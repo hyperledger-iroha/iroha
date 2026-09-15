@@ -15,12 +15,20 @@ fresh matching Cargo artifact copies and the real four-peer gate are still
 required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
+For a mutable-source prequalification diagnostic, check accepts repeatable
+--focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
+and only explicitly selected harnesses, then run their exact tests. It writes
+no qualification checkpoint and cannot be selected by prepare.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
 after durable publication. Failed captures, outputs and Cargo caches remain intact.
 The explicit --expected-commit selects immutable Git objects on both fresh
 preparation and resume; unrelated HEAD advancement and worktree edits are excluded.
+Preparation records the sanitized environment in a separate owner-private file.
+Resume restores those exact inputs before resolving tools, so session PATH changes
+do not invalidate successful checks. An explicit incremental-policy change still
+requires a fresh preparation; old records without an environment are not resumed.
 The active repository must remain on optimizations, and the executing controller
 sources must match the selected signed commit.
 """
@@ -115,6 +123,52 @@ def native_check_environment(environment: dict[str, str], inherited: dict[str, s
     if incremental == "1" and Path(native.get("RUSTC_WRAPPER", "")).name == "sccache":
         native.pop("RUSTC_WRAPPER")
     return native
+
+
+def recorded_preparation_environment(output: Path, target_dir: Path,
+                                     request: dict[str, object]) -> dict[str, object]:
+    """Authenticate only the saved allowlist; never deserialize arbitrary hooks."""
+    path = output / "environment.json"
+    require(path.is_file() and not path.is_symlink() and path.lstat().st_nlink == 1,
+            "preparation requires its direct single-link environment checkpoint; select a fresh output")
+    record = read_record(path)
+    require(hashlib.sha256(canonical_json_bytes(record)).hexdigest()
+            == request.get("environment_sha256"), "preparation environment checkpoint changed")
+    require(set(record) == {"schema", "child_environment"}
+            and record["schema"] == "taira.preparation-environment.v1",
+            "invalid preparation environment checkpoint")
+    environment = record["child_environment"]
+    require(isinstance(environment, dict)
+            and all(isinstance(key, str) and isinstance(value, str)
+                    and "\0" not in key and "\0" not in value
+                    for key, value in environment.items()),
+            "invalid preparation environment values")
+    require(child_environment(environment, target_dir) == environment,
+            "preparation environment contains noncanonical or unapproved inputs")
+    return record
+
+
+def preparation_environment(output: Path, target_dir: Path,
+                            inherited: dict[str, str], *, fresh: bool
+                            ) -> tuple[dict[str, str], dict[str, object], str]:
+    """Keep actual tool resolution and execution on one recorded environment."""
+    if fresh:
+        incremental = native_check_environment({}, inherited)["CARGO_INCREMENTAL"]
+        record = {"schema": "taira.preparation-environment.v1",
+                  "child_environment": child_environment(inherited, target_dir)}
+    else:
+        request = read_record(output / "request.json")
+        require(request.get("schema") == SESSION_SCHEMA,
+                "unsupported preparation checkpoint; select a fresh output")
+        require(type(request.get("native_incremental")) is bool,
+                "invalid recorded native incremental policy")
+        incremental = "1" if request["native_incremental"] else "0"
+        if "CARGO_INCREMENTAL" in inherited:
+            requested = native_check_environment({}, inherited)["CARGO_INCREMENTAL"]
+            require(requested == incremental,
+                    "preparation checkpoint belongs to different inputs: native incremental policy")
+        record = recorded_preparation_environment(output, target_dir, request)
+    return dict(record["child_environment"]), record, incremental
 
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(["git", "--no-replace-objects", *args], cwd=root, stdin=subprocess.DEVNULL,
@@ -877,15 +931,23 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
-                      *, native_check_scope: str = "basic") -> None:
+                      *, native_check_scope: str = "basic", focused_regressions=None) -> None:
+    if focused_regressions is not None:
+        gate.focused_regression_stages(native_check_scope, focused_regressions)
     root = real_path(root)
     target_dir = development_target(root, target, inherited)
     with cargo_lane(root, target_dir, "development") as lock_fd:
         env = child_environment(inherited, target_dir)
         env, _ = isolated_cargo_environment(root, root, env)
         print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        gate.run_checks(root, environment=native_check_environment(env, inherited), lock_fds=(lock_fd,),
-                        qualification_scope=native_check_scope)
+        native = native_check_environment(env, inherited)
+        if focused_regressions is None:
+            gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
+                            qualification_scope=native_check_scope)
+        else:
+            gate.run_prequalification(root, focused_regressions=focused_regressions,
+                                      environment=native, lock_fds=(lock_fd,),
+                                      qualification_scope=native_check_scope)
 
 
 @contextlib.contextmanager
@@ -959,7 +1021,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     source = capture_source(root, source, target_dir, args.expected_commit, entries)
     before = frozen_snapshot(source, entries, target_dir)
     inherited = dict(os.environ)
-    env = child_environment(inherited, target_dir)
+    env, environment_record, incremental = preparation_environment(output, target_dir, inherited, fresh=fresh)
     tools = [verify_tool(args.zig, args.zig_sha256),
              verify_tool(args.cargo_zigbuild, args.cargo_zigbuild_sha256)]
     selected = shutil.which("cargo-zigbuild", path=env.get("PATH", ""))
@@ -968,11 +1030,12 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
     env, compiler_tools = isolated_cargo_environment(root, source, env)
-    native_env = native_check_environment(env, inherited)
+    native_env = native_check_environment(env, {"CARGO_INCREMENTAL": incremental})
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
             "native_check_scope": args.native_check_scope,
             "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
+            "environment_sha256": hashlib.sha256(canonical_json_bytes(environment_record)).hexdigest(),
             # This is the effective gate environment: child_environment excludes
             # CARGO_BUILD_TARGET, and both commit variables are normalized above.
             # Bind path-dependent tests without publishing environment values.
@@ -989,6 +1052,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         output = create_fresh_directory(output, mode=0o700)
 
     def revalidate():
+        require(recorded_preparation_environment(output, target_dir, request) == environment_record,
+                "preparation environment checkpoint changed during preparation")
         require(frozen_snapshot(source, entries, target_dir) == before, "captured source changed during preparation")
         require([{"name": row["name"], **verify_tool(Path(row["path"]), row["sha256"])}
                  for row in compiler_tools] == compiler_tools, "Rust toolchain changed during preparation")
@@ -998,6 +1063,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
 
     with preparation_lock(output) as lock_fd:
         if fresh:
+            write_record(output / "environment.json", environment_record)
             write_record(output / "request.json", request)
             create_fresh_directory(output / "attempts", mode=0o700)
         else:
@@ -1108,6 +1174,9 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
         command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
                              help="basic Taira deployment checks (default), or full regression qualification")
+        if name == "check":
+            command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
+                                 help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
         if name == "prepare":
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
@@ -1124,8 +1193,10 @@ def main() -> int:
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            development_check(args.repo_root, args.target_dir, dict(os.environ),
-                              native_check_scope=args.native_check_scope)
+            options = {"native_check_scope": args.native_check_scope}
+            if args.focus_regression is not None:
+                options["focused_regressions"] = tuple(args.focus_regression)
+            development_check(args.repo_root, args.target_dir, dict(os.environ), **options)
         else:
             args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)

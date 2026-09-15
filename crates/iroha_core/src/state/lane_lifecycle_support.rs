@@ -14,6 +14,7 @@ struct LaneTopologyDiff<'a> {
 struct LaneLifecycleCatalogUpdate {
     previous_catalog: LaneCatalog,
     previous_dataspace_catalog: DataSpaceCatalog,
+    updated_dataspace_catalog: DataSpaceCatalog,
     previous_routing_policy: LaneRoutingPolicy,
     previous_autoscale: iroha_config::parameters::actual::Autoscale,
     updated_catalog: LaneCatalog,
@@ -409,6 +410,7 @@ struct PendingAutoscaleLaneLifecycle {
     transition: PendingAutoscaleTransition,
     transition_height: u64,
     expected_incarnation_root: Hash,
+    runtime_catalog: Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>,
 }
 impl PendingAutoscaleLaneLifecycle {
     fn exact_scale_in_binding(
@@ -746,6 +748,7 @@ fn ensure_pending_autoscale_lifecycle_staking_is_safe(
     let mut prospective_nexus = nexus.clone();
     prospective_nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
     prospective_nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
+    prospective_nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
     ensure_live_shared_dataspace_staking_owner_is_not_reset(
         world,
         nexus,

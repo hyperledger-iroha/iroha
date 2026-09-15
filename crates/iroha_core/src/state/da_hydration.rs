@@ -93,6 +93,22 @@ impl State {
     }
 
     pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaIndexHydrationError> {
+        self.ensure_da_indexes_hydrated_with_journal_publication(true)
+    }
+
+    /// Rebuild an isolated replay State's exact committed prefix without publishing
+    /// its DA journal to the shared Kura directory. A cached result is preserved;
+    /// an absent cache must still authenticate and reconstruct all five indexes.
+    pub(super) fn ensure_da_indexes_hydrated_for_replay_prevalidation(
+        &self,
+    ) -> Result<(), DaIndexHydrationError> {
+        self.ensure_da_indexes_hydrated_with_journal_publication(false)
+    }
+
+    fn ensure_da_indexes_hydrated_with_journal_publication(
+        &self,
+        persist_journal: bool,
+    ) -> Result<(), DaIndexHydrationError> {
         {
             let guard = self.da_indexes_hydrated.read();
             if let Some(result) = guard.as_ref() {
@@ -106,7 +122,9 @@ impl State {
         let _state_write_guard = self.state_write_lock.lock();
         let result = self.build_da_indexes_from_kura(None).map(|hydrated| {
             self.publish_hydrated_da_indexes(hydrated);
-            self.persist_da_shard_cursor_journal();
+            if persist_journal {
+                self.persist_da_shard_cursor_journal();
+            }
         });
         if let Err(err) = &result {
             warn!(?err, "failed to hydrate DA indexes from Kura");

@@ -33,6 +33,8 @@ pub mod private_settlement_api;
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
+/// Typed absence response for authoritative SNS registration lookups.
+pub mod sns;
 /// Canonical wire types for the authenticated SoraFS hedging and billing API.
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
@@ -712,6 +714,10 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee: Option<FeeErrorDetails>,
+    /// Exact missing SNS registration selector for `sns_registration_not_found` HTTP 404.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sns_registration_not_found: Option<sns::SnsRegistrationNotFoundV1>,
 }
 impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
@@ -733,6 +739,7 @@ impl ErrorDetails {
             && self.hint.is_none()
             && self.axt.is_none()
             && self.fee.is_none()
+            && self.sns_registration_not_found.is_none()
     }
 }
 /// Stable public network profile metadata used by clients and Torii helpers.
@@ -2159,6 +2166,7 @@ mod tests {
             r#"{"code":"bad_request","message":"invalid","retired":null}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"retired":null}}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"fee":{"retired":null}}}"#,
+            r#"{"code":"sns_registration_not_found","message":"missing","details":{"sns_registration_not_found":{"suffix_id":4099,"label":"dpn","retired":null}}}"#,
         ] {
             norito::json::from_str::<ErrorEnvelope>(json)
                 .expect_err("error envelopes must reject unknown members at every owned boundary");
@@ -2187,6 +2195,14 @@ mod tests {
             ..Default::default()
         });
         assert!(!details.is_empty());
+        details = ErrorDetails::default();
+        details.sns_registration_not_found = Some(crate::sns::SnsRegistrationNotFoundV1::new(
+            iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
+            "dpn".to_owned(),
+        ));
+        assert!(!details.is_empty());
+        details.sns_registration_not_found = None;
+        assert!(details.is_empty());
     }
     #[test]
     fn network_profile_registry_resolves_public_discriminants() {

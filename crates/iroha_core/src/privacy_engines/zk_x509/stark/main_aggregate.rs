@@ -200,12 +200,12 @@ fn main_trace_group_root_v1(
     match kind {
         MainTraceColumnKindV1::Base => TraceGroupProofV1 {
             base_root: commitment.commitment.root,
-            aux_root: GoldilocksDigest384V1::default(),
+            aux_root: PrivacyOuterDigestV1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         },
         MainTraceColumnKindV1::Aux => TraceGroupProofV1 {
-            base_root: GoldilocksDigest384V1::default(),
+            base_root: PrivacyOuterDigestV1::default(),
             aux_root: commitment.commitment.root,
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
@@ -239,7 +239,7 @@ pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     trace_groups: Vec<TraceGroupProofV1>,
     base_polynomials: MainTracePolynomialSetV1,
     transcript: TransparentTranscriptV1,
-    base_transcript_state: GoldilocksDigest384V1,
+    base_transcript_state: PrivacyOuterDigestV1,
     pre_aux: ZkX509CredentialMainPreAuxV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -253,8 +253,8 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
             || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
             || self.transcript.state() != self.base_transcript_state
             || self.trace_groups.iter().any(|group| {
-                group.base_root == GoldilocksDigest384V1::default()
-                    || group.aux_root != GoldilocksDigest384V1::default()
+                group.base_root == PrivacyOuterDigestV1::default()
+                    || group.aux_root != PrivacyOuterDigestV1::default()
             })
             || self.projection.aux.is_some()
             || self.io.bind_attempted
@@ -287,7 +287,7 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     terminal_claims: ZkX509MainTerminalClaimsV1,
     alphas: Vec<Vec<Vec<E>>>,
     transcript: TransparentTranscriptV1,
-    composition_transcript_state: GoldilocksDigest384V1,
+    composition_transcript_state: PrivacyOuterDigestV1,
     binding: ZkX509CredentialPreAuxBindingV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -305,8 +305,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             || self.log19.post_base != self.binding.main_post_base()
             || self.transcript.state() != self.composition_transcript_state
             || self.trace_groups.iter().any(|group| {
-                group.base_root == GoldilocksDigest384V1::default()
-                    || group.aux_root == GoldilocksDigest384V1::default()
+                group.base_root == PrivacyOuterDigestV1::default()
+                    || group.aux_root == PrivacyOuterDigestV1::default()
             })
             || self.alphas.len() != self.layout.registered_segments.len()
             || self
@@ -392,7 +392,7 @@ pub(super) fn record_main_group_commitment_v1(
     commitment: &aggregate::StreamingRowCommitmentResultV1,
     trace_groups: &mut Vec<TraceGroupProofV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
-    if commitment.commitment.root == GoldilocksDigest384V1::default() {
+    if commitment.commitment.root == PrivacyOuterDigestV1::default() {
         return Err(ZkX509StarkErrorV1::TranscriptMismatch);
     }
     match kind {
@@ -405,7 +405,7 @@ pub(super) fn record_main_group_commitment_v1(
         MainTraceColumnKindV1::Aux => {
             let expected_group = trace_groups
                 .iter()
-                .position(|group| group.aux_root == GoldilocksDigest384V1::default())
+                .position(|group| group.aux_root == PrivacyOuterDigestV1::default())
                 .unwrap_or(trace_groups.len());
             if trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1 || group_index != expected_group {
                 return Err(ZkX509StarkErrorV1::TranscriptMismatch);
@@ -413,8 +413,8 @@ pub(super) fn record_main_group_commitment_v1(
             let group = trace_groups
                 .get_mut(group_index)
                 .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-            if group.base_root == GoldilocksDigest384V1::default()
-                || group.aux_root != GoldilocksDigest384V1::default()
+            if group.base_root == PrivacyOuterDigestV1::default()
+                || group.aux_root != PrivacyOuterDigestV1::default()
             {
                 return Err(ZkX509StarkErrorV1::TranscriptMismatch);
             }
@@ -794,7 +794,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         )
         .map_err(map_aggregate_error_v1)?;
         let fri_masks = aggregate::build_fri_mask_oracles_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             AGGREGATE_PARAMETERS_V1,
             AGGREGATE_DOMAINS_V1,
             &shared_layout,
@@ -917,7 +916,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         let grinding_state = self.transcript.state();
         let grinding_nonce = grind_nonce_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             ZK_X509_DIGEST_CONTEXT_V1,
             &grinding_state,
             ZK_X509_GRINDING_BITS_V1,

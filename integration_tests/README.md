@@ -68,11 +68,11 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
-- The ignored N=3 Metal smoke requires `atomic-private-settlement-metal-smoke`.
-  This test capability enables the common release harness and Core GPU backend;
-  it retains every native proof and committee check. The ordinary
+- The ignored N=3 smoke requires `atomic-private-settlement-smoke`.
+  This test capability enables the common release harness and its CPU SHA3-384
+  privacy proof, retaining every native proof and committee check. The ordinary
   `atomic-private-settlement-release` feature supports the explicit CPU fault,
-  leakage and benchmark workloads without compiling the Metal smoke entrypoint.
+  leakage and benchmark workloads without compiling the smoke entrypoint.
 - The retained benchmark session harness owns one warmed network per
   profile/topology/seed. Its control-channel, economic-vector and measurement
   boundary tests are ordinary tests under

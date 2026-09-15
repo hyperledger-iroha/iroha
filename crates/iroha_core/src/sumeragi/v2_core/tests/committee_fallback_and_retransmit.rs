@@ -761,7 +761,7 @@ fn future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership() {
     assert!(ignored.effects().is_empty());
     assert_eq!(&reducer, &before);
     assert!(reducer.durable_state().highest_prepare().is_none());
-    assert!(reducer.outbound_messages().all(|message| {
+    assert!(reducer.retained_control_messages().all(|message| {
         !matches!(
             message,
             ConsensusMessageV2::QuorumCertificate(certificate)
@@ -780,4 +780,315 @@ fn future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership() {
                 if certificate == &future
         )
     }));
+}
+
+/// Compare emitted controls with the exact retained recovery witnesses for this role.
+fn assert_certificate_role_retransmission(reducer: &mut Reducer) {
+    let retained = reducer
+        .retained_control_messages()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        !retained.is_empty(),
+        "authenticated certificate evidence must remain owned"
+    );
+    let eligible = reducer.local_validator().is_some();
+    let outcome = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("role-aware retransmission passes the production refinement gate");
+    let emitted = outcome
+        .effects()
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Broadcast(message) => Some(message.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(emitted, if eligible { retained } else { Vec::new() });
+    assert!(
+        outcome
+            .effects()
+            .iter()
+            .any(|effect| matches!(effect, Effect::FetchBody { .. })),
+        "both roles retain certified body recovery independently of emission authority"
+    );
+    assert!(
+        !outcome
+            .effects()
+            .iter()
+            .any(|effect| matches!(effect, Effect::Sign { .. }))
+    );
+}
+
+#[test]
+fn certificate_retransmission_requires_roster_role_after_remote_install_and_replay() {
+    for local in [None, Some(id(4))] {
+        let context = context();
+        let high = qc(
+            &context,
+            0,
+            Phase::Prepare,
+            Subject::repeat(0xe1),
+            &[1, 2, 3],
+        );
+        let timeout = tc_with_high(&context, 0, high.clone(), &[1, 2, 3]);
+        let commit = qc(&context, 0, Phase::Commit, high.subject(), &[1, 2, 3]);
+        let records = [
+            WalRecord::ObservePrepare(high.clone()),
+            WalRecord::InstallTimeout(timeout.clone()),
+            WalRecord::Decision(commit),
+        ];
+        for record in records {
+            let mut live = Reducer::new(context.clone(), local, Generation::new(71)).unwrap();
+            let event = match &record {
+                WalRecord::ObservePrepare(certificate) | WalRecord::Decision(certificate) => {
+                    Event::QuorumCertificateReceived {
+                        tag: live.current_tag(),
+                        certificate: certificate.clone(),
+                    }
+                }
+                WalRecord::InstallTimeout(certificate) => Event::TimeoutCertificateReceived {
+                    tag: live.current_tag(),
+                    certificate: certificate.clone(),
+                },
+                _ => panic!("only certificate records occur in this fixture"),
+            };
+            let received = live
+                .step(event)
+                .expect("authenticated remote certificate is accepted");
+            assert!(
+                !received
+                    .effects()
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Broadcast(_) | Effect::Sign { .. }))
+            );
+            let entries = received
+                .effects()
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::Persist { entry, .. } => Some(entry.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].record(), &record);
+            let installed = acknowledge(&mut live, &entries[0]);
+            assert!(
+                !installed
+                    .effects()
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Broadcast(_) | Effect::Sign { .. }))
+            );
+            if matches!(&record, WalRecord::InstallTimeout(_)) {
+                assert_eq!(live.current_tag().view(), 1);
+                assert_eq!(live.durable_state().last_timeout(), Some(&timeout));
+                assert_eq!(live.durable_state().locked(), Some(&high));
+                assert!(matches!(
+                    installed.effects().first(),
+                    Some(Effect::EnterView { .. })
+                ));
+            }
+            assert_certificate_role_retransmission(&mut live);
+            let mut recovered =
+                Reducer::recover(context.clone(), local, Generation::new(72), entries).unwrap();
+            assert_eq!(recovered.durable_state(), live.durable_state());
+            let resumed = resume_after_replay(&mut recovered);
+            assert!(
+                !resumed
+                    .effects()
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::Broadcast(_) | Effect::Sign { .. }))
+            );
+            assert_certificate_role_retransmission(&mut recovered);
+        }
+    }
+}
+
+#[test]
+fn observer_decision_body_pipeline_applies_without_productive_broadcast() {
+    let context = context();
+    let subject = Subject::repeat(0xe2);
+    let decision = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+    let mut observer = Reducer::new(context, None, Generation::new(73)).unwrap();
+    let installed = install_decision(&mut observer, decision.clone());
+    assert!(matches!(installed.effects(), [Effect::FetchBody { .. }]));
+    assert_certificate_role_retransmission(&mut observer);
+    let tag = observer.current_tag();
+    let round = decision.round();
+    let available = observer
+        .step(Event::BodyAvailable {
+            tag,
+            round,
+            subject,
+        })
+        .unwrap();
+    assert!(matches!(available.effects(), [Effect::StoreBody { .. }]));
+    let stored = observer
+        .step(Event::BodyStored {
+            tag,
+            round,
+            subject,
+        })
+        .unwrap();
+    assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
+    let validated = observer
+        .step(Event::ValidationCompleted {
+            tag,
+            round,
+            subject,
+            valid: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(validated.effects(), [Effect::Apply { certificate, .. }] if certificate == &decision)
+    );
+    let completed = observer
+        .step(Event::ApplicationCompleted { tag, subject })
+        .unwrap();
+    assert!(completed.effects().is_empty());
+    assert_eq!(observer.applied_subject(), Some(subject));
+    assert!(observer.ready_to_finish());
+    assert_eq!(
+        observer.retained_control_messages().count(),
+        1,
+        "the exact terminal certificate remains a recovery witness"
+    );
+    let final_retry = observer.step(Event::RetransmitElapsed { tag }).unwrap();
+    assert!(final_retry.effects().is_empty());
+}
+
+/// Form exact three-of-four certificates using only independently received validator shares.
+fn assert_received_vote_formation_role(timeout: bool) {
+    for local in [None, Some(id(4))] {
+        let context = context();
+        let round = Round::new(context.height(), 0);
+        let mut reducer = Reducer::new(context.clone(), local, Generation::new(74)).unwrap();
+        for signer in 1_u8..=3 {
+            let event = if timeout {
+                Event::TimeoutVoteReceived {
+                    tag: reducer.current_tag(),
+                    vote: SignedTimeoutVote::new(
+                        TimeoutVote::new(context.id(), round, id(signer), None),
+                        signature(signer),
+                    ),
+                }
+            } else {
+                Event::VoteReceived {
+                    tag: reducer.current_tag(),
+                    vote: SignedVote::new(
+                        Vote::new(
+                            context.id(),
+                            round,
+                            Phase::Prepare,
+                            Subject::repeat(0xe3),
+                            id(signer),
+                        ),
+                        signature(signer),
+                    ),
+                }
+            };
+            let outcome = reducer
+                .step(event)
+                .expect("received share passes ordinary reducer gates");
+            if signer < 3 {
+                assert!(
+                    outcome.effects().is_empty(),
+                    "two-of-four must not form a certificate or WAL intent"
+                );
+                assert!(reducer.durable_state().highest_prepare().is_none());
+                assert!(reducer.durable_state().last_timeout().is_none());
+                continue;
+            }
+            let entries = outcome
+                .effects()
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::Persist { entry, .. } => Some(entry.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1);
+            match entries[0].record() {
+                WalRecord::ObservePrepare(certificate) => {
+                    assert!(!timeout);
+                    certificate.validate(&context).unwrap();
+                    assert_eq!(
+                        certificate.signatures().len(),
+                        context.minimum_signer_count()
+                    );
+                }
+                WalRecord::InstallTimeout(certificate) => {
+                    assert!(timeout);
+                    certificate.validate(&context).unwrap();
+                    assert_eq!(
+                        certificate
+                            .groups()
+                            .iter()
+                            .map(|group| group.signatures().len())
+                            .sum::<usize>(),
+                        context.minimum_signer_count()
+                    );
+                }
+                _ => panic!("certificate formation must retain its exact WAL record"),
+            }
+            let immediate = outcome
+                .effects()
+                .iter()
+                .filter(|effect| matches!(effect, Effect::Broadcast(_)))
+                .count();
+            assert_eq!(immediate, usize::from(!timeout && local.is_some()));
+            let installed = acknowledge(&mut reducer, &entries[0]);
+            let after_persist = installed
+                .effects()
+                .iter()
+                .filter(|effect| matches!(effect, Effect::Broadcast(_)))
+                .count();
+            assert_eq!(after_persist, usize::from(timeout && local.is_some()));
+            if timeout {
+                assert_eq!(reducer.current_tag().view(), 1);
+                assert!(matches!(
+                    installed.effects().first(),
+                    Some(Effect::EnterView { .. })
+                ));
+            }
+            let retained = reducer
+                .retained_control_messages()
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(retained.len(), 1);
+            let retransmit = reducer
+                .step(Event::RetransmitElapsed {
+                    tag: reducer.current_tag(),
+                })
+                .unwrap();
+            let emitted = retransmit
+                .effects()
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::Broadcast(message) => Some(message.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                emitted,
+                if local.is_some() {
+                    retained
+                } else {
+                    Vec::new()
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn prepare_qc_formation_from_received_votes_requires_roster_emission_authority() {
+    assert_received_vote_formation_role(false);
+}
+
+#[test]
+fn timeout_certificate_formation_from_received_votes_requires_roster_emission_authority() {
+    assert_received_vote_formation_role(true);
 }

@@ -6001,6 +6001,144 @@ mod tests {
             Hash::prehashed(TEST_GENESIS_HASH),
         ))
     }
+    #[test]
+    fn governed_registration_and_activation_share_one_state_transaction() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("compiled profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: TEST_BLOCK_HEIGHT,
+                },
+            ));
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        crate::executor::Executor::Initial
+            .execute_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                RegisterPrivacyProtocolActivationV1::new(proposal).into(),
+            )
+            .expect("authorized registration");
+        assert_eq!(
+            transaction.world.privacy_activations.get(&key),
+            Some(&proposal)
+        );
+        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: TEST_BLOCK_HEIGHT,
+            activated_at_height: TEST_BLOCK_HEIGHT,
+            state_since_height: TEST_BLOCK_HEIGHT,
+        });
+        crate::executor::Executor::Initial
+            .execute_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
+            )
+            .expect("authorized same-transaction activation");
+        let expected = PrivacyProtocolActivationRecordV1 {
+            lifecycle: active,
+            ..proposal
+        };
+        assert_eq!(
+            transaction.world.privacy_activations.get(&key),
+            Some(&expected)
+        );
+        transaction.apply();
+        assert_eq!(block.world.privacy_activations.get(&key), Some(&expected));
+        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
+            &block.world.privacy_activations,
+            TEST_BLOCK_HEIGHT,
+        )
+        .expect("same-block activation is a valid durable history");
+    }
+    #[test]
+    fn explicit_activation_keeps_authority_height_and_transaction_rollback_checks() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(test_header());
+        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("compiled profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: TEST_BLOCK_HEIGHT,
+                },
+            ));
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        {
+            let mut transaction = block.transaction();
+            let error = crate::executor::Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    RegisterPrivacyProtocolActivationV1::new(proposal).into(),
+                )
+                .expect_err("post-genesis registration requires governance authority");
+            assert!(format!("{error:?}").contains("CanEnactGovernance"));
+            assert!(transaction.world.privacy_activations.get(&key).is_none());
+            grant_governance(&mut transaction);
+            crate::executor::Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    RegisterPrivacyProtocolActivationV1::new(proposal).into(),
+                )
+                .expect("authorized registration");
+            let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: TEST_BLOCK_HEIGHT,
+                activated_at_height: TEST_BLOCK_HEIGHT,
+                state_since_height: TEST_BLOCK_HEIGHT,
+            });
+            let error = crate::executor::Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &iroha_test_samples::BOB_ID,
+                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
+                )
+                .expect_err("activation independently requires governance authority");
+            assert!(format!("{error:?}").contains("CanEnactGovernance"));
+            assert_eq!(
+                transaction.world.privacy_activations.get(&key),
+                Some(&proposal)
+            );
+            let future = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: TEST_BLOCK_HEIGHT,
+                activated_at_height: TEST_BLOCK_HEIGHT + 1,
+                state_since_height: TEST_BLOCK_HEIGHT + 1,
+            });
+            crate::executor::Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, future).into(),
+                )
+                .expect_err("a signed activation cannot claim another block height");
+            assert_eq!(
+                transaction.world.privacy_activations.get(&key),
+                Some(&proposal)
+            );
+            crate::executor::Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active).into(),
+                )
+                .expect("valid explicit activation");
+        }
+        assert!(
+            block.world.privacy_activations.get(&key).is_none(),
+            "an unapplied transaction rolls back both registration and activation"
+        );
+    }
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -8163,7 +8301,7 @@ mod tests {
         next_limits.max_actions_per_block -= 1;
         next_limits.retained_root_count -= 1;
         let valid =
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 300, next_limits);
+            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, next_limits);
         let state = state_with_activation(active_lifecycle());
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
@@ -8178,16 +8316,16 @@ mod tests {
         for invalid in [
             SchedulePrivacyConsensusPolicyTighteningV1::new(1, next_limits),
             SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT, next_limits),
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 299, next_limits),
+            SchedulePrivacyConsensusPolicyTighteningV1::new(0, next_limits),
             SchedulePrivacyConsensusPolicyTighteningV1::new(
-                TEST_BLOCK_HEIGHT + 300,
+                TEST_BLOCK_HEIGHT + 1,
                 PrivacyConsensusLimitsV1::taira_default(),
             ),
             {
                 let mut increased = next_limits;
                 increased.max_actions_per_block =
                     PrivacyConsensusLimitsV1::taira_default().max_actions_per_block + 1;
-                SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 300, increased)
+                SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, increased)
             },
         ] {
             invalid
@@ -8201,17 +8339,17 @@ mod tests {
         }
         valid
             .execute(&ALICE_ID, &mut transaction)
-            .expect("exact +300 strict tightening");
+            .expect("next-block strict tightening");
         let scheduled = *transaction.world.privacy_consensus_policy.get();
         assert_eq!(scheduled.current_limits, original.current_limits);
         let pending = scheduled.pending_tightening.expect("pending tightening");
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
-        assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 300);
+        assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 1);
         assert_eq!(pending.next_limits, next_limits);
         let mut other_limits = next_limits;
         other_limits.retained_root_count -= 1;
         let error =
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 301, other_limits)
+            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 2, other_limits)
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("a pending schedule cannot be overwritten");
         assert!(
@@ -8250,7 +8388,7 @@ mod tests {
         );
         let valid = SchedulePrivacyProtocolLimitsTighteningV1::new(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            TEST_BLOCK_HEIGHT + 300,
+            TEST_BLOCK_HEIGHT + 1,
             next,
         );
         let error = valid
@@ -8266,17 +8404,17 @@ mod tests {
         let invalid = [
             SchedulePrivacyProtocolLimitsTighteningV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                TEST_BLOCK_HEIGHT + 299,
+                TEST_BLOCK_HEIGHT - 1,
                 next,
             ),
             SchedulePrivacyProtocolLimitsTighteningV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                TEST_BLOCK_HEIGHT + 300,
+                TEST_BLOCK_HEIGHT + 1,
                 current.protocol_limits,
             ),
             SchedulePrivacyProtocolLimitsTighteningV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                TEST_BLOCK_HEIGHT + 300,
+                TEST_BLOCK_HEIGHT + 1,
                 PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
                     AnonymousPgcActivationLimitsV1 {
                         max_anonymity_set_size: 64,
@@ -8286,7 +8424,7 @@ mod tests {
             ),
             SchedulePrivacyProtocolLimitsTighteningV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                TEST_BLOCK_HEIGHT + 300,
+                TEST_BLOCK_HEIGHT + 1,
                 PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
                     iroha_data_model::privacy::VeRangeActivationLimitsV1 {
                         max_aggregation_count: 8,
@@ -8295,7 +8433,7 @@ mod tests {
             ),
             SchedulePrivacyProtocolLimitsTighteningV1::new(
                 PrivacyProtocolIdV1::PqMaspStarkV1,
-                TEST_BLOCK_HEIGHT + 300,
+                TEST_BLOCK_HEIGHT + 1,
                 PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(
                     iroha_data_model::privacy::PqMaspActivationLimitsV1 {
                         max_input_count: 1,
@@ -8316,7 +8454,7 @@ mod tests {
         }
         valid
             .execute(&ALICE_ID, &mut transaction)
-            .expect("exact +300 strict protocol tightening");
+            .expect("next-block strict protocol tightening");
         let scheduled = *transaction
             .world
             .privacy_activations
@@ -8327,11 +8465,11 @@ mod tests {
             .pending_protocol_limits_tightening
             .expect("pending protocol limits");
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
-        assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 300);
+        assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 1);
         assert_eq!(pending.next_limits, next);
         let error = SchedulePrivacyProtocolLimitsTighteningV1::new(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            TEST_BLOCK_HEIGHT + 301,
+            TEST_BLOCK_HEIGHT + 2,
             next,
         )
         .execute(&ALICE_ID, &mut transaction)
@@ -8344,6 +8482,86 @@ mod tests {
             transaction.world.privacy_activations.get(&key),
             Some(&scheduled)
         );
+    }
+    #[test]
+    fn next_block_tightening_applies_only_after_committed_schedule() {
+        for commit_schedule in [false, true] {
+            let state = state_with_activation(active_lifecycle());
+            let key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
+            let mut block = state.block(test_header());
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let original_policy = *transaction.world.privacy_consensus_policy.get();
+            let original_activation = *transaction.world.privacy_activations.get(&key).unwrap();
+            let mut next_policy = original_policy.current_limits;
+            next_policy.retained_root_count -= 1;
+            let mut next_protocol = original_activation.protocol_limits;
+            let PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(ref mut limits) =
+                next_protocol
+            else {
+                unreachable!("Anonymous PGC fixture")
+            };
+            limits.max_anonymity_set_size /= 2;
+            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 1, next_policy)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("governed next-block consensus tightening");
+            SchedulePrivacyProtocolLimitsTighteningV1::new(
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                TEST_BLOCK_HEIGHT + 1,
+                next_protocol,
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("governed next-block protocol tightening");
+            let pending_policy = transaction.world.privacy_consensus_policy.get();
+            assert_eq!(
+                pending_policy.current_limits,
+                original_policy.current_limits
+            );
+            assert_eq!(
+                pending_policy.admission_retained_root_count(),
+                next_policy.retained_root_count
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_activations
+                    .get(&key)
+                    .unwrap()
+                    .protocol_limits,
+                original_activation.protocol_limits
+            );
+            if commit_schedule {
+                transaction.apply();
+            } else {
+                drop(transaction);
+            }
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit admitting block overlay");
+            let mut next_block = state.block(test_header_at(TEST_BLOCK_HEIGHT + 1));
+            let transaction = next_block.transaction();
+            let policy = transaction.world.privacy_consensus_policy.get();
+            let activation = transaction.world.privacy_activations.get(&key).unwrap();
+            assert_eq!(policy.pending_tightening, None);
+            assert_eq!(activation.pending_protocol_limits_tightening, None);
+            assert_eq!(activation.lifecycle, original_activation.lifecycle);
+            assert_eq!(
+                policy.current_limits,
+                if commit_schedule {
+                    next_policy
+                } else {
+                    original_policy.current_limits
+                }
+            );
+            assert_eq!(
+                activation.protocol_limits,
+                if commit_schedule {
+                    next_protocol
+                } else {
+                    original_activation.protocol_limits
+                }
+            );
+        }
     }
     #[test]
     fn pgc_bootstrap_rejects_authority_inactive_and_future_activation_without_mutation() {
@@ -8360,7 +8578,6 @@ mod tests {
         for lifecycle in [
             PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
-                activate_at_height: 20,
             }),
             PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
                 proposed_at_height: 1,

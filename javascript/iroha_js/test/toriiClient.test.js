@@ -945,7 +945,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
           },
           subject: { ...subject },
           execution_commitment: null,
-          stage: { stage: "sent", details: null },
+          stage: { stage: "retained", details: null },
         },
       ],
       work: {
@@ -11979,6 +11979,10 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
     status.liveness.outbound_intents[0].proposal_round,
     status.liveness.outbound_intents[0].round,
   );
+  assert.deepEqual(status.liveness.outbound_intents[0].stage, {
+    stage: "retained",
+    details: null,
+  });
   assert.equal(status.liveness.queues[0].queue.queue, "network_ingress");
   assert.equal(status.liveness.queues[0].service_debt, 2);
   assert.equal(
@@ -11989,6 +11993,16 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal("mode_tag" in status, false);
   assert.equal("lane_settlement_commitments" in status, false);
   assert.equal("operator" in status, false);
+});
+
+test("getSumeragiStatusTyped rejects sent as an outbound intent stage", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.outbound_intents[0].stage = { stage: "sent", details: null };
+
+  await assert.rejects(
+    sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+    /outbound_intents\[0\]\.stage\.stage is not a supported v2 variant/u,
+  );
 });
 
 test("getSumeragiStatusTyped accepts a non-empty Native AMX application manifest", async () => {

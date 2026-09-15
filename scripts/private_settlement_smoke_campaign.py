@@ -492,6 +492,19 @@ def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any])
         "context_id": qc["round"]["context_id"], "context": semantic_context})
 
 
+def validate_smoke_result_heights(result: dict[str, Any]) -> tuple[int, int, int]:
+    """Bind nonzero genesis readiness and subsequent authority/finality observations.
+
+    The experimental result's ``activation_height`` is the committed height of
+    the first successful exact Active-genesis capability observation, not a
+    scheduled lifecycle transition. Pool authority must be observed afterward.
+    """
+    activation = integer(result["activation_height"], 1, 2**64 - 2, "genesis readiness height")
+    authority = integer(result["authority_context_height"], activation + 1, 2**64 - 1, "authority height")
+    finalized = integer(result["finalized_height"], authority, 2**64 - 1, "finalized height")
+    return activation, authority, finalized
+
+
 def validate_certificates(evidence: dict[str, Any], result: dict[str, Any], identities: list[Any]) -> bytes:
     """Check the retained three participant authorities and full Prepare/Commit/receipt bindings."""
     receipt = fields(evidence["receipt.json"], {"version", "manifest", "authority_catalog", "legs",
@@ -499,6 +512,13 @@ def validate_certificates(evidence: dict[str, Any], result: dict[str, Any], iden
     barrier = fields(evidence["prepare-barrier.json"], {"version", "manifest", "authority_catalog", "deltas",
                         "prepare_certificates", "prepared_bundle_digest"}, "Prepare barrier")
     manifest = receipt["manifest"]
+    activation, authority, finalized = validate_smoke_result_heights(result)
+    manifest_authority = integer(manifest["authority_context_height"], activation + 1, 2**64 - 1,
+                                 "manifest authority height")
+    # The authority context precedes expiry; the final admissible height is inclusive.
+    expiry = integer(manifest["expiry_height"], authority + 1, 2**64 - 1, "manifest expiry height")
+    require(manifest_authority == authority and finalized <= expiry,
+            "receipt/Prepare authority or expiry window substitution")
     require(all(type(row["version"]) is int and row["version"] == 1 for row in (receipt, barrier, manifest))
             and receipt["finalized_height"] == result["finalized_height"]
             and receipt["manifest"] == barrier["manifest"]
@@ -577,10 +597,7 @@ def validate_run(path: Path, request: dict[str, Any], validator_sha: str) -> dic
             and result["passed"] is True, "unbound Rust result")
     for name, expected in (("participants", 3), ("processes", 16), ("restarted", 16), ("signed_rs16_observations", 16)):
         require(type(result[name]) is int and result[name] == expected, f"wrong {name}")
-    activation = integer(result["activation_height"], 301, 2**64 - 2, "300-height-notice activation")
-    require(integer(result["authority_context_height"], 302, 2**64 - 1, "authority height") == activation + 1,
-            "authority context did not follow activation")
-    height = integer(result["finalized_height"], activation + 1, 2**64 - 1, "finalized height")
+    _activation, _authority, height = validate_smoke_result_heights(result)
     require({item.name for item in evidence_path.iterdir()} == EVIDENCE_NAMES, "incomplete or extra smoke evidence files")
     inventory = result["artifacts"]
     require(isinstance(inventory, list) and len(inventory) == len(EVIDENCE_NAMES), "incomplete artifact manifest")
@@ -726,7 +743,7 @@ def build_commands(repo: Path, target: Path) -> dict[str, list[str]]:
         "build-validator": prefix + ["build", *common, "-p", "irohad", "--bin", "iroha3d",
                                       "--features", "test-network-message-control", "--target-dir", str(target)],
         "build-integration": prefix + ["test", *common, "-p", "integration_tests", "--test", "nexus_and_streaming",
-            "--features", "atomic-private-settlement-metal-smoke", "--no-run", "--message-format=json",
+            "--features", "atomic-private-settlement-smoke", "--no-run", "--message-format=json",
             "--target-dir", str(target)],
     }
 

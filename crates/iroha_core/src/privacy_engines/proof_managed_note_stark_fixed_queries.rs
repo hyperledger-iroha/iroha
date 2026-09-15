@@ -1,8 +1,8 @@
-//! Exact selected-query evaluation of execution profiles' public fixed polynomials.
+//! Exact selected-query evaluation of compiled profiles' public fixed polynomials.
 //!
 //! The values are the same degree-<N interpolants used by the prover's IFFT/LDE.
 //! All inputs come from the compiled adapter; proof bytes supply neither these
-//! polynomials nor their evaluations. Privacy profiles retain their original path.
+//! polynomials nor their evaluations. The verifier uses one path for every profile.
 
 use super::{F, ProofManagedNoteStarkErrorV1, checked_trace_size_v1, map_transparent_error_v1};
 use crate::privacy_engines::transparent_stark::{
@@ -11,7 +11,7 @@ use crate::privacy_engines::transparent_stark::{
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
-/// At most four independent inversion buffers are resident, regardless of Rayon width.
+/// At most four queries retain weights and inversion-prefix scratch, regardless of Rayon width.
 const QUERY_BATCH: usize = 4;
 
 enum Column {
@@ -274,6 +274,31 @@ mod tests {
     }
 
     #[test]
+    fn native_subgroup_is_rejected_and_privacy_coset_is_disjoint() {
+        let oracle = Oracle::new(vec![vec![F::ONE; 8]], 3).expect("small native oracle");
+        for root in &oracle.roots {
+            assert_eq!(
+                oracle.evaluate(*root),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+                "a zero denominator must never produce an interpolated row"
+            );
+        }
+        let native_log2 = super::super::PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1;
+        let lde_log2 = native_log2 + super::super::PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1;
+        let native_size = checked_trace_size_v1(native_log2).expect("native size");
+        let lde_size = checked_trace_size_v1(lde_log2).expect("LDE size");
+        let shift = F(GOLDILOCKS_GENERATOR_V1);
+        // If any shifted LDE point belonged to the native subgroup, its LDE-size
+        // power would be one too. This proves disjointness for the entire coset.
+        assert_ne!(shift.pow(lde_size as u128), F::ONE);
+        let root = goldilocks_primitive_root_v1(lde_log2).expect("LDE root");
+        for index in [0, 1, lde_size - 1] {
+            let x = shift.mul(root.pow(index as u128));
+            assert_ne!(x.pow(native_size as u128), F::ONE);
+        }
+    }
+
+    #[test]
     fn selected_evaluations_are_identical_across_rayon_widths() {
         let columns = vec![
             (0..512)
@@ -289,6 +314,8 @@ mod tests {
                 .expect("private deterministic query pool")
                 .install(|| query_rows_v1(columns.clone(), 9, 12, &indices).expect("queries"))
         };
-        assert_eq!(run(1), run(4));
+        let serial = run(1);
+        assert_eq!(serial, run(4));
+        assert_eq!(serial, run(8));
     }
 }

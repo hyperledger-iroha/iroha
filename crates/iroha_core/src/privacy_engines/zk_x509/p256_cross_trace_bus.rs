@@ -54,7 +54,7 @@ use super::{
     },
 };
 #[cfg(test)]
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
@@ -2332,8 +2332,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-cross-trace-test",
-            &GoldilocksDigest384V1::new([0x43; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([0xb8; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([0x43; 48]),
+            &PrivacyOuterDigestV1::from_bytes([0xb8; 48]),
         )
         .expect("transcript");
         let transcript_challenges =

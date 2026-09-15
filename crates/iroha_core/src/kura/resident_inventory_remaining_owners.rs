@@ -20,13 +20,34 @@ flat_resident_owner!(VecDeque<VerifiedV2FinalityCacheEntry>, ResidentVerificatio
 flat_resident_owner!(VecDeque<PipelineRecoverySidecar>, ResidentQueue);
 flat_resident_owner!(VecDeque<QueuedFastpqProofSnapshot>, ResidentQueue);
 flat_resident_owner!(BTreeMap<LaneId,LaneConfigEntry>, ResidentFrontier);
-flat_resident_owner!(BTreeMap<LaneId,CertifiedFrontierPairDurabilityAttestation>, ResidentFrontier);
+flat_resident_owner!(BTreeMap<LaneId,CertifiedPairDurabilityAttestation>, ResidentFrontier);
 flat_resident_owner!(BTreeMap<LaneId,CertifiedFrontierArtifactValidationAttestation>, ResidentFrontier);
 
 impl resident_nested_map::AssociationValue for BTreeMap<PeerId, BlockReplicaAdvert> {
     const FAMILY: resource_inventory::Family = resource_inventory::Family::ResidentReplica;
     fn association_weight(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
         resident_inventory::lengths([1, self.len()])
+    }
+}
+impl resident_nested_map::AssociationValue for NativeAmxPublicationCapacityReservation {
+    const FAMILY: resource_inventory::Family = resource_inventory::Family::ResidentFrontier;
+    fn association_weight(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
+        self.routes.values().try_fold(
+            resident_inventory::lengths([
+                1,
+                self.routes.len(),
+                usize::from(self.index_record.is_some()),
+            ])?,
+            |total, route| {
+                total
+                    .checked_add(resident_inventory::lengths([
+                        route.component_bytes.len(),
+                        route.component_allocation_bytes.len(),
+                        route.outstanding_components.len(),
+                    ])?)
+                    .ok_or(resource_inventory::Unavailable::Arithmetic)
+            },
+        )
     }
 }
 impl resident_nested_map::AssociationValue for PostWsvLaneArtifactBudgetReservation {

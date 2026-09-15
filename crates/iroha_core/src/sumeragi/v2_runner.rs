@@ -737,8 +737,8 @@ impl LocalProposalState {
         self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
     }
-    /// Recheck a moving merge frontier without changing ordinary retry or proposal ownership.
-    fn defer_merge_frontier(&mut self, owner: LocalProposalOwner, now: Instant) {
+    /// Recheck a deferred candidate snapshot without changing ordinary retry or proposal ownership.
+    fn defer_candidate_snapshot(&mut self, owner: LocalProposalOwner, now: Instant) {
         let started_at = self
             .candidate_work_wait
             .filter(|wait| wait.owner == owner)
@@ -838,7 +838,7 @@ impl ProductionLifecycleLocalProposalStateV1 {
 }
 
 /// Run the v2-only worker until shutdown or a fail-closed error.
-pub(super) fn run(worker: SumeragiWorker) {
+pub(super) fn run(worker: SumeragiWorker, mut startup_recovery: super::StartupRecoveryPublisher) {
     let mut status_clear = V2StatusClearGuard::new();
     let ingress_ready = Arc::clone(&worker.ingress_ready);
     let block_ingress = Arc::clone(&worker.block_rx);
@@ -847,8 +847,9 @@ pub(super) fn run(worker: SumeragiWorker) {
     // Declared after ingress cleanup so reverse-order unwinding closes the
     // process output gate before readiness state is released.
     let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
-    match run_inner(worker) {
+    match run_inner(worker, &startup_recovery) {
         Ok(()) => {
+            startup_recovery.finish();
             failure_guard.disarm();
             status_clear.clear_on_drop();
         }
@@ -945,7 +946,10 @@ fn wait_for_terminal_shutdown(
 }
 include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
-fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
+fn run_inner(
+    worker: SumeragiWorker,
+    startup_recovery: &super::StartupRecoveryPublisher,
+) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
         build_identity,
         config,
@@ -1030,6 +1034,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .into(),
                 );
             }
+            // Terminal recovery authorizes writers only after exact final validation.
+            startup_recovery.ready();
             wait_for_terminal_shutdown(
                 terminal_context.height,
                 terminal_context.id(),
@@ -1175,6 +1181,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             retained_merge_sidecars,
             kura_replica_advert_refresh,
             block_sync_server,
+            Some(startup_recovery),
         ),
         Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(
             build_identity,
@@ -1220,6 +1227,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             retained_merge_sidecars,
             kura_replica_advert_refresh,
             block_sync_server,
+            startup_recovery,
         ),
     }
 }
@@ -1531,7 +1539,7 @@ fn schedule_local_proposal(
         if lane_work.refresh_merge_candidates(directive.tag().view())?
             == super::v2_lane_work::MergeRefreshOutcome::Deferred
         {
-            proposal_state.defer_merge_frontier(owner, Instant::now());
+            proposal_state.defer_candidate_snapshot(owner, Instant::now());
             return Ok(());
         }
         let queue_plan_admissions =
@@ -1559,6 +1567,17 @@ fn schedule_local_proposal(
         })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
+                proposal_state.defer_candidate_snapshot(owner, Instant::now());
+                iroha_logger::debug!(
+                    height = owner.tag.height(),
+                    view = owner.tag.view(),
+                    ?reason,
+                    ?report,
+                    "deferred Sumeragi v2 proposal because its complete work snapshot is unavailable"
+                );
+                return Ok(());
+            }
             CandidateAssemblyOutcome::NoProposalWork(report) => {
                 let now = Instant::now();
                 proposal_state.retire_unsubmitted_non_empty_retry(owner);

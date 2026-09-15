@@ -8,13 +8,16 @@ use iroha_core::privacy_profiles::{
 };
 use iroha_crypto::sha256;
 use iroha_data_model::{
-    isi::{InstructionBox, privacy::RegisterPrivacyProtocolActivationV1},
+    isi::{
+        InstructionBox,
+        privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
+    },
     privacy::{
         PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1,
-        PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PrivacyCompiledProfileCatalogRowV1,
-        PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileResultV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PrivacyActiveLifecycleV1,
+        PrivacyCompiledProfileCatalogRowV1, PrivacyCompiledProfileCatalogV1,
+        PrivacyCompiledProfileResultV1, PrivacyProposedLifecycleV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
 };
 use iroha_genesis::genesis_instructions_json;
@@ -27,9 +30,8 @@ use std::{
 };
 mod release;
 const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-governance-templates.v1";
-const NOTICE_INTERVAL_BLOCKS_V1: u64 = 300;
-const OBSERVATION_INTERVAL_BLOCKS_V1: u64 = 300;
-const WAVE_PROPOSED_AT_HEIGHTS_V1: [u64; 4] = [1, 602, 1_203, 1_804];
+const BOOTSTRAP_EXECUTION_HEIGHT_V1: u64 = 1;
+const BOOTSTRAP_INSTRUCTION_COUNT_V1: usize = PrivacyProtocolIdV1::COUNT * 2;
 const MAX_INSTRUCTIONS_JSON_BYTES_V1: u64 = 4 * 1024 * 1024;
 const MAX_REPORT_JSON_BYTES_V1: u64 = 8 * 1024 * 1024;
 /// Emit or validate the exact first-release Taira privacy bootstrap.
@@ -40,7 +42,7 @@ pub struct Args {
 }
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Emit all twelve compiled governance activation templates atomically.
+    /// Emit one height-1 template of twelve ordered registration/activation pairs.
     #[command(name = "emit-taira-v1")]
     EmitTairaV1(EmitTairaV1Args),
     /// Validate an emitted exact-12 instruction set and its digest inventory.
@@ -95,7 +97,7 @@ impl<T: Write> RunArgs<T> for Args {
                     "instructions_json_sha256": (hex::encode(sha256(&artifacts.instructions_json))),
                     "report_path": (args.report_output.display().to_string()),
                     "report_json_sha256": (hex::encode(sha256(&artifacts.report_json))),
-                    "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
+                    "instruction_count": (BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
             }
@@ -117,7 +119,7 @@ impl<T: Write> RunArgs<T> for Args {
                     "instructions_json_sha256": (hex::encode(sha256(&instructions_json))),
                     "report_path": (args.report.display().to_string()),
                     "report_json_sha256": (hex::encode(sha256(&report_json))),
-                    "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
+                    "instruction_count": (BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
             }
@@ -131,20 +133,12 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
-    match protocol {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
-        | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-        | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
-        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => 0,
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1
-        | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
-        | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-        | PrivacyProtocolIdV1::PqMaspStarkV1 => 1,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1
-        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => 2,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
-    }
+fn bootstrap_active_lifecycle_v1() -> PrivacyProtocolLifecycleV1 {
+    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        activated_at_height: BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        state_since_height: BOOTSTRAP_EXECUTION_HEIGHT_V1,
+    })
 }
 fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     let profiles = PrivacyProtocolIdV1::ALL
@@ -179,7 +173,7 @@ fn build_artifacts_from_profiles_v1(
         );
     }
     let mut seen = BTreeSet::new();
-    let mut instructions = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+    let mut instructions = Vec::with_capacity(BOOTSTRAP_INSTRUCTION_COUNT_V1);
     let mut catalog_rows = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     for (index, (profile, expected_protocol)) in profiles
         .iter()
@@ -200,11 +194,8 @@ fn build_artifacts_from_profiles_v1(
                 profile.protocol_id.canonical_label()
             );
         }
-        let wave = rollout_wave_index_v1(profile.protocol_id);
-        let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[wave];
         let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-            proposed_at_height,
-            activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
+            proposed_at_height: BOOTSTRAP_EXECUTION_HEIGHT_V1,
         });
         let activation = profile.activation_record(lifecycle);
         activation.validate().map_err(|source| {
@@ -215,6 +206,12 @@ fn build_artifacts_from_profiles_v1(
         })?;
         instructions.push(InstructionBox::from(
             RegisterPrivacyProtocolActivationV1::new(activation),
+        ));
+        instructions.push(InstructionBox::from(
+            TransitionPrivacyProtocolLifecycleV1::new(
+                profile.protocol_id,
+                bootstrap_active_lifecycle_v1(),
+            ),
         ));
         catalog_rows.push(PrivacyCompiledProfileCatalogRowV1 {
             protocol_id: profile.protocol_id,
@@ -234,19 +231,26 @@ fn render_artifacts_v1(
     instructions: Vec<InstructionBox>,
     catalog: PrivacyCompiledProfileCatalogV1,
 ) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
+    validate_instruction_semantics_v1(&instructions, &instructions)?;
     let mut instructions_json = String::new();
     genesis_instructions_json::serialize(&instructions, &mut instructions_json);
     instructions_json.push('\n');
     let instructions_json = instructions_json.into_bytes();
-    let mut labels = Vec::with_capacity(instructions.len());
+    let labels = PrivacyProtocolIdV1::ALL
+        .into_iter()
+        .map(|id| id.canonical_label().to_owned())
+        .collect::<Vec<_>>();
+    let mut instruction_labels = Vec::with_capacity(instructions.len());
+    let mut wire_ids = Vec::with_capacity(instructions.len());
     let mut instruction_norito_base64 = Vec::with_capacity(instructions.len());
     let mut instruction_norito_sha256 = Vec::with_capacity(instructions.len());
     for (index, instruction) in instructions.iter().enumerate() {
-        let activation = privacy_activation_at_v1(instruction, index)?;
+        let (protocol, wire_id) = privacy_instruction_identity_at_v1(instruction, index)?;
         let encoded = norito::to_bytes(instruction).wrap_err_with(|| {
             format!("failed to encode privacy bootstrap instruction {index} as Norito")
         })?;
-        labels.push(activation.protocol_id.canonical_label().to_owned());
+        instruction_labels.push(protocol.canonical_label().to_owned());
+        wire_ids.push(wire_id);
         instruction_norito_base64.push(BASE64_STANDARD.encode(&encoded));
         instruction_norito_sha256.push(hex::encode(sha256(&encoded)));
     }
@@ -259,10 +263,11 @@ fn render_artifacts_v1(
         "schema_version": 1_u64,
         "governance_activation_templates": {
             "deployment_state": "not-executed",
-            "genesis_activation_forbidden": true,
-            "notice_interval_blocks": (NOTICE_INTERVAL_BLOCKS_V1),
-            "observation_interval_blocks": (OBSERVATION_INTERVAL_BLOCKS_V1),
-            "instruction_wire_id": (RegisterPrivacyProtocolActivationV1::WIRE_ID),
+            "execution_mode": "explicit-register-then-activate",
+            "execution_height": (BOOTSTRAP_EXECUTION_HEIGHT_V1),
+            "instruction_count": (BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
+            "instruction_wire_ids": (wire_ids),
+            "instruction_protocol_labels": (instruction_labels),
             "instruction_encoding": "norito-instruction-box-base64",
             "protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
             "protocol_labels": (labels),
@@ -331,53 +336,92 @@ fn validate_instruction_semantics_v1(
     instructions: &[InstructionBox],
     expected: &[InstructionBox],
 ) -> color_eyre::Result<()> {
-    if instructions.len() != PrivacyProtocolIdV1::COUNT {
+    if instructions.len() != BOOTSTRAP_INSTRUCTION_COUNT_V1 {
         bail!(
-            "privacy bootstrap must contain exactly {} activation registrations, got {}",
-            PrivacyProtocolIdV1::COUNT,
+            "privacy bootstrap must contain exactly {} ordered registration/activation instructions, got {}",
+            BOOTSTRAP_INSTRUCTION_COUNT_V1,
             instructions.len()
         );
     }
-    if expected.len() != PrivacyProtocolIdV1::COUNT {
+    if expected.len() != BOOTSTRAP_INSTRUCTION_COUNT_V1 {
         bail!("internal exact-12 privacy bootstrap expectation is incomplete");
     }
     let mut seen = BTreeSet::new();
-    for (index, ((instruction, expected_instruction), expected_protocol)) in instructions
-        .iter()
-        .zip(expected)
+    for (index, ((pair, expected_pair), expected_protocol)) in instructions
+        .chunks_exact(2)
+        .zip(expected.chunks_exact(2))
         .zip(PrivacyProtocolIdV1::ALL)
         .enumerate()
     {
-        let actual = privacy_activation_at_v1(instruction, index)?;
-        let expected_activation = privacy_activation_at_v1(expected_instruction, index)?;
+        let actual = privacy_activation_at_v1(&pair[0], index * 2)?;
+        let expected_activation = privacy_activation_at_v1(&expected_pair[0], index * 2)?;
         if !seen.insert(actual.protocol_id) {
-            bail!(
-                "privacy bootstrap contains duplicate protocol `{}` at index {index}",
-                actual.protocol_id.canonical_label()
-            );
+            bail!("privacy bootstrap contains duplicate protocol at pair {index}");
         }
         if actual.protocol_id != expected_protocol {
-            bail!(
-                "privacy bootstrap protocol order mismatch at index {index}: expected `{}`, got `{}`",
-                expected_protocol.canonical_label(),
-                actual.protocol_id.canonical_label()
-            );
+            bail!("privacy bootstrap protocol order mismatch at pair {index}");
         }
         actual.validate().map_err(|source| {
-            eyre!(
-                "privacy bootstrap activation `{}` is structurally invalid: {source}",
-                actual.protocol_id.canonical_label()
-            )
+            eyre!("privacy bootstrap activation at pair {index} is structurally invalid: {source}")
         })?;
-        if actual != expected_activation {
+        let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        });
+        if actual.lifecycle != proposed || actual != expected_activation {
             bail!(
-                "privacy bootstrap activation `{}` differs from the exact local compiled profile",
-                actual.protocol_id.canonical_label()
+                "privacy bootstrap registration at pair {index} differs from the exact compiled profile or execution height"
             );
         }
+        let transition = privacy_transition_at_v1(&pair[1], index * 2 + 1)?;
+        let expected_transition = privacy_transition_at_v1(&expected_pair[1], index * 2 + 1)?;
+        if transition.protocol_id != actual.protocol_id
+            || transition.next_lifecycle != bootstrap_active_lifecycle_v1()
+            || transition != expected_transition
+        {
+            bail!(
+                "privacy bootstrap transition at pair {index} is not the exact same-height Active transition"
+            );
+        }
+        actual
+            .lifecycle
+            .validate_transition_to(&transition.next_lifecycle)
+            .map_err(|source| {
+                eyre!("privacy bootstrap transition at pair {index} is invalid: {source}")
+            })?;
     }
     Ok(())
 }
+fn privacy_transition_at_v1(
+    instruction: &InstructionBox,
+    index: usize,
+) -> color_eyre::Result<&TransitionPrivacyProtocolLifecycleV1> {
+    instruction
+        .as_any()
+        .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+        .ok_or_else(|| {
+            eyre!(
+                "privacy bootstrap instruction {index} is not `{}`",
+                TransitionPrivacyProtocolLifecycleV1::WIRE_ID
+            )
+        })
+}
+fn privacy_instruction_identity_at_v1(
+    instruction: &InstructionBox,
+    index: usize,
+) -> color_eyre::Result<(PrivacyProtocolIdV1, &'static str)> {
+    if index % 2 == 0 {
+        Ok((
+            privacy_activation_at_v1(instruction, index)?.protocol_id,
+            RegisterPrivacyProtocolActivationV1::WIRE_ID,
+        ))
+    } else {
+        Ok((
+            privacy_transition_at_v1(instruction, index)?.protocol_id,
+            TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
+        ))
+    }
+}
+
 fn privacy_activation_at_v1(
     instruction: &InstructionBox,
     index: usize,
@@ -413,30 +457,70 @@ fn validate_report_inventory_v1(
         .ok_or_else(|| {
             eyre!("privacy bootstrap report governance_activation_templates must be an object")
         })?;
+    if registration
+        .get("deployment_state")
+        .and_then(JsonValue::as_str)
+        != Some("not-executed")
+        || registration
+            .get("execution_mode")
+            .and_then(JsonValue::as_str)
+            != Some("explicit-register-then-activate")
+        || registration
+            .get("execution_height")
+            .and_then(JsonValue::as_u64)
+            != Some(BOOTSTRAP_EXECUTION_HEIGHT_V1)
+        || registration
+            .get("instruction_count")
+            .and_then(JsonValue::as_u64)
+            != Some(BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64)
+        || registration
+            .get("protocol_count")
+            .and_then(JsonValue::as_u64)
+            != Some(PrivacyProtocolIdV1::COUNT as u64)
+    {
+        bail!(
+            "privacy bootstrap report does not bind the unexecuted height-1 explicit activation contract"
+        );
+    }
     let labels = report_string_array_v1(registration, "protocol_labels")?;
+    if labels.len() != PrivacyProtocolIdV1::COUNT
+        || labels
+            .iter()
+            .zip(PrivacyProtocolIdV1::ALL)
+            .any(|(label, protocol)| *label != protocol.canonical_label())
+    {
+        bail!("privacy bootstrap report must bind the unique ordered Exact12 protocol inventory");
+    }
+    let instruction_labels = report_string_array_v1(registration, "instruction_protocol_labels")?;
+    let wire_ids = report_string_array_v1(registration, "instruction_wire_ids")?;
     let base64_values = report_string_array_v1(registration, "instruction_norito_base64")?;
     let hashes = report_string_array_v1(registration, "instruction_norito_sha256")?;
     for (field, len) in [
-        ("protocol_labels", labels.len()),
+        ("instruction_protocol_labels", instruction_labels.len()),
+        ("instruction_wire_ids", wire_ids.len()),
         ("instruction_norito_base64", base64_values.len()),
         ("instruction_norito_sha256", hashes.len()),
     ] {
-        if len != PrivacyProtocolIdV1::COUNT {
+        if len != BOOTSTRAP_INSTRUCTION_COUNT_V1 {
             bail!(
                 "privacy bootstrap report `{field}` must contain exactly {} entries, got {len}",
-                PrivacyProtocolIdV1::COUNT
+                BOOTSTRAP_INSTRUCTION_COUNT_V1
             );
         }
     }
-    for (index, (((label, encoded), claimed_hash), instruction)) in labels
+    if instructions.len() != BOOTSTRAP_INSTRUCTION_COUNT_V1 {
+        bail!("privacy bootstrap report instruction population is incomplete");
+    }
+    for (index, ((((label, wire_id), encoded), claimed_hash), instruction)) in instruction_labels
         .iter()
+        .zip(&wire_ids)
         .zip(&base64_values)
         .zip(&hashes)
         .zip(instructions)
         .enumerate()
     {
-        let activation = privacy_activation_at_v1(instruction, index)?;
-        if *label != activation.protocol_id.canonical_label() {
+        let (protocol, expected_wire_id) = privacy_instruction_identity_at_v1(instruction, index)?;
+        if *label != protocol.canonical_label() || *wire_id != expected_wire_id {
             bail!("privacy bootstrap report label mismatch at index {index}");
         }
         let decoded = BASE64_STANDARD.decode(encoded).map_err(|source| {
@@ -453,8 +537,10 @@ fn validate_report_inventory_v1(
             norito::decode_from_bytes::<InstructionBox>(&decoded).map_err(|source| {
                 eyre!("privacy bootstrap report Norito instruction {index} is invalid: {source}")
             })?;
-        let decoded_activation = privacy_activation_at_v1(&decoded_instruction, index)?;
-        if decoded_activation != activation {
+        let decoded_identity = privacy_instruction_identity_at_v1(&decoded_instruction, index)?;
+        if decoded_identity != (protocol, expected_wire_id)
+            || norito::to_bytes(instruction)? != decoded
+        {
             bail!("privacy bootstrap report Norito instruction mismatch at index {index}");
         }
         let reencoded = norito::to_bytes(&decoded_instruction).wrap_err_with(|| {
@@ -641,6 +727,248 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
 mod tests {
     use super::*;
 
+    // Structural fixture only: never substitutes for the production all-engine gate.
+    fn structural_profiles_v1() -> Vec<CompiledPrivacyProfileV1> {
+        use iroha_data_model::privacy::{
+            AnonymousPgcActivationLimitsV1, FcmpActivationLimitsV1,
+            IvmPrivateNoteActivationLimitsV1, JindoActivationLimitsV1, OrchardActivationLimitsV1,
+            PqMaspActivationLimitsV1, PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyProtocolActivationLimitsV1 as Limits,
+            PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1, VeRangeActivationLimitsV1,
+            ZkAmsActivationLimitsV1,
+        };
+        PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .map(|protocol_id| {
+                let protocol_limits = match protocol_id {
+                    PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => Limits::ZkAcePqAuthorizationV1,
+                    PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+                        Limits::AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1 {
+                            max_anonymity_set_size: 16,
+                            max_recipient_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+                        Limits::VeRangeTransparentRangeV1(VeRangeActivationLimitsV1 {
+                            max_aggregation_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::IrohaZkAmsV1 => {
+                        Limits::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                            max_batch_size: 1,
+                            max_ring_size: 16,
+                        })
+                    }
+                    PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
+                        Limits::VegaExistingCredentialZkV1
+                    }
+                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => Limits::IrohaZkX509StarkP256V1,
+                    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+                        Limits::IrohaJindoPolynomialCommitmentV1(JindoActivationLimitsV1 {
+                            max_polynomial_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                        Limits::IrohaBootleLanternAnoncredV1
+                    }
+                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+                        Limits::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+                            max_action_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+                        Limits::MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1 {
+                            max_input_count: 1,
+                            max_output_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+                        Limits::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteActivationLimitsV1 {
+                            max_input_count: 1,
+                            max_output_count: 1,
+                        })
+                    }
+                    PrivacyProtocolIdV1::PqMaspStarkV1 => {
+                        Limits::PqMaspStarkV1(PqMaspActivationLimitsV1 {
+                            max_input_count: 1,
+                            max_output_count: 1,
+                        })
+                    }
+                };
+                CompiledPrivacyProfileV1 {
+                    protocol_id,
+                    proof_system_id: protocol_id.expected_proof_system(),
+                    engine_id: protocol_id.expected_engine(),
+                    parameter_id: PrivacyParameterIdV1::new([1; 32]),
+                    parameter_digest: PrivacyParameterDigestV1::new([2; 32]),
+                    verifier_digest: PrivacyVerifierDigestV1::new([3; 32]),
+                    statement_schema_digest: PrivacyStatementSchemaDigestV1::new([4; 32]),
+                    engine_manifest_digest: PrivacyEngineManifestDigestV1::new([5; 32]),
+                    protocol_limits,
+                }
+            })
+            .collect()
+    }
+    #[test]
+    fn exact12_templates_pair_registration_and_same_height_explicit_activation() {
+        let profiles = structural_profiles_v1();
+        let artifacts = build_artifacts_from_profiles_v1(&profiles).expect("structural fixture");
+        assert_eq!(artifacts.instructions.len(), 24);
+        assert_eq!(artifacts.catalog.protocols.len(), 12);
+        for (index, (pair, profile)) in artifacts
+            .instructions
+            .chunks_exact(2)
+            .zip(&profiles)
+            .enumerate()
+        {
+            let registration = privacy_activation_at_v1(&pair[0], index * 2).expect("registration");
+            assert_eq!(registration.protocol_id, profile.protocol_id);
+            let transition = privacy_transition_at_v1(&pair[1], index * 2 + 1).expect("transition");
+            assert_eq!(transition.protocol_id, profile.protocol_id);
+            assert_eq!(transition.next_lifecycle, bootstrap_active_lifecycle_v1());
+            registration
+                .lifecycle
+                .validate_transition_to(&transition.next_lifecycle)
+                .expect("explicit same-height edge");
+        }
+        validate_artifacts_against_v1(
+            &artifacts.instructions_json,
+            &artifacts.report_json,
+            &artifacts,
+        )
+        .expect("canonical JSON and Norito report roundtrip");
+        let report: JsonValue = norito::json::from_slice(&artifacts.report_json).expect("report");
+        for (key, count) in [
+            ("protocol_labels", 12),
+            ("instruction_protocol_labels", 24),
+            ("instruction_wire_ids", 24),
+            ("instruction_norito_base64", 24),
+            ("instruction_norito_sha256", 24),
+        ] {
+            assert_eq!(
+                report
+                    .get("governance_activation_templates")
+                    .and_then(|value| value.get(key))
+                    .and_then(JsonValue::as_array)
+                    .expect("inventory array")
+                    .len(),
+                count
+            );
+        }
+    }
+    #[test]
+    fn explicit_bootstrap_rejects_missing_duplicate_reordered_and_rebound_pairs() {
+        let artifacts = build_artifacts_from_profiles_v1(&structural_profiles_v1())
+            .expect("structural fixture");
+        let expected = &artifacts.instructions;
+        let mut cases = Vec::new();
+        for index in [0, 1, 23] {
+            let mut changed = expected.clone();
+            changed.remove(index);
+            cases.push(changed);
+        }
+        let mut changed = expected.clone();
+        changed.extend_from_slice(&expected[..2]);
+        cases.push(changed);
+        let mut changed = expected.clone();
+        changed.swap(0, 1);
+        cases.push(changed);
+        let mut changed = expected.clone();
+        changed[22] = expected[0].clone();
+        changed[23] = expected[1].clone();
+        cases.push(changed);
+        let mut changed = expected.clone();
+        changed[1] = InstructionBox::from(TransitionPrivacyProtocolLifecycleV1::new(
+            PrivacyProtocolIdV1::ALL[1],
+            bootstrap_active_lifecycle_v1(),
+        ));
+        cases.push(changed);
+        let mut changed = expected.clone();
+        changed[1] = InstructionBox::from(TransitionPrivacyProtocolLifecycleV1::new(
+            PrivacyProtocolIdV1::ALL[0],
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 2,
+            }),
+        ));
+        cases.push(changed);
+        let mut changed = expected.clone();
+        let mut registration = *privacy_activation_at_v1(&changed[0], 0).expect("registration");
+        registration.parameter_digest =
+            iroha_data_model::privacy::PrivacyParameterDigestV1::new([9; 32]);
+        changed[0] = InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(registration));
+        cases.push(changed);
+        for (index, changed) in cases.iter().enumerate() {
+            assert!(
+                validate_instruction_semantics_v1(changed, expected).is_err(),
+                "accepted hostile pair population {index}"
+            );
+        }
+    }
+    #[test]
+    fn explicit_bootstrap_report_rejects_every_incomplete_identity_population() {
+        let artifacts = build_artifacts_from_profiles_v1(&structural_profiles_v1())
+            .expect("structural fixture");
+        for key in [
+            "protocol_labels",
+            "instruction_protocol_labels",
+            "instruction_wire_ids",
+            "instruction_norito_base64",
+            "instruction_norito_sha256",
+        ] {
+            let mut report: JsonValue =
+                norito::json::from_slice(&artifacts.report_json).expect("report");
+            report
+                .get_mut("governance_activation_templates")
+                .and_then(|value| value.get_mut(key))
+                .and_then(JsonValue::as_array_mut)
+                .expect("inventory array")
+                .pop();
+            assert!(
+                validate_report_inventory_v1(&report, &artifacts.instructions).is_err(),
+                "accepted incomplete {key}"
+            );
+        }
+        for key in ["protocol_labels", "instruction_wire_ids"] {
+            let mut report: JsonValue =
+                norito::json::from_slice(&artifacts.report_json).expect("report");
+            report
+                .get_mut("governance_activation_templates")
+                .and_then(|value| value.get_mut(key))
+                .and_then(JsonValue::as_array_mut)
+                .expect("ordered identity inventory")
+                .swap(0, 1);
+            assert!(
+                validate_report_inventory_v1(&report, &artifacts.instructions).is_err(),
+                "accepted reordered {key}"
+            );
+        }
+    }
+    #[test]
+    fn explicit_bootstrap_report_rejects_promoted_or_retimed_execution_metadata() {
+        let artifacts = build_artifacts_from_profiles_v1(&structural_profiles_v1())
+            .expect("structural fixture");
+        for (key, value) in [
+            ("deployment_state", norito::json!("executed")),
+            ("execution_mode", norito::json!("governance-four-wave")),
+            ("execution_height", norito::json!(2_u64)),
+            ("instruction_count", norito::json!(12_u64)),
+            ("protocol_count", norito::json!(24_u64)),
+        ] {
+            let mut report: JsonValue =
+                norito::json::from_slice(&artifacts.report_json).expect("report");
+            report
+                .get_mut("governance_activation_templates")
+                .and_then(JsonValue::as_object_mut)
+                .expect("contract")
+                .insert(key.to_owned(), value);
+            assert!(
+                validate_report_inventory_v1(&report, &artifacts.instructions).is_err(),
+                "accepted hostile {key}"
+            );
+        }
+    }
     #[test]
     fn exact12_bootstrap_fails_closed_when_any_engine_is_unavailable() {
         let error = build_taira_privacy_bootstrap_v1()

@@ -1,0 +1,504 @@
+{
+  "instructions": [
+    {
+      "Register": {
+        "Account": {
+          "id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+          "metadata": {
+            "purpose": "nevo_taira_onboarding_authority"
+          },
+          "label": null,
+          "uaid": null,
+          "opaque_ids": []
+        }
+      }
+    },
+    {
+      "Register": {
+        "Account": {
+          "id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+          "metadata": {
+            "purpose": "nevo_dpn_contract_admin_api_signer"
+          },
+          "label": null,
+          "uaid": null,
+          "opaque_ids": []
+        }
+      }
+    },
+    {
+      "Register": {
+        "Account": {
+          "id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+          "metadata": {
+            "purpose": "nevo_dpn_inori_controller"
+          },
+          "label": null,
+          "uaid": null,
+          "opaque_ids": []
+        }
+      }
+    },
+    {
+      "Register": {
+        "Account": {
+          "id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+          "metadata": {
+            "purpose": "nevo_dpn_epr_source_guard"
+          },
+          "label": null,
+          "uaid": null,
+          "opaque_ids": []
+        }
+      }
+    },
+    {
+      "Mint": {
+        "Asset": {
+          "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+          "object": "1000000"
+        }
+      }
+    },
+    {
+      "Mint": {
+        "Asset": {
+          "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+          "object": "1000000"
+        }
+      }
+    },
+    {
+      "Mint": {
+        "Asset": {
+          "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+          "object": "1000000"
+        }
+      }
+    },
+    {
+      "Mint": {
+        "Asset": {
+          "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+          "object": "1000000"
+        }
+      }
+    },
+    {
+      "Register": {
+        "Role": {
+          "id": "nevo_taira_alias_bootstrap",
+          "permissions": [
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "alias",
+                  "value": {
+                    "canonical_name": {
+                      "label": "admin",
+                      "domain": null,
+                      "dataspace": "universal"
+                    },
+                    "dataspace_id": 0
+                  }
+                }
+              }
+            },
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "alias",
+                  "value": {
+                    "canonical_name": {
+                      "label": "inori",
+                      "domain": null,
+                      "dataspace": "universal"
+                    },
+                    "dataspace_id": 0
+                  }
+                }
+              }
+            },
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "alias",
+                  "value": {
+                    "canonical_name": {
+                      "label": "source_guard",
+                      "domain": null,
+                      "dataspace": "universal"
+                    },
+                    "dataspace_id": 0
+                  }
+                }
+              }
+            },
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "dataspace",
+                  "value": 10
+                }
+              }
+            },
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "dataspace",
+                  "value": 8477022798449861195
+                }
+              }
+            },
+            {
+              "name": "CanManageAccountAlias",
+              "payload": {
+                "scope": {
+                  "scope": "domain",
+                  "value": "nevo.dpn"
+                }
+              }
+            }
+          ],
+          "grant_to": "testuﾛ1NヰﾋhM25ｳﾙﾁUｺﾂxｼqPﾙPﾅPdNｼﾖ2oﾉﾀdJﾘZﾖ3pTｳ1MLRWYG"
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "dataspace",
+          "intent": {
+            "dataspace": {
+              "canonical_name": "dpn",
+              "dataspace_id": 10
+            },
+            "owner": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "dataspace",
+          "intent": {
+            "dataspace": {
+              "canonical_name": "is2",
+              "dataspace_id": 8477022798449861195
+            },
+            "owner": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "domain",
+          "intent": {
+            "domain": {
+              "canonical_name": "nevo.dpn",
+              "dataspace_id": 10
+            },
+            "owner": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "account_alias",
+          "intent": {
+            "alias": {
+              "canonical_name": {
+                "label": "admin",
+                "domain": null,
+                "dataspace": "universal"
+              },
+              "dataspace_id": 0
+            },
+            "target_account": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+            "provision": {
+              "kind": "existing",
+              "value": null
+            },
+            "role": {
+              "kind": "primary",
+              "value": null
+            }
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "account_alias",
+          "intent": {
+            "alias": {
+              "canonical_name": {
+                "label": "inori",
+                "domain": null,
+                "dataspace": "universal"
+              },
+              "dataspace_id": 0
+            },
+            "target_account": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+            "provision": {
+              "kind": "existing",
+              "value": null
+            },
+            "role": {
+              "kind": "primary",
+              "value": null
+            }
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "EnsureAlias": {
+        "intent": {
+          "kind": "account_alias",
+          "intent": {
+            "alias": {
+              "canonical_name": {
+                "label": "source_guard",
+                "domain": null,
+                "dataspace": "universal"
+              },
+              "dataspace_id": 0
+            },
+            "target_account": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+            "provision": {
+              "kind": "existing",
+              "value": null
+            },
+            "role": {
+              "kind": "primary",
+              "value": null
+            }
+          }
+        },
+        "acquisition": {
+          "term_years": 1,
+          "pricing_class_hint": null
+        },
+        "quote_guard": {
+          "expected_policy_version": 2,
+          "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          "max_amount": "0.5",
+          "valid_until_ms": 18446744073709551615
+        }
+      }
+    },
+    {
+      "Unregister": {
+        "Role": {
+          "object": "nevo_taira_alias_bootstrap"
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+          "object": {
+            "name": "CanRegisterAccount",
+            "payload": {
+              "domain": "nevo.dpn"
+            }
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
+          "object": {
+            "name": "CanEnrollFeeSponsorProgram",
+            "payload": {
+              "program_id": {
+                "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+                "name": "cbsi_web"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+          "object": {
+            "name": "CanRegisterSmartContractCode",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+          "object": {
+            "name": "DpnAdmin",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
+          "object": {
+            "name": "DpnUser",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+          "object": {
+            "name": "DpnInori",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+          "object": {
+            "name": "DpnSettlement",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
+          "object": {
+            "name": "DpnUser",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "Grant": {
+        "Permission": {
+          "destination": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
+          "object": {
+            "name": "DpnEprGuard",
+            "payload": null
+          }
+        }
+      }
+    },
+    {
+      "EnrollFeeSponsorBeneficiary": {
+        "program_id": {
+          "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+          "name": "cbsi_web"
+        },
+        "beneficiary": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+      }
+    },
+    {
+      "EnrollFeeSponsorBeneficiary": {
+        "program_id": {
+          "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+          "name": "cbsi_web"
+        },
+        "beneficiary": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP"
+      }
+    },
+    {
+      "EnrollFeeSponsorBeneficiary": {
+        "program_id": {
+          "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+          "name": "cbsi_web"
+        },
+        "beneficiary": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9"
+      }
+    },
+    {
+      "EnrollFeeSponsorBeneficiary": {
+        "program_id": {
+          "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+          "name": "cbsi_web"
+        },
+        "beneficiary": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT"
+      }
+    }
+  ],
+  "ivm_triggers": [],
+  "topology": []
+}

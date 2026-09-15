@@ -576,7 +576,7 @@ fn locked_commit_progress_witness_rejects_inexact_or_empty_ownership() {
         proposal_round: Some(reference.proposal_round),
         subject: Some(reference.subject),
         execution_commitment: Some(reference.execution_commitment),
-        stage: SumeragiV2OutboundIntentStage::Sent,
+        stage: SumeragiV2OutboundIntentStage::Retained,
     };
     let mut wrong_kind = empty.clone();
     wrong_kind
@@ -697,7 +697,7 @@ fn locked_commit_progress_witness_accepts_each_exact_owner() {
         proposal_round: None,
         subject: None,
         execution_commitment: None,
-        stage: SumeragiV2OutboundIntentStage::Sent,
+        stage: SumeragiV2OutboundIntentStage::Retained,
     };
     let mut timed_out = SumeragiV2LivenessStatus::default();
     timed_out.outbound_intents.push(exact_timeout.clone());

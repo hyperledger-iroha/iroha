@@ -738,28 +738,93 @@ pub struct SnapshotMaker {
     resource_policy: SnapshotResourcePolicy,
 }
 impl SnapshotMaker {
-    /// Start the actor.
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> Child {
+    /// Start supervised storage maintenance after successful startup recovery.
+    ///
+    /// The optional snapshot writer may be disabled while storage-budget
+    /// maintenance remains required. This child waits asynchronously so daemon
+    /// startup can finish wiring P2P and Torii before consensus becomes live.
+    pub fn start(
+        snapshot_maker: Option<Self>,
+        state: Arc<State>,
+        startup_recovery: crate::sumeragi::StartupRecovery,
+        shutdown_signal: ShutdownSignal,
+    ) -> Child {
         Child::new(
-            tokio::spawn(self.run(shutdown_signal)),
+            tokio::spawn(Self::run_startup_maintenance(
+                startup_recovery,
+                shutdown_signal,
+                move || {
+                    tokio::task::block_in_place(|| state.enforce_storage_budget_after_startup());
+                },
+                move |startup_recovery, shutdown_signal| async move {
+                    if let Some(mut maker) = snapshot_maker {
+                        Self::run_snapshot_loop(
+                            maker.create_every,
+                            startup_recovery,
+                            shutdown_signal,
+                            || maker.create_snapshot(),
+                        )
+                        .await;
+                    } else {
+                        let mut startup_recovery = startup_recovery;
+                        tokio::select! {
+                            biased;
+                            () = startup_recovery.failed() => {},
+                            () = shutdown_signal.receive() => {},
+                        }
+                    }
+                },
+            )),
             OnShutdown::Wait(Duration::from_secs(30)),
         )
     }
-    async fn run(mut self, shutdown_signal: ShutdownSignal) {
-        let mut snapshot_create_every = tokio::time::interval(self.create_every);
-        // Don't try to create snapshot more frequently if previous take longer time
+
+    pub(crate) async fn run_startup_maintenance<B, W, F>(
+        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        shutdown_signal: ShutdownSignal,
+        budget: B,
+        writers: W,
+    ) where
+        B: FnOnce(),
+        W: FnOnce(crate::sumeragi::StartupRecovery, ShutdownSignal) -> F,
+        F: std::future::Future<Output = ()>,
+    {
+        if !startup_recovery.wait_for_success(&shutdown_signal).await
+            || !startup_recovery.is_ready()
+            || shutdown_signal.is_sent()
+        {
+            return;
+        }
+        budget();
+        if startup_recovery.is_ready() && !shutdown_signal.is_sent() {
+            writers(startup_recovery, shutdown_signal).await;
+        }
+    }
+
+    pub(crate) async fn run_snapshot_loop<W: FnMut()>(
+        create_every: Duration,
+        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        shutdown_signal: ShutdownSignal,
+        mut write_snapshot: W,
+    ) {
+        let mut snapshot_create_every = tokio::time::interval(create_every);
         snapshot_create_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = snapshot_create_every.tick() => {
-                    // Offload snapshot creation into blocking thread
-                    self.create_snapshot();
-                },
+                biased;
+                () = startup_recovery.failed() => break,
                 () = shutdown_signal.receive() => {
-                    info!("Saving latest snapshot and shutting down");
-                    self.create_snapshot();
+                    if startup_recovery.is_ready() {
+                        info!("Saving latest snapshot and shutting down");
+                        write_snapshot();
+                    }
                     break;
-                }
+                },
+                _ = snapshot_create_every.tick() => {
+                    if startup_recovery.is_ready() && !shutdown_signal.is_sent() {
+                        write_snapshot();
+                    }
+                },
             }
             tokio::task::yield_now().await;
         }

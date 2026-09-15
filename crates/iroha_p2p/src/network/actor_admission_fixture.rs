@@ -48,14 +48,18 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let mut handle = Self::closed_for_tests();
         handle.self_id = self_id;
         let target_count = targets.len().max(1);
-        let sources = target_count
-            .checked_mul(ActorProgressClass::COUNT)
-            .expect("test actor source geometry fits usize");
+        // The bounded fixture has the same independent semantic waiter ranks
+        // as production, including all Lane relay and exact-output producers.
+        let waiters_per_target = actor_waiter_limits()
+            .expect("bounded actor waiter classes")
+            .into_iter()
+            .try_fold(0usize, usize::checked_add)
+            .expect("test actor waiter geometry fits usize");
         handle.network_actor_progress_budget = NetworkActorProgressBudget::new_classed(
             ActorProgressByteLimits::uniform(1024 * 1024),
             target_count,
-            sources
-                .checked_mul(4)
+            target_count
+                .checked_mul(waiters_per_target)
                 .expect("test waiter geometry fits usize"),
         )
         .expect("nonzero bounded test actor progress geometry");

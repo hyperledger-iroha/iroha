@@ -35,8 +35,8 @@ use super::{
     sha256_word_air::{ZkX509WordMemoryChallengesV1, derive_sha256_word_memory_challenges_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1, append_u16_v1, goldilocks_digest384_frame_v1,
+    GoldilocksFieldV1 as F, PrivacyOuterDigestV1, TransparentStarkErrorV1, TransparentTranscriptV1,
+    append_u16_v1, privacy_outer_digest_frame_v1,
 };
 use thiserror::Error;
 const CREDENTIAL_PRE_AUX_MAGIC_V1: [u8; 4] = *b"X5B1";
@@ -94,7 +94,7 @@ pub(crate) struct ZkX509CredentialMainPreAuxV1 {
     /// Digest of the canonical first-release MAIN profile.
     main_profile_digest: [u8; 32],
     /// Exact log5, log8, log15, log16, log18, and log19 MAIN base roots.
-    main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    main_base_roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
 }
 impl ZkX509CredentialMainPreAuxV1 {
     /// Mint MAIN pre-auxiliary state from the completed canonical commitment
@@ -120,7 +120,7 @@ impl ZkX509CredentialMainPreAuxV1 {
     pub(crate) const fn fixture_for_test_v1(
         consensus_context_digest: [u8; 32],
         main_profile_digest: [u8; 32],
-        main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+        main_base_roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     ) -> Self {
         Self {
             consensus_context_digest,
@@ -147,13 +147,13 @@ impl ZkX509CredentialMainPreAuxV1 {
     /// Return the fixture MAIN roots in their asserted canonical order.
     pub(crate) const fn main_base_roots_for_test_v1(
         self,
-    ) -> [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
+    ) -> [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
         self.main_base_roots
     }
     /// Return mutable fixture-only access to the ordered MAIN roots.
     pub(crate) fn main_base_roots_mut_for_test_v1(
         &mut self,
-    ) -> &mut [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
+    ) -> &mut [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1] {
         &mut self.main_base_roots
     }
 }
@@ -175,7 +175,7 @@ pub(crate) struct ZkX509CredentialMainPostBaseChallengesV1 {
     p256_cross: P256CrossTraceChallengesV1,
     p256_scalar: P256ScalarBitBusChallengesV1,
     p256_arithmetic_copy: P256ArithmeticCopyChallengesV1,
-    transcript_state: GoldilocksDigest384V1,
+    transcript_state: PrivacyOuterDigestV1,
 }
 impl ZkX509CredentialMainPostBaseChallengesV1 {
     /// MAIN projection copy and compaction challenges.
@@ -222,7 +222,7 @@ impl ZkX509CredentialMainPostBaseChallengesV1 {
         self.p256_arithmetic_copy
     }
     /// Post-challenge state bound into both local subproof transcripts.
-    pub(crate) const fn transcript_state(self) -> GoldilocksDigest384V1 {
+    pub(crate) const fn transcript_state(self) -> PrivacyOuterDigestV1 {
         self.transcript_state
     }
 }
@@ -264,7 +264,7 @@ impl ZkX509CredentialPreAuxBindingV1 {
         self.main_post_base.rfc5280()
     }
     /// Post-challenge state bound into both local subproof transcripts.
-    pub(crate) const fn transcript_state(self) -> GoldilocksDigest384V1 {
+    pub(crate) const fn transcript_state(self) -> PrivacyOuterDigestV1 {
         self.main_post_base.transcript_state()
     }
 }
@@ -288,10 +288,10 @@ impl From<TransparentStarkErrorV1> for ZkX509CredentialPreAuxErrorV1 {
 }
 fn pre_aux_profile_digest_v1(
     main_profile_digest: [u8; 32],
-    ca_profile_digest: GoldilocksDigest384V1,
-) -> Result<GoldilocksDigest384V1, ZkX509CredentialPreAuxErrorV1> {
-    let ca_profile_digest = ca_profile_digest.to_le_bytes();
-    goldilocks_digest384_frame_v1(
+    ca_profile_digest: PrivacyOuterDigestV1,
+) -> Result<PrivacyOuterDigestV1, ZkX509CredentialPreAuxErrorV1> {
+    let ca_profile_digest = ca_profile_digest.to_bytes();
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         CREDENTIAL_PRE_AUX_PROFILE_DOMAIN_V1,
         b"credential-profile",
@@ -310,10 +310,10 @@ fn pre_aux_profile_digest_v1(
 }
 fn pre_aux_public_digest_v1(
     consensus_context_digest: [u8; 32],
-    ca_public_digest: GoldilocksDigest384V1,
-) -> Result<GoldilocksDigest384V1, ZkX509CredentialPreAuxErrorV1> {
-    let ca_public_digest = ca_public_digest.to_le_bytes();
-    goldilocks_digest384_frame_v1(
+    ca_public_digest: PrivacyOuterDigestV1,
+) -> Result<PrivacyOuterDigestV1, ZkX509CredentialPreAuxErrorV1> {
+    let ca_public_digest = ca_public_digest.to_bytes();
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         CREDENTIAL_PRE_AUX_PUBLIC_DOMAIN_V1,
         b"credential-public",
@@ -330,8 +330,8 @@ fn pre_aux_public_digest_v1(
     .map_err(Into::into)
 }
 fn encode_pre_aux_roots_v1(
-    main_base_roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
-    ca_base_root: GoldilocksDigest384V1,
+    main_base_roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    ca_base_root: PrivacyOuterDigestV1,
 ) -> Result<Vec<u8>, ZkX509CredentialPreAuxErrorV1> {
     const ROOT_RECORD_BYTES_V1: usize = 1 + 2 + 48;
     let exact = 4 + 2 + 2 + (ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 + 1) * ROOT_RECORD_BYTES_V1;
@@ -352,11 +352,11 @@ fn encode_pre_aux_roots_v1(
             &mut encoded,
             u16::try_from(index).map_err(|_| ZkX509CredentialPreAuxErrorV1::Resource)?,
         );
-        encoded.extend_from_slice(&root.to_le_bytes());
+        encoded.extend_from_slice(&root.to_bytes());
     }
     encoded.push(CA_ROOT_KIND_V1);
     append_u16_v1(&mut encoded, 0);
-    encoded.extend_from_slice(&ca_base_root.to_le_bytes());
+    encoded.extend_from_slice(&ca_base_root.to_bytes());
     if encoded.len() != exact {
         return Err(ZkX509CredentialPreAuxErrorV1::Resource);
     }
@@ -528,9 +528,9 @@ fn encode_pre_aux_challenges_v1(
 /// own decoded base roots with the roots used here before accepting the proof.
 pub(crate) fn derive_zk_x509_credential_pre_aux_binding_v1(
     main: ZkX509CredentialMainPreAuxV1,
-    ca_profile_digest: GoldilocksDigest384V1,
-    ca_public_digest: GoldilocksDigest384V1,
-    ca_base_root: GoldilocksDigest384V1,
+    ca_profile_digest: PrivacyOuterDigestV1,
+    ca_public_digest: PrivacyOuterDigestV1,
+    ca_base_root: PrivacyOuterDigestV1,
 ) -> Result<ZkX509CredentialPreAuxBindingV1, ZkX509CredentialPreAuxErrorV1> {
     let profile_digest = pre_aux_profile_digest_v1(main.main_profile_digest, ca_profile_digest)?;
     let public_digest = pre_aux_public_digest_v1(main.consensus_context_digest, ca_public_digest)?;
@@ -584,7 +584,7 @@ pub(crate) fn absorb_zk_x509_credential_pre_aux_binding_v1(
     binding: ZkX509CredentialPreAuxBindingV1,
 ) -> Result<(), ZkX509CredentialPreAuxErrorV1> {
     let challenges = encode_pre_aux_challenges_v1(binding)?;
-    let transcript_state = binding.transcript_state().to_le_bytes();
+    let transcript_state = binding.transcript_state().to_bytes();
     transcript
         .absorb(
             CREDENTIAL_PRE_AUX_LOCAL_BINDING_DOMAIN_V1,
@@ -600,13 +600,13 @@ pub(crate) fn absorb_zk_x509_credential_pre_aux_binding_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn test_digest_v1(value: u8) -> GoldilocksDigest384V1 {
-        GoldilocksDigest384V1::new([u64::from(value); 6]).expect("canonical test digest")
+    fn test_digest_v1(value: u8) -> PrivacyOuterDigestV1 {
+        PrivacyOuterDigestV1::from_bytes([value; 48])
     }
-    fn mutate_digest_byte_v1(digest: &mut GoldilocksDigest384V1, byte: usize) {
-        let mut bytes = digest.to_le_bytes();
+    fn mutate_digest_byte_v1(digest: &mut PrivacyOuterDigestV1, byte: usize) {
+        let mut bytes = digest.to_bytes();
         bytes[byte] ^= 1;
-        *digest = GoldilocksDigest384V1::from_le_bytes(bytes).expect("canonical digest mutation");
+        *digest = PrivacyOuterDigestV1::from_bytes(bytes);
     }
     fn main_pre_aux_v1() -> ZkX509CredentialMainPreAuxV1 {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
@@ -701,7 +701,7 @@ mod tests {
     fn state_after_family_order_v1(
         main: ZkX509CredentialMainPreAuxV1,
         order: &[usize],
-    ) -> GoldilocksDigest384V1 {
+    ) -> PrivacyOuterDigestV1 {
         let mut transcript = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
         for family in order {
             derive_family_for_order_test_v1(&mut transcript, *family);
@@ -763,7 +763,7 @@ mod tests {
     fn local_state_for_encoded_challenges_v1(
         binding: ZkX509CredentialPreAuxBindingV1,
         encoded: &[u8],
-    ) -> GoldilocksDigest384V1 {
+    ) -> PrivacyOuterDigestV1 {
         let mut transcript = TransparentTranscriptV1::new(
             ZK_X509_DIGEST_CONTEXT_V1,
             b"local",
@@ -771,7 +771,7 @@ mod tests {
             &test_digest_v1(0x72),
         )
         .expect("local");
-        let transcript_state = binding.transcript_state().to_le_bytes();
+        let transcript_state = binding.transcript_state().to_bytes();
         transcript
             .absorb(
                 CREDENTIAL_PRE_AUX_LOCAL_BINDING_DOMAIN_V1,
@@ -800,7 +800,7 @@ mod tests {
             main_phase.sha_word().base_folding,
             main_phase.sha_word_base_folding
         );
-        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
+        assert_ne!(binding.transcript_state(), PrivacyOuterDigestV1::default());
     }
     #[test]
     fn opaque_binding_rejects_every_main_phase_provenance_substitution() {
@@ -852,7 +852,7 @@ mod tests {
         let encoded =
             encode_pre_aux_challenges_v1(binding).expect("canonical 272-field challenge encoding");
         assert_eq!(encoded.len(), 272 * core::mem::size_of::<u64>());
-        let challenge_digest = goldilocks_digest384_frame_v1(
+        let challenge_digest = privacy_outer_digest_frame_v1(
             ZK_X509_DIGEST_CONTEXT_V1,
             b"iroha:privacy:zk-x509:credential-pre-aux:challenge-kat:v1",
             b"ordered-challenges",
@@ -862,8 +862,8 @@ mod tests {
             &[&encoded],
         )
         .expect("challenge KAT frame");
-        assert_ne!(challenge_digest, GoldilocksDigest384V1::default());
-        assert_ne!(binding.transcript_state(), GoldilocksDigest384V1::default());
+        assert_ne!(challenge_digest, PrivacyOuterDigestV1::default());
+        assert_ne!(binding.transcript_state(), PrivacyOuterDigestV1::default());
     }
     #[test]
     fn all_eleven_family_positions_are_order_bound() {
@@ -1172,7 +1172,7 @@ mod tests {
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut changed_local, changed_projection)
             .expect("changed local binding");
         assert_ne!(canonical_local.state(), changed_local.state());
-        let local_base_root = test_digest_v1(0x81).to_le_bytes();
+        let local_base_root = test_digest_v1(0x81).to_bytes();
         let mut correct_order = local;
         correct_order
             .absorb(b"local-base-roots", &[&local_base_root])

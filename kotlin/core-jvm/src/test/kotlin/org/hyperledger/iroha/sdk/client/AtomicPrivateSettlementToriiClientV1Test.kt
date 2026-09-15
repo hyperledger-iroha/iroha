@@ -541,6 +541,128 @@ class AtomicPrivateSettlementToriiClientV1Test {
     }
 
     @Test
+    fun pendingReceiptHasOnlyBundleIdentityAndRetainsCanonicalBytes() {
+        val pending = fixture.objectField("responses").objectField("receipt_pending")
+        assertEquals(setOf("bundle_id"), pending.objectField("value").keys)
+        val encoded = JsonEncoder.encode(pending).toByteArray(StandardCharsets.UTF_8)
+        val executor = CapturingSettlementExecutor(rawJsonResponse(encoded))
+        val response = client(executor, verifier = null).getBundleReceipt(bundle).join()
+        assertContentEquals(encoded, response.bytes())
+        val returned = response.bytes()
+        returned.fill(0)
+        assertContentEquals(encoded, response.bytes())
+        assertEquals(1, executor.invocationCount)
+        assertEquals(RequestReplayPolicy.RETRY_SAFE, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.keys.none { it.startsWith("X-Iroha", true) })
+        response.close()
+        assertFailsWith<IllegalStateException> { response.bytes() }
+    }
+
+    @Test
+    fun pendingReceiptRejectsLifecycleAliasesFieldDriftAndUnknownTags() {
+        val pending = fixture.objectField("responses").objectField("receipt_pending")
+        val value = pending.objectField("value")
+        val invalidValues = listOf(
+            value + ("lifecycle" to mapOf("status" to "prepared", "value" to null)),
+            value + ("lifecycle" to null),
+            value + ("extra" to true),
+            emptyMap<String, Any?>(),
+            mapOf("bundle_id" to null),
+            mapOf("bundle_id" to identifiers.stringField("payload_json")),
+            mapOf("bundle_id" to identifiers.stringField("bundle_hex")),
+            null,
+            emptyList<Any?>(),
+        )
+        invalidValues.forEach { invalid ->
+            assertInvalidPublicReceipt(pending + ("value" to invalid))
+        }
+        listOf("absent", "unknown", "Pending", "prepared", null).forEach { tag ->
+            assertInvalidPublicReceipt(pending + ("status" to tag))
+        }
+    }
+
+    @Test
+    fun finalizedReceiptBindsOnlyTheNestedManifestBundleIdentity() {
+        val finalized = fixture.objectField("responses").objectField("receipt_finalized")
+        val value = finalized.objectField("value")
+        assertEquals(
+            setOf("version", "manifest", "authority_catalog", "legs", "finalized_height"),
+            value.keys,
+        )
+        assertEquals(identifiers.stringField("bundle_json"), value.objectField("manifest")["bundle_id"])
+        val encoded = JsonEncoder.encode(finalized).toByteArray(StandardCharsets.UTF_8)
+        val response = client(
+            CapturingSettlementExecutor(rawJsonResponse(encoded)),
+            verifier = null,
+        ).getBundleReceipt(bundle).join()
+        assertContentEquals(encoded, response.bytes())
+        response.close()
+
+        // The fixture checks transport shape and identity, not cryptographic receipt validity.
+        val manifest = value.objectField("manifest")
+        listOf(
+            value + ("bundle_id" to identifiers.stringField("bundle_json")),
+            value + ("extra" to true),
+            value + ("manifest" to (manifest + ("bundle_id" to identifiers.stringField("payload_json")))),
+            value + ("manifest" to (manifest - "bundle_id")),
+            value + ("manifest" to null),
+            value + ("manifest" to emptyList<Any?>()),
+            (value + ("bundle_id" to identifiers.stringField("bundle_json"))) +
+                ("manifest" to emptyMap<String, Any?>()),
+        ).forEach { invalid ->
+            assertInvalidPublicReceipt(finalized + ("value" to invalid))
+        }
+        value.keys.forEach { missing ->
+            assertInvalidPublicReceipt(finalized + ("value" to (value - missing)))
+        }
+    }
+
+    @Test
+    fun abortedReceiptRetainsItsDirectBundleIdentityBinding() {
+        val aborted = fixture.objectField("responses").objectField("receipt_aborted")
+        val value = aborted.objectField("value")
+        assertEquals(identifiers.stringField("bundle_json"), value["bundle_id"])
+        val encoded = JsonEncoder.encode(aborted).toByteArray(StandardCharsets.UTF_8)
+        val response = client(
+            CapturingSettlementExecutor(rawJsonResponse(encoded)),
+            verifier = null,
+        ).getBundleReceipt(bundle).join()
+        assertContentEquals(encoded, response.bytes())
+        response.close()
+        assertInvalidPublicReceipt(aborted + ("value" to (value - "bundle_id")))
+        assertInvalidPublicReceipt(
+            aborted + ("value" to (value + ("bundle_id" to identifiers.stringField("payload_json")))),
+        )
+    }
+
+    @Test
+    fun pendingShapedHttpNotFoundAndTransportFailuresRemainErrors() {
+        val pending = fixture.objectField("responses").objectField("receipt_pending")
+        val executor = CapturingSettlementExecutor(jsonResponse(pending, statusCode = 404))
+        val missing = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(executor, verifier = null).getBundleReceipt(bundle).join()
+        }
+        val failure = missing.cause
+        assertTrue(failure is AtomicPrivateSettlementToriiExceptionV1)
+        assertEquals("atomic private settlement request failed with HTTP 404", failure.message)
+        assertEquals(null, failure.cause)
+        assertEquals(1, executor.invocationCount)
+
+        val unavailable = java.io.IOException("test transport unavailable")
+        val failedExecutor = object : HttpTransportExecutor {
+            override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
+                CompletableFuture<TransportResponse>().apply { completeExceptionally(unavailable) }
+        }
+        val transport = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(failedExecutor, verifier = null).getBundleReceipt(bundle).join()
+        }
+        val transportFailure = transport.cause
+        assertTrue(transportFailure is AtomicPrivateSettlementToriiExceptionV1)
+        assertEquals("atomic private settlement request failed", transportFailure.message)
+        assertTrue(transportFailure.cause === unavailable)
+    }
+
+    @Test
     fun rejectCodesAreAllowlistedBeforeEnteringPublicStatusErrors() {
         fun rejectionMessage(rejectCode: String): String {
             val rejection = TransportResponse.builder()
@@ -648,6 +770,18 @@ class AtomicPrivateSettlementToriiClientV1Test {
         assertFailsWith<java.util.concurrent.CompletionException> {
             client(CapturingSettlementExecutor(redirectedResponse)).getBundleStatus(bundle).join()
         }
+    }
+
+    private fun assertInvalidPublicReceipt(receipt: Map<String, Any?>) {
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(jsonResponse(receipt)), verifier = null)
+                .getBundleReceipt(bundle)
+                .join()
+        }
+        val failure = error.cause
+        assertTrue(failure is AtomicPrivateSettlementToriiExceptionV1)
+        assertEquals("atomic private settlement response is invalid", failure.message)
+        assertEquals(null, failure.cause)
     }
 
     private fun client(

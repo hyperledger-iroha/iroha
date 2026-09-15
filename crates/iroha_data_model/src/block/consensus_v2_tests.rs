@@ -2442,7 +2442,7 @@ fn status_validation_checks_liveness_rounds_quorums_and_queue_ownership() {
             proposal_round: Some(active_round),
             subject: Some(subject(41)),
             execution_commitment: None,
-            stage: SumeragiV2OutboundIntentStage::Sent,
+            stage: SumeragiV2OutboundIntentStage::Retained,
         }],
         queues: vec![SumeragiV2QueueStatus {
             queue: SumeragiV2QueueKind::RuntimeProgress,
@@ -2678,7 +2678,7 @@ fn status_validation_accepts_later_view_active_height_finality_evidence() {
             proposal_round: Some(later_commit.proposal_round),
             subject: Some(later_commit.subject),
             execution_commitment: Some(later_commit.execution_commitment),
-            stage: SumeragiV2OutboundIntentStage::Sent,
+            stage: SumeragiV2OutboundIntentStage::Retained,
         }],
         last_progress: Some(SumeragiV2ProgressTransitionStatus {
             generation: 8,
@@ -2891,5 +2891,44 @@ fn kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift() {
     assert_eq!(
         decode_kagemusha_consensus_signature_envelope_v1(&bls),
         Ok(None)
+    );
+}
+
+#[test]
+fn retained_outbound_stage_wire_and_schema_describe_local_retention() {
+    use iroha_schema::{IntoSchema as _, Metadata};
+    let retained = SumeragiV2OutboundIntentStage::Retained;
+    let bytes = retained.encode();
+    assert_eq!(bytes, 3_u32.to_le_bytes());
+    assert_eq!(
+        SumeragiV2OutboundIntentStage::decode_all(&mut bytes.as_slice())
+            .expect("decode exact retained stage wire slot"),
+        retained
+    );
+    let unknown = 4_u32.to_le_bytes();
+    assert!(SumeragiV2OutboundIntentStage::decode_all(&mut unknown.as_slice()).is_err());
+    let schema = SumeragiV2OutboundIntentStage::schema();
+    let Metadata::Enum(metadata) = schema
+        .get::<SumeragiV2OutboundIntentStage>()
+        .expect("outbound stage schema")
+    else {
+        panic!("outbound stage schema must be an enum");
+    };
+    let variants = metadata
+        .variants
+        .iter()
+        .map(|variant| {
+            assert!(variant.ty.is_none());
+            (variant.tag.as_str(), variant.discriminant)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        variants,
+        vec![
+            ("pending_persistence", 0),
+            ("pending_signature", 1),
+            ("queued", 2),
+            ("retained", 3),
+        ]
     );
 }

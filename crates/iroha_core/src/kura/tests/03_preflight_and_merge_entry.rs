@@ -1462,32 +1462,88 @@ fn pending_queue_plan_admission_store_rejects_empty_and_oversized_bytes() {
     );
 }
 #[test]
-fn pending_queue_plan_admission_exact_height_rejects_frontier_drift_before_write() {
+fn pending_queue_plan_publication_guard_checks_height_before_exposing_mutations() {
     let kura = Kura::blank_kura_for_testing();
     let bytes = b"queue-plan-admission-v1:exact-height".to_vec();
     assert!(
-        kura.persist_pending_queue_plan_admission_certificate_at_exact_durable_height(1, &bytes)
-            .is_err(),
+        matches!(
+            kura.try_queue_plan_publication_at_height(1),
+            Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height: 1,
+                actual_durable_height: 0,
+            })
+        ),
         "a caller snapshot ahead of durable Kura must fail closed"
     );
     assert!(
         !kura.pending_queue_plan_admission_dir().exists(),
         "height mismatch must not create a sidecar directory or certificate"
     );
-    let hash = kura
-        .persist_pending_queue_plan_admission_certificate_at_exact_durable_height(0, &bytes)
-        .expect("the exact empty-chain frontier permits durable publication");
-    kura.verify_pending_queue_plan_admission_durable_height(0)
-        .expect("an idempotent retry observes the exact durable frontier without rescanning");
+    let publication = kura
+        .try_queue_plan_publication_at_height(0)
+        .expect("check the exact empty-chain frontier")
+        .expect("uncontended canonical lock");
     assert!(
-        kura.verify_pending_queue_plan_admission_durable_height(1)
-            .is_err(),
-        "the retry-only height check must reject frontier drift"
+        kura.canonical_chain_lock.try_lock().is_none(),
+        "the checked guard must retain canonical publication ownership"
     );
+    let hash = publication.persist(&bytes).expect("publish exact sidecar");
+    assert_eq!(publication.persist(&bytes).expect("exact retry"), hash);
+    publication
+        .retire(hash)
+        .expect("retire under the checked guard");
+    publication.retire(hash).expect("idempotent retirement");
+    publication
+        .persist(&bytes)
+        .expect("republish exact sidecar");
+    drop(publication);
     assert_eq!(
         kura.pending_queue_plan_admission_certificate(hash)
             .expect("read exact-height sidecar"),
         Some(bytes)
+    );
+}
+
+#[test]
+fn pending_queue_plan_publication_busy_try_never_grants_mutation_authority() {
+    let kura = Kura::blank_kura_for_testing();
+    let lease = kura.canonical_publication_lease();
+    assert!(
+        kura.try_queue_plan_publication_at_height(0)
+            .expect("busy is not a storage failure")
+            .is_none()
+    );
+    assert!(!kura.pending_queue_plan_admission_dir().exists());
+    drop(lease);
+    kura.wait_for_queue_plan_publication();
+    assert!(
+        kura.canonical_chain_lock.try_lock().is_some(),
+        "waiting returns no retained canonical authority"
+    );
+    assert!(
+        kura.try_queue_plan_publication_at_height(0)
+            .expect("fresh preflight after the wait")
+            .is_some()
+    );
+}
+
+#[test]
+fn pending_queue_plan_publication_poison_rejects_without_retirement() {
+    let kura = Kura::blank_kura_for_testing();
+    let bytes = b"queue-plan-admission-v1:preserve-on-poison";
+    let hash = kura
+        .persist_pending_queue_plan_admission_certificate(bytes)
+        .expect("seed retained evidence");
+    let path = kura.pending_queue_plan_admission_path(hash);
+    kura.canonical_storage_poisoned
+        .store(true, Ordering::Release);
+    assert!(matches!(
+        kura.try_queue_plan_publication_at_height(0),
+        Err(Error::CanonicalStoragePoisoned)
+    ));
+    assert_eq!(
+        std::fs::read(path).expect("inspect retained exact bytes"),
+        bytes
     );
 }
 #[test]

@@ -615,8 +615,8 @@ fn assert_protocol_json_labels_roundtrip() {
 fn assert_proof_system_json_labels_roundtrip() {
     let proof_systems = [
         (
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-            "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+            "stark-fri-sha3-384-goldilocks-v1",
         ),
         (
             PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
@@ -664,8 +664,8 @@ fn assert_proof_system_json_labels_roundtrip() {
 fn assert_engine_json_labels_roundtrip() {
     let engines = [
         (
-            PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
-            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
+            "native-goldilocks-sha3-384-stark-fri-v1",
         ),
         (
             PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
@@ -1268,8 +1268,8 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
     ] {
         assert_eq!(
             protocol.expected_proof_system(),
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-            "{protocol:?} must identify the SHA-256 transcript/Merkle STARK"
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+            "{protocol:?} must identify the SHA3-384 transcript/Merkle STARK"
         );
     }
 }
@@ -2534,19 +2534,19 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
     ));
 }
 #[test]
-fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
+fn consensus_policy_schedule_enforces_future_height_and_snapshot_boundaries() {
     let current_limits = PrivacyConsensusLimitsV1::taira_default();
     let mut next_limits = current_limits;
     next_limits.max_actions_per_block -= 1;
     next_limits.retained_root_count -= 1;
     let valid = PrivacyConsensusPolicyTighteningV1 {
         scheduled_at_height: 100,
-        effective_at_height: 100 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+        effective_at_height: 101,
         next_limits,
     };
     valid
         .validate_against(&current_limits)
-        .expect("exact +300 schedule");
+        .expect("next-block schedule");
     for invalid in [
         PrivacyConsensusPolicyTighteningV1 {
             scheduled_at_height: 0,
@@ -2561,11 +2561,7 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
             ..valid
         },
         PrivacyConsensusPolicyTighteningV1 {
-            effective_at_height: valid.effective_at_height - 1,
-            ..valid
-        },
-        PrivacyConsensusPolicyTighteningV1 {
-            scheduled_at_height: u64::MAX - 100,
+            scheduled_at_height: u64::MAX,
             effective_at_height: u64::MAX,
             ..valid
         },
@@ -2575,6 +2571,24 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
             "invalid schedule must reject: {invalid:?}"
         );
     }
+    for (scheduled_at_height, effective_at_height) in [(100, 102), (u64::MAX - 1, u64::MAX)] {
+        PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height,
+            effective_at_height,
+            ..valid
+        }
+        .validate_against(&current_limits)
+        .expect("any representable future block is allowed");
+    }
+    assert!(matches!(
+        PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height: u64::MAX,
+            effective_at_height: u64::MAX,
+            ..valid
+        }
+        .validate_against(&current_limits),
+        Err(PrivacyPolicyValidationErrorV1::HeightOverflow)
+    ));
     let policy = PrivacyConsensusPolicyV1 {
         current_limits,
         pending_tightening: Some(valid),
@@ -2619,12 +2633,12 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
         });
     let valid = PrivacyProtocolLimitsTighteningV1 {
         scheduled_at_height: 25,
-        effective_at_height: 25 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+        effective_at_height: 26,
         next_limits: next,
     };
     valid
         .validate_against(&current)
-        .expect("exact delayed protocol tightening");
+        .expect("next-block protocol tightening");
     assert!(matches!(
         PrivacyProtocolLimitsTighteningV1 {
             next_limits: current,
@@ -2640,7 +2654,7 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
         }
         .validate_against(&current),
         Err(PrivacyProtocolLimitsTighteningValidationErrorV1::Schedule(
-            PrivacyPolicyValidationErrorV1::LeadTimeTooShort { .. }
+            PrivacyPolicyValidationErrorV1::EffectiveNotLater { .. }
         ))
     ));
     assert!(matches!(
@@ -2799,4 +2813,113 @@ fn goldilocks_digest384_json_rejects_noncanonical_words() {
     bytes[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
     let invalid_json = norito::json::to_json(&bytes.to_vec()).expect("serialize invalid bytes");
     assert!(norito::json::from_str::<GoldilocksDigest384V1>(&invalid_json).is_err());
+}
+
+#[test]
+fn privacy_stark_ids_require_the_single_sha3_outer_suite() {
+    for protocol in [
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
+    ] {
+        assert_eq!(
+            protocol.expected_proof_system(),
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks
+        );
+        assert_eq!(
+            protocol.expected_engine(),
+            PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri
+        );
+    }
+    assert!(
+        norito::json::from_json::<PrivacyProofSystemIdV1>(
+            r#"{"proof_system":"stark-fri-poseidon-x7-goldilocks-6x64-v1","value":null}"#,
+        )
+        .is_err()
+    );
+    assert!(
+        norito::json::from_json::<PrivacyEngineIdV1>(
+            r#"{"engine":"native-goldilocks-poseidon-x7-stark-fri-6x64-v1","value":null}"#,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn proposed_lifecycle_schema_and_codecs_have_no_activation_schedule() {
+    use iroha_schema::{IntoSchema as _, Metadata};
+
+    let schema = PrivacyProposedLifecycleV1::schema();
+    let Metadata::Struct(fields) = schema
+        .get::<PrivacyProposedLifecycleV1>()
+        .expect("proposed lifecycle schema")
+    else {
+        panic!("proposed lifecycle must be a named struct");
+    };
+    assert_eq!(fields.declarations.len(), 1);
+    assert_eq!(fields.declarations[0].name, "proposed_at_height");
+    assert_eq!(fields.declarations[0].ty, std::any::TypeId::of::<u64>());
+    let proposed = PrivacyProposedLifecycleV1 {
+        proposed_at_height: 7,
+    };
+    let json = norito::json::to_json(&proposed).expect("serialize pending proposal");
+    assert_eq!(json, r#"{"proposed_at_height":7}"#);
+    assert_eq!(
+        norito::json::from_json::<PrivacyProposedLifecycleV1>(&json)
+            .expect("decode pending proposal"),
+        proposed
+    );
+    let bytes = norito::to_bytes(&proposed).expect("encode pending proposal");
+    assert_eq!(
+        norito::decode_from_bytes::<PrivacyProposedLifecycleV1>(&bytes)
+            .expect("decode pending proposal"),
+        proposed
+    );
+    for removed_schedule in [
+        r#"{"proposed_at_height":7,"activate_at_height":7}"#,
+        r#"{"proposed_at_height":7,"activate_at_height":307}"#,
+    ] {
+        assert!(norito::json::from_json::<PrivacyProposedLifecycleV1>(removed_schedule).is_err());
+    }
+    assert!(
+        norito::json::from_json::<PrivacyProtocolLifecycleV1>(
+            r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":307}}"#,
+        )
+        .is_err()
+    );
+    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 7,
+    });
+    active.validate().expect("same-block active record");
+    let active_bytes = norito::to_bytes(&active).expect("encode immediate active state");
+    let decoded = norito::decode_from_bytes::<PrivacyProtocolLifecycleV1>(&active_bytes)
+        .expect("decode immediate active state");
+    assert_eq!(decoded, active);
+    decoded.validate().expect("decoded immediate active state");
+}
+
+#[test]
+fn proposed_lifecycle_norito_rejects_removed_schedule_payload() {
+    // Test-only encoding of the removed shape under its unchanged nominal frame identity.
+    #[derive(norito::codec::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::privacy::PrivacyProposedLifecycleV1")]
+    struct RemovedScheduledProposal {
+        proposed_at_height: u64,
+        activate_at_height: u64,
+    }
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RemovedScheduledProposal>(),
+        norito::schema::identity::frame_hash::<PrivacyProposedLifecycleV1>()
+    );
+    for activate_at_height in [7, 307] {
+        let removed = RemovedScheduledProposal {
+            proposed_at_height: 7,
+            activate_at_height,
+        };
+        let frame = norito::encode_canonical(&removed).expect("encode removed payload fixture");
+        assert!(norito::decode_from_bytes::<PrivacyProposedLifecycleV1>(&frame).is_err());
+    }
 }

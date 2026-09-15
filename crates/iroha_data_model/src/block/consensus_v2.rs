@@ -3066,10 +3066,11 @@ pub enum SumeragiV2OutboundIntentStage {
     PendingPersistence,
     /// Durable state is waiting for a local signature.
     PendingSignature,
-    /// A signed intent is owned by a reserved outbound queue.
+    /// Durable signing work is queued for the local signature service.
     Queued,
-    /// The intent has been broadcast and remains eligible for retransmission.
-    Sent,
+    /// A signed or certified control is retained by a frozen-roster-eligible node
+    /// for retransmission. This stage records local retention, not transport progress.
+    Retained,
 }
 /// Exact durable outbound intent visible to liveness diagnostics.
 ///
@@ -3106,7 +3107,7 @@ pub struct SumeragiV2OutboundIntentStatus {
     /// Execution result, when the intent authenticates one.
     #[norito(required)]
     pub execution_commitment: Option<ExecutionCommitment>,
-    /// Current durable-delivery stage.
+    /// Current durable-intent lifecycle stage.
     pub stage: SumeragiV2OutboundIntentStage,
 }
 /// State of one terminating local-work stage.

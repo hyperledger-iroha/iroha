@@ -240,7 +240,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksMerkleTreeV1, masked_trace_lde_column_v1,
+    PrivacyOuterMerkleTreeV1, masked_trace_lde_column_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
@@ -250,10 +250,10 @@ use crate::privacy_engines::transparent_stark::{
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-        GoldilocksFp4V1 as E, TransparentStarkDigestContextV1, TransparentStarkErrorV1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+        PrivacyOuterDigestV1, TransparentStarkDigestContextV1, TransparentStarkErrorV1,
         TransparentTranscriptV1, append_u16_v1, append_u32_v1, goldilocks_batch_invert_v1,
-        goldilocks_digest384_frame_v1, goldilocks_primitive_root_v1, verify_grinding_nonce_v1,
+        goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1, verify_grinding_nonce_v1,
     },
 };
 #[cfg(test)]
@@ -283,7 +283,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:goldilocks-poseidon-x7-six-lane-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max272-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-proof-cap";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max272-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-proof-cap";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -463,9 +463,9 @@ pub(crate) const ZK_X509_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
         b"iroha-zk-x509-stark-p256-release-profile-v1",
     );
 #[cfg(test)]
-/// Construct one canonical six-lane digest for cross-module zk-X509 tests.
-pub(crate) fn zk_x509_test_digest384_v1(seed: u8) -> GoldilocksDigest384V1 {
-    GoldilocksDigest384V1::new([u64::from(seed); 6]).expect("test digest is canonical")
+/// Construct one opaque 48-byte outer digest for cross-module zk-X509 tests.
+pub(crate) fn zk_x509_test_digest384_v1(seed: u8) -> PrivacyOuterDigestV1 {
+    PrivacyOuterDigestV1::from_bytes([seed; 48])
 }
 #[cfg(test)]
 const DER_TERMINAL_CLAIMS_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-terminal-claims:v1";
@@ -938,9 +938,7 @@ fn map_aggregate_error_v1(error: AggregateStarkErrorV1) -> ZkX509StarkErrorV1 {
         AggregateStarkErrorV1::TranscriptMismatch => ZkX509StarkErrorV1::TranscriptMismatch,
         AggregateStarkErrorV1::AllocationFailure => ZkX509StarkErrorV1::AllocationFailure,
         AggregateStarkErrorV1::RandomnessUnavailable => ZkX509StarkErrorV1::RandomnessUnavailable,
-        AggregateStarkErrorV1::InternalInvariant | AggregateStarkErrorV1::DigestExecution => {
-            ZkX509StarkErrorV1::InternalInvariant
-        }
+        AggregateStarkErrorV1::InternalInvariant => ZkX509StarkErrorV1::InternalInvariant,
     }
 }
 fn map_fixed_algebraic_error_v1(error: ZkX509FixedAlgebraicErrorV1) -> ZkX509StarkErrorV1 {
@@ -2325,11 +2323,11 @@ const MAIN_LOG19_QUERY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.main.log19-qu
 struct MainLog19VerifierQueryScheduleV1 {
     pairs: [(usize, usize); QUERY_COUNT],
     indices: Vec<u64>,
-    order_digest: GoldilocksDigest384V1,
+    order_digest: PrivacyOuterDigestV1,
 }
 fn main_log19_query_schedule_digest_v1(
     pairs: &[(usize, usize); QUERY_COUNT],
-) -> Result<GoldilocksDigest384V1, ZkX509StarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
     let mut encoded = Vec::new();
     encoded
         .try_reserve_exact(QUERY_COUNT * 2 * core::mem::size_of::<u64>())
@@ -2346,7 +2344,7 @@ fn main_log19_query_schedule_digest_v1(
                 .to_be_bytes(),
         );
     }
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         MAIN_LOG19_QUERY_SCHEDULE_DOMAIN_V1,
         b"ordered-current-next-query-schedule",
@@ -2470,7 +2468,7 @@ struct ZkX509MainBaseCommitmentSessionV1 {
     layout: AggregateProofLayoutV1,
     consensus_context_digest: [u8; 32],
     main_profile_digest: [u8; 32],
-    roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     recorded: [bool; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     next_group: usize,
 }
@@ -2481,7 +2479,7 @@ struct ZkX509MainBaseCommitmentSessionV1 {
 pub(super) struct ZkX509CompletedMainBaseCommitmentSessionV1 {
     consensus_context_digest: [u8; 32],
     main_profile_digest: [u8; 32],
-    roots: [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+    roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
 }
 impl ZkX509CompletedMainBaseCommitmentSessionV1 {
     pub(super) fn into_pre_aux_parts_v1(
@@ -2489,7 +2487,7 @@ impl ZkX509CompletedMainBaseCommitmentSessionV1 {
     ) -> (
         [u8; 32],
         [u8; 32],
-        [GoldilocksDigest384V1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+        [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
     ) {
         (
             self.consensus_context_digest,
@@ -2535,7 +2533,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
             layout: layout.clone(),
             consensus_context_digest,
             main_profile_digest,
-            roots: [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+            roots: [PrivacyOuterDigestV1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             recorded: [false; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             next_group: 0,
         };
@@ -2560,7 +2558,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
                 .enumerate()
                 .any(|(index, recorded)| *recorded != (index < self.next_group))
             || self.roots.iter().enumerate().any(|(index, root)| {
-                (*root == GoldilocksDigest384V1::default()) != (index >= self.next_group)
+                (*root == PrivacyOuterDigestV1::default()) != (index >= self.next_group)
             })
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
@@ -2571,7 +2569,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
         &mut self,
         group_index: usize,
         native_trace_log2: u8,
-        root: GoldilocksDigest384V1,
+        root: PrivacyOuterDigestV1,
     ) -> Result<(), ZkX509StarkErrorV1> {
         self.validate_state_v1()?;
         let expected_index = self.next_group;
@@ -2589,7 +2587,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
             || native_trace_log2 != expected_log
             || native_trace_log2 != layout_log
             || self.recorded[expected_index]
-            || root == GoldilocksDigest384V1::default()
+            || root == PrivacyOuterDigestV1::default()
         {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
@@ -2624,7 +2622,7 @@ impl ZkX509MainBaseCommitmentSessionV1 {
             || trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
             || trace_groups
                 .iter()
-                .any(|group| group.base_root == GoldilocksDigest384V1::default())
+                .any(|group| group.base_root == PrivacyOuterDigestV1::default())
         {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
@@ -3583,7 +3581,7 @@ fn build_projection_trace_material_v1(
 #[cfg(test)]
 fn io_public_digest_v1(
     statement: &ZkX509IoStarkStatementV1,
-) -> Result<GoldilocksDigest384V1, ZkX509StarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
     let mut encoding = Vec::new();
     append_u16_v1(
         &mut encoding,
@@ -3616,7 +3614,7 @@ fn io_public_digest_v1(
             None => encoding.push(0),
         }
     }
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         PUBLIC_DIGEST_DOMAIN,
         b"io-public-statement",
@@ -3630,11 +3628,11 @@ fn io_public_digest_v1(
 #[cfg(test)]
 fn der_public_digest_v1(
     shape: &ZkX509DerStarkShapeV1,
-) -> Result<GoldilocksDigest384V1, ZkX509StarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
     shape
         .validate()
         .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         DER_PUBLIC_DIGEST_DOMAIN,
         b"der-public-statement",
@@ -3652,11 +3650,11 @@ fn der_public_digest_v1(
 #[cfg(test)]
 fn projection_public_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
-) -> Result<GoldilocksDigest384V1, ZkX509StarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
     let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         PROJECTION_PUBLIC_DIGEST_DOMAIN,
         b"projection-public-statement",
@@ -4857,9 +4855,8 @@ fn row_tree_v1(
     segment: usize,
     columns: &[Vec<F>],
     rows: usize,
-) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, ZkX509StarkErrorV1> {
     aggregate::row_tree_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         domain,
         node_domain,
@@ -4873,37 +4870,26 @@ fn row_tree_v1(
 fn composition_tree_v1(
     lane: usize,
     chunks: &[Vec<E>],
-) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
-    aggregate::composition_tree_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
-        AGGREGATE_DOMAINS_V1,
-        lane,
-        chunks,
-    )
-    .map_err(map_aggregate_error_v1)
+) -> Result<PrivacyOuterMerkleTreeV1, ZkX509StarkErrorV1> {
+    aggregate::composition_tree_v1(AGGREGATE_DOMAINS_V1, lane, chunks)
+        .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn fri_tree_v1(
     lane: usize,
     round: usize,
     values: &[E],
-) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
-    aggregate::fri_tree_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
-        AGGREGATE_DOMAINS_V1,
-        lane,
-        round,
-        values,
-    )
-    .map_err(map_aggregate_error_v1)
+) -> Result<PrivacyOuterMerkleTreeV1, ZkX509StarkErrorV1> {
+    aggregate::fri_tree_v1(AGGREGATE_DOMAINS_V1, lane, round, values)
+        .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn new_transcript_v1(
-    public_digest: &GoldilocksDigest384V1,
+    public_digest: &PrivacyOuterDigestV1,
 ) -> Result<TransparentTranscriptV1, ZkX509StarkErrorV1> {
     let compiled_profile_digest = recompute_zk_x509_compiled_profile_digest_v1()
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let compiled_profile_digest = goldilocks_digest384_frame_v1(
+    let compiled_profile_digest = privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:privacy:zk-x509:stark:compiled-profile:v1",
         b"compiled-profile",
@@ -4951,7 +4937,7 @@ fn new_main_transcript_after_profile_validation_v1(
     if release_profile_digest == [0_u8; 32] {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    let transcript_profile_digest = goldilocks_digest384_frame_v1(
+    let transcript_profile_digest = privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:privacy:zk-x509:stark:release-profile:v1",
         b"release-profile",
@@ -4961,7 +4947,7 @@ fn new_main_transcript_after_profile_validation_v1(
         &[&release_profile_digest],
     )
     .map_err(map_transparent_error_v1)?;
-    let transcript_public_digest = goldilocks_digest384_frame_v1(
+    let transcript_public_digest = privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:privacy:zk-x509:stark:main-public:v1",
         b"consensus-context",
@@ -5981,7 +5967,6 @@ fn build_fri_lane_v1(
     let aggregate_layout = AggregateProofLayoutV1::for_segments(&[layout])?;
     let parameters = aggregate_layout.parameters_v1();
     aggregate::build_fri_lane_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         parameters,
         AGGREGATE_DOMAINS_V1,
         &aggregate_layout.as_shared()?,
@@ -6016,20 +6001,20 @@ fn exact_encoded_aggregate_proof_bytes_v1(
 }
 #[cfg(test)]
 fn canonical_multiproof_frontier_v1(
-    tree: &GoldilocksMerkleTreeV1,
+    tree: &PrivacyOuterMerkleTreeV1,
     leaf_count: usize,
     indices: &[usize],
-) -> Result<Vec<GoldilocksDigest384V1>, ZkX509StarkErrorV1> {
+) -> Result<Vec<PrivacyOuterDigestV1>, ZkX509StarkErrorV1> {
     aggregate::canonical_multiproof_frontier_v1(tree, leaf_count, indices)
         .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn verify_canonical_multiproof_v1(
     node_domain: &[u8],
-    root: &GoldilocksDigest384V1,
+    root: &PrivacyOuterDigestV1,
     leaf_count: usize,
-    leaves: &BTreeMap<usize, GoldilocksDigest384V1>,
-    frontier: &[GoldilocksDigest384V1],
+    leaves: &BTreeMap<usize, PrivacyOuterDigestV1>,
+    frontier: &[PrivacyOuterDigestV1],
 ) -> Result<(), ()> {
     aggregate::verify_canonical_multiproof_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
@@ -6117,7 +6102,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: GoldilocksDigest384V1::default(),
+        aux_root: PrivacyOuterDigestV1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6179,7 +6164,6 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6242,7 +6226,6 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
@@ -6342,7 +6325,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_tree.root(),
-        aux_root: GoldilocksDigest384V1::default(),
+        aux_root: PrivacyOuterDigestV1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6393,7 +6376,6 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6456,7 +6438,6 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
@@ -6568,7 +6549,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     .map_err(map_aggregate_error_v1)?;
     let mut trace_group_proofs = vec![TraceGroupProofV1 {
         base_root: base_commitment.commitment.root,
-        aux_root: GoldilocksDigest384V1::default(),
+        aux_root: PrivacyOuterDigestV1::default(),
         base_frontier: Vec::new(),
         aux_frontier: Vec::new(),
     }];
@@ -6642,7 +6623,6 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6749,7 +6729,6 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
-        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,

@@ -427,7 +427,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                         "view": 1,
                     },
                     "subject": dict(subject),
-                    "stage": {"stage": "sent", "details": None},
+                    "stage": {"stage": "retained", "details": None},
                 }
             ],
             "work": {
@@ -5841,12 +5841,26 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
         status.liveness.outbound_intents[0].proposal_round
         == status.liveness.outbound_intents[0].round
     )
+    assert status.liveness.outbound_intents[0].stage == "retained"
     assert status.liveness.queues[0].queue == "network_ingress"
     assert status.liveness.last_progress is not None
     assert status.liveness.last_progress.transition == "prepare_vote_admitted"
     assert status.liveness.blocker == "prepare_quorum_missing"
     assert not hasattr(status, "lane_settlement_commitments")
     assert not hasattr(status, "operator")
+
+
+def test_get_sumeragi_status_rejects_sent_outbound_stage() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["outbound_intents"][0]["stage"] = {
+        "stage": "sent", "details": None,
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"outbound_intents\[0\]\.stage\.stage is not a supported v2 variant",
+    ):
+        _get_sumeragi_status(payload)
 
 
 def test_get_sumeragi_status_accepts_nonempty_native_manifest() -> None:

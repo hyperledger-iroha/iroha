@@ -89,7 +89,8 @@ def hash_literal(number: int, *, mark: bool = True) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
-def observation(peer: int, finalized: bool, *, staged: bool = False) -> dict:
+def observation(peer: int, finalized: bool, *, staged: bool = False, baseline_height: int = 302,
+                finalized_height: int = 306) -> dict:
     """Build bound synthetic raw state bytes with the current two-input/three-output counts."""
     counts = {name: 0 for name in M.release_runner.FAULT_STATE_COUNT_FIELDS}
     counts.update(governance=3, pools=3, roots=3, commitments=6)
@@ -100,7 +101,7 @@ def observation(peer: int, finalized: bool, *, staged: bool = False) -> dict:
     if staged:
         counts.update(staged_pool_heads=1, staged_nullifiers=2, staged_output_commitments=3,
                       staged_locks=6, replicated_staged_locks=28)
-    response = {"format_version": 1, "height": 306 if finalized else 302,
+    response = {"format_version": 1, "height": finalized_height if finalized else baseline_height,
                 "commitment": hash_literal(24 if finalized else 23),
                 "ledger_commitment": hash_literal(12 if finalized else 11),
                 "replicated_staged_lock_commitment": hash_literal(14 if staged else 13),
@@ -110,10 +111,13 @@ def observation(peer: int, finalized: bool, *, staged: bool = False) -> dict:
             **{name: value for name, value in response.items() if name != "format_version"}}
 
 
-def continuous(peer: int, bundle: bytes) -> dict:
+def continuous(peer: int, bundle: bytes, *, baseline_height: int = 302,
+               finalized_height: int = 306) -> dict:
     """Build an independent response/phase hash-chain fixture with one live baseline poll."""
-    observations = [observation(peer, False), observation(peer, False, staged=True),
-                    observation(peer, True), observation(peer, True)]
+    observations = [observation(peer, False, baseline_height=baseline_height),
+                    observation(peer, False, staged=True, baseline_height=baseline_height),
+                    observation(peer, True, finalized_height=finalized_height),
+                    observation(peer, True, finalized_height=finalized_height)]
     classes = ["baseline", "baseline", "finalized", "finalized"]
     response_chain = hashlib.sha256(b"iroha:aps-fault-continuous-observation:v1\0" + bundle + struct.pack("<Q", peer))
     for row in observations:
@@ -144,11 +148,11 @@ def continuous(peer: int, bundle: bytes) -> dict:
         "finalized_observations": 2, "phase_coverage": phases}, "observations": observations}
 
 
-def finality(network: object, identities: list[str]) -> dict:
+def finality(network: object, identities: list[str], *, height: int = 306) -> dict:
     """Construct synthetic finality structure; signatures deliberately have no cryptographic validity."""
     block_hash = hash_literal(777)
     context = {name: None for name in ("next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap")}
-    context.update(network_id=network, protocol_version=4, height=306, epoch=1,
+    context.update(network_id=network, protocol_version=4, height=height, epoch=1,
         kagemusha_mint_finality_epoch_id=[1] * 32, kagemusha_mint_finality_epoch_roster={"synthetic": True},
         epoch_end_height=1000, mode={"mode": "permissioned", "details": None},
         roster=[{"validator": peer, "power": 1} for peer in identities[:4]],
@@ -157,16 +161,16 @@ def finality(network: object, identities: list[str]) -> dict:
         da_layout={"encoding": {"encoding": "reed_solomon16", "details": None}, "chunk_size_bytes": 262144,
                    "data_shards": 4, "parity_shards": 2, "max_payload_size_bytes": 16777216, "max_chunk_count": 1024})
     subject = {"block_hash": block_hash}
-    round_value = {"context_id": [hash_literal(780)], "height": 306, "view": 0}
+    round_value = {"context_id": [hash_literal(780)], "height": height, "view": 0}
     qc = {"round": round_value, "proposal_round": copy.deepcopy(round_value),
           "phase": {"phase": "commit", "details": None}, "subject": subject,
           "execution_commitment": {"synthetic": True}, "signers": [0, 1, 2], "aggregate_signature": [1] * 96}
     header = {name: None for name in ("prev_block_hash", "merkle_root", "result_merkle_root", "da_proof_policies_hash",
         "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash", "sccp_commitment_root",
         "confidential_features", "execution_context_hash")}
-    header.update(height=306, creation_time_ms=123456, view_change_index=0)
+    header.update(height=height, creation_time_ms=123456, view_change_index=0)
     return {"version": 2, "block_header": header, "finality_artifact": {"format_version": 4, "protocol_version": 4,
-        "height": 306, "height_context": context, "subject": subject, "block_hash": block_hash,
+        "height": height, "height_context": context, "subject": subject, "block_hash": block_hash,
         "commit_qc": qc, "validator_set_pops": [[1] * 96 for _ in range(4)]}}
 
 
@@ -178,13 +182,15 @@ def request(index: int) -> dict:
     return value
 
 
-def evidence_fixture(index: int, validator_sha: str) -> tuple[dict, dict]:
+def evidence_fixture(index: int, validator_sha: str, *, authority_height: int = 302,
+                     expiry_height: int = 1000, readiness_height: int = 301,
+                     finalized_height: int = 306) -> tuple[dict, dict]:
     """Build the 80-file contract entirely from explicitly synthetic test values."""
     req = request(index)
     identities = [f"synthetic-validator-{index}-{peer:02}" for peer in range(16)]
     network = [hash_literal(900 + 2 * index)]
     manifest = {"version": 1, "bundle_id": hash_literal(1000 + 2 * index), "network_id": network,
-                "authority_context_height": 302, "expiry_height": 1000, "legs": []}
+                "authority_context_height": authority_height, "expiry_height": expiry_height, "legs": []}
     authorities, rosters, deltas, prepares, commits, legs = [], [], [], [], [], []
     prepared_digest = hash_literal(3000 + index)
     for ordinal in range(3):
@@ -194,7 +200,7 @@ def evidence_fixture(index: int, validator_sha: str) -> tuple[dict, dict]:
             "validators": identities[(ordinal+1)*4:(ordinal+2)*4], "validator_pops": [[1]*96 for _ in range(4)]}
         body = {"network_id": network, "bundle_id": manifest["bundle_id"], "manifest_digest": hash_literal(3300),
             "leg_ordinal": ordinal, "route": route, "delta_digest": hash_literal(3400 + ordinal),
-            "authority_digest": hash_literal(3500 + ordinal), "authority_context_height": 302, "expiry_height": 1000}
+            "authority_digest": hash_literal(3500 + ordinal), "authority_context_height": authority_height, "expiry_height": expiry_height}
         certificates = []
         for phase in ("prepare", "commit"):
             certificates.append({"body": {**body, "phase": {"phase": phase, "value": None},
@@ -217,21 +223,23 @@ def evidence_fixture(index: int, validator_sha: str) -> tuple[dict, dict]:
             "authority_catalog": catalog, "deltas": deltas, "prepare_certificates": prepares,
             "prepared_bundle_digest": prepared_digest}, "commit-certificates.json": commits,
         "receipt.json": {"version": 1, "manifest": manifest, "authority_catalog": catalog,
-                         "legs": legs, "finalized_height": 306},
+                         "legs": legs, "finalized_height": finalized_height},
         "restarts.json": [{"peer_index": peer, "before_pid": 100+peer, "after_pid": 200+peer} for peer in range(16)]}
     for phase in M.STATE_PHASES:
         evidence[f"state-{phase}.json"] = {"label": f"smoke-{phase}",
-            "validators": [observation(peer, phase in ("finalized", "replay")) for peer in range(16)]}
+            "validators": [observation(peer, phase in ("finalized", "replay"), baseline_height=authority_height, finalized_height=finalized_height)
+                           for peer in range(16)]}
     for peer in range(16):
         evidence[f"state-restarted-{peer:02}.json"] = {"label": "smoke-restarted",
-            "validators": [observation(other, True) for other in range(16)]}
-        evidence[f"continuous-{peer:02}.json"] = continuous(peer, ((1000+2*index) | 1).to_bytes(32, "big"))
+            "validators": [observation(other, True, finalized_height=finalized_height) for other in range(16)]}
+        evidence[f"continuous-{peer:02}.json"] = continuous(peer, ((1000+2*index) | 1).to_bytes(32, "big"),
+                                                               baseline_height=authority_height, finalized_height=finalized_height)
         for phase in ("before", "after"):
-            evidence[f"finality-{phase}-{peer:02}.json"] = finality(network, identities)
+            evidence[f"finality-{phase}-{peer:02}.json"] = finality(network, identities, height=finalized_height)
     result = {"version": 1, "protocol": M.PROTOCOL, "kind": "smoke", "request": req,
         "request_sha256": M.sha(M.canonical(req)+b"\n"), "network_id": network, "participants": 3,
-        "processes": 16, "restarted": 16, "activation_height": 301, "authority_context_height": 302,
-        "finalized_height": 306, "signed_rs16_observations": 16, "continuous_checks": 64, "passed": True,
+        "processes": 16, "restarted": 16, "activation_height": readiness_height, "authority_context_height": authority_height,
+        "finalized_height": finalized_height, "signed_rs16_observations": 16, "continuous_checks": 64, "passed": True,
         "artifacts": []}
     return evidence, result
 
@@ -272,6 +280,98 @@ class SmokeEvidenceTests(unittest.TestCase):
     def test_complete_synthetic_contract_and_live_staged_observation(self) -> None:
         self.assertEqual(self.validate()["continuous_checks"], 64)
         self.assertEqual(len(M.EVIDENCE_NAMES), 80)
+
+    def test_genesis_readiness_height_one_keeps_all_eighty_artifacts_bound(self) -> None:
+        self.evidence, self.result = evidence_fixture(
+            0, self.sha, readiness_height=1, authority_height=4, finalized_height=8)
+        summary = self.validate()
+        self.assertEqual(M.validate_smoke_result_heights(self.result), (1, 4, 8))
+        self.assertEqual(summary["finalized_height"], 8)
+        self.assertEqual(summary["continuous_checks"], 64)
+        self.assertEqual(len(self.result["artifacts"]), 80)
+        self.assertEqual({row["name"] for row in self.result["artifacts"]}, M.EVIDENCE_NAMES)
+
+    def test_low_height_readiness_type_and_strict_authority_order_fail_closed(self) -> None:
+        for field, values in (("activation_height", (0, True, 1.0, "1", 4)),
+                              ("authority_context_height", (0, True, 4.0, "4", 1)),
+                              ("finalized_height", (0, True, 8.0, "8", 3))):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.evidence, self.result = evidence_fixture(
+                        0, self.sha, readiness_height=1, authority_height=4, finalized_height=8)
+                    self.result[field] = value
+                    with self.assertRaises(M.release_runner.RunnerError):
+                        self.validate()
+
+    def test_low_height_manifest_substitution_fails_after_rehash(self) -> None:
+        self.evidence, self.result = evidence_fixture(
+            0, self.sha, readiness_height=1, authority_height=4, finalized_height=8)
+        self.evidence["receipt.json"]["manifest"]["authority_context_height"] = 5
+        with self.assertRaisesRegex(M.CampaignError, "authority or expiry"):
+            self.validate()
+
+    def test_low_height_changed_artifact_bytes_fail_the_retained_hash(self) -> None:
+        self.evidence, self.result = evidence_fixture(
+            0, self.sha, readiness_height=1, authority_height=4, finalized_height=8)
+        store_evidence(self.root, self.evidence, self.result)
+        artifact = self.root / "evidence" / "state-before.json"
+        artifact.write_bytes(artifact.read_bytes() + b" ")
+        with self.assertRaisesRegex(M.CampaignError, "byte/digest mismatch"):
+            M.validate_run(self.root, request(0), self.sha)
+
+    def test_observed_later_authority_height_keeps_complete_evidence_binding(self) -> None:
+        for authority in (303, 305, 306):
+            with self.subTest(authority=authority):
+                self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=authority)
+                summary = self.validate()
+                self.assertEqual(summary["finalized_height"], 306)
+                self.assertEqual(self.evidence["state-before.json"]["validators"][0]["height"], authority)
+
+    def test_result_height_window_rejects_order_type_and_u64_substitution(self) -> None:
+        maximum = 2**64 - 1
+        self.assertEqual(M.validate_smoke_result_heights({"activation_height": maximum - 2,
+            "authority_context_height": maximum - 1, "finalized_height": maximum}),
+            (maximum - 2, maximum - 1, maximum))
+        for field, values in (
+            ("activation_height", (True, 0, 301.0, maximum - 1, maximum + 1)),
+            ("authority_context_height", (True, 0, 300, 301, 302.0, maximum + 1)),
+            ("finalized_height", (True, 0, 301, 306.0, maximum + 1)),
+        ):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    result = dict(self.result, **{field: value})
+                    with self.assertRaises(M.release_runner.RunnerError):
+                        M.validate_smoke_result_heights(result)
+
+    def test_manifest_authority_substitution_is_rejected_after_rehash(self) -> None:
+        self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=303)
+        # Receipt and barrier share the manifest; keep both coherently changed.
+        self.evidence["receipt.json"]["manifest"]["authority_context_height"] = 304
+        with self.assertRaisesRegex(M.CampaignError, "authority or expiry"):
+            self.validate()
+
+    def test_expiry_is_strict_for_authority_and_inclusive_for_finalization(self) -> None:
+        self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=305, expiry_height=306)
+        self.assertEqual(self.validate()["finalized_height"], 306)
+        for expiry in (True, 0, 304, 305, 306.0, 2**64):
+            with self.subTest(expiry=expiry):
+                self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=305,
+                                                             expiry_height=expiry)
+                with self.assertRaises(M.release_runner.RunnerError):
+                    self.validate()
+        # Valid authority < expiry does not permit finalization after expiry.
+        self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=303, expiry_height=305)
+        with self.assertRaisesRegex(M.CampaignError, "authority or expiry"):
+            self.validate()
+
+    def test_later_authority_does_not_relax_phase_height_or_expiry_binding(self) -> None:
+        for phase in ("prepare", "commit"):
+            for field in ("authority_context_height", "expiry_height"):
+                with self.subTest(phase=phase, field=field):
+                    self.evidence, self.result = evidence_fixture(0, self.sha, authority_height=303)
+                    self.evidence["receipt.json"]["legs"][1][phase]["body"][field] += 1
+                    with self.assertRaisesRegex(M.CampaignError, "phase signed-body substitution"):
+                        self.validate()
 
     def test_financial_stage_mutations_rejected_even_with_rehashed_artifacts(self) -> None:
         for phase in ("collecting", "audited", "prepared", "registered", "commit-certified"):
@@ -344,8 +444,8 @@ class SmokeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(M.CampaignError, "disagree"):
             self.validate()
 
-    def test_notice_barrier_authority_and_missing_artifact_failures(self) -> None:
-        self.result["activation_height"] = 300
+    def test_readiness_authority_and_missing_artifact_failures(self) -> None:
+        self.result["activation_height"] = 0
         with self.assertRaises(M.release_runner.RunnerError):
             self.validate()
         self.evidence, self.result = evidence_fixture(0, self.sha)
@@ -458,12 +558,12 @@ class SmokeEvidenceTests(unittest.TestCase):
 class DriverBoundaryTests(unittest.TestCase):
     """Verify strict invocation controls without spawning Git, Cargo, or networks."""
 
-    def test_smoke_build_requests_the_metal_entrypoint_feature(self) -> None:
+    def test_smoke_build_requests_the_privacy_entrypoint_feature(self) -> None:
         commands = M.build_commands(Path("/synthetic/repo"), Path("/synthetic/target"))
         integration = commands["build-integration"]
         self.assertEqual(integration.count("--features"), 1)
         self.assertEqual(integration[integration.index("--features") + 1],
-                         "atomic-private-settlement-metal-smoke")
+                         "atomic-private-settlement-smoke")
         self.assertEqual(integration[integration.index("--test") + 1], "nexus_and_streaming")
         for flag in ("--locked", "--offline", "--release", "--no-run"):
             self.assertIn(flag, integration)

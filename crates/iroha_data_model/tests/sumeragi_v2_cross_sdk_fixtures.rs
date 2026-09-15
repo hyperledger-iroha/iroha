@@ -400,7 +400,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
                 proposal_round: Some(round(&context, 3)),
                 subject: Some(prepare.subject),
                 execution_commitment: Some(prepare.execution_commitment),
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             }],
             work: SumeragiV2WorkStatus {
                 candidate: SumeragiV2LocalWorkStage::Complete,

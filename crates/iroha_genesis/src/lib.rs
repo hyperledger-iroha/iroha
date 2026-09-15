@@ -308,6 +308,31 @@ pub fn validate_prepared_genesis_bundle(
             .verify_signature()
             .map_err(|error| eyre!("verify genesis transaction signature: {error}"))?;
     }
+    let validator_pops = signed_genesis_validator_pops(&block)?;
+    let consensus_metadata = signed_genesis_consensus_metadata(&block)?;
+    validate_signed_manifest_binding(manifest, &block, public_key, &consensus_metadata)?;
+    Ok(ValidatedGenesisBundle {
+        block,
+        canonical_wire,
+        public_key: public_key.clone(),
+        expected_hash,
+        validator_pops,
+        consensus_metadata,
+    })
+}
+/// Read and validate the validator keys and BLS proofs of possession in genesis.
+///
+/// The caller must independently authenticate this exact genesis body and its
+/// network identity before trusting the returned roster. This helper validates
+/// the peer registrations, unique keys, supported exact `3f + 1` committee size,
+/// and every BLS proof of possession; it does not verify block or transaction
+/// signatures, the genesis identity, or the remaining instruction semantics.
+///
+/// # Errors
+///
+/// Returns an error for duplicate validators, an invalid BLS proof of possession,
+/// or a committee outside the supported exact Sumeragi v2 geometry.
+pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
     let mut validator_pops = BTreeMap::new();
     for transaction in block.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
@@ -342,16 +367,7 @@ pub fn validate_prepared_genesis_bundle(
             validator_pops.len()
         ));
     }
-    let consensus_metadata = signed_genesis_consensus_metadata(&block)?;
-    validate_signed_manifest_binding(manifest, &block, public_key, &consensus_metadata)?;
-    Ok(ValidatedGenesisBundle {
-        block,
-        canonical_wire,
-        public_key: public_key.clone(),
-        expected_hash,
-        validator_pops,
-        consensus_metadata,
-    })
+    Ok(validator_pops)
 }
 /// Decode and validate the unique consensus metadata signed into a genesis block.
 ///

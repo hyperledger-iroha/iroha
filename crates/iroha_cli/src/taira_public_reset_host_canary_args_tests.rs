@@ -16,7 +16,7 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
     let directory = super::super::private_custody_test_dir("taira-canary-argv-");
     for scope in [
         super::super::QualificationScopeV1::CoreTestnet,
-        super::super::QualificationScopeV1::Inrou,
+        super::super::QualificationScopeV1::FullInrou,
     ] {
         let mut admitted = admitted_reset_fixture();
         admitted.inventory.qualification_scope = scope;
@@ -40,7 +40,11 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
 
         // The basic argv builder does not consume the retained Inrou stage. Populate
         // its identity from the same public inventory without preparing any VM data.
-        let canary = &admitted.inventory.inrou_canary;
+        let canary = admitted
+            .inventory
+            .inrou_canary
+            .as_ref()
+            .expect("full Inrou fixture");
         let stage_identity = crate::soracloud::TairaInrouStageIdentity {
             service_name: canary.service_name.clone(),
             service_version: canary.service_version.clone(),
@@ -65,6 +69,11 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
             placement_targets: inventory_inrou_placement_targets(&admitted.inventory)
                 .expect("public placement fixture"),
         };
+        if !scope.includes_inrou() {
+            admitted.inventory.inrou_canary = None;
+            admitted.inventory.inrou_stage_tree_sha256 = None;
+            admitted.authorization.claims.inrou_stage_tree_sha256 = None;
+        }
         let transport = OpenSshTransport {
             admitted: &admitted,
             runtime: RuntimeCustody {
@@ -76,9 +85,11 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
                     pin_owner_private_file(&token_path, "token fixture")
                         .expect("pin token fixture"),
                 ),
-                inrou_stage_dir: directory.path().join("unused-inrou-stage"),
-                snapshot_stage_files: Vec::new(),
-                stage_identity,
+                inrou: scope.includes_inrou().then_some(InrouStageCustody {
+                    inrou_stage_dir: directory.path().join("unused-inrou-stage"),
+                    snapshot_stage_files: Vec::new(),
+                    stage_identity,
+                }),
                 fee_args: super::super::PublicResetApply::fee_args(&admitted.inventory)
                     .expect("actual parent fee arguments"),
             },
@@ -93,7 +104,7 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
             super::super::QualificationScopeV1::CoreTestnet => {
                 &["pre_edge", "restart-wave-1", "post_edge"]
             }
-            super::super::QualificationScopeV1::Inrou => &[
+            super::super::QualificationScopeV1::FullInrou => &[
                 "pre_edge",
                 "restart-wave-1",
                 "restart-wave-2",
@@ -268,7 +279,7 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
             census.len(),
             match scope {
                 super::super::QualificationScopeV1::CoreTestnet => 27,
-                super::super::QualificationScopeV1::Inrou => 54,
+                super::super::QualificationScopeV1::FullInrou => 54,
             },
             "all selected phases, three shared write operations and three actions"
         );

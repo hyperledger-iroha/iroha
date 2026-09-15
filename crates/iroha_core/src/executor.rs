@@ -9733,13 +9733,16 @@ mod tests {
     fn initial_executor_routes_native_privacy_corridor_to_core() {
         use crate::privacy_profiles::compiled_privacy_profile_v1;
         use iroha_data_model::{
-            isi::privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
+            isi::privacy::{
+                RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+                TransitionPrivacyProtocolLifecycleV1,
+            },
             privacy::{
-                IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1,
-                PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-                PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
-                PrivacyProtocolLifecycleV1, PrivacyStatementContextV1, PrivacyStatementV1,
-                PrivacyTransactionIntentDigestV1,
+                IrohaJindoPolynomialCommitmentStatementV1, PrivacyActiveLifecycleV1,
+                PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1,
+                PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+                PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementContextV1,
+                PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
             },
         };
 
@@ -9749,7 +9752,6 @@ mod tests {
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 2,
-                activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
             },
         ));
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
@@ -9787,8 +9789,17 @@ mod tests {
                 vec![0x55],
             )),
         };
-        let instructions: [InstructionBox; 2] = [
+        let instructions: [InstructionBox; 3] = [
             RegisterPrivacyProtocolActivationV1::new(activation).into(),
+            TransitionPrivacyProtocolLifecycleV1::new(
+                profile.protocol_id,
+                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 2,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                }),
+            )
+            .into(),
             SubmitPrivacyProofV1::new(envelope).into(),
         ];
         for instruction in &instructions {

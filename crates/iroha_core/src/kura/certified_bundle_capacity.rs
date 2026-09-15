@@ -1836,7 +1836,7 @@ impl Kura {
         pending_block_bytes: u64,
         physical_bytes: u64,
         terminal_reserved_bytes: u64,
-        post_wsv_reserved_bytes: u64,
+        lane_publication_reserved_bytes: u64,
     ) -> Result<u64> {
         let mut reservations = self.certified_bundle_capacity_reservations.lock();
         if reservations.keys().any(|identity| {
@@ -1939,7 +1939,7 @@ impl Kura {
             let required = physical_bytes
                 .checked_add(pending_block_bytes)
                 .and_then(|bytes| bytes.checked_add(terminal_reserved_bytes))
-                .and_then(|bytes| bytes.checked_add(post_wsv_reserved_bytes))
+                .and_then(|bytes| bytes.checked_add(lane_publication_reserved_bytes))
                 .and_then(|bytes| {
                     bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
                 })
@@ -1992,10 +1992,10 @@ impl Kura {
         // This avoids a post-WSV -> certified/bundle / certified/bundle ->
         // post-WSV mutex inversion while `prune_lock` keeps the aggregate
         // capacity state stable for the admission decision.
-        let (terminal_reserved_bytes, post_wsv_reserved_bytes) = if configured_capacity {
+        let (terminal_reserved_bytes, lane_publication_reserved_bytes) = if configured_capacity {
             (
                 self.autonomous_global_terminal_outcome_reserved_bytes_locked()?,
-                self.post_wsv_lane_artifact_budget_reserved_bytes()?,
+                self.lane_publication_budget_reserved_bytes()?,
             )
         } else {
             (0, 0)
@@ -2010,7 +2010,7 @@ impl Kura {
             pending_block_bytes,
             physical_bytes,
             terminal_reserved_bytes,
-            post_wsv_reserved_bytes,
+            lane_publication_reserved_bytes,
         )
     }
     fn certified_bundle_capacity_reserved_bytes(&self) -> Result<u64> {
@@ -2388,7 +2388,7 @@ impl Kura {
                 let pending_block_bytes =
                     self.pending_block_bytes(persisted_count, unindexed_bytes)?;
                 let terminal = self.autonomous_global_terminal_outcome_reserved_bytes()?;
-                let post_wsv = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+                let post_wsv = self.lane_publication_budget_reserved_bytes()?;
                 let required = used
                     .checked_add(pending_block_bytes)
                     .and_then(|bytes| bytes.checked_add(terminal))

@@ -1437,6 +1437,7 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
     kura.persist_prune_intent(&admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 1,
             source_tip_hash: Some(block_hash),

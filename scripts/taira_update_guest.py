@@ -35,7 +35,7 @@ BOUND = False
 
 def configure(plan):
     """Bind deployment-owned public paths once, before any guest observation."""
-    global BOUND, BASE, OLD, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI
+    global BOUND, BASE, OLD, CANDIDATE_COMMIT, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI
     global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN
     global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR
     need(not BOUND, 'one deployment per guest process')
@@ -48,6 +48,7 @@ def configure(plan):
     PREDECESSOR = deployment['current']
     installed = plan.get('failed_start', {}).get('installed', PREDECESSOR)
     OLD = installed['commit']
+    CANDIDATE_COMMIT = plan['commit']
     PREVIOUS_DAEMON = Path(installed['daemon'])
     DAEMON = BASE / ('release-' + plan['commit'] + '-' + plan['operation']) / 'bin/iroha3d_taira'
     CLI = DAEMON.with_name('iroha')
@@ -325,7 +326,7 @@ class NativeCommandFailure(RuntimeError):
         super().__init__(f'native command failed: {label} (exit {exit_code})')
 
 
-def command(argv, *, timeout=60, name=None, pass_fds=()):
+def command(argv, *, timeout=60, name=None, pass_fds=(), allowed_exit_codes=(0,)):
     # Output may contain native configuration diagnostics; retain it privately,
     # never include arbitrary stderr/config-related output in the public report.
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
@@ -335,7 +336,7 @@ def command(argv, *, timeout=60, name=None, pass_fds=()):
         write_new(ATTEMPT / (name + '.stdout'), result.stdout)
         write_new(ATTEMPT / (name + '.stderr'), result.stderr)
         record(name + '.result.json', {'exit_code': result.returncode})
-    if result.returncode != 0:
+    if result.returncode not in allowed_exit_codes:
         raise NativeCommandFailure(name or Path(argv[0]).name, result.returncode)
     return result.stdout
 
@@ -402,21 +403,38 @@ def systemd(unit):
     return result
 
 
+class StartupProbeUnavailable(RuntimeError):
+    """Only declared local transport failures or HTTP 503 may be polled."""
+
+
 def public_probe(index, route, *, name=None):
     need(route in ('/status', '/v1/accounts/faucet/puzzle', '/readyz'),
          'unexpected public probe route')
     label = f'role={ROLES[index]} endpoint={route}'
     accept = 'text/plain' if route == '/readyz' else 'application/json'
     try:
-        return command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                        '-H', 'Accept: ' + accept, f'http://127.0.0.1:{PORTS[index]}{route}'],
-                       timeout=10, name=name)
+        raw = command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
+                       '--write-out', '\n%{http_code}', '-H', 'Accept: ' + accept,
+                       f'http://127.0.0.1:{PORTS[index]}{route}'],
+                      timeout=10, name=name, allowed_exit_codes=(0, 22))
     except NativeCommandFailure as error:
-        raise RuntimeError(f'public probe failed: {label} curl_exit={error.exit_code}') from None
+        # Connection refused, timeout, empty reply, and connection reset can
+        # occur during native startup. DNS/configuration/HTTP errors cannot.
+        kind = StartupProbeUnavailable if error.exit_code in (7, 28, 52, 56) else RuntimeError
+        raise kind(f'public probe failed: {label} curl_exit={error.exit_code}') from None
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f'public probe failed: {label} timeout') from None
+        raise StartupProbeUnavailable(f'public probe failed: {label} timeout') from None
     except (RuntimeError, OSError):
         raise RuntimeError(f'public probe failed: {label} native_probe_unavailable') from None
+    body, separator, code = raw.rpartition(b'\n')
+    need(separator and re.fullmatch(b'[0-9]{3}', code),
+         'public probe HTTP status is malformed: ' + label)
+    if code == b'503':
+        raise StartupProbeUnavailable('public probe not ready: ' + label + ' http_status=503')
+    need(code == b'200', 'public probe HTTP status rejected: ' + label + ' http_status=' + code.decode())
+    if route == '/readyz':
+        need(body == b'Ready', 'public readiness body differs: ' + label)
+    return body
 
 
 def public_get(index, route):
@@ -431,17 +449,22 @@ def public_get(index, route):
     return value
 
 
-def public_identity(index):
+def public_identity(index, *, expected_commit, minimum_height=0):
     status = public_get(index, '/status')
-    puzzle = public_get(index, '/v1/accounts/faucet/puzzle')
-    need(puzzle.get('network_id') == NETWORK and puzzle.get('chain_discriminant') == 369,
-         f'live NetworkId or Taira prefix changed: role={ROLES[index]} endpoint=/v1/accounts/faucet/puzzle')
     build = status.get('build', {})
     height = status.get('blocks')
     need(isinstance(build, dict) and type(height) is int and height > 0,
          f'public build identity or positive retained height missing: role={ROLES[index]} endpoint=/status')
+    # Validate each response before issuing another probe that may be transient.
+    # An invalid fresh status must never disappear behind a later puzzle 503.
+    need(build.get('git_commit_sha') == expected_commit,
+         'candidate revision differs: ' + ROLES[index])
+    need(height >= minimum_height, 'committed catch-up height regressed: ' + ROLES[index])
+    puzzle = public_get(index, '/v1/accounts/faucet/puzzle')
+    need(puzzle.get('network_id') == NETWORK and puzzle.get('chain_discriminant') == 369,
+         f'live NetworkId or Taira prefix changed: role={ROLES[index]} endpoint=/v1/accounts/faucet/puzzle')
     return {'network_id': puzzle['network_id'], 'height': height,
-            'commit': build.get('git_commit_sha')}
+            'commit': build['git_commit_sha']}
 
 
 def retained_identity(row, *, after=False):
@@ -477,7 +500,7 @@ def process_summary(props):
     return ','.join(values)
 
 
-def observe(row, *, after=False):
+def observe(row, *, after=False, allow_unavailable=False, expected_commit=None, minimum_height=0):
     props = systemd(f'iroha3d-{row["role"]}.service')
     need(props['ActiveState'] == 'active' and props['SubState'] == 'running'
          and props['ControlPID'] == '0',
@@ -490,20 +513,24 @@ def observe(row, *, after=False):
     need(actual == cmd, 'daemon argv differs: ' + row['role'])
     need(os.readlink(f'/proc/{pid}/exe') == identity['executable'],
          'daemon executable differs: ' + row['role'])
+    public = None
+    unavailable = None
     try:
-        public = public_identity(ROLES.index(row['role']))
-    except RuntimeError as error:
-        try:
-            current = systemd(f'iroha3d-{row["role"]}.service')
-        except (RuntimeError, OSError, subprocess.TimeoutExpired):
-            current = {}
-        raise RuntimeError(str(error) + '; observed=' + process_summary(props)
-                           + '; current=' + process_summary(current)) from None
+        public = public_identity(ROLES.index(row['role']),
+                                 expected_commit=expected_commit or (CANDIDATE_COMMIT if after else OLD),
+                                 minimum_height=minimum_height)
+    except StartupProbeUnavailable as error:
+        unavailable = error
     identity.update(systemd=props, public=public)
     current = systemd(f'iroha3d-{row["role"]}.service')
     need(current == props,
          'validator changed during observation: ' + row['role']
+         + (('; ' + str(unavailable)) if unavailable else '')
          + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
+    if unavailable is not None:
+        if not allow_unavailable:
+            raise unavailable
+        identity['public_unavailable'] = str(unavailable)
     return identity
 
 
@@ -748,6 +775,16 @@ def cohort_retained_tip(checkpoints):
     return {'height': height, 'hash': hashes.pop()}
 
 
+def verify_stopped_cohort_prefixes(checkpoints):
+    """Check every stopped tip against every peer retaining that height."""
+    tip = cohort_retained_tip(checkpoints)
+    for checkpoint in checkpoints:
+        for peer in checkpoints:
+            if peer['kura_tip']['height'] >= checkpoint['kura_tip']['height']:
+                require_retained_tip(peer['role'], checkpoint['kura_tip'])
+    return tip
+
+
 def verify_cohort_processes(observations, expected=None):
     """Reject exits/restarts during the complete cohort observation window."""
     for observed, original in zip(observations, expected or observations, strict=True):
@@ -757,6 +794,7 @@ def verify_cohort_processes(observations, expected=None):
              and props['ActiveState'] == 'active' and props['SubState'] == 'running'
              and props['ControlPID'] == '0' and int(props['MainPID']) > 0
              and re.fullmatch('[0-9a-f]{32}', props['InvocationID'])
+             and props.get('NRestarts', '0') == '0'
              and all(props[key] == original['systemd'][key]
                      for key in ('MainPID', 'InvocationID')),
              'validator process changed across cohort verification: ' + role
@@ -767,76 +805,141 @@ def verify_cohort_processes(observations, expected=None):
              + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
 
 
-def observe_healthy_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
-    """Observe every candidate process, including healthy peers still catching up."""
-    observations = [observe(row, after=after) for row in rows]
-    for old, new in zip(before, observations, strict=True):
+def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
+                           expected_processes=None, verified=None, minimum_heights=None):
+    """Attempt all four peers; only fresh Ready peers can contribute to quorum.
+
+    A prior candidate observation can retain an unavailable peer's identity,
+    but is explicitly marked stale and never counted as a fresh quorum vote.
+    """
+    need(tuple(row['role'] for row in rows) == ROLES
+         and tuple(row['role'] for row in before) == ROLES, 'observation cohort differs')
+    verified = verified or [None] * len(rows)
+    minimum_heights = minimum_heights or [row['public']['height'] for row in before]
+    observations = []
+    for index, (row, old, prior, minimum) in enumerate(zip(
+            rows, before, verified, minimum_heights, strict=True)):
+        last_height = max(old['public']['height'],
+                          prior['public']['height'] if prior is not None and prior['public'] else 0)
+        new = observe(row, after=after, allow_unavailable=True,
+                      expected_commit=commit, minimum_height=last_height)
         compare_retained_identity(old, new)
-        need(new['public']['commit'] == commit
-             and new['public']['height'] >= old['public']['height'],
-             'revision or retained validator height is not ready: ' + new['role'])
-        if new['public']['height'] >= retained_tip['height']:
-            require_retained_tip(new['role'], retained_tip)
-    for row in rows:
-        index = ROLES.index(row['role'])
-        public_probe(index, '/readyz')
+        public = new['public']
+        fresh = public is not None
+        if fresh:
+            need(public['commit'] == commit, 'candidate revision differs: ' + row['role'])
+            need(public['height'] >= old['public']['height'],
+                 'retained validator height regressed: ' + row['role'])
+            if prior is not None and prior['public'] is not None:
+                need(public['height'] >= prior['public']['height'],
+                     'committed catch-up height regressed: ' + row['role'])
+            if public['height'] >= retained_tip['height']:
+                require_retained_tip(row['role'], retained_tip)
+        elif prior is not None:
+            new['public'] = prior['public']
+        ready = True
+        try:
+            public_probe(index, '/readyz')
+        except StartupProbeUnavailable as error:
+            ready = False
+            new['ready_unavailable'] = str(error)
+        public = new['public']
+        restored = public is not None and public['height'] >= minimum
+        new['cohort_observation'] = {
+            'public_fresh': fresh, 'ready': ready,
+            'own_retained_tip_restored': restored,
+            'anchored_quorum_member': fresh and ready and restored
+                and public['height'] >= retained_tip['height']}
+        observations.append(new)
     verify_cohort_processes(observations, expected_processes)
     return observations
 
 
-def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
-    observations = observe_healthy_cohort(rows, before, after=after, commit=commit,
-                                        retained_tip=retained_tip, expected_processes=expected_processes)
-    for observed in observations:
-        need(observed['public']['height'] >= retained_tip['height'],
-             'common retained cohort height is not ready: ' + observed['role'])
+def cohort_sample_summary(observations, retained_tip):
+    return {'retained_tip': retained_tip, 'required': 3,
+            'quorum_roles': [row['role'] for row in observations
+                             if row['cohort_observation']['anchored_quorum_member']],
+            'missing_roles': [row['role'] for row in observations
+                              if not row['cohort_observation']['public_fresh']],
+            'unready_roles': [row['role'] for row in observations
+                              if not row['cohort_observation']['ready']],
+            'lagging_roles': [row['role'] for row in observations
+                              if row['public'] is not None
+                              and row['public']['height'] < retained_tip['height']],
+            'unverified_roles': [row['role'] for row in observations
+                                 if not row['cohort_observation']['own_retained_tip_restored']]}
+
+
+def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None,
+                   verified=None, minimum_heights=None):
+    observations = observe_healthy_cohort(
+        rows, before, after=after, commit=commit, retained_tip=retained_tip,
+        expected_processes=expected_processes, verified=verified, minimum_heights=minimum_heights)
+    summary = cohort_sample_summary(observations, retained_tip)
+    need(not summary['unverified_roles'] and len(summary['quorum_roles']) >= 3,
+         'anchored retained quorum is not ready: ' + json.dumps(summary, sort_keys=True))
     return observations
 
 
-def wait_for_cohort(rows, before, *, after, commit, retained_tip,
+def wait_for_cohort(rows, before, *, after, commit, retained_tip, startup_processes=None,
+                    verified=None, minimum_heights=None, sample_receipts=None,
                     timeout=COHORT_STALL_TIMEOUT_SECONDS,
                     max_timeout=COHORT_MAX_TIMEOUT_SECONDS):
-    """Extend catch-up only for advancing peers; never restart or rebuild here."""
+    """Require two fresh anchored quorum samples and all four own restorations.
+
+    Only progressing Ready peers extend their own catch-up budget. A fourth
+    stalled peer cannot block a coherent quorum or conceal a permanent failure.
+    """
     need(0 < timeout <= max_timeout <= COHORT_MAX_TIMEOUT_SECONDS,
          'cohort observation time bounds are invalid')
     started = time.monotonic()
     hard_deadline = started + max_timeout
     progress_deadlines = [started + timeout for _ in rows]
-    pending = list(range(len(rows)))
-    previous_heights = None
-    expected_processes = None
-    last_healthy = started
+    previous_heights = [None] * len(rows)
+    expected_processes = startup_processes
     deadline = min(hard_deadline, started + timeout)
+    confirmations = []
     latest = None
     while time.monotonic() < deadline:
-        try:
-            observations = observe_healthy_cohort(
-                rows, before, after=after, commit=commit, retained_tip=retained_tip,
-                expected_processes=expected_processes)
-        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
-            latest = str(error)
-        else:
-            now = time.monotonic()
-            if now >= deadline:
-                break
-            heights = [row['public']['height'] for row in observations]
-            if previous_heights is not None:
-                for index, (previous, height) in enumerate(zip(previous_heights, heights, strict=True)):
-                    need(height >= previous, 'committed catch-up height regressed: ' + rows[index]['role'])
-                    if previous < retained_tip['height'] and height > previous:
-                        progress_deadlines[index] = now + timeout
-            if expected_processes is None:
-                expected_processes = [{'role': row['role'], 'systemd': dict(row['systemd'])}
-                                      for row in observations]
-            previous_heights = heights
-            last_healthy = now
-            pending = [index for index, height in enumerate(heights) if height < retained_tip['height']]
-            if not pending:
+        if expected_processes is not None:
+            verify_cohort_processes(expected_processes)
+        # Permanent identity, process, hash, protocol and filesystem failures
+        # escape immediately. The observer alone classifies unavailable HTTP.
+        observations = observe_healthy_cohort(
+            rows, before, after=after, commit=commit, retained_tip=retained_tip,
+            expected_processes=expected_processes, verified=verified, minimum_heights=minimum_heights)
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        if expected_processes is None:
+            expected_processes = [{'role': row['role'], 'systemd': dict(row['systemd'])}
+                                  for row in observations]
+        for index, row in enumerate(observations):
+            sample = row['cohort_observation']
+            if sample['public_fresh']:
+                height = row['public']['height']
+                previous = previous_heights[index]
+                if sample['ready'] and previous is not None and height > previous:
+                    progress_deadlines[index] = now + timeout
+                previous_heights[index] = height
+        verified = observations
+        summary = cohort_sample_summary(observations, retained_tip)
+        latest = json.dumps(summary, sort_keys=True)
+        if not summary['unverified_roles'] and len(summary['quorum_roles']) >= 3:
+            confirmations.append(summary)
+            if len(confirmations) == 2:
+                if sample_receipts is not None:
+                    sample_receipts.extend(confirmations)
                 return observations
-            latest = 'common retained cohort height is not ready: ' + ', '.join(
-                rows[index]['role'] for index in pending)
-        deadline = min(hard_deadline, last_healthy + timeout,
-                       *(progress_deadlines[index] for index in pending))
+        else:
+            confirmations.clear()
+        # Three peers must have time remaining to reach the anchor. All four
+        # additionally retain an individual deadline until their own tip is seen.
+        budgets = [hard_deadline if row['cohort_observation']['anchored_quorum_member']
+                   else progress_deadlines[index] for index, row in enumerate(observations)]
+        required_restores = [progress_deadlines[index] for index, row in enumerate(observations)
+                             if not row['cohort_observation']['own_retained_tip_restored']]
+        deadline = min(hard_deadline, sorted(budgets, reverse=True)[2], *required_restores)
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(2, remaining))
@@ -1104,7 +1207,7 @@ def apply(plan):
         checkpoints = [checkpoint_barrier(row, stopped=True, prior=prior)
                        for row, prior in zip(before, retained[1], strict=True)]
         record('checkpoint-stopped.json', checkpoints)
-        retained_tip = cohort_retained_tip(checkpoints)
+        retained_tip = verify_stopped_cohort_prefixes(checkpoints)
         record('cohort-retained-tip.json', retained_tip)
         stopped_owner_maintenance(plan['operation'])
         for row, original in zip(plan['units'], before, strict=True):
@@ -1121,20 +1224,28 @@ def apply(plan):
                  'stopped Kura tip changed before new runtime startup')
         new_start_attempted = True
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
+        startup_processes = [{'role': role, 'systemd': systemd(unit)}
+                             for role, unit in zip(ROLES, UNITS, strict=True)]
+        need(all(row['systemd']['NRestarts'] == '0' for row in startup_processes),
+             'validator restarted before startup process capture')
+        verify_cohort_processes(startup_processes)
+        record('startup-processes.json', startup_processes)
         record('cohort-observation-intent.json', {
             'schema': COHORT_OBSERVATION_SCHEMA, 'operation': plan['operation'],
             'commit': plan['commit'], 'phase': 'cohort_observation',
             'owner': cohort_observation_owner(),
             'automatic_restart_or_rollback_after_start': False,
             'remaining_actions': list(COHORT_REMAINING_ACTIONS)})
+        minimum_heights = [row['kura_tip']['height'] for row in checkpoints]
+        initial_samples = []
         after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
-                                retained_tip=retained_tip)
+                                retained_tip=retained_tip, startup_processes=startup_processes,
+                                minimum_heights=minimum_heights, sample_receipts=initial_samples)
         record('after.json', after)
+        record('cohort-initial-quorum.json', {'samples': initial_samples})
         restored = [verify_restored_checkpoint(row, checkpoint)
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
         record('checkpoint-restored.json', restored)
-        for index in range(4):
-            public_probe(index, '/readyz', name=f'ready-{index+1}')
         report = json.loads(command([CLI, 'taira', 'doctor',
                                      '--scope', 'basic', '--json', '--public-root', PUBLIC_ORIGIN],
                                     timeout=90, name='public-doctor'))
@@ -1142,45 +1253,69 @@ def apply(plan):
              and report.get('scope') == 'basic' and report.get('failures') == []
              and len(report.get('checks', [])) == 10
              and all(row.get('ok') is True for row in report['checks']), 'public basic doctor failed')
-        final = observe_cohort(plan['units'], before, after=True, commit=plan['commit'],
-                               retained_tip=retained_tip, expected_processes=after)
+        final_samples = []
+        final = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
+                                retained_tip=retained_tip, startup_processes=startup_processes,
+                                verified=after, minimum_heights=minimum_heights,
+                                sample_receipts=final_samples)
+        for observed, checkpoint in zip(final, checkpoints, strict=True):
+            require_retained_tip(observed['role'], checkpoint['kura_tip'])
         record('cohort-ready.json', {'retained_tip': retained_tip, 'observations': final,
+                                     'quorum_confirmations': final_samples,
                                      'startup_processes_unchanged': True})
         result = {'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
                   'commit': plan['commit'], 'network_id': NETWORK, 'state_preserved': True,
                   'canary_applied_verified': False, 'application_ready': False,
                   'retained_native_snapshot_verified': True,
                   'cohort_retained_tip_verified': retained_tip,
+                  'cohort_quorum': final_samples[-1],
+                  'cohort_fresh_quorum_confirmations': len(final_samples),
                   'cohort_processes_verified_after_public_doctor': True,
+                  'all_own_retained_tips_verified_after_public_doctor': True,
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}
         record('result.json', result)
         print(json.dumps(result), flush=True)
     except BaseException as error:
-        record('failure.json', {'error': str(error), 'new_start_attempted': new_start_attempted,
-                               'installed_units': [row['role'] for row in installed]})
-        if not new_start_attempted:
-            # No new daemon was allowed to execute retained state. Restore all
-            # old units, including any replacement completed before an I/O error.
-            for row, original in zip(plan['units'], before, strict=True):
-                path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
-                current = path.read_bytes()
-                old = base64.b64decode(row['before'])
-                new = base64.b64decode(row['after'])
-                need(current in (old, new), 'unit has an unknown rollback successor')
-                if current != old:
-                    install_unit(path, old, new, original['unit_stamp'][2] & 0o7777)
-            command(['/usr/bin/systemctl', 'daemon-reload'], name='rollback-reload')
-            restored = []
-            for unit in UNITS:
-                state = systemd(unit)
-                need((state['ActiveState'], state['SubState']) in (('inactive', 'dead'), ('failed', 'failed'))
-                     and state['MainPID'] == state['ControlPID'] == '0' and state['Job'] == '',
-                     'rollback did not retain the paused cohort: ' + unit)
-                restored.append({'unit': unit, 'systemd': state})
-            record('rollback.json', {'restored_previous_stopped_cohort': True,
-                                     'old_daemons_restarted': False, 'observations': restored})
+        try:
+            record('failure.json', {'error': str(error), 'new_start_attempted': new_start_attempted,
+                                   'installed_units': [row['role'] for row in installed]})
+        finally:
+            # Evidence storage failure must never suppress process containment.
+            if new_start_attempted:
+                # Keep the failed candidate and its retained state for diagnosis,
+                # while preventing the service supervisor from repeating failures.
+                # The caller still owns the deployment lock throughout containment.
+                command(['/usr/bin/systemctl', 'stop', *UNITS], timeout=150,
+                        name='failed-start-stop')
+                stopped = [{'unit': unit, 'systemd': systemd(unit)} for unit in UNITS]
+                need(all(row['systemd']['MainPID'] == row['systemd']['ControlPID'] == '0'
+                         and row['systemd']['ActiveState'] in ('inactive', 'failed')
+                         for row in stopped), 'failed candidate cohort stop incomplete')
+                record('failed-start-stopped.json', {'all_four_stopped': True,
+                                                   'observations': stopped})
+            else:
+                # No new daemon was allowed to execute retained state. Restore all
+                # old units, including any replacement completed before an I/O error.
+                for row, original in zip(plan['units'], before, strict=True):
+                    path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
+                    current = path.read_bytes()
+                    old = base64.b64decode(row['before'])
+                    new = base64.b64decode(row['after'])
+                    need(current in (old, new), 'unit has an unknown rollback successor')
+                    if current != old:
+                        install_unit(path, old, new, original['unit_stamp'][2] & 0o7777)
+                command(['/usr/bin/systemctl', 'daemon-reload'], name='rollback-reload')
+                restored = []
+                for unit in UNITS:
+                    state = systemd(unit)
+                    need((state['ActiveState'], state['SubState']) in (('inactive', 'dead'), ('failed', 'failed'))
+                         and state['MainPID'] == state['ControlPID'] == '0' and state['Job'] == '',
+                         'rollback did not retain the paused cohort: ' + unit)
+                    restored.append({'unit': unit, 'systemd': state})
+                record('rollback.json', {'restored_previous_stopped_cohort': True,
+                                         'old_daemons_restarted': False, 'observations': restored})
         raise
 
 

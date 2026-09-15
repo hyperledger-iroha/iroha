@@ -275,7 +275,8 @@ fn verified_successor_context_at_fixture_tip(
     let context = crate::sumeragi::v2_context::build_successor_height_context_from_state(
         &parent_artifact,
         &state_view,
-        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(fixture.state.as_ref()),
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(fixture.state.as_ref())
+            .expect("valid committed catalog"),
     )
     .expect("derive fixture context after the exact canonical carrier");
     drop(state_view);

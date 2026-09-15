@@ -2046,6 +2046,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
     mut retained_merge_sidecars: Option<RetainedMergeSidecars>,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
+    mut startup_recovery: Option<&crate::sumeragi::StartupRecoveryPublisher>,
 ) -> Result<(), V2RunnerError> {
     let local_peer = common_config.peer.id().clone();
     let mut pending_successor_timings: Option<SuccessorStageTimings> = None;
@@ -2526,6 +2527,13 @@ pub(super) fn run_non_pending_lifecycle_loop(
         // Preserve activation/readiness and beacon handoff before diagnostic I/O.
         if let Some(timings) = pending_successor_timings.take() {
             timings.report();
+        }
+        // Startup evidence is consumed only after closed-ingress repair, exact
+        // reservation reconciliation and successor activation. In particular,
+        // pending-Kura recovery reaches this point only after its Apply finalized.
+        // This one-shot publication is not the mutable ingress-ready flag.
+        if let Some(startup_recovery) = startup_recovery.take() {
+            startup_recovery.ready();
         }
         let finalized = run_lifecycle_active_height(
             activated,

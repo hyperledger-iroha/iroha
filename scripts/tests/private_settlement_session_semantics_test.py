@@ -151,6 +151,48 @@ class SemanticControls(unittest.TestCase):
         (self.records.path/ref['path']).write_bytes(b'{"changed":true}')
         with self.assertRaises(control.SessionProtocolError): self.owner.validate_acceptance(bound, self.row, window)
 
+    def frozen_ready(self, height):
+        """Retain a synthetic ready record with the real process-inventory shape."""
+        request = self.prepared['request']
+        inventory = [dict(role=role, dataspace_ordinal=dataspace,
+            validator_ordinal=validator, pid=1000 + index, executable_sha256='f'*64,
+            revision=request['commit'], health_observed=True)
+            for index, (role, dataspace, validator) in enumerate(
+                semantics.runner.expected_process_inventory_keys(request['participants']))]
+        ready = {**self.prepared['identity'], 'network_id': '1'*64,
+            'genesis_sha256': '2'*64, 'configuration_sha256': request['configuration_sha256'],
+            'workload_manifest_sha256': request['workload_manifest_sha256'],
+            'activated_height': height, 'process_inventory': inventory, 'worker_pid': 999,
+            'network_ports': {'path': 'synthetic-network-ports.json', 'sha256': '3'*64, 'bytes': 1}}
+        path = self.records.path/f"sessions/{ready['session_id']}/ready.json"
+        path.write_bytes(control.canonical(ready))
+        return ready
+
+    def test_ready_accepts_positive_observed_heights_without_scheduled_floor(self):
+        for height in (1, 4, 300, 301, control.MAX_U64):
+            with self.subTest(height=height):
+                ready = self.frozen_ready(height)
+                self.owner.validate_ready(ready, self.prepared['request'])
+                self.assertEqual(control.decode(self.records.read(self.owner.ready_ref)), ready)
+
+    def test_ready_rejects_zero_noninteger_and_out_of_range_heights(self):
+        ready = self.frozen_ready(4)
+        for height in (0, -1, True, False, 4.0, '4', None, control.MAX_U64 + 1):
+            with self.subTest(height=height), self.assertRaises(control.SessionProtocolError):
+                self.owner.validate_ready(dict(ready, activated_height=height), self.prepared['request'])
+
+    def test_immediate_ready_preserves_session_request_inventory_and_frozen_bytes(self):
+        for field, replacement in (('session_id', '8'*64), ('session_invocation_nonce', '8'*64),
+                ('configuration_sha256', '8'*64), ('workload_manifest_sha256', '8'*64),
+                ('genesis_sha256', '0'*64), ('process_inventory', []), ('activated_height', 4)):
+            ready = self.frozen_ready(1)
+            with self.subTest(field=field), self.assertRaises((
+                    control.SessionProtocolError, semantics.runner.RunnerError)):
+                self.owner.validate_ready(dict(ready, **{field: replacement}), self.prepared['request'])
+        ready = self.frozen_ready(1)
+        request = dict(self.prepared['request'], session_invocation_nonce='8'*64)
+        with self.assertRaises(control.SessionProtocolError): self.owner.validate_ready(ready, request)
+
 
 if __name__ == '__main__':
     unittest.main()

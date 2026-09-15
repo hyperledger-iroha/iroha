@@ -17,6 +17,29 @@ SPEC.loader.exec_module(UNIT)
 
 
 class ValidatorUnitTests(unittest.TestCase):
+    def test_cli_output_matches_public_artifact_mode_under_private_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            role = UNIT.ROLES[0]
+            output = root / f"iroha3d-{role}.service"
+            command = [sys.executable, "-I", str(SOURCE), "--role", role,
+                       "--runtime-key", str(root / "absent-key"),
+                       "--mint-finality-seed", str(root / "absent-seed"),
+                       "--output", str(output)]
+            result = subprocess.run(command, capture_output=True, timeout=10, umask=0o077)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(output.stat().st_mode & 0o7777, 0o644)
+            expected = UNIT.render(role, str(root / "absent-key"), str(root / "absent-seed"))
+            self.assertEqual(output.read_text(), expected)
+            self.assertEqual(set(root.iterdir()), {output})
+            before = output.stat()
+            repeated = subprocess.run(command, capture_output=True, timeout=10, umask=0o077)
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertEqual(output.read_text(), expected)
+            after = output.stat()
+            for field in ("st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                self.assertEqual(getattr(before, field), getattr(after, field))
+
     def test_render_does_not_open_signers_and_waits_for_launcher_exec(self):
         with patch("os.open", side_effect=AssertionError("renderer read an input")):
             for role in UNIT.ROLES:

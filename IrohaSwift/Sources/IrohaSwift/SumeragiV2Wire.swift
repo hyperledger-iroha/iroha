@@ -1634,9 +1634,11 @@ public enum SumeragiV2OutboundIntentKind: UInt32, Equatable, Sendable {
     }
 }
 
-/// Current delivery stage of a durable outbound intent.
+/// Current lifecycle stage of a durable outbound intent.
 public enum SumeragiV2OutboundIntentStage: UInt32, Equatable, Sendable {
-    case pendingPersistence = 0, pendingSignature, queued, sent
+    case pendingPersistence = 0, pendingSignature, queued
+    /// The control is retained for outbound service; this is not a delivery acknowledgment.
+    case retained
     fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
     fileprivate static func decode(_ data: Data) throws -> Self {
         let tag = try sumeragiV2DecodeU32(data)

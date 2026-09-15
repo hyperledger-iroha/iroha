@@ -4,7 +4,7 @@
 use super::*;
 use crate::zk::kagemusha_v1_state::KagemushaResponseEvidenceContextV1;
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
 const RESPONSE_FILE: &str = "responses.norito.wal";

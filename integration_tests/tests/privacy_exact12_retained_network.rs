@@ -8,17 +8,17 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     data_model::{
-        Level,
         account::Account,
         asset::AssetDefinition,
         block::consensus_v2::BlockSubject,
         domain::Domain,
         isi::{
-            Grant, InstructionBox, Log, Mint, Register, SetParameter,
+            Grant, InstructionBox, Mint, Register, SetParameter,
             privacy::{
                 BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyProofManagedPoolV1,
                 RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
                 RotatePrivacyBootleLanternIssuerPolicyV1, SubmitPrivacyProofV1,
+                TransitionPrivacyProtocolLifecycleV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -41,7 +41,6 @@ use iroha::{
     },
 };
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
@@ -83,7 +82,6 @@ const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
 const PROVER_TIMEOUT: Duration = Duration::from_secs(1_800);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(240);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_TTL: Duration = Duration::from_secs(7_200);
@@ -249,24 +247,22 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-async fn next_incoming_height(client: &Client) -> Result<u64> {
-    read_privacy_capabilities(&client)
+// These isolated fixtures submit through the QueuePlanSynced client API: one
+// block admits the plan, one certifies it, and the third executes its payload.
+async fn next_governed_execution_height(client: &Client) -> Result<u64> {
+    read_privacy_capabilities(client)
         .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("incoming privacy height overflowed"))
+        .checked_add(3)
+        .ok_or_else(|| eyre!("governed privacy execution height overflowed"))
 }
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
-    activate_at_height: u64,
 ) -> PrivacyProtocolActivationRecordV1 {
     compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height,
-            activate_at_height,
-        },
+        PrivacyProposedLifecycleV1 { proposed_at_height },
     ))
 }
 fn active_activation(
@@ -310,39 +306,6 @@ async fn submit_signed_transaction(
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
     .wrap_err_with(|| context.to_owned())
-}
-async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = read_privacy_capabilities(&client)
-        .await
-        .wrap_err("query height before deterministic activation advance")?
-        .committed_height;
-    ensure!(
-        start <= target_height,
-        "cannot advance backwards from height {start} to {target_height}"
-    );
-    for incoming_height in start.saturating_add(1)..=target_height {
-        submit_instructions(
-            client,
-            vec![
-                Log::new(
-                    Level::INFO,
-                    format!("retained exact-12 activation advance {incoming_height}"),
-                )
-                .into(),
-            ],
-            "advance retained exact-12 activation height",
-        )
-        .await?;
-    }
-    let observed = read_privacy_capabilities(&client)
-        .await
-        .wrap_err("query height after deterministic activation advance")?
-        .committed_height;
-    ensure!(
-        observed == target_height,
-        "activation advance landed at {observed}, expected {target_height}"
-    );
-    Ok(())
 }
 async fn exact_transaction_result(
     client: &Client,
@@ -906,14 +869,11 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "grant CanEnactGovernance",
         )
         .await?;
-        let registration_height = next_incoming_height(&client).await?;
-        let activation_height = registration_height
-            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-            .ok_or_else(|| eyre!("retained exact-12 activation height overflowed"))?;
+        let registration_height = next_governed_execution_height(&client).await?;
         let proposed_records = compiled_profiles
             .iter()
             .copied()
-            .map(|compiled| proposed_activation(compiled, registration_height, activation_height))
+            .map(|compiled| proposed_activation(compiled, registration_height))
             .collect::<Vec<_>>();
         submit_instructions(
             &client,
@@ -1209,17 +1169,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         ] {
             assert_exactly_one_direct_privacy_submission(transaction, label)?;
         }
-        let advance_target = activation_height
-            .checked_sub(2)
-            .ok_or_else(|| eyre!("activation height lacks a pre-activation predecessor"))?;
-        timeout(
-            ACTIVATION_ADVANCE_TIMEOUT,
-            advance_to_exact_height(&client, advance_target),
-        )
-        .await
-        .map_err(|_| {
-            eyre!("advancing through activation lead exceeded {ACTIVATION_ADVANCE_TIMEOUT:?}")
-        })??;
         let preactivation_error = submit_signed_transaction(
             &client,
             &pre_verange.transaction,
@@ -1245,23 +1194,13 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "pre-activation and unavailable-ZK-ACE paths must preserve public balances",
         )
         .await?;
-        submit_instructions(
-            &client,
-            vec![
-                Log::new(
-                    Level::INFO,
-                    format!("exact retained exact-12 activation block {activation_height}"),
-                )
-                .into(),
-            ],
-            "commit exact retained exact-12 activation block",
-        )
-        .await?;
-        let active_records = compiled_profiles
-            .iter()
-            .copied()
+        let activation_height = next_governed_execution_height(&client).await?;
+        let active_records = compiled_profiles.iter().copied()
             .map(|compiled| active_activation(compiled, registration_height, activation_height))
             .collect::<Vec<_>>();
+        submit_instructions(&client, active_records.iter().map(|record| {
+            TransitionPrivacyProtocolLifecycleV1::new(record.protocol_id, record.lifecycle).into()
+        }).collect(), "explicitly activate exact retained profiles").await?;
         let active_expectations = AVAILABLE_PROTOCOLS
             .iter()
             .copied()

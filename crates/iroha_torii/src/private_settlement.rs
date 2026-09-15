@@ -855,6 +855,14 @@ fn active_config(
     app: &SharedAppState,
     height: u64,
 ) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
+    active_config_at_view(app, height, &app.state.view())
+}
+
+fn active_config_at_view(
+    app: &SharedAppState,
+    height: u64,
+    state: &iroha_core::state::StateView<'_>,
+) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
     let config = app.state.nexus_snapshot().atomic_private_settlement;
     if !config.enabled
         || config
@@ -868,7 +876,6 @@ fn active_config(
         .ok_or_else(private_settlement_unavailable)?;
     iroha_core::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
         .map_err(|_| private_settlement_unavailable())?;
-    let state = app.state.view();
     let capability = state
         .privacy_capability_snapshot_v1()
         .map_err(|_| private_settlement_unavailable())?;
@@ -2046,43 +2053,49 @@ pub(crate) async fn handler_bundle_status(
     .into_response()
 }
 
-/// Return the finalized receipt, abort marker, or redacted pending state.
+/// Read only public terminal state; absence makes no claim about local sidecars.
+fn public_bundle_receipt(
+    bundle_id: Hash,
+    receipt: Option<iroha_data_model::nexus::PrivateSettlementReceiptV1>,
+    abort: Option<iroha_data_model::nexus::PrivateSettlementAbortReceiptV1>,
+) -> PrivateSettlementBundleReceiptResponseV1 {
+    if let Some(receipt) = receipt {
+        PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)
+    } else if let Some(abort) = abort {
+        PrivateSettlementBundleReceiptResponseV1::Aborted(abort)
+    } else {
+        PrivateSettlementBundleReceiptResponseV1::Pending { bundle_id }
+    }
+}
+
+/// Return public terminal state from one committed view, independently of sidecar placement.
 pub(crate) async fn handler_bundle_receipt(
     State(app): State<SharedAppState>,
-    Extension(runtime): Extension<PrivateSettlementToriiRuntimeV1>,
     Path(bundle_id): Path<String>,
 ) -> Response {
     let bundle_id = match parse_digest(&bundle_id) {
         Ok(bundle_id) => bundle_id,
         Err(response) => return response,
     };
-    let height = match authoritative_height(&app) {
+    let view = app.state.view();
+    let height = match u64::try_from(view.height()) {
         Ok(height) => height,
-        Err(response) => return response,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_height_unavailable",
+            );
+        }
     };
-    if active_config(&app, height).is_err() {
+    if active_config_at_view(&app, height, &view).is_err() {
         return private_settlement_unavailable();
     }
-    let (receipt, abort) = terminal_bundle_state(&app, bundle_id);
-    if let Some(receipt) = receipt {
-        return JsonBody(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt))
-            .into_response();
-    }
-    if let Some(abort) = abort {
-        return JsonBody(PrivateSettlementBundleReceiptResponseV1::Aborted(abort)).into_response();
-    }
-    let status = match runtime.store().and_then(|store| {
-        store
-            .public_bundle_status(bundle_id, height)
-            .map_err(map_store_error)
-    }) {
-        Ok(status) => status,
-        Err(response) => return response,
-    };
-    JsonBody(PrivateSettlementBundleReceiptResponseV1::Pending {
+    let world = view.world();
+    JsonBody(public_bundle_receipt(
         bundle_id,
-        lifecycle: lifecycle_dto(status.lifecycle),
-    })
+        world.private_settlement_receipt_v1(&bundle_id).cloned(),
+        world.private_settlement_abort_v1(&bundle_id).copied(),
+    ))
     .into_response()
 }
 
@@ -2141,6 +2154,177 @@ mod tests {
             .computed_bundle_id()
             .expect("fixture bundle hashes");
         manifest
+    }
+
+    #[test]
+    fn public_receipt_absence_is_pending_and_terminal_state_takes_precedence() {
+        let manifest = abort_carrier_manifest_fixture();
+        let bundle_id = manifest.bundle_id;
+        assert_eq!(
+            public_bundle_receipt(bundle_id, None, None),
+            PrivateSettlementBundleReceiptResponseV1::Pending { bundle_id }
+        );
+        let abort = iroha_data_model::nexus::PrivateSettlementAbortReceiptV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            network_id: manifest.network_id,
+            bundle_id,
+            manifest_digest: manifest.manifest_digest().expect("manifest digest"),
+            finalized_height: 12,
+            reason: PrivateSettlementAbortReasonV1::ParticipantRejected,
+        };
+        assert_eq!(
+            public_bundle_receipt(bundle_id, None, Some(abort)),
+            PrivateSettlementBundleReceiptResponseV1::Aborted(abort)
+        );
+        // Classification trusts authenticated WSV terminal records, without consulting a sidecar store.
+        let receipt = iroha_data_model::nexus::PrivateSettlementReceiptV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            manifest,
+            authority_catalog: Default::default(),
+            legs: Vec::new(),
+            finalized_height: 12,
+        };
+        for competing_abort in [None, Some(abort)] {
+            assert_eq!(
+                public_bundle_receipt(bundle_id, Some(receipt.clone()), competing_abort),
+                PrivateSettlementBundleReceiptResponseV1::Finalized(receipt.clone())
+            );
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn activated_public_receipt_route_returns_pending_without_sidecar_runtime() {
+        use iroha_core::{
+            query::store::LiveQueryStore,
+            smartcontracts::Execute,
+            state::{State as CoreState, World},
+        };
+        use iroha_data_model::{
+            isi::privacy::{
+                RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1,
+            },
+            privacy::{
+                PrivacyActiveLifecycleV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
+                PrivacyProtocolLifecycleV1,
+            },
+        };
+        use std::num::NonZeroU64;
+        use tower::ServiceExt as _;
+
+        let mut config = iroha_config::parameters::actual::Nexus::default();
+        config.atomic_private_settlement.enabled = true;
+        config.atomic_private_settlement.activation_height = Some(2);
+        config
+            .atomic_private_settlement
+            .minimum_activation_notice_blocks = NonZeroU64::new(1).expect("notice");
+        // Authenticate the final configured catalog when Kura opens, before State publishes it.
+        let state = CoreState::new_with_pre_genesis_nexus_for_testing(
+            World::default(),
+            config,
+            LiveQueryStore::start_test(),
+        );
+        let header = |height, previous| {
+            BlockHeader::new(
+                NonZeroU64::new(height).expect("height"),
+                previous,
+                None,
+                None,
+                0,
+                0,
+            )
+        };
+        let authority = abort_carrier_manifest_fixture().sponsor;
+        let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let profile = iroha_core::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+            .expect("compiled profile");
+        let genesis_header = header(1, None);
+        let genesis_hash = genesis_header.hash();
+        let mut block = state.block(genesis_header);
+        let mut transaction = block.transaction();
+        RegisterPrivacyProtocolActivationV1::new(profile.activation_record(
+            PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                proposed_at_height: 1,
+            }),
+        ))
+        .execute(&authority, &mut transaction)
+        .expect("initial-governance registration");
+        TransitionPrivacyProtocolLifecycleV1::new(
+            protocol_id,
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 1,
+                state_since_height: 1,
+            }),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("explicit initial-governance activation");
+        transaction.apply();
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit activation fixture block");
+        state
+            .block(header(2, Some(genesis_hash)))
+            .commit_empty_block_for_testing()
+            .expect("commit configured service height");
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        Arc::get_mut(&mut app).expect("unique test app").state = Arc::new(state);
+        let view = app.state.view();
+        assert_eq!(view.height(), 2);
+        active_config_at_view(&app, 2, &view).expect("real active capability gate");
+        let bundle_id = Hash::new(b"identifier without local sidecars or terminal records");
+        assert!(
+            view.world()
+                .private_settlement_receipt_v1(&bundle_id)
+                .is_none()
+        );
+        assert!(
+            view.world()
+                .private_settlement_abort_v1(&bundle_id)
+                .is_none()
+        );
+        drop(view);
+        // The real route has no PrivateSettlementToriiRuntimeV1 Extension at all.
+        let router = axum::Router::new()
+            .route(
+                "/v1/nexus/private-settlements/bundles/{bundle_id}/receipt",
+                axum::routing::get(handler_bundle_receipt),
+            )
+            .with_state(app);
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/v1/nexus/private-settlements/bundles/{bundle_id}/receipt"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("route response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bounded response");
+        let decoded: PrivateSettlementBundleReceiptResponseV1 =
+            norito::json::from_slice(&bytes).expect("strict receipt DTO");
+        assert_eq!(
+            decoded,
+            PrivateSettlementBundleReceiptResponseV1::Pending { bundle_id }
+        );
+        let json: norito::json::Value = norito::json::from_slice(&bytes).expect("JSON");
+        assert_eq!(json["value"].as_object().expect("pending value").len(), 1);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn public_receipt_preserves_disabled_service_and_digest_errors_without_runtime() {
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let digest = Hash::new(b"unknown receipt bundle");
+        let disabled = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+        let malformed = handler_bundle_receipt(State(app), Path("invalid-digest".to_owned())).await;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

@@ -1009,13 +1009,13 @@ def test_queue_plan_pending_membership_contract_rejects_persistence_guard_drift(
             "crates/iroha_core/src/state.rs",
             "persist_classified_queue_plan_admission",
             "let state_commit = self.state_commit_lock.lock();",
-            "let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(",
+            "let disposition = Self::classify_pending_queue_plan_admission_in_view(",
         ),
         (
             "crates/iroha_core/src/kura.rs",
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+            "try_queue_plan_publication_at_height",
             "if actual_durable_height != expected_durable_height",
-            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+            "Ok(Some(KuraQueuePlanPublicationGuard {",
         ),
         (
             "crates/iroha_torii/src/lib.rs",
@@ -1024,7 +1024,7 @@ def test_queue_plan_pending_membership_contract_rejects_persistence_guard_drift(
             "disseminate_queue_plan_admission_publication(",
         ),
     ],
-    ids=("state-fence-before-classification", "height-check-before-write",
+    ids=("state-fence-before-classification", "height-check-before-guard",
          "durable-body-before-publication"),
 )
 def test_queue_plan_pending_membership_contract_rejects_persistence_order_drift(
@@ -1060,4 +1060,210 @@ def test_queue_plan_pending_membership_contract_preserves_historical_applied(
         "queue_plan_binding_application_evidence_in_view" in error
         and "QueuePlanBindingApplicationEvidence::AppliedDirect" in error
         for error in errors
+    ), errors
+
+
+def queue_plan_publication_source_contract_errors(module, sources: dict[str, str]) -> tuple[str, ...]:
+    """Evaluate only the changed publication owners using the real checker contracts/parser."""
+    symbols = {
+        "persist_classified_queue_plan_admission",
+        "try_queue_plan_publication_at_height",
+        "wait_for_queue_plan_publication",
+        "KuraQueuePlanPublicationGuard",
+        "KuraQueuePlanPublicationGuard<'_>::retire",
+        "KuraQueuePlanPublicationGuard<'_>::persist",
+    }
+    errors: list[str] = []
+    items = {}
+    for relative, kind, symbol, tokens in module.QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS:
+        if symbol not in symbols:
+            continue
+        found = module._extract_rust_binding_items(sources[relative], kind, symbol)
+        if len(found) != 1:
+            errors.append(f"{symbol}: expected one owner, found {len(found)}")
+            continue
+        items[(relative, kind, symbol)] = found[0]
+        for token in tokens:
+            if token not in found[0]:
+                errors.append(f"{symbol}: missing {token!r}")
+    for relative, kind, symbol, tokens in module.QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS:
+        if symbol not in symbols:
+            continue
+        item = items.get((relative, kind, symbol))
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            at = item.find(token, cursor + 1)
+            if item.count(token) != 1 or at < 0:
+                errors.append(f"{symbol}: reordered or duplicated {token!r}")
+                break
+            cursor = at
+    module._validate_queue_plan_publication_lock_items(items, errors)
+    return tuple(errors)
+
+
+def test_queue_plan_publication_scoped_contract_accepts_current_owners() -> None:
+    module = load_checker()
+    sources = {relative: (ROOT_DIR / relative).read_text(encoding="utf-8") for relative in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+    )}
+    errors = queue_plan_publication_source_contract_errors(module, sources)
+    assert errors == (), errors
+
+
+@pytest.mark.parametrize(("relative", "old", "new"), [
+    ("crates/iroha_core/src/state.rs", "drop(state_view);", "// retained StateView"),
+    ("crates/iroha_core/src/state.rs", "self.kura.wait_for_queue_plan_publication();", "// skip the outside-State wait"),
+    ("crates/iroha_core/src/state.rs", "parking_lot::MutexGuard::unlock_fair(state_commit);", "drop(state_commit);"),
+    ("crates/iroha_core/src/state.rs", "self.authenticate_pending_queue_plan_admission(bytes)?", "self.authenticate_pending_queue_plan_admission(bytes).unwrap()"),
+    ("crates/iroha_core/src/kura.rs", "self.canonical_chain_lock.try_lock()", "Some(self.canonical_chain_lock.lock())"),
+    ("crates/iroha_core/src/kura.rs", "actual_durable_height != expected_durable_height", "actual_durable_height < expected_durable_height"),
+    ("crates/iroha_core/src/kura.rs", "_guard: canonical_guard,", "_guard: self.canonical_chain_lock.lock(),"),
+])
+def test_queue_plan_publication_scoped_contract_rejects_lock_and_height_drift(
+    relative: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+    )}
+    symbol = "persist_classified_queue_plan_admission" if relative.endswith("state.rs") else "try_queue_plan_publication_at_height"
+    owner = module._extract_rust_binding_items(sources[relative], "fn", symbol)[0]
+    assert old in owner
+    sources[relative] = sources[relative].replace(owner, owner.replace(old, new, 1), 1)
+    assert queue_plan_publication_source_contract_errors(module, sources)
+
+
+@pytest.mark.parametrize("symbol", [
+    "KuraQueuePlanPublicationGuard<'_>::retire", "KuraQueuePlanPublicationGuard<'_>::persist",
+])
+def test_queue_plan_publication_scoped_contract_rejects_recursive_canonical_lock(symbol: str) -> None:
+    module = load_checker()
+    sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+    )}
+    relative = "crates/iroha_core/src/kura.rs"
+    owner = module._extract_rust_binding_items(sources[relative], "method", symbol)[0]
+    changed = owner.replace("{", "{ let _recursive = self.kura.canonical_chain_lock.lock();", 1)
+    sources[relative] = sources[relative].replace(owner, changed, 1)
+    errors = queue_plan_publication_source_contract_errors(module, sources)
+    assert any(symbol in error and "recursive" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(("symbol", "earlier", "later"), [
+    ("persist_classified_queue_plan_admission", "drop(state_view);", ".try_queue_plan_publication_at_height(committed_height)"),
+    ("persist_classified_queue_plan_admission", ".try_queue_plan_publication_at_height(committed_height)", "publication.retire(hash)?;"),
+    ("persist_classified_queue_plan_admission", "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    #[cfg(test)]", "self.kura.wait_for_queue_plan_publication();\n                    continue;"),
+    ("try_queue_plan_publication_at_height", "if actual_durable_height != expected_durable_height", "Ok(Some(KuraQueuePlanPublicationGuard {"),
+])
+def test_queue_plan_publication_scoped_contract_rejects_reordered_authority(
+    symbol: str, earlier: str, later: str,
+) -> None:
+    module = load_checker()
+    sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+    )}
+    relative = "crates/iroha_core/src/" + (
+        "state.rs" if symbol == "persist_classified_queue_plan_admission" else "kura.rs"
+    )
+    owner = module._extract_rust_binding_items(sources[relative], "fn", symbol)[0]
+    assert owner.count(earlier) == owner.count(later) == 1
+    swapped = owner.replace(earlier, "__HELD_ORDER_SWAP__").replace(later, earlier).replace("__HELD_ORDER_SWAP__", later)
+    sources[relative] = sources[relative].replace(owner, swapped, 1)
+    assert queue_plan_publication_source_contract_errors(module, sources)
+
+
+def test_queue_plan_publication_scoped_contract_rejects_wait_returning_authority() -> None:
+    module = load_checker()
+    sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+    )}
+    relative = "crates/iroha_core/src/kura.rs"
+    symbol = "wait_for_queue_plan_publication"
+    owner = module._extract_rust_binding_items(sources[relative], "fn", symbol)[0]
+    changed = owner.replace("(&self) {", "(&self) -> KuraQueuePlanPublicationGuard<'_> {", 1)
+    assert changed != owner
+    sources[relative] = sources[relative].replace(owner, changed, 1)
+    assert any("wait must carry no" in error for error in queue_plan_publication_source_contract_errors(module, sources))
+
+
+def test_queue_plan_publication_scoped_contract_keeps_native_control_anchors() -> None:
+    module = load_checker()
+    symbols = {
+        "pending_queue_plan_publication_guard_checks_height_before_exposing_mutations",
+        "pending_queue_plan_busy_kura_releases_state_and_reclassifies_after_publication",
+        "pending_queue_plan_frontier_mismatch_preserves_all_retirement_candidates",
+        "pending_queue_plan_height_mismatch_preserves_stale_conflicting_binding",
+    }
+    checked = set()
+    for relative, symbol, tokens in module.QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS:
+        if symbol not in symbols:
+            continue
+        source = (ROOT_DIR / relative).read_text(encoding="utf-8")
+        owners = module._extract_rust_binding_items(source, "fn", symbol)
+        assert len(owners) == 1, symbol
+        assert all(token in owners[0] for token in tokens), (symbol, [token for token in tokens if token not in owners[0]])
+        checked.add(symbol)
+    assert checked == symbols
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "old", "new"),
+    [
+        (
+            "crates/iroha_core/src/state.rs",
+            "authenticate_pending_queue_plan_admission",
+            "&self.network_id,",
+            "&NetworkId::from(\"wrong-network\"),",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "validate_authenticated_queue_plan_admission_for_carrier_in_view",
+            "exact_predecessor != context.predecessor_block_hash",
+            "false",
+        ),
+        (
+            "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+            "persist",
+            "QueuePlanAdmissionPersistenceScope::Admission,",
+            "QueuePlanAdmissionPersistenceScope::Carrier { height: 1 },",
+        ),
+        (
+            "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+            "publication_overlap_height",
+            "expected_durable_height.checked_add(1) == Some(*actual_durable_height)",
+            "expected_durable_height < actual_durable_height",
+        ),
+    ],
+    ids=("authenticated-network", "exact-history", "admission-scope", "one-ahead-wait"),
+)
+def test_queue_plan_pending_membership_contract_rejects_current_owner_drift(
+    tmp_path: Path, relative: str, symbol: str, old: str, new: str,
+) -> None:
+    """Authentication, historical authority, and deadline retries retain their owners."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    replace_once_after(tmp_path / relative, f"fn {symbol}(", old, new)
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(symbol in error and old in error for error in errors), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_historical_authority_order_drift(
+    tmp_path: Path,
+) -> None:
+    """The authenticated helper keeps exact history ahead of live authority lookup."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    symbol = "validate_authenticated_queue_plan_admission_for_carrier_in_view"
+    swap_ordered_once_after(
+        path,
+        f"fn {symbol}(",
+        "state_view.block_hashes().get(index).copied()",
+        "queue_plan_authoritative_peers_in_view_at_height(",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(
+        "ordered QueuePlan" in error and symbol in error for error in errors
     ), errors

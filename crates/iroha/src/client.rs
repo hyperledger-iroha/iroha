@@ -8921,7 +8921,14 @@ fn decode_parameters_response(
                 .into(),
         );
     }
-    norito::json::from_slice(resp.body()).map_err(Into::into)
+    let content_type = exact_single_response_header(resp, "content-type")
+        .wrap_err("invalid parameters response Content-Type")?;
+    if !Client::is_json_content_type(content_type) {
+        return Err(eyre!(
+            "parameters response requires application/json, received `{content_type}`"
+        ));
+    }
+    norito::json::from_slice(resp.body()).wrap_err("failed to decode parameters response JSON")
 }
 #[cfg(test)]
 fn decode_parameters_for_test(
@@ -9818,7 +9825,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_parameters(&self) -> Result<iroha_data_model::parameter::Parameters> {
         let url = join_torii_url(&self.torii_url, "v1/parameters");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         decode_parameters_response(&resp)
     }
     /// GET `/v1/sumeragi/qc` — authoritative v2 `PrepareQC` references.
@@ -10252,7 +10262,7 @@ fn lifecycle_status() -> LaneLifecycleStatusV1 {
         LaneId::SINGLE,
         Hash::new(b"client-lifecycle-status-incarnation"),
     )]);
-    LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
+    LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
 }
 #[cfg(test)]
 mod status_tests {
@@ -10357,21 +10367,52 @@ mod status_tests {
     }
     #[test]
     fn lane_lifecycle_status_decodes_json_and_norito() {
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let mut status = lifecycle_status();
+            status.runtime_catalog_hash = runtime_catalog_hash;
+            let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+            let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
+            assert_eq!(
+                Client::decode_lane_lifecycle_status_for_test(&response)
+                    .expect("decode lifecycle status JSON"),
+                status
+            );
+            let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+            let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
+            assert_eq!(
+                Client::decode_lane_lifecycle_status_for_test(&response)
+                    .expect("decode lifecycle status Norito"),
+                status
+            );
+        }
+    }
+    #[test]
+    fn lane_lifecycle_status_rejects_missing_or_empty_runtime_catalog_hash() {
         let status = lifecycle_status();
-        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status JSON"),
-            status
+        let mut value = norito::json::to_value(&status).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_catalog_hash");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(&value).unwrap(),
+            Some(APPLICATION_JSON),
         );
-        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status Norito"),
-            status
-        );
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("old response without runtime hash must fail");
+        assert!(error.to_string().contains("runtime_catalog_hash"));
+        let mut status = status;
+        status.runtime_catalog_hash = Some(Hash::prehashed([0; Hash::LENGTH]));
+        for (body, media_type) in [
+            (norito::json::to_vec(&status).unwrap(), APPLICATION_JSON),
+            (norito::to_bytes(&status).unwrap(), APPLICATION_NORITO),
+        ] {
+            let response = mk_response(StatusCode::OK, body, Some(media_type));
+            let error = Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect_err("empty runtime hash must fail");
+            assert!(format!("{error:#}").contains("empty runtime catalog hash"));
+        }
     }
     #[test]
     fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
@@ -13978,6 +14019,7 @@ mod evidence_http_tests {
         }
     }
     include!("client/activation_evidence_tests.rs");
+    include!("client/activation_attestation_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
@@ -17514,7 +17556,10 @@ impl Client {
                 .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
         )
     }
-    /// Fetch and validate the exact current Nexus lane catalog and incarnation commitments.
+    /// Fetch the committed Nexus lane catalog, incarnation commitments, and runtime overlay hash.
+    ///
+    /// The runtime hash is an authoritative node read for catalog-transition concurrency checks;
+    /// the lane-only response does not contain the complete overlay needed to recompute it.
     ///
     /// # Errors
     /// Returns an error for non-success responses, malformed JSON/Norito,
@@ -18585,8 +18630,12 @@ impl Client {
     }
     /// Account-signed page of effective permissions for one exact account.
     ///
-    /// Query pagination is included before canonical request signing and count mode is always
-    /// `exact`, allowing callers to fail closed while traversing a response larger than one page.
+    /// Pagination and `count_mode=exact` are included before canonical request signing. Exact
+    /// counts apply per route; the routed response's `total` is the deduplicated union of the
+    /// current route pages, not a global permission count or an exhaustion witness. Callers must
+    /// keep `offset + limit` within the server's configured fetch budget, require complete
+    /// successful fanout, and independently establish exhaustion before treating the returned
+    /// permissions as a complete policy view.
     ///
     /// # Errors
     /// Returns an error if request signing, construction, or the HTTP call fails.
@@ -26660,7 +26709,7 @@ mod tests {
             LaneId::SINGLE,
             Hash::new(b"client-http-lifecycle-incarnation"),
         )]);
-        LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
+        LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
     }
     struct FailingClientRng;
     #[derive(Debug)]
@@ -34289,11 +34338,81 @@ mod tests {
     include!("client/status_response_tests.rs");
     #[test]
     fn decode_parameters_response_parses_json_payload() {
+        use http::{HeaderValue, header::CONTENT_TYPE};
+
         let params = iroha_data_model::parameter::Parameters::default();
         let body = norito::json::to_vec(&params).expect("serialize parameters");
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let decoded = decode_parameters_for_test(&response).expect("decode parameters");
         assert_eq!(decoded, params);
+
+        // Exercise the actual SDK HTTP boundary, not just its private decoder.
+        let request = |response| {
+            capture_request(response, |transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(transport.clone())
+                    .get_parameters()
+            })
+        };
+        let (result, snapshot) = request(response.clone());
+        assert_eq!(result.expect("native parameters response"), params);
+        assert_eq!(snapshot.url.path(), "/v1/parameters");
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+
+        let malformed = json_response(StatusCode::OK, r#"{"message":"unexpected envelope"}"#);
+        let (result, _) = request(malformed);
+        let error = result.expect_err("an error envelope is not a parameter snapshot");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode parameters response JSON")
+        );
+        assert!(
+            error.downcast_ref::<norito::json::Error>().is_some(),
+            "response context must preserve the native strict decoder cause: {error:#}"
+        );
+        assert!(format!("{error:#}").contains("unknown field `message`"));
+
+        let mut wrong_media = response.clone();
+        wrong_media
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        let (result, _) = request(wrong_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires application/json")
+        );
+
+        let mut missing_media = response.clone();
+        missing_media.headers_mut().remove(CONTENT_TYPE);
+        let (result, _) = request(missing_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid parameters response Content-Type")
+        );
+
+        let mut duplicate_media = response.clone();
+        duplicate_media
+            .headers_mut()
+            .append(CONTENT_TYPE, HeaderValue::from_static(APPLICATION_JSON));
+        let (result, _) = request(duplicate_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid parameters response Content-Type")
+        );
+
+        let mut failed = response;
+        *failed.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        let (result, _) = request(failed);
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Unexpected parameters response"));
+        assert!(error.to_string().contains("503"));
     }
     #[test]
     fn decode_status_allows_json_fallback() {

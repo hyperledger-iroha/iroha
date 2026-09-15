@@ -15,10 +15,12 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
 use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
+    account::address::ChainDiscriminantGuard,
     isi::{
         InstructionBox,
         privacy::{
             RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
     },
     privacy::{
@@ -52,7 +54,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd";
+    "41343a63f1fb3bf4cd550e697f316b8e50fe18e06d6daffba48605e228ddda74";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -62,6 +64,9 @@ const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
+const CANONICAL_NEVO_OVERLAY_V1: &[u8] =
+    include_bytes!("../../../../configs/soranexus/taira/nevo_genesis_overlay.template.json");
+#[cfg(test)]
 const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json");
 #[cfg(test)]
@@ -256,7 +261,8 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
-        "qualification_activation_template_count": (PrivacyProtocolIdV1::COUNT as u64),
+        "qualification_activation_protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
+        "qualification_activation_instruction_count": (super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
         "genesis_privacy_instruction_count": 0_u64,
         "rollout_state": "not-executed",
     });
@@ -622,29 +628,39 @@ fn expected_nevo_genesis_v1(
 ) -> color_eyre::Result<JsonValue> {
     let mut expected: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
         .wrap_err("failed to decode the canonical Taira genesis template")?;
-    let golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
-        .wrap_err("failed to decode the source-pinned Python NEVO v2 golden")?;
-    let golden_transactions = golden
-        .as_object()
-        .and_then(|root| root.get("transactions"))
+    let mut overlay: JsonValue = norito::json::from_slice(CANONICAL_NEVO_OVERLAY_V1)
+        .wrap_err("failed to decode the canonical NEVO overlay transaction")?;
+    let fields = object_v1(&overlay, "canonical NEVO overlay")?;
+    expect_exact_keys_v1(
+        fields,
+        &["instructions", "ivm_triggers", "topology"],
+        "canonical NEVO overlay",
+    )?;
+    if fields
+        .get("instructions")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("source-pinned Python NEVO v2 golden omitted transactions"))?;
+        .map(Vec::len)
+        != Some(29)
+        || fields
+            .get("ivm_triggers")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            != Some(0)
+        || fields
+            .get("topology")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            != Some(0)
+    {
+        bail!(
+            "canonical NEVO overlay must contain exactly 29 instructions and no triggers or topology"
+        );
+    }
     let expected_transactions = expected
         .as_object_mut()
         .and_then(|root| root.get_mut("transactions"))
         .and_then(JsonValue::as_array_mut)
         .ok_or_else(|| eyre!("canonical Taira genesis template omitted transactions"))?;
-    if golden_transactions.len() != expected_transactions.len() + 1
-        || golden_transactions[..expected_transactions.len()] != expected_transactions[..]
-    {
-        bail!(
-            "source-pinned Python NEVO v2 golden must equal the canonical Taira genesis plus exactly one overlay transaction"
-        );
-    }
-    let mut overlay = golden_transactions
-        .last()
-        .expect("the exact transaction-count check proves an overlay exists")
-        .clone();
     for (source, target, label) in [
         (GOLDEN_NEVO_ONBOARDING_V2, onboarding, "onboarding"),
         (GOLDEN_NEVO_API_SIGNER_V2, api_signer, "API signer"),
@@ -652,7 +668,7 @@ fn expected_nevo_genesis_v1(
         (GOLDEN_NEVO_EPR_GUARD_V2, dpn_epr_guard, "EPR guard"),
     ] {
         if replace_nevo_golden_identity_v2(&mut overlay, source, target) == 0 {
-            bail!("compiled Python NEVO v2 overlay omitted the {label} identity");
+            bail!("canonical NEVO overlay omitted the {label} identity");
         }
     }
     expected_transactions.push(overlay);
@@ -990,10 +1006,9 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         &[
             "activation_state",
             "controller_observation_required",
-            "genesis_activation_forbidden",
+            "execution_height",
+            "instruction_count",
             "mode",
-            "notice_interval_blocks",
-            "observation_interval_blocks",
             "rollout_plan_path",
             "rollout_plan_sha256",
         ],
@@ -1008,14 +1023,19 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     expect_string_v1(
         rollout,
         "mode",
-        "governance-four-wave",
+        "explicit-register-then-activate",
         "governance rollout",
     )?;
-    expect_u64_v1(rollout, "notice_interval_blocks", 300, "governance rollout")?;
     expect_u64_v1(
         rollout,
-        "observation_interval_blocks",
-        300,
+        "execution_height",
+        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        "governance rollout",
+    )?;
+    expect_u64_v1(
+        rollout,
+        "instruction_count",
+        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
         "governance rollout",
     )?;
     expect_string_v1(
@@ -1041,13 +1061,9 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
         != Some(true)
-        || rollout
-            .get("genesis_activation_forbidden")
-            .and_then(JsonValue::as_bool)
-            != Some(true)
     {
         bail!(
-            "privacy plan template must forbid genesis activation and require a controller observation"
+            "privacy plan template must require authenticated controller observation after explicit activation"
         );
     }
     validate_catalog_inventory_v1(object_field_v1(root, "privacy_catalog", "privacy plan")?)?;
@@ -1209,7 +1225,6 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
             "chain_id",
             "endpoints",
             "halt_conditions",
-            "intervals",
             "post_cutover_contract",
             "protocol_matrix_sha256",
             "protocols",
@@ -1219,7 +1234,6 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
             "rollback_contract",
             "schema",
             "schema_version",
-            "waves",
             "wire_contract",
         ],
         "privacy rollout plan",
@@ -1339,36 +1353,62 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         )?;
     }
 
-    let waves = root
-        .get("waves")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("privacy rollout plan `waves` must be an array"))?;
-    if waves.len() != 4 {
-        bail!("privacy rollout plan must contain exactly four waves");
-    }
-    let mut scheduled = BTreeSet::new();
-    for (index, value) in waves.iter().enumerate() {
-        let wave = object_v1(value, "privacy rollout wave")?;
-        expect_exact_keys_v1(
-            wave,
-            &["index", "label", "protocols"],
-            "privacy rollout wave",
-        )?;
-        expect_u64_v1(wave, "index", (index + 1) as u64, "privacy rollout wave")?;
-        for label in string_array_field_v1(wave, "protocols", "privacy rollout wave")? {
-            if !PrivacyProtocolIdV1::ALL
-                .iter()
-                .any(|protocol| protocol.canonical_label() == label)
-            {
-                bail!("privacy rollout wave contains an unknown protocol label");
-            }
-            if !scheduled.insert(label) {
-                bail!("privacy rollout wave schedules a protocol more than once");
-            }
-        }
-    }
-    if scheduled.len() != PrivacyProtocolIdV1::COUNT {
-        bail!("privacy rollout waves must schedule every Exact12 protocol exactly once");
+    let activation = object_field_v1(root, "activation_contract", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        activation,
+        &[
+            "mode",
+            "execution_height",
+            "proposed_lifecycle",
+            "active_lifecycle",
+            "ordered_instruction_count",
+            "protocol_count",
+            "one_governed_instruction_batch",
+        ],
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "mode",
+        "explicit-register-then-activate",
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "proposed_lifecycle",
+        "Proposed",
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "active_lifecycle",
+        "Active",
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "execution_height",
+        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "ordered_instruction_count",
+        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "protocol_count",
+        PrivacyProtocolIdV1::COUNT as u64,
+        "privacy activation contract",
+    )?;
+    if activation
+        .get("one_governed_instruction_batch")
+        .and_then(JsonValue::as_bool)
+        != Some(true)
+    {
+        bail!("privacy activation must preserve the complete ordered instruction batch");
     }
     Ok(())
 }
@@ -1716,6 +1756,11 @@ fn render_release_genesis_v1(
         CHAIN_DISCRIMINANT_V1,
         "Taira genesis",
     )?;
+    // Account decoding must use the validated document network, independently
+    // of the caller's ambient address context. The guard restores that context
+    // on success and every error return.
+    let _chain_discriminant =
+        ChainDiscriminantGuard::enter(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
     let transactions = root
         .get("transactions")
         .and_then(JsonValue::as_array)
@@ -1734,6 +1779,10 @@ fn render_release_genesis_v1(
                 .as_any()
                 .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
                 .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+                    .is_some()
                 || instruction
                     .as_any()
                     .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
@@ -2308,6 +2357,22 @@ mod tests {
 
         let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
             .expect("parse canonical rollout plan");
+        let mut substituted_lock = rollout.clone();
+        substituted_lock
+            .as_object_mut()
+            .expect("rollout plan object")
+            .insert(
+                "cargo_lock_sha256".to_owned(),
+                JsonValue::String("0".repeat(64)),
+            );
+        let substituted_bytes = json_pretty_bytes_v1(&substituted_lock, "substituted rollout")
+            .expect("encode substituted rollout");
+        assert!(
+            validate_rollout_plan_v1(&substituted_bytes)
+                .expect_err("a substituted dependency lock must be rejected")
+                .to_string()
+                .contains("cargo_lock_sha256")
+        );
         let protocols = rollout
             .get("protocols")
             .and_then(JsonValue::as_array)
@@ -2457,17 +2522,21 @@ mod tests {
             .expect("decode canonical Taira genesis");
         let mut golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
             .expect("decode source-pinned NEVO genesis");
-        golden
+        let overlay = golden
             .as_object_mut()
             .and_then(|root| root.get_mut("transactions"))
             .and_then(JsonValue::as_array_mut)
             .expect("NEVO genesis transactions")
             .pop()
             .expect("exactly one NEVO overlay transaction");
+        let canonical_overlay: JsonValue = norito::json::from_slice(CANONICAL_NEVO_OVERLAY_V1)
+            .expect("decode canonical NEVO overlay");
+        assert_eq!(overlay, canonical_overlay);
         assert_eq!(golden, base);
     }
     #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
+        let _caller_network = ChainDiscriminantGuard::enter(42);
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
         let unsigned_genesis_path = directory.path().join("unsigned-genesis.template.json");
         let review_path = directory.path().join("review.json");
@@ -2481,6 +2550,7 @@ mod tests {
         let mut output = std::io::BufWriter::new(Vec::new());
         validate_taira_nevo_review_v1(&args, &mut output)
             .expect("validate exact reviewed NEVO genesis");
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let output = String::from_utf8(output.into_inner().expect("flush NEVO validation receipt"))
             .expect("NEVO validation receipt is UTF-8");
         let receipt: JsonValue =
@@ -2533,6 +2603,7 @@ mod tests {
         let error = validate_taira_nevo_review_v1(&args, &mut std::io::BufWriter::new(Vec::new()))
             .expect_err("digest-unbound public identity mutation must fail native validation");
         assert!(error.to_string().contains("public_inputs_sha256"));
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
     }
     #[test]
     fn reviewed_nevo_genesis_is_natively_recomposed_and_splices_are_rejected() {
@@ -2613,6 +2684,8 @@ mod tests {
     }
     #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
+        let _chain_discriminant =
+            ChainDiscriminantGuard::enter(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let (genesis, _) = nevo_fixture_v1();
         let genesis_json: JsonValue =
             norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
@@ -2859,37 +2932,43 @@ mod tests {
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
-                activate_at_height: 301,
             },
         ));
-        let instruction =
-            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation));
-        let mut genesis: JsonValue =
-            norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
-        let mut one = String::new();
-        iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
-        let mut decoded: JsonValue =
-            norito::json::from_str(&one).expect("parse decoded activation JSON");
-        let injected = decoded
-            .as_array_mut()
-            .expect("activation array")
-            .pop()
-            .expect("one activation");
-        genesis
-            .get_mut("transactions")
-            .and_then(JsonValue::as_array_mut)
-            .and_then(|transactions| transactions.last_mut())
-            .and_then(|transaction| transaction.get_mut("instructions"))
-            .and_then(JsonValue::as_array_mut)
-            .expect("final instructions")
-            .push(injected);
-        let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-        assert!(
-            render_release_genesis_v1(&tampered, None)
-                .expect_err("reject pre-existing decoded privacy instruction")
-                .to_string()
-                .contains("already contains a privacy bootstrap instruction")
-        );
+        for instruction in [
+            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation)),
+            InstructionBox::from(TransitionPrivacyProtocolLifecycleV1::new(
+                profile.protocol_id,
+                super::super::bootstrap_active_lifecycle_v1(),
+            )),
+        ] {
+            let mut genesis: JsonValue =
+                norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
+            let mut one = String::new();
+            iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
+            let mut decoded: JsonValue =
+                norito::json::from_str(&one).expect("parse decoded activation JSON");
+            let injected = decoded
+                .as_array_mut()
+                .expect("activation array")
+                .pop()
+                .expect("one activation");
+            genesis
+                .get_mut("transactions")
+                .and_then(JsonValue::as_array_mut)
+                .and_then(|transactions| transactions.last_mut())
+                .and_then(|transaction| transaction.get_mut("instructions"))
+                .and_then(JsonValue::as_array_mut)
+                .expect("final instructions")
+                .push(injected);
+            let tampered =
+                json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
+            assert!(
+                render_release_genesis_v1(&tampered, None)
+                    .expect_err("reject pre-existing decoded privacy instruction")
+                    .to_string()
+                    .contains("already contains a privacy bootstrap instruction")
+            );
+        }
     }
     #[test]
     fn wrong_and_scoped_governance_grants_are_rejected_before_composition() {

@@ -2,7 +2,8 @@
 """Render a Taira validator systemd unit without reading runtime signing inputs.
 
 Requires Python 3.10+ and explicit absolute Linux paths to retained owner-private
-signers. Output is a new mode-0600 unit, never installed or overwritten here.
+signers. Output is a new public mode-0644 unit, ready for native inventory
+assembly and never installed or overwritten here. Referenced signers stay private.
 Validate it with systemd-analyze verify on the deployment host and bind its exact
 bytes into the native public-reset inventory before installation.
 
@@ -177,6 +178,9 @@ def main():
     with os.fdopen(fd, "wb") as output:
         output.write(content)
         output.flush()
+        # Match the native validator_unit artifact role even under UMask=0077.
+        # Publish only the completed public unit; signer files are never opened.
+        os.fchmod(output.fileno(), 0o644)
         os.fsync(output.fileno())
     print(args.output)
 

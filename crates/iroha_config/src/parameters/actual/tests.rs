@@ -119,6 +119,46 @@ mod tests {
         );
     }
     #[test]
+    fn nexus_consensus_policy_digest_keeps_configured_dataspaces_during_runtime_addition() {
+        let baseline = Nexus::default();
+        assert_eq!(
+            baseline.configured_dataspace_catalog,
+            baseline.dataspace_catalog
+        );
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid baseline policy");
+        let mut expanded = baseline.clone();
+        expanded.dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(8_648_377_547_929_788_715),
+                alias: "bpng".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid committed dataspace addition");
+        assert_eq!(
+            expanded.configured_dataspace_catalog,
+            baseline.dataspace_catalog
+        );
+        assert_eq!(
+            nexus_consensus_policy_digest(&expanded).expect("valid expanded runtime policy"),
+            expected,
+            "committed runtime geometry does not rewrite the immutable execution policy"
+        );
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&expanded, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &[]),
+            "the effective dataspace addition remains bound to the per-height context"
+        );
+        expanded.configured_dataspace_catalog = expanded.dataspace_catalog.clone();
+        assert_ne!(
+            nexus_consensus_policy_digest(&expanded).expect("valid different configured policy"),
+            expected,
+            "a local baseline addition must remain execution-policy drift"
+        );
+    }
+    #[test]
     fn nexus_consensus_policy_digest_binds_configured_lane_catalog() {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
@@ -261,22 +301,24 @@ mod tests {
         let baseline = Nexus::default();
         let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
         let mut dataspace_drift = baseline.clone();
-        dataspace_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            fault_tolerance: 2,
-            ..DataSpaceMetadata::default()
-        }])
-        .expect("valid dataspace committee drift");
+        dataspace_drift.configured_dataspace_catalog =
+            DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                fault_tolerance: 2,
+                ..DataSpaceMetadata::default()
+            }])
+            .expect("valid dataspace committee drift");
         assert_ne!(
             nexus_consensus_policy_digest(&dataspace_drift).expect("valid dataspace drift"),
             expected,
             "dataspace fault tolerance changes the 3f+1 lane committee"
         );
         let mut dataspace_id_drift = baseline.clone();
-        dataspace_id_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::new(7),
-            ..DataSpaceMetadata::default()
-        }])
-        .expect("valid dataspace identifier catalog");
+        dataspace_id_drift.configured_dataspace_catalog =
+            DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                ..DataSpaceMetadata::default()
+            }])
+            .expect("valid dataspace identifier catalog");
         assert_ne!(
             nexus_consensus_policy_digest(&dataspace_id_drift)
                 .expect("digest does not perform cross-catalog validation"),
@@ -365,12 +407,15 @@ mod tests {
             fault_tolerance: 2,
         };
         let left = Nexus {
-            dataspace_catalog: DataSpaceCatalog::new(vec![universal.clone(), settlement.clone()])
-                .expect("valid dataspace catalog"),
+            configured_dataspace_catalog: DataSpaceCatalog::new(vec![
+                universal.clone(),
+                settlement.clone(),
+            ])
+            .expect("valid dataspace catalog"),
             ..Nexus::default()
         };
         let mut right = left.clone();
-        right.dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
+        right.configured_dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
             .expect("valid reordered dataspace catalog");
         assert_eq!(
             nexus_consensus_policy_digest(&left).expect("valid left policy"),
@@ -1613,6 +1658,64 @@ mod tests {
             <[u8; 32]>::from(hash),
             iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             "data-model genesis defaults must track the canonical config projection",
+        );
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+                &Nexus::default(),
+                &Pipeline::default(),
+                &[],
+                &[],
+                None,
+            ),
+            hash,
+            "absence of a committed catalog policy preserves the original context projection"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy() {
+        let nexus = Nexus::default();
+        let pipeline = Pipeline::default();
+        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
+        let root = Hash::new(b"first committed catalog with exact four-validator manifest");
+        let changed_root = Hash::new(b"changed committed manifest authority");
+        let committed = sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+            &nexus,
+            &pipeline,
+            &[],
+            &[],
+            Some(root),
+        );
+        assert_ne!(
+            committed, baseline,
+            "the authorization root is consensus-relevant"
+        );
+        assert_ne!(
+            committed,
+            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+                &nexus,
+                &pipeline,
+                &[],
+                &[],
+                Some(changed_root),
+            ),
+            "same geometry with different manifest policy cannot share a height context"
+        );
+        let mut changed_geometry = nexus.clone();
+        changed_geometry.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            fault_tolerance: 2,
+            ..DataSpaceMetadata::default()
+        }])
+        .expect("valid changed geometry");
+        assert_ne!(
+            committed,
+            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+                &changed_geometry,
+                &pipeline,
+                &[],
+                &[],
+                Some(root),
+            ),
+            "the committed root supplements the complete effective geometry projection"
         );
     }
     #[test]

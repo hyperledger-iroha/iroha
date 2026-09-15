@@ -687,7 +687,7 @@ fn world_with_privacy_tightenings(
             next_limits,
         }),
     });
-    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, activate_at_height: 400, }, )) };
+    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, }, )) };
     let mut next_protocol_limits = activation.protocol_limits;
     let_row! { iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
@@ -719,13 +719,13 @@ state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_b
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
     let_row! { key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("promoted activation") };
+    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("activation with updated limits") };
     assert_eq!(activation.protocol_limits, next_protocol_limits);
     assert_eq!(activation.pending_protocol_limits_tightening, None);
     assert!(matches!(
         activation.lifecycle,
-        PrivacyProtocolLifecycleV1::Active(_)
-    ));
+        PrivacyProtocolLifecycleV1::Proposed(_)
+    ), "a protocol-limit schedule must not activate a pending proposal");
     assert!(matches!(
         activation.protocol_limits,
         PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
@@ -764,6 +764,79 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
         state.world.privacy_activations.view().get(&activation_key),
         Some(&original_activation),
         "a failed start hook must leave the base activation unchanged"
+    );
+}
+state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overlay
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+    let original_policy = *world.privacy_consensus_policy.view().get();
+    let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+    );
+    let original_activation = *world
+        .privacy_activations
+        .view()
+        .get(&activation_key)
+        .expect("scheduled activation");
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+    let error = match state.block_with_pristine_stage(header, |block| {
+        assert!(!block.start_of_block_effects_applied);
+        assert_eq!(block.world.privacy_consensus_policy.get(), &original_policy);
+        assert_eq!(
+            block.world.privacy_activations.get(&activation_key),
+            Some(&original_activation),
+            "the pristine stage must precede due privacy effects",
+        );
+        let mut staged_activation = original_activation;
+        // If construction continues past the failed stage, the start hook must
+        // reject this missed schedule instead of silently discarding its writes.
+        staged_activation
+            .pending_protocol_limits_tightening
+            .as_mut()
+            .expect("pending protocol tightening")
+            .effective_at_height = 399;
+        block
+            .world
+            .privacy_activations
+            .insert(activation_key, staged_activation);
+        Err("rejected pristine stage")
+    }) {
+        Ok(_) => panic!("a rejected pristine stage must not construct a block"),
+        Err(error) => error,
+    };
+    assert_eq!(error, "rejected pristine stage");
+    assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
+    assert_eq!(
+        state.world.privacy_activations.view().get(&activation_key),
+        Some(&original_activation),
+        "a failed stage must discard its activation write",
+    );
+
+    // Taking a new block scope also proves that failure released every overlay lock.
+    let block = state.block(header);
+    assert!(block.start_of_block_effects_applied);
+    assert_eq!(block.world.privacy_consensus_policy.get().current_limits, next_limits);
+    assert_eq!(block.world.privacy_consensus_policy.get().pending_tightening, None);
+    assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
+    let activation = block
+        .world
+        .privacy_activations
+        .get(&activation_key)
+        .expect("activation survives the discarded stage");
+    assert_eq!(activation.protocol_limits, next_protocol_limits);
+    assert_eq!(activation.pending_protocol_limits_tightening, None);
+    drop(block);
+    assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
+    assert_eq!(
+        state.world.privacy_activations.view().get(&activation_key),
+        Some(&original_activation),
+        "dropping a successful block scope must also discard its start effects",
     );
 }
 state_test! { sync privacy_action_budget_is_transactional_contiguous_and_fail_closed
@@ -964,6 +1037,111 @@ state_test! { sync privacy_action_budget_accepts_exact_byte_boundary_and_rejects
         .expect("reservation must agree with successful boundary preflight");
     assert_eq!(transaction.privacy_budget_for_testing(), (1, max, 1, max));
 }
+fn nondefault_pre_genesis_dataspace_fixture(
+    configured: bool,
+) -> iroha_config::parameters::actual::Nexus {
+    let secondary = LaneConfig {
+        id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(7),
+        alias: "fixture-dataspace".to_owned(),
+        ..LaneConfig::default()
+    };
+    let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), secondary])
+        .expect("two configured lanes");
+    let dataspaces = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "fixture-dataspace".to_owned(),
+            description: Some("nondefault physical test dataspace".to_owned()),
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("two configured dataspaces");
+    let mut nexus = iroha_config::parameters::actual::Nexus {
+        lane_config: RuntimeLaneConfig::from_catalog(&catalog),
+        lane_catalog: catalog,
+        dataspace_catalog: dataspaces,
+        ..Default::default()
+    };
+    if configured {
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    } else {
+        assert_ne!(nexus.configured_dataspace_catalog, nexus.dataspace_catalog);
+    }
+    nexus
+}
+
+fn assert_pre_genesis_dataspace_fixture(
+    state: &State,
+    requested: &iroha_config::parameters::actual::Nexus,
+) {
+    let installed = state.nexus_snapshot();
+    assert_eq!(installed.lane_catalog, requested.lane_catalog);
+    assert_eq!(installed.configured_lane_catalog, requested.lane_catalog);
+    assert_eq!(installed.dataspace_catalog, requested.dataspace_catalog);
+    assert_eq!(
+        installed.configured_dataspace_catalog,
+        requested.dataspace_catalog
+    );
+    assert_eq!(installed.routing_policy, requested.routing_policy);
+    assert_eq!(
+        state.view().world().dataspace_catalog(),
+        &requested.dataspace_catalog
+    );
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(
+        state
+            .kura
+            .exact_durable_blocks_count()
+            .expect("durable height"),
+        0
+    );
+    assert!(
+        runtime_catalog_from_world(&state.world.view())
+            .expect("protected overlay")
+            .is_none()
+    );
+    assert_eq!(state.lane_incarnations_snapshot().len(), 2);
+}
+
+state_test! { large_stack pre_genesis_constructor_retains_nondefault_dataspace_baseline
+    for configured in [false, true] {
+        let requested = nondefault_pre_genesis_dataspace_fixture(configured);
+        let state = State::new_with_pre_genesis_nexus_for_testing(
+            World::default(),
+            requested.clone(),
+            LiveQueryStore::start_test(),
+        );
+        assert_pre_genesis_dataspace_fixture(&state, &requested);
+    }
+}
+
+state_test! { large_stack pre_genesis_installer_retains_nondefault_dataspace_baseline
+    for configured in [false, true] {
+        let requested = nondefault_pre_genesis_dataspace_fixture(configured);
+        let directory = tempfile::tempdir().expect("isolated Kura directory");
+        let kura_config = strict_kura_config_for_testing(directory.path().join("kura"));
+        let (kura, _) = Kura::new_with_configured_lane_catalog(
+            &kura_config,
+            &requested.lane_config,
+            &requested.lane_catalog,
+        )
+        .expect("configured Kura");
+        let mut state = State::try_new(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("empty configured State");
+        state.install_pre_genesis_nexus_for_testing(requested.clone());
+        assert_pre_genesis_dataspace_fixture(&state, &requested);
+    }
+}
+
 #[test]
 fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default_segment() {
     let_row! { custom_primary = LaneConfig { alias: "custom-primary".to_owned(), ..LaneConfig::default() } };
@@ -3558,8 +3736,8 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
         profile.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height: 1,
-                activated_at_height: 1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-                state_since_height: 1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+                activated_at_height: 1,
+                state_since_height: 1,
             },
         )),
     );
@@ -3584,10 +3762,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    seed_committed_height_for_state_test(
-        &state,
-        1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-    );
+    seed_committed_height_for_state_test(&state, 1);
     seed_autoscale_sample_history_for_snapshot_test(&state);
     (state, reserve_account, asset_definition_id)
 }
@@ -8172,13 +8347,14 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     }
     let_row! { active_lanes = [MergeLaneBinding { lane_id, dataspace_id, lane_config_hash: Hash::new(b"historical-lane-config"), incarnation, activation_height: 1, }] };
     state
-        .validate_merge_lane_drain_certificate_payload(
+        .validate_merge_lane_drain_certificate_structure(
             std::slice::from_ref(&certificate),
             3,
             &active_lanes,
-            false,
         )
-        .expect("historical recovery accepts the exact frontier before retirement");
+        .expect("historical certificate structure remains valid before retirement");
+    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+        .expect("ordered replay accepts the exact replicated frontier");
     let mut mismatched_body = certificate.body.clone();
     mismatched_body.final_frontier = LaneDrainFrontierV1::ordinary(
         lane_id,
@@ -8189,12 +8365,10 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     );
     let_row! { mismatched_votes = keypairs .iter() .map(|keypair| { crate::lane_consensus::LaneDrainVoteV1::new_signed( mismatched_body.clone(), PeerId::new(keypair.public_key().clone()), keypair.private_key(), ) .expect("structurally valid mismatched drain vote") }) .collect::<Vec<_>>() };
     let_row! { mismatched_certificate = crate::lane_consensus::aggregate_lane_drain_votes( mismatched_body, certificate.validator_set.clone(), &mismatched_votes, ) .expect("aggregate mismatched drain certificate") };
-    let_row! { error = state .validate_merge_lane_drain_certificate_payload( std::slice::from_ref(&mismatched_certificate), 3, &active_lanes, false, ) .expect_err("global admission must reject a signed frontier drift") };
-    assert!(matches!(
-        error,
-        MergeLedgerCommitError::ExecutionBatchInvalid(reason)
-            if reason.contains("exact globally applied frontier")
-    ));
+    let_row! { error = State::lane_drain_frontier_from_replay_state(&state.view(), mismatched_certificate.body.final_frontier)
+        .expect_err("ordered replay rejects a signed frontier drift") };
+    assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(reason)
+        if reason.contains("exact replicated frontier")));
     {
         let mut world = state.world.block();
         State::prune_lane_lifecycle_world_block_state_for_lanes(
@@ -8213,13 +8387,14 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
         "retirement cleanup must retain the replicated historical frontier"
     );
     state
-        .validate_merge_lane_drain_certificate_payload(
+        .validate_merge_lane_drain_certificate_structure(
             std::slice::from_ref(&certificate),
             3,
             &active_lanes,
-            false,
         )
-        .expect("restart-style historical validation survives lane cleanup");
+        .expect("historical certificate structure survives lane cleanup");
+    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+        .expect("retirement cleanup retains the replicated historical frontier");
 }
 state_test! { sync autoscale_cooldown_active_suppresses_repeated_transitions
     assert!(!autoscale_cooldown_active(0, 128, 1));
@@ -8933,6 +9108,35 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     ));
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
+    // Kura supplies this typed carrier only after retained global finality has
+    // authenticated it. Recovery must not ask a pre-replay World for the later
+    // drain intent; ordered replay performs that separate state-dependent check.
+    let mut before_replay = blank_test_state();
+    before_replay.network_id = state.network_id;
+    assert!(before_replay.pending_autoscale_lane_drain_body().is_none());
+    let historical_carrier = crate::kura::MergeLedgerCarrierRecord {
+        version: 1,
+        entry_hash: entry.canonical_hash(),
+        epoch_id: entry.epoch_id,
+        block_height: entry.merge_qc.carrier_height,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"authenticated-drain-carrier")),
+    };
+    before_replay.validate_historical_merge_lane_drain_certificate(
+        HistoricalMergeDrainAuthority { entry: &entry, carrier: &historical_carrier },
+    ).expect("exact historical certificate admission does not consult pre-replay intent");
+    for attack in ["entry", "height", "epoch", "version"] {
+        let mut changed = historical_carrier;
+        match attack {
+            "entry" => changed.entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign-drain-entry")),
+            "height" => changed.block_height += 1,
+            "epoch" => changed.epoch_id += 1,
+            "version" => changed.version += 1,
+            _ => unreachable!(),
+        }
+        assert!(before_replay.validate_historical_merge_lane_drain_certificate(
+            HistoricalMergeDrainAuthority { entry: &entry, carrier: &changed },
+        ).is_err(), "historical drain must reject {attack}");
+    }
     state
         .validate_certified_merge_entry_for_global_order(&entry, ConsensusMode::Permissioned)
         .expect("certificate-only drain entry is globally admissible");
@@ -10812,7 +11016,7 @@ state_test! { sync replay_geometry_live_failure_preserves_state_kura_and_nexus_e
     ] {
         REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(failure_index));
         REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(|observed| observed.set(false));
-        let_row! { error = apply_replay_geometry_receipts(&state, &geometry) .expect_err("injected live geometry failure must reject before publication") };
+        let_row! { error = apply_replay_geometry_receipts(&state, &geometry, None) .expect_err("injected live geometry failure must reject before publication") };
         assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
         assert_eq!(
             REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get),
@@ -39692,6 +39896,11 @@ state_test! { sync block_leaves_governance_unlock_audit_clean_when_no_locks_are_
     let state = blank_test_state();
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
+    assert_eq!(block.committed_fragment_count(), 0);
+    assert!(
+        !block.has_committed_fragments(),
+        "an idle governance sweep must not make an empty block commit-eligible"
+    );
     assert_eq!(
         *block.world.governance_unlock_stats,
         GovernanceUnlockStatsSnapshot::default(),
@@ -39738,6 +39947,11 @@ state_test! { sync block_sweeps_expired_governance_locks_and_records_height
     }
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
+    assert_eq!(block.committed_fragment_count(), 1);
+    assert!(
+        block.has_committed_fragments(),
+        "a due governance sweep must retain its committed work"
+    );
     assert!(!block.world.merge_execution_write_set_bytes().is_empty());
     let recorded_height = *block.world.governance_last_unlock_sweep_height;
     assert_eq!(
@@ -39786,6 +40000,11 @@ state_test! { sync block_retains_expired_governance_lock_when_atomic_release_fai
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
     let_row! { locks_after = block .world .governance_locks .get(&referendum_id) .expect("failed release must retain the referendum entry") };
+    assert_eq!(block.committed_fragment_count(), 1);
+    assert!(
+        block.has_committed_fragments(),
+        "a failed due release must still commit its governance audit"
+    );
     assert!(
         locks_after.locks.contains_key(&voter),
         "failed release must retain the exact lock"

@@ -3019,11 +3019,15 @@ impl SumeragiV2Adapter {
                 let durable = body_store
                     .store(manifest, body)
                     .expect("persist CompleteTip successor body");
-                body_store
+                let validated = body_store
                     .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                         Ok::<_, String>(commitment)
                     })
-                    .expect("persist CompleteTip successor validation outcome");
+                    .expect("persist CompleteTip successor validation outcome")
+                    .into_validated_receipt()
+                    .expect("CompleteTip successor validation must succeed");
+                assert_eq!(validated.durable(), &durable);
+                assert_eq!(validated.execution_commitment(), commitment);
             }
             let (mut writer, effects) = Self::open_with_aggregator_and_publication(
                 wal_path,
@@ -3038,17 +3042,24 @@ impl SumeragiV2Adapter {
             )
             .expect("open CompleteTip successor WAL writer");
             assert!(effects.is_empty());
-            writer
+            let envelope = WalEnvelopeV2 {
+                protocol_version: wire::PROTOCOL_VERSION,
+                persistence_id: 1,
+                record: WalRecordV2::Decision(decision),
+            };
+            let payload = envelope.encode();
+            let receipt = writer
                 .wal
-                .append(
-                    &WalEnvelopeV2 {
-                        protocol_version: wire::PROTOCOL_VERSION,
-                        persistence_id: 1,
-                        record: WalRecordV2::Decision(decision),
-                    }
-                    .encode(),
-                )
+                .append(&payload)
                 .expect("fsync actual CompleteTip successor Decision");
+            assert_eq!(
+                receipt.sequence().checked_add(1),
+                Some(envelope.persistence_id)
+            );
+            let records = writer.wal.recovered_records();
+            assert_eq!(records.len(), 1);
+            assert!(records[0].exactly_matches_receipt(receipt));
+            assert_eq!(records[0].payload(), payload.as_slice());
             drop(writer);
         }
         body_store
@@ -3323,7 +3334,206 @@ fn same_round_timeout_cold_owner_cancels_exact_retained_proposal() {
 
 #[cfg(feature = "bls")]
 #[test]
+fn same_round_timeout_cold_owner_reconciles_standalone_broadcast() {
+    // This fixture launches the real lifecycle services, whose debug stack
+    // requires the same budget as the production Sumeragi thread.
+    let handle = crate::sumeragi::sumeragi_thread_builder("standalone-timeout-cold-owner")
+        .spawn(|| {
+            terminal_standalone_timeout_recovery_fixture(0);
+            terminal_standalone_timeout_recovery_fixture(3);
+        })
+        .expect("spawn standalone Timeout recovery with the Sumeragi stack budget");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_round_timeout_cold_owner_rejects_foreign_standalone_broadcast() {
+    terminal_standalone_timeout_recovery_fixture(1);
+    terminal_standalone_timeout_recovery_fixture(2);
+    terminal_standalone_timeout_recovery_fixture(4);
+}
+
+#[cfg(feature = "bls")]
+fn terminal_standalone_timeout_recovery_fixture(case: u8) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the recovered output fixture requires a Tokio reactor");
+    let _entered = runtime.enter();
+    let _logger = iroha_logger::test_logger();
+    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let signer = &keys[local as usize];
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let unsigned = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    let mut signed = unsigned.clone();
+    signed.signature = Signature::new(signer.private_key(), &signed.signature_preimage())
+        .payload()
+        .to_vec();
+    let safety = TempDir::new().expect("standalone timeout safety WAL");
+    let storage = TempDir::new().expect("standalone timeout lifecycle storage");
+    let ledger_root = storage.path().join("ledger");
+    let lifecycle_context = LifecycleContext::new(
+        LifecycleDigest::new(*context.id().0.as_ref()),
+        context.height,
+    );
+    drop(write_and_reopen_authenticated_wal_startup(
+        &safety,
+        &context,
+        &proofs,
+        local,
+        [0xE5; 32],
+        vec![WalRecordV2::TimeoutIntent(unsigned.clone())],
+    ));
+    let wal_path = safety.path().join("authenticated-fifo-safety.wal");
+    let wal_before = std::fs::read(&wal_path).expect("retain exact unsigned timeout WAL");
+    let open = || {
+        let startup = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+            &wal_path,
+            VerifiedHeightContext::genesis(context.clone(), proofs.clone()).unwrap(),
+            Some(local),
+            reducer::Generation::INITIAL,
+            [0xE5; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("replay actual retained timeout intent");
+        startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| {
+                panic!("authenticate standalone timeout recovery: {error}")
+            })
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &storage.path().join("serve"),
+                &storage.path().join("body"),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                signer,
+            )
+    };
+    drop(open().expect("stage the exact current Timeout WAL Sign"));
+    // The live incident has only these two rows: an independently terminal
+    // ConsensusBroadcast/TimeoutVote and a different-owner current WAL Sign.
+    // A linked Sign -> Broadcast pair cannot reproduce the admission collision.
+    let mut retained_unsigned = unsigned.clone();
+    let mut retained_signed = signed.clone();
+    if case == 1 {
+        retained_signed.signature[0] ^= 1;
+    } else if case == 2 {
+        retained_unsigned.signer = (local + 1) % 4;
+        retained_signed = retained_unsigned.clone();
+        retained_signed.signature = Signature::new(
+            keys[retained_unsigned.signer as usize].private_key(),
+            &retained_signed.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+    }
+    assert!(
+        crate::sumeragi::v2_lifecycle_coordinator::install_standalone_timeout_broadcast_before_current_control_for_test(
+            &ledger_root,
+            lifecycle_context,
+            retained_unsigned,
+            retained_signed,
+            802_071,
+            case != 3,
+            case == 4,
+        )
+    );
+    let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+    let before = std::fs::read(&ledger_path).expect("retain the exact incident frame");
+    let result = open();
+    if matches!(case, 1 | 2 | 4) {
+        assert!(
+            result.is_err(),
+            "a malformed, different-signer, or shared-owner Timeout cannot replace the current WAL Sign",
+        );
+        assert_eq!(std::fs::read(&ledger_path).unwrap(), before);
+        assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before);
+        crate::sumeragi::status::clear_v2_status();
+        return;
+    }
+    let mut owner = result.expect("reconcile the actual completed standalone timeout Broadcast");
+    assert!(owner.exact_recovered_body_pipeline_join_for_test());
+    assert_eq!(
+        owner.recovered_control_row_summary_for_test(),
+        None,
+        "the authenticated emitted Timeout must not queue a fresh Sign whose Broadcast collides with the terminal owner",
+    );
+    let after = std::fs::read(&ledger_path).expect("retain reconciled timeout ledger");
+    drop(owner);
+    let mut repeated = open().expect("repeat the exact completed timeout recovery");
+    assert!(repeated.exact_recovered_body_pipeline_join_for_test());
+    assert_eq!(repeated.recovered_control_row_summary_for_test(), None);
+    assert_eq!(
+        std::fs::read(&ledger_path).unwrap(),
+        after,
+        "a repeated cold recovery must not append another timeout owner",
+    );
+    crate::sumeragi::v2_worker::tests::refanout_recovered_timeout_after_terminal_history_for_test(
+        Box::new(repeated),
+        context.clone(),
+        local,
+        signer.clone(),
+        &wal_path,
+        signed,
+    );
+    let mut after_refanout = open().expect("cold reopen after actual retained-signature refanout");
+    assert!(after_refanout.exact_recovered_body_pipeline_join_for_test());
+    assert_eq!(
+        after_refanout.recovered_control_row_summary_for_test(),
+        None
+    );
+    assert_eq!(
+        std::fs::read(&ledger_path).unwrap(),
+        after,
+        "refanout and another process restart must reuse the same durable Broadcast child",
+    );
+    drop(after_refanout);
+    assert_eq!(
+        std::fs::read(&wal_path).unwrap(),
+        wal_before,
+        "retained signed output must not rewrite the exact TimeoutIntent WAL",
+    );
+    crate::sumeragi::status::clear_v2_status();
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history() {
+    same_round_timeout_retired_history_fixture(false);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_round_timeout_cold_owner_publishes_broadcast_after_retired_validation_history() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the test logger requires a Tokio reactor");
+    let _entered = runtime.enter();
+    let _logger = iroha_logger::test_logger();
+    same_round_timeout_retired_history_fixture(true);
+}
+
+#[cfg(feature = "bls")]
+fn same_round_timeout_retired_history_fixture(publish_timeout: bool) {
     let _guard = crate::sumeragi::status::rbc_status_test_guard();
     use super::super::v2_lifecycle_coordinator::{
         LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
@@ -3390,7 +3600,7 @@ fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history()
     // Success and deterministic rejection both retain only historical evidence.
     // A forged original Proposal still fails; an older process may legitimately
     // have reached a generation larger than the fresh startup generation.
-    for case in 0..5 {
+    for case in 0..if publish_timeout { 2 } else { 5 } {
         let safety = TempDir::new().unwrap();
         let storage = TempDir::new().unwrap();
         let ledger_root = storage.path().join("ledger");
@@ -3417,7 +3627,7 @@ fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history()
                 &wal_path,
                 VerifiedHeightContext::genesis(context.clone(), proofs.clone()).unwrap(),
                 Some(local),
-                reducer::Generation::new(50),
+                reducer::Generation::INITIAL,
                 [0xE4; 32],
                 fingerprints(),
                 Box::new(TestAggregator),
@@ -3534,6 +3744,20 @@ fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history()
                 Some((4, 4))
             );
             assert_eq!(std::fs::read(&ledger_path).unwrap(), after);
+            if publish_timeout {
+                crate::sumeragi::v2_worker::tests::publish_recovered_timeout_after_history_for_test(
+                    Box::new(repeated),
+                    context.clone(),
+                    local,
+                    local_signer.clone(),
+                    &wal_path,
+                );
+                assert_ne!(
+                    std::fs::read(&ledger_path).unwrap(),
+                    after,
+                    "the completed timeout must publish its durable Broadcast successor"
+                );
+            }
         }
         assert_eq!(
             std::fs::read(&wal_path).unwrap(),

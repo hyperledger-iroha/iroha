@@ -14,7 +14,7 @@ use std::{
 };
 use thiserror::Error;
 /// Registry of per-lane privacy commitments derived from governance manifests.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LanePrivacyRegistry {
     entries: BTreeMap<LaneId, LanePrivacyLane>,
 }
@@ -105,7 +105,7 @@ pub fn verify_lane_privacy_proofs(
     Ok(verified)
 }
 /// Per-lane commitment snapshot derived from manifests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanePrivacyLane {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,

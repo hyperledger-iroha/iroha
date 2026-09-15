@@ -775,7 +775,8 @@ fn native_coordinator_after_applied_participant_fixture(
     context.parent_commit_qc = Some(finality.commit_qc.clone());
     context.snapshot_bootstrap = None;
     context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
     let restart = LaneAdapterRestartParts::capture(&adapter);
     drop(adapter);
     let adapter = restart

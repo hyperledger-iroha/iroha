@@ -661,24 +661,15 @@ impl LifecycleProducerClaimDispositionV1 {
             }
             (
                 Self::AwaitingCompletion,
-                Completion::RecoveredLifecycleSignCompletion(SignCompletion::Broadcast(
-                    SignSettlement::Retry,
-                )),
-            )
-            | (
-                Self::AwaitingCompletion,
                 Completion::RecoveredLifecycleSignCompletion(SignCompletion::Retry),
             )
             | (
                 Self::AwaitingCompletion,
                 Completion::RecoveredLifecycleSignCompletion(
-                    SignCompletion::ProposalPrepareWal(
-                        ProposalSettlement::Retry | ProposalSettlement::CapacityUnavailable,
-                    )
+                    SignCompletion::ProposalPrepareWal(ProposalSettlement::CapacityUnavailable)
                     | SignCompletion::ProposalBroadcastAndSign(
-                        ProposalSettlement::Retry | ProposalSettlement::CapacityUnavailable,
-                    )
-                    | SignCompletion::VoteBroadcastAndSign(VoteSettlement::Retry),
+                        ProposalSettlement::CapacityUnavailable,
+                    ),
                 ),
             )
             | (
@@ -1800,6 +1791,15 @@ mod tests {
             ))
             .expect("transient runtime debt retains the exact Sign target");
         assert_eq!(retry_claim, claim);
+        let failed_broadcast = Completion::RecoveredLifecycleSignCompletion(
+            SignCompletion::Broadcast(SignSettlement::RestartRequired),
+        );
+        assert!(failed_broadcast.restart_required());
+        assert_eq!(
+            claim.observe_completion(&failed_broadcast).unwrap(),
+            LifecycleProducerClaimDispositionV1::Eligible,
+            "an invariant failure releases the producer claim for the restart path"
+        );
         let superseded_claim = retry_claim
             .observe_completion(&Completion::RecoveredLifecycleSignCompletion(
                 SignCompletion::Superseded,

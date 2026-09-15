@@ -58,7 +58,7 @@ use crate::privacy_engines::transparent_stark::{
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksDigest384V1, goldilocks_digest384_frame_v1,
+    PrivacyOuterDigestV1, privacy_outer_digest_frame_v1,
 };
 use thiserror::Error;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
@@ -732,8 +732,8 @@ impl ZkX509Rfc5280StarkShapeV1 {
     #[cfg(test)]
     pub(crate) fn schedule_digest(
         &self,
-    ) -> Result<GoldilocksDigest384V1, ZkX509Rfc5280StarkErrorV1> {
-        goldilocks_digest384_frame_v1(
+    ) -> Result<PrivacyOuterDigestV1, ZkX509Rfc5280StarkErrorV1> {
+        privacy_outer_digest_frame_v1(
             ZK_X509_DIGEST_CONTEXT_V1,
             b"iroha:privacy:zk-x509:rfc5280-stark-schedule:v1",
             b"rfc5280-public-schedule",

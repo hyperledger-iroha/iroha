@@ -34,6 +34,9 @@ impl ValidSingularQuery for FindDataspaceNameOwnerById {
 }
 fn alias_lease_instruction_error(err: crate::sns::SnsError) -> InstructionExecutionError {
     match err {
+        error @ crate::sns::SnsError::RegistrationNotFound { .. } => {
+            InstructionExecutionError::InvariantViolation(error.to_string().into())
+        }
         crate::sns::SnsError::NotFound(message)
         | crate::sns::SnsError::BadRequest(message)
         | crate::sns::SnsError::Conflict(message)
@@ -44,6 +47,9 @@ fn alias_lease_instruction_error(err: crate::sns::SnsError) -> InstructionExecut
 }
 fn sns_mutation_instruction_error(err: crate::sns::SnsError) -> InstructionExecutionError {
     match err {
+        error @ crate::sns::SnsError::RegistrationNotFound { .. } => {
+            InstructionExecutionError::InvariantViolation(error.to_string().into())
+        }
         crate::sns::SnsError::BadRequest(message) => InstructionExecutionError::InvalidParameter(
             InvalidParameterError::SmartContract(message.into()),
         ),

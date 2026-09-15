@@ -355,3 +355,54 @@ fn physical_reaudit_rejects_replaced_live_kura_root_identity() {
     std::fs::rename(&displaced, &root).unwrap();
     kura.reconcile_physical_resource_inventory().unwrap();
 }
+
+#[test]
+fn native_publication_index_is_in_the_complete_physical_scope() {
+    let kura = Kura::blank_kura_for_testing();
+    kura.reconcile_physical_resource_inventory().unwrap();
+    let before_storage = physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes;
+    let before_evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
+    let namespace = kura.store_root.join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
+    std::fs::create_dir(&namespace).unwrap();
+    let digest = "a1".repeat(Hash::LENGTH);
+    let main = namespace.join(format!("00000000000000000001-{digest}.norito"));
+    let temporary = namespace.join(format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}A1b2C3"));
+    std::fs::write(&main, [1_u8; 13]).unwrap();
+    std::fs::write(&temporary, [2_u8; 17]).unwrap();
+    assert!(kura.physical_resource_path_is_owned(&main));
+    assert!(kura.physical_resource_path_is_owned(&temporary));
+    kura.reconcile_physical_resource_inventory().unwrap();
+    let evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
+    assert_eq!(
+        evidence.persisted_entries,
+        before_evidence.persisted_entries + 2
+    );
+    assert_eq!(evidence.index_bytes, before_evidence.index_bytes + 13);
+    assert_eq!(
+        evidence.temporary_index_bytes,
+        before_evidence.temporary_index_bytes + 17
+    );
+    assert_eq!(
+        physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes,
+        before_storage + 30
+    );
+    let unowned = namespace.join("unknown.norito");
+    std::fs::write(&unowned, b"unowned").unwrap();
+    assert!(kura.reconcile_physical_resource_inventory().is_err());
+    std::fs::remove_file(unowned).unwrap();
+    std::fs::remove_file(temporary).unwrap();
+    kura.reconcile_physical_resource_inventory().unwrap();
+    let evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
+    assert_eq!(
+        evidence.persisted_entries,
+        before_evidence.persisted_entries + 1
+    );
+    assert_eq!(
+        evidence.temporary_index_bytes,
+        before_evidence.temporary_index_bytes
+    );
+    assert_eq!(
+        physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes,
+        before_storage + 13
+    );
+}

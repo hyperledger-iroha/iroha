@@ -1299,21 +1299,24 @@ impl CanonicalTransactionOutcome {
         }
     }
 }
-fn canonical_transaction_outcome(
+// The State authority needed to authenticate a transaction outcome is owned:
+// no world snapshot or epoch read guard crosses the Kura/crypto handoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CanonicalTransactionAnchor {
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    height: NonZeroUsize,
+    block_hash: HashOf<BlockHeader>,
+}
+fn canonical_transaction_anchor(
     state: &CoreState,
-    kura: &Kura,
     hash: &HashOf<SignedTransaction>,
-) -> Result<Option<CanonicalTransactionOutcome>, Error> {
+) -> Result<Option<CanonicalTransactionAnchor>, Error> {
     let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
     let state_view = state.view();
     let Some(height) = state_view.transactions.get(&entrypoint_hash) else {
         return Ok(None);
     };
-    let height_u64 = u64::try_from(height.get())
-        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
-    let height_nz = NonZeroU64::new(height_u64)
-        .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
-    let expected_hash = state_view
+    let block_hash = state_view
         .block_hashes()
         .get(height.get().saturating_sub(1))
         .copied()
@@ -1323,6 +1326,59 @@ fn canonical_transaction_outcome(
                 height.get()
             ))
         })?;
+    Ok(Some(CanonicalTransactionAnchor {
+        entrypoint_hash,
+        height,
+        block_hash,
+    }))
+}
+fn canonical_transaction_outcome(
+    state: &CoreState,
+    kura: &Kura,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<Option<CanonicalTransactionOutcome>, Error> {
+    canonical_transaction_outcome_with_authenticator(state, hash, |anchor| {
+        authenticate_canonical_transaction_outcome(kura, hash, anchor)
+    })
+}
+fn canonical_transaction_outcome_with_authenticator(
+    state: &CoreState,
+    hash: &HashOf<SignedTransaction>,
+    authenticate: impl FnOnce(CanonicalTransactionAnchor) -> Result<CanonicalTransactionOutcome, Error>,
+) -> Result<Option<CanonicalTransactionOutcome>, Error> {
+    let Some(anchor) = canonical_transaction_anchor(state, hash)? else {
+        return Ok(None);
+    };
+    let outcome = authenticate(anchor)?;
+    // A later append does not invalidate this exact committed carrier. A rewind,
+    // removed/rebound membership, or replaced journal hash does. Return an error
+    // on a changed binding so neither the pipeline cache nor ISO reconciliation
+    // can convert an unauthoritative outcome into a terminal success.
+    if canonical_transaction_anchor(state, hash)? != Some(anchor) {
+        return Err(pipeline_status_projection_error(format!(
+            "transaction {hash} canonical binding changed during outcome authentication"
+        )));
+    }
+    Ok(Some(outcome))
+}
+// The header hash selects the canonical carrier; it does not include execution
+// results. Kura's existing-block admission binds the exact result-bearing wire,
+// and finality forbids replacing/pruning committed carriers. Keep the complete
+// merge-transcript authentication below; State membership alone is insufficient.
+fn authenticate_canonical_transaction_outcome(
+    kura: &Kura,
+    hash: &HashOf<SignedTransaction>,
+    anchor: CanonicalTransactionAnchor,
+) -> Result<CanonicalTransactionOutcome, Error> {
+    let CanonicalTransactionAnchor {
+        entrypoint_hash,
+        height,
+        block_hash: expected_hash,
+    } = anchor;
+    let height_u64 = u64::try_from(height.get())
+        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
+    let height_nz = NonZeroU64::new(height_u64)
+        .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
     let block = kura.get_block(height).ok_or_else(|| {
         pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
     })?;
@@ -1364,7 +1420,7 @@ fn canonical_transaction_outcome(
         }
     }
     if let Some(result) = direct_result {
-        return Ok(Some(match &result.0 {
+        return Ok(match &result.0 {
             Ok(_) => CanonicalTransactionOutcome::Applied {
                 height: height_nz,
                 settled_at,
@@ -1373,7 +1429,7 @@ fn canonical_transaction_outcome(
                 height: height_nz,
                 reason: reason.clone(),
             },
-        }));
+        });
     }
     let reference = block_ref
         .execution_context()
@@ -1409,7 +1465,7 @@ fn canonical_transaction_outcome(
             height.get()
         )));
     }
-    Ok(Some(match &transaction.result().0 {
+    Ok(match &transaction.result().0 {
         Ok(_) => CanonicalTransactionOutcome::Applied {
             height: height_nz,
             settled_at,
@@ -1418,7 +1474,7 @@ fn canonical_transaction_outcome(
             height: height_nz,
             reason: reason.clone(),
         },
-    }))
+    })
 }
 fn pipeline_status_from_state(
     state: &CoreState,

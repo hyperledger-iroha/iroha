@@ -199,7 +199,7 @@ fn lifecycle_status() -> LaneLifecycleStatusV1 {
         iroha_model_base::topology::LaneId::SINGLE,
         Hash::new(b"mochi-lifecycle-status-incarnation"),
     )]);
-    LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
+    LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
 }
 fn spawn_status_stub(
     responses: Vec<(u16, Vec<u8>)>,

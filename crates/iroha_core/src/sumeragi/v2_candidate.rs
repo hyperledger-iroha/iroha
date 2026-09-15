@@ -232,6 +232,29 @@ impl CandidateWorkUnavailable {
         self.defer_native_for_episode
     }
 }
+/// A temporary dependency of the complete candidate snapshot, independent of its row count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CandidateWorkDeferral {
+    /// The exact committed merge frontier or installed reducer view is moving.
+    MergeFrontier,
+}
+/// Explicit provider failure scope; an empty candidate batch cannot encode snapshot deferral.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CandidateWorkError {
+    /// Only these checked positional candidates lack lane-local work.
+    Unavailable(CandidateWorkUnavailable),
+    /// Keep the complete snapshot queued and retry its temporary dependency.
+    Deferred(CandidateWorkDeferral),
+    /// Input, authority, or storage failed; never downgrade this to pending work.
+    Failed(String),
+    /// The provider's fail-stop authority is already closed.
+    RestartRequired,
+}
+impl From<CandidateWorkUnavailable> for CandidateWorkError {
+    fn from(unavailable: CandidateWorkUnavailable) -> Self {
+        Self::Unavailable(unavailable)
+    }
+}
 /// Snapshot adapter for lane-local and Native AMX readiness.
 ///
 /// Implementations must be deterministic for one committed state and input
@@ -241,7 +264,9 @@ impl CandidateWorkUnavailable {
 /// provider can surface already-reserved autonomous payloads without adding
 /// their entrypoints to ordinary global execution. Providers must return one
 /// Native AMX receipt slot per input descriptor and a canonically lane-ordered
-/// autonomous envelope vector disjoint from those descriptors.
+/// autonomous envelope vector disjoint from those descriptors. A dependency of
+/// the whole snapshot uses [`CandidateWorkError::Deferred`], never an empty
+/// unavailable-index set. Input, authority and storage failures remain fatal.
 pub(crate) trait CandidateWorkProvider {
     /// Prepare receipts, lane-local ownerships, and autonomous control anchors.
     fn prepare(
@@ -249,7 +274,7 @@ pub(crate) trait CandidateWorkProvider {
         context: &wire::HeightContext,
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable>;
+    ) -> Result<PreparedCandidateWork, CandidateWorkError>;
 }
 /// Exact parent authority available to the first executable candidate.
 ///
@@ -291,7 +316,7 @@ impl CandidateWorkProvider for SingleRouteWorkProvider {
         _context: &wire::HeightContext,
         _view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
         let unavailable = unavailable_native_amx_indices(candidates);
         if unavailable.is_empty() {
             Ok(PreparedCandidateWork::single_route_batch(candidates.len()))
@@ -299,7 +324,8 @@ impl CandidateWorkProvider for SingleRouteWorkProvider {
             Err(CandidateWorkUnavailable::new(
                 unavailable,
                 "certified Native AMX receipts are not available",
-            ))
+            )
+            .into())
         }
     }
 }
@@ -351,6 +377,13 @@ pub(crate) enum CandidateAssemblyOutcome {
     Assembled(AssembledV2Candidate),
     /// The queue snapshot and internal providers contained no proposal work.
     NoProposalWork(CandidateScanReport),
+    /// A complete provider snapshot is temporarily unavailable, even with no selected rows.
+    WorkDeferred {
+        /// Queue observations made before the provider deferred.
+        report: CandidateScanReport,
+        /// Exact temporary dependency to recheck without changing work ownership.
+        reason: CandidateWorkDeferral,
+    },
 }
 /// A canonical successor body and its deterministic v2 dispersal plan.
 #[derive(Debug)]
@@ -432,10 +465,12 @@ impl V2CandidateAssembler {
     /// Assemble, sign, exactly encode, and deterministically chunk one fresh
     /// successor body.
     ///
-    /// The queue is never mutated. An empty queue, an entirely unavailable
-    /// lane/AMX snapshot, or a batch whose transactions do not fit returns
+    /// Candidate selection never consumes the queue. An empty queue or a batch
+    /// whose positional work cannot fit returns
     /// [`CandidateAssemblyOutcome::NoProposalWork`] unless genuine internal
-    /// work exists.
+    /// work exists. A temporary dependency of the complete provider snapshot
+    /// returns [`CandidateAssemblyOutcome::WorkDeferred`] without signing or
+    /// removing entries, including when the selected batch is empty.
     ///
     /// # Errors
     ///
@@ -526,7 +561,7 @@ impl V2CandidateAssembler {
                     .prepare(request.context, view, &descriptors)
                 {
                     Ok(work) => work,
-                    Err(unavailable) => {
+                    Err(CandidateWorkError::Unavailable(unavailable)) => {
                         let defer_native_for_episode = unavailable.defers_native_for_episode();
                         remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
                         if defer_native_for_episode {
@@ -544,6 +579,19 @@ impl V2CandidateAssembler {
                             &mut report,
                         );
                         continue;
+                    }
+                    Err(CandidateWorkError::Deferred(reason)) => {
+                        if request.queue.transaction_selection_durability_faulted() {
+                            return Err(CandidateError::RestartRequired);
+                        }
+                        validate_request(&request)?;
+                        return Ok(CandidateAssemblyOutcome::WorkDeferred { report, reason });
+                    }
+                    Err(CandidateWorkError::Failed(reason)) => {
+                        return Err(CandidateError::WorkPreparationFailed(reason));
+                    }
+                    Err(CandidateWorkError::RestartRequired) => {
+                        return Err(CandidateError::RestartRequired);
                     }
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
@@ -1467,6 +1515,9 @@ pub(crate) enum CandidateError {
     /// Work provider returned no indices or a blank reason.
     #[error("Sumeragi v2 work provider returned a malformed unavailable-work result")]
     MalformedUnavailableWork,
+    /// A provider rejected its input, authority, or storage rather than deferring work.
+    #[error("Sumeragi v2 candidate work preparation failed: {0}")]
+    WorkPreparationFailed(String),
     /// Parent WSV contains malformed or conflicting QueuePlan admission evidence.
     #[error("Sumeragi v2 candidate routing admission evidence is invalid: {0}")]
     RoutingAdmissionEvidence(String),
@@ -1610,7 +1661,7 @@ pub(crate) enum CandidateError {
     AssemblyDidNotConverge,
 }
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{
         block::ValidBlock,
@@ -2039,6 +2090,233 @@ mod tests {
         })
         .expect("empty snapshot candidate assembly")
     }
+    struct RecordingWorkErrorProvider<'a> {
+        error: CandidateWorkError,
+        observed: &'a std::cell::RefCell<Vec<Vec<HashOf<TransactionEntrypoint>>>>,
+    }
+    impl CandidateWorkProvider for RecordingWorkErrorProvider<'_> {
+        fn prepare(
+            &mut self,
+            _context: &wire::HeightContext,
+            _view: wire::View,
+            candidates: &[CandidateDescriptor<'_>],
+        ) -> Result<PreparedCandidateWork, CandidateWorkError> {
+            let mut observed = self.observed.borrow_mut();
+            assert!(
+                observed.is_empty(),
+                "a snapshot deferral or malformed/fatal error must end this assembly attempt"
+            );
+            observed.push(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.entrypoint_hash())
+                    .collect(),
+            );
+            Err(self.error.clone())
+        }
+    }
+
+    fn assemble_recorded_work_error(
+        error: CandidateWorkError,
+        queued_count: u8,
+        close_signing_gate: bool,
+    ) -> Result<CandidateAssemblyOutcome, CandidateError> {
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let mut world = World::new();
+        let mut transactions = Vec::new();
+        for offset in 0..queued_count {
+            let key = KeyPair::try_from_seed(vec![0x71 + offset; 32], Algorithm::Ed25519)
+                .expect("deterministic queued authority");
+            let authority = AccountId::new(key.public_key().clone());
+            world.accounts.insert(
+                authority.clone(),
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+            let transaction = TransactionBuilder::new_with_time_source(
+                crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+                authority,
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .sign(key.private_key());
+            transactions.push(AcceptedTransaction::new_unchecked(Cow::Owned(transaction)));
+        }
+        let expected = transactions
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>();
+        let (state, mut context, anchor, key) = snapshot_parent_fixture_with_world(2, world);
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        context.validate().expect("expanded fixture DA limits");
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        for transaction in transactions {
+            queue
+                .push(transaction, state.view())
+                .expect("admit ordinary FIFO fixture");
+        }
+        let output_guard = ConsensusOutputGuard::isolated();
+        if close_signing_gate {
+            // A deliberate signing barrier: returning WorkDeferred must not require
+            // a signing permit, even though attachments below are genuine body work.
+            output_guard.activate_restart_required();
+            assert!(output_guard.begin_fail_stop_operation().is_none());
+        }
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        let observed = std::cell::RefCell::new(Vec::new());
+        let outcome = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("fixture candidate limits"),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive,
+            local_validator,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments {
+                time_trigger_clock_progress_required: true,
+                ..CandidateAttachments::default()
+            },
+            work_provider: RecordingWorkErrorProvider {
+                error,
+                observed: &observed,
+            },
+        });
+        assert_eq!(
+            *observed.borrow(),
+            vec![expected.clone()],
+            "prepare sees one exact FIFO snapshot"
+        );
+        assert_eq!(
+            queue.queued_len(),
+            expected.len(),
+            "deferral/error must retain every queued entry"
+        );
+        assert!(queue.live_lane_reservations().is_empty());
+        assert!(!queue.transaction_selection_durability_faulted());
+        // A fresh lease must recover the same complete prefix, proving that the
+        // failed/deferred attempt neither removed entries nor leaked its selection owner.
+        let state_view = state.view();
+        let (retained, lease) = queue
+            .bounded_pending_snapshot(&state_view, nonzero(8))
+            .expect("selection lease is released at the attempt boundary");
+        assert_eq!(
+            retained
+                .iter()
+                .map(AcceptedTransaction::hash_as_entrypoint)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        drop(lease);
+        outcome
+    }
+
+    /// Pass an exact live-provider error through the real empty-snapshot assembler.
+    pub(in crate::sumeragi) fn assert_empty_work_deferral_reaches_assembler(
+        error: CandidateWorkError,
+    ) {
+        assert_eq!(
+            error,
+            CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier)
+        );
+        let outcome = assemble_recorded_work_error(error, 0, true)
+            .expect("whole-snapshot deferral is retryable before signing");
+        let CandidateAssemblyOutcome::WorkDeferred { report, reason } = outcome else {
+            panic!("an empty provider deferral must remain a typed whole-snapshot outcome");
+        };
+        assert_eq!(reason, CandidateWorkDeferral::MergeFrontier);
+        assert_eq!(report, CandidateScanReport::default());
+    }
+
+    #[test]
+    fn empty_snapshot_provider_deferral_returns_once_without_signing() {
+        assert_empty_work_deferral_reaches_assembler(CandidateWorkError::Deferred(
+            CandidateWorkDeferral::MergeFrontier,
+        ));
+    }
+
+    #[test]
+    fn nonempty_snapshot_provider_deferral_preserves_fifo_and_selection_ownership() {
+        let outcome = assemble_recorded_work_error(
+            CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier),
+            2,
+            false,
+        )
+        .expect("nonempty snapshot deferral remains retryable");
+        let CandidateAssemblyOutcome::WorkDeferred { report, reason } = outcome else {
+            panic!("a deferred provider must not sign, remove or manufacture candidate work");
+        };
+        assert_eq!(reason, CandidateWorkDeferral::MergeFrontier);
+        assert_eq!(report.inspected, 2);
+        assert_eq!(report.routable, 2);
+        assert_eq!(
+            report.work_deferred, 0,
+            "whole-snapshot deferral is not positional removal"
+        );
+        assert_eq!(report.selected, 0, "no final candidate was assembled");
+    }
+
+    #[test]
+    fn positional_unavailability_rejects_empty_blank_and_out_of_range_sets() {
+        for (queued_count, indices, reason, out_of_range) in [
+            (0, BTreeSet::new(), "empty subset", false),
+            (2, BTreeSet::new(), "empty subset", false),
+            (2, BTreeSet::from([0]), " \t", false),
+            (2, BTreeSet::from([2]), "outside batch", true),
+        ] {
+            let error = assemble_recorded_work_error(
+                CandidateWorkError::Unavailable(CandidateWorkUnavailable::new(indices, reason)),
+                queued_count,
+                false,
+            )
+            .expect_err("malformed positional unavailability remains fatal");
+            if out_of_range {
+                assert!(matches!(error, CandidateError::UnavailableIndexOutOfRange));
+            } else {
+                assert!(matches!(error, CandidateError::MalformedUnavailableWork));
+            }
+        }
+    }
+
+    #[test]
+    fn fatal_provider_errors_retain_their_exact_failure_scope() {
+        for queued_count in [0, 2] {
+            let failed = assemble_recorded_work_error(
+                CandidateWorkError::Failed("certified lane storage failed".to_owned()),
+                queued_count,
+                false,
+            )
+            .expect_err("storage failure must not become a snapshot retry");
+            assert!(
+                matches!(failed, CandidateError::WorkPreparationFailed(reason) if reason == "certified lane storage failed")
+            );
+            let restart = assemble_recorded_work_error(
+                CandidateWorkError::RestartRequired,
+                queued_count,
+                false,
+            )
+            .expect_err("a closed provider remains restart-required");
+            assert!(matches!(restart, CandidateError::RestartRequired));
+        }
+    }
+
     #[test]
     fn proposal_work_gate_defers_idle_candidate() {
         let outcome = assemble_empty_snapshot_candidate(CandidateAttachments::default());
@@ -2048,20 +2326,74 @@ mod tests {
         assert_eq!(report, CandidateScanReport::default());
     }
     #[test]
-    fn scheduled_privacy_activation_is_proposal_work_at_exact_height_301() {
+    fn pending_privacy_proposal_does_not_create_an_empty_candidate() {
         use iroha_data_model::privacy::{
             PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         };
         let mut world = World::new();
         let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
+        let proposal = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
             .expect("compiled private-note profile")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 1,
-                    activate_at_height: 301,
                 },
             ));
+        let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(protocol);
+        world.privacy_activations.insert(activation_key, proposal);
+        let (state, context, anchor, key) = snapshot_parent_fixture_with_world(300, world);
+        let header = BlockHeader::new(
+            NonZeroU64::new(301).expect("successor height"),
+            Some(anchor.snapshot_block_hash),
+            None,
+            None,
+            301,
+            0,
+        );
+        assert_eq!(state.deterministic_start_work_pending(&header), Some(false));
+        let outcome = assemble_empty_snapshot_candidate_for_state(
+            CandidateAttachments::default(),
+            &state,
+            context,
+            anchor,
+            key,
+        );
+        assert!(
+            matches!(outcome, CandidateAssemblyOutcome::NoProposalWork(_)),
+            "a pending privacy proposal cannot manufacture block work"
+        );
+        assert_eq!(
+            state.world.privacy_activations.view().get(&activation_key),
+            Some(&proposal)
+        );
+    }
+    #[test]
+    fn scheduled_privacy_protocol_limits_are_proposal_work_at_exact_height() {
+        use iroha_data_model::privacy::{
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        };
+        let mut world = World::new();
+        let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let mut activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
+            .expect("compiled VeRange profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 1,
+                },
+            ));
+        let mut next_limits = activation.protocol_limits;
+        let PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(ref mut limits) =
+            next_limits
+        else {
+            unreachable!("VeRange fixture");
+        };
+        limits.max_aggregation_count -= 1;
+        activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: 1,
+            effective_at_height: 301,
+            next_limits,
+        });
         let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(protocol);
         world.privacy_activations.insert(activation_key, activation);
         let (state, context, anchor, key) = snapshot_parent_fixture_with_world(300, world);
@@ -2072,7 +2404,7 @@ mod tests {
             .map(|voter| voter.validator.clone())
             .collect();
         let header = BlockHeader::new(
-            NonZeroU64::new(301).expect("activation height"),
+            NonZeroU64::new(301).expect("protocol-limit effective height"),
             Some(parent_hash),
             None,
             None,
@@ -2101,7 +2433,7 @@ mod tests {
             key,
         );
         let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
-            panic!("scheduled activation must produce its ordinary carrier without a transaction");
+            panic!("scheduled limits must produce their ordinary carrier without a transaction");
         };
         assert_eq!(candidate.block().header().height().get(), 301);
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
@@ -2121,20 +2453,27 @@ mod tests {
                 Vec::new(),
                 AxtPolicySnapshot::default(),
             )
-            .expect("empty activation execution record");
+            .expect("empty protocol-limit execution record");
         signed.set_committed_fragment_count(0);
         let committed = ValidBlock::new_unverified_for_tests(signed)
             .commit_unchecked()
             .unpack(|_| {});
         let mut overlay = state.block(committed.as_ref().header());
-        assert!(matches!(
-            overlay.world.privacy_activations.get(&activation_key).expect("activation").lifecycle,
-            PrivacyProtocolLifecycleV1::Active(active) if active.activated_at_height == 301
-        ));
+        let updated = overlay
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .expect("activation");
+        assert_eq!(
+            updated.lifecycle, activation.lifecycle,
+            "protocol-limit work must not activate a pending proposal"
+        );
+        assert_eq!(updated.protocol_limits, next_limits);
+        assert_eq!(updated.pending_protocol_limits_tightening, None);
         let _events = overlay.apply_without_execution(&committed, topology);
         overlay
             .commit()
-            .expect("publish scheduled activation in the ordinary carrier");
+            .expect("publish scheduled protocol limits in the ordinary carrier");
         let successor = BlockHeader::new(
             NonZeroU64::new(302).expect("successor height"),
             Some(committed.as_ref().hash()),

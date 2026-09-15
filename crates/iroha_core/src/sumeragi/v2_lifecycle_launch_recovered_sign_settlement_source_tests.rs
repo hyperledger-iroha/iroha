@@ -26,6 +26,7 @@ fn assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed() {
             "project_proposal_exact_output_authority",
             "capture_recovered_lifecycle_proposal_exact_output",
             "output.commit_after_publication()",
+            "retry!()",
         ],
     );
     let transition_commit =
@@ -101,13 +102,18 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
             "output.commit_after_publication();",
         ],
     );
-    assert_source_token_count(settlement, "output.abort_before_publication()", 2);
+    assert_forbidden_source_tokens(
+        settlement,
+        &["output.abort_before_publication()", "retry!()"],
+    );
     assert_required_source_tokens(
         settlement,
         &[
             "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
             "Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
             "drop(output);",
+            "recovered Proposal Broadcast and Sign successor violates lifecycle ownership",
+            "recovered Proposal Broadcast and Sign transition violates lifecycle ownership",
         ],
     );
     let transition_commit =

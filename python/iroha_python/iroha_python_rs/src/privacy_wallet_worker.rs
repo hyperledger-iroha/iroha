@@ -1141,7 +1141,6 @@ fn prove_private_settlement_v1(
     let prepared = vault
         .consume_with(request.handle, &request.binding, |material| {
             consume_atomic_private_settlement_wallet_bundle_v1(
-                iroha_core::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1::CPU,
                 material,
                 &wallet_id,
                 &request.manifest,

@@ -1611,6 +1611,290 @@ fn trigger_completion_query_caps_explicit_from_height() {
     assert_eq!(explicit_history.scanned_blocks, 2);
     assert!(explicit_history.completions.is_empty());
 }
+fn canonical_outcome_test_fixture(
+    rejection: Option<TransactionRejectionReason>,
+) -> (SharedAppState, HashOf<SignedTransaction>) {
+    let app = mk_app_state_for_tests();
+    let (mut block, entrypoint_hash) = make_signed_block(1, None);
+    if let Some(reason) = rejection {
+        block
+            .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![Err(reason)])
+            .expect("replace the fixture's execution result before canonical storage");
+    }
+    let hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
+    (app, hash)
+}
+fn append_canonical_outcome_test_block(
+    app: &SharedAppState,
+    anchor: CanonicalTransactionAnchor,
+    rebind_transaction: bool,
+) {
+    let block = make_empty_signed_block(2, Some(anchor.block_hash), 10);
+    let header = block.header();
+    let block_hash = store_block(app, block);
+    record_committed_block_hash_for_test(app, header.clone(), block_hash);
+    let mut state_block = app.state.block(header);
+    let membership = if rebind_transaction {
+        [anchor.entrypoint_hash].into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+    state_block.transactions.insert_block(
+        membership,
+        NonZeroUsize::new(2).expect("second height is nonzero"),
+    );
+    state_block.commit().expect("publish second fixture block");
+}
+#[tokio::test]
+async fn canonical_outcome_releases_state_snapshot_before_kura_authentication() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    // Give this State a unique configuration allocation, then prove a real
+    // StateView retains it. No timer, reclamation schedule, or global counter
+    // is involved in the release assertion at the actual auth handoff.
+    let crypto = Arc::new((*app.state.crypto()).clone());
+    *app.state.crypto.write() = crypto.clone();
+    let baseline = Arc::strong_count(&crypto);
+    assert_eq!(
+        baseline, 2,
+        "only State and this test own the unique snapshot"
+    );
+    let view = app.state.view();
+    assert_eq!(Arc::strong_count(&crypto), baseline + 1);
+    drop(view);
+    assert_eq!(Arc::strong_count(&crypto), baseline);
+    let mut calls = 0;
+    let outcome = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+        calls += 1;
+        assert_eq!(
+            Arc::strong_count(&crypto),
+            baseline,
+            "the complete StateView must be dropped before Kura/authentication"
+        );
+        let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+        assert_eq!(Arc::strong_count(&crypto), baseline);
+        Ok(outcome)
+    })
+    .expect("stable canonical binding")
+    .expect("indexed transaction");
+    assert_eq!(calls, 1);
+    assert!(matches!(
+        outcome,
+        CanonicalTransactionOutcome::Applied { height, settled_at }
+            if height.get() == 1 && settled_at == UNIX_EPOCH
+    ));
+    assert_eq!(Arc::strong_count(&crypto), baseline);
+}
+#[tokio::test]
+async fn canonical_outcome_preserves_exact_committed_rejection() {
+    let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+    let (app, hash) = canonical_outcome_test_fixture(Some(reason.clone()));
+    let outcome = canonical_transaction_outcome(&app.state, &app.kura, &hash)
+        .expect("stable rejection binding")
+        .expect("indexed rejected transaction");
+    assert!(matches!(
+        outcome,
+        CanonicalTransactionOutcome::Rejected { height, reason: actual }
+            if height.get() == 1 && actual == reason
+    ));
+}
+#[tokio::test]
+async fn canonical_outcome_absent_membership_never_authenticates() {
+    let app = mk_app_state_for_tests();
+    let hash = HashOf::from_untyped_unchecked(Hash::new(b"unindexed canonical outcome"));
+    let result = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |_| {
+        panic!("absent State membership must not enter Kura/authentication")
+    })
+    .expect("absence is not an inconsistent projection");
+    assert!(result.is_none());
+}
+#[tokio::test]
+async fn canonical_outcome_accepts_unrelated_state_append_after_authentication() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    let mut calls = 0;
+    let outcome = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+        calls += 1;
+        let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+        append_canonical_outcome_test_block(&app, anchor, false);
+        assert_eq!(app.state.view().block_hashes().len(), 2);
+        assert_eq!(
+            canonical_transaction_anchor(&app.state, &hash)?,
+            Some(anchor)
+        );
+        Ok(outcome)
+    })
+    .expect("an unrelated append preserves the exact committed carrier")
+    .expect("indexed transaction");
+    assert_eq!(calls, 1, "height progress must not restart authentication");
+    assert!(
+        matches!(outcome, CanonicalTransactionOutcome::Applied { height, .. } if height.get() == 1)
+    );
+}
+#[tokio::test]
+async fn canonical_outcome_rejects_removed_membership_after_authentication() {
+    for rejected in [false, true] {
+        let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        let (app, hash) = canonical_outcome_test_fixture(rejected.then_some(reason));
+        let mut calls = 0;
+        let result =
+            canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+                calls += 1;
+                let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+                assert_eq!(
+                    matches!(outcome, CanonicalTransactionOutcome::Rejected { .. }),
+                    rejected
+                );
+                // Mutate the actual indexed store, not a detached State clone.
+                let mut membership = app.state.transactions.block_and_revert();
+                membership.insert_block(HashSet::new(), anchor.height);
+                membership
+                    .commit()
+                    .expect("remove latest fixture membership");
+                assert!(canonical_transaction_anchor(&app.state, &hash)?.is_none());
+                Ok(outcome)
+            });
+        let error = result.expect_err("neither terminal disposition survives removal");
+        assert!(
+            query_conversion_message(&error)
+                .expect("projection error")
+                .contains("canonical binding changed during outcome authentication")
+        );
+        assert_eq!(calls, 1, "a changed binding fails closed without retry");
+    }
+}
+#[tokio::test]
+async fn canonical_outcome_rejects_rebound_membership_after_authentication() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    let result = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+        let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+        append_canonical_outcome_test_block(&app, anchor, true);
+        let rebound = canonical_transaction_anchor(&app.state, &hash)?.expect("rebound membership");
+        assert_eq!(rebound.entrypoint_hash, anchor.entrypoint_hash);
+        assert_eq!(rebound.height.get(), 2);
+        assert_ne!(rebound.block_hash, anchor.block_hash);
+        Ok(outcome)
+    });
+    let error = result.expect_err("the old carrier is no longer the indexed authority");
+    assert!(
+        query_conversion_message(&error)
+            .expect("projection error")
+            .contains("canonical binding changed during outcome authentication")
+    );
+}
+#[tokio::test]
+async fn canonical_outcome_rejects_replaced_journal_after_authentication() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    let result = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+        let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+        let replacement = HashOf::from_untyped_unchecked(Hash::new(b"replaced outcome carrier"));
+        assert_ne!(replacement, anchor.block_hash);
+        let mut journal = app.state.block_hashes.block_and_revert();
+        journal.push_for_tests(replacement);
+        journal.commit_for_tests();
+        let rebound =
+            canonical_transaction_anchor(&app.state, &hash)?.expect("retained membership");
+        assert_eq!(rebound.height, anchor.height);
+        assert_eq!(rebound.block_hash, replacement);
+        Ok(outcome)
+    });
+    let error = result.expect_err("same-height journal replacement invalidates the result");
+    assert!(
+        query_conversion_message(&error)
+            .expect("projection error")
+            .contains("canonical binding changed during outcome authentication")
+    );
+}
+#[tokio::test]
+async fn canonical_outcome_rejects_missing_journal_after_authentication() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    let result = canonical_transaction_outcome_with_authenticator(&app.state, &hash, |anchor| {
+        let outcome = authenticate_canonical_transaction_outcome(&app.kura, &hash, anchor)?;
+        app.state.block_hashes.block_and_revert().commit_for_tests();
+        assert!(app.state.view().block_hashes().is_empty());
+        Ok(outcome)
+    });
+    let error = result.expect_err("an incomplete State journal cannot authenticate the outcome");
+    assert!(
+        query_conversion_message(&error)
+            .expect("projection error")
+            .contains("indexed beyond the committed block-hash journal")
+    );
+}
+#[tokio::test]
+async fn canonical_outcome_rejects_result_substitution_under_the_same_header_hash() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    let anchor = canonical_transaction_anchor(&app.state, &hash)
+        .expect("consistent State")
+        .expect("indexed transaction");
+    let canonical = app.kura.get_block(anchor.height).expect("canonical block");
+    let mut replacement = canonical.as_ref().clone();
+    replacement
+        .set_transaction_results(
+            Vec::new(),
+            &[anchor.entrypoint_hash],
+            vec![Err(TransactionRejectionReason::Validation(
+                ValidationFail::TooComplex,
+            ))],
+        )
+        .expect("construct a substituted result-bearing block");
+    assert_eq!(
+        replacement.hash(),
+        canonical.hash(),
+        "header hash omits execution results"
+    );
+    assert_ne!(
+        replacement.header().result_merkle_root(),
+        canonical.header().result_merkle_root()
+    );
+    assert_ne!(
+        replacement.encode_wire().expect("replacement wire"),
+        canonical.encode_wire().expect("canonical wire")
+    );
+    assert!(matches!(
+        app.kura.store_block(replacement.clone()),
+        Err(iroha_core::kura::Error::CanonicalBlockWireMismatch { height: 1 })
+    ));
+    assert!(matches!(
+        app.kura.replace_top_block(replacement),
+        Err(iroha_core::kura::Error::CanonicalBlockWireMismatch { height: 1 })
+    ));
+    let outcome = canonical_transaction_outcome(&app.state, &app.kura, &hash)
+        .expect("rejected mutations preserve canonical authority")
+        .expect("indexed transaction");
+    assert!(
+        matches!(outcome, CanonicalTransactionOutcome::Applied { height, .. } if height.get() == 1)
+    );
+}
+#[tokio::test]
+async fn canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cache() {
+    let (app, hash) = canonical_outcome_test_fixture(None);
+    app.pipeline_status_cache.record_entry(
+        hash,
+        PipelineStatusEntry::fresh(
+            PipelineStatusKind::Applied,
+            Some(NonZeroU64::new(1).expect("height")),
+            None,
+        ),
+    );
+    let mut journal = app.state.block_hashes.block_and_revert();
+    journal.push_for_tests(HashOf::from_untyped_unchecked(Hash::new(
+        b"mismatched State authority",
+    )));
+    journal.commit_for_tests();
+    let error = pipeline_status_terminal_or_state_entry(&app, &hash)
+        .expect_err("a cached terminal result must not mask canonical authentication failure");
+    assert!(
+        query_conversion_message(&error)
+            .expect("projection error")
+            .contains("does not match the committed State journal")
+    );
+    assert_eq!(
+        app.pipeline_status_cache
+            .lookup(&hash)
+            .expect("retained test cache")
+            .kind,
+        PipelineStatusKind::Applied
+    );
+}
 #[tokio::test]
 async fn pipeline_status_handler_returns_applied_from_state() {
     let app = mk_app_state_for_tests();

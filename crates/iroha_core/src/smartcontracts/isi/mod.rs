@@ -105,8 +105,18 @@ pub(crate) enum InitialNativeInstructionAdmission {
     /// The operation is registered for decoding but is not available for execution.
     Closed,
 }
+/// Reviewed, static numeric-asset effects, independent of execution authority.
+///
+/// This metadata cannot admit an instruction or replace a payload-dependent fee-asset guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeInstructionAssetEffect {
+    /// The handler changes no numeric asset balance or supply.
+    NoNumericAssetEffect,
+    /// The handler can cause numeric asset effects not exposed as signed transfer coordinates.
+    MayAffectNumericAssets,
+}
 macro_rules! define_instruction_handlers {
-    ($($handler:ident::<$instruction:ty $(,)?> $(=> $admission:ident)?),* $(,)?) => {
+    ($($handler:ident::<$instruction:ty $(,)?> $(=> $admission:ident)? $([asset_effect = $asset_effect:ident])?),* $(,)?) => {
         const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
             $($handler::<$instruction>),*
         ];
@@ -134,6 +144,35 @@ macro_rules! define_instruction_handlers {
         #[cfg(test)]
         fn registered_native_instruction_type_names() -> Vec<&'static str> {
             vec![$(core::any::type_name::<$instruction>()),*]
+        }
+        /// Match only explicitly reviewed static asset effects at the native handler owner.
+        ///
+        /// Registration and Initial authority alone never assign an asset-effect disposition.
+        /// Unannotated handlers remain subject to the fee classifier's independent dynamic and
+        /// static guards, followed by its deny-by-default fallback.
+        pub(crate) fn registered_native_instruction_asset_effect(
+            instruction: &InstructionBox,
+        ) -> Option<(&'static str, NativeInstructionAssetEffect)> {
+            $(
+                $(
+                    if instruction.as_any().downcast_ref::<$instruction>().is_some() {
+                        return Some((
+                            core::any::type_name::<$instruction>(),
+                            NativeInstructionAssetEffect::$asset_effect,
+                        ));
+                    }
+                )?
+            )*
+            None
+        }
+        #[cfg(test)]
+        fn registered_native_instruction_asset_effects()
+            -> Vec<(&'static str, NativeInstructionAssetEffect)>
+        {
+            vec![$($( (
+                core::any::type_name::<$instruction>(),
+                NativeInstructionAssetEffect::$asset_effect,
+            ), )?)*]
         }
         /// Match only concrete instruction types whose Initial disposition was reviewed here.
         ///
@@ -564,78 +603,85 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
+    // Privacy governance checks exact native permissions and lifecycle state. Proof
+    // submissions and settlement carriers enforce their signed transaction bindings
+    // and exhaustive verification in Core before committing persistent effects.
+    // Asset-effect metadata is an independent audit: governance, roots, bootstraps and APS
+    // carriers update typed privacy state, opaque commitments and rollback-safe budgets.
+    // Their ordinary signed network fees remain payable. SubmitPrivacyProof can authorize
+    // transparent transfers, so active validation-fee policy must still reject it.
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
-    >,
-    dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1>,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1
-    >,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyVegaIssuerV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyVegaIssuerV1>,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyVegaIssuerV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyVegaIssuerV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RevokePrivacyZkX509TrustAnchorV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1
-    >,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1>,
-    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1
-    >,
+    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
 }
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
@@ -710,6 +756,46 @@ mod registry_dispatch_tests {
         assert_eq!(
             closed_types, expected_closed,
             "closed native operations must not acquire admission"
+        );
+    }
+    fn assert_reviewed_asset_effect_family(
+        family: &str,
+        expected_count: usize,
+        expected_ds_capable: BTreeSet<&str>,
+    ) {
+        let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
+            .names()
+            .filter(|name| name.starts_with(family))
+            .collect();
+        let effects: Vec<_> = registered_native_instruction_asset_effects()
+            .into_iter()
+            .filter(|(name, _)| name.starts_with(family))
+            .collect();
+        let reviewed_types: BTreeSet<_> = effects.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            wire_types.len(),
+            expected_count,
+            "review the complete family on change"
+        );
+        assert_eq!(
+            wire_types, reviewed_types,
+            "every wire type needs an explicit asset-effect audit"
+        );
+        assert_eq!(
+            effects.len(),
+            reviewed_types.len(),
+            "duplicate asset-effect audit"
+        );
+        let ds_capable: BTreeSet<_> = effects
+            .into_iter()
+            .filter_map(|(name, effect)| match effect {
+                NativeInstructionAssetEffect::NoNumericAssetEffect => None,
+                NativeInstructionAssetEffect::MayAffectNumericAssets => Some(name),
+            })
+            .collect();
+        assert_eq!(
+            ds_capable, expected_ds_capable,
+            "authority does not imply balance neutrality"
         );
     }
     #[test]
@@ -797,6 +883,21 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
+        assert_reviewed_initial_family("iroha_data_model::isi::privacy::", BTreeSet::new());
+        assert_reviewed_asset_effect_family(
+            "iroha_data_model::isi::privacy::",
+            29,
+            BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()]),
+        );
+        assert_reviewed_asset_effect_family(
+            "iroha_data_model::isi::private_settlement::",
+            5,
+            BTreeSet::new(),
+        );
+        assert_reviewed_initial_family(
+            "iroha_data_model::isi::private_settlement::",
+            BTreeSet::new(),
+        );
     }
     #[test]
     fn default_instruction_registry_entries_have_core_dispatch_handlers() {

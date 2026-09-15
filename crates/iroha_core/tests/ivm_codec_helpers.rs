@@ -2,7 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_crypto::Hash;
-use iroha_model_base::name::Name;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use ivm::{
@@ -219,26 +219,34 @@ fn name_decode_from_norito_bytes() {
 }
 #[test]
 fn build_path_key_norito_appends_canonical_key_bytes() {
-    let mut host = CoreHost::new(ALICE_ID.clone());
-    let mut vm = IVM::new(0);
-    load_state_map_metadata(&mut vm, "kv", EmbeddedStateType::Bytes);
-    let base: Name = "kv".parse().unwrap();
-    let base_bytes = norito::to_bytes(&base).expect("encode base name");
-    let base_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &base_bytes));
-    let key = make_tlv(PointerType::Blob, b"opaque bytes payload");
-    let key_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, &key));
-    vm.set_register(10, base_ptr);
-    vm.set_register(11, key_ptr);
-    host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
-        .expect("path key builder succeeds");
-    let out_ptr = vm.register(10);
-    let out_tlv = vm
-        .memory
-        .validate_tlv(out_ptr)
-        .expect("validate output Name TLV");
-    assert_eq!(out_tlv.type_id, PointerType::Name);
-    let out_name: Name = norito::decode_from_bytes(out_tlv.payload).expect("decode output Name");
-    assert_eq!(out_name.as_ref(), format!("kv/{}", hex::encode(key)));
+    // Composite paths have their own nominal type and can exceed the Name bound.
+    for payload in [b"opaque bytes payload".to_vec(), vec![0xAB; 512]] {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let mut vm = IVM::new(0);
+        load_state_map_metadata(&mut vm, "kv", EmbeddedStateType::Bytes);
+        let base: Name = "kv".parse().unwrap();
+        let base_bytes = norito::to_bytes(&base).expect("encode base name");
+        let base_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &base_bytes));
+        let key = make_tlv(PointerType::Blob, &payload);
+        let key_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, &key));
+        vm.set_register(10, base_ptr);
+        vm.set_register(11, key_ptr);
+        host.syscall(syscalls::SYSCALL_BUILD_PATH_KEY_NORITO, &mut vm)
+            .expect("path key builder succeeds");
+        let out_ptr = vm.register(10);
+        let out_tlv = vm
+            .memory
+            .validate_tlv(out_ptr)
+            .expect("validate output StatePath TLV");
+        assert_eq!(out_tlv.type_id, PointerType::NoritoBytes);
+        let out_path: StatePath =
+            norito::decode_from_bytes(out_tlv.payload).expect("decode output StatePath");
+        assert_eq!(out_path.as_ref(), format!("kv/{}", hex::encode(key)));
+        assert_eq!(
+            out_tlv.payload,
+            norito::encode_canonical(&out_path).expect("canonical StatePath frame")
+        );
+    }
 }
 #[test]
 fn schema_info_returns_registry_snapshot() {

@@ -97,6 +97,43 @@ fn da_index_debug_snapshot(state: &State) -> (String, String, String, String, St
         format!("{:?}", state.da_pin_intents.read()),
     )
 }
+state_test! { sync replay_private_da_hydration_reconstructs_exact_prefix_and_rejects_wrong_body
+    let (state, kura) = blank_test_state_with_kura();
+    let keypair = crate::state::checked_keypair();
+    let record = sample_da_commitment_record(LaneId::new(0), 1, 1, 0x91);
+    let_row! { block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![record.clone()]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
+    kura.store_block(Arc::new(block.clone())).expect("store exact DA prefix");
+    {
+        let mut hashes = state.block_hashes.block();
+        hashes.push(block.hash());
+        hashes.commit_for_tests();
+    }
+    assert!(state.da_indexes_hydrated.read().is_none());
+    let before = da_index_debug_snapshot(&state);
+    state.ensure_da_indexes_hydrated_for_replay_prevalidation()
+        .expect("authenticate and reconstruct private DA prefix");
+    assert_eq!(*state.da_indexes_hydrated.read(), Some(Ok(())));
+    assert_ne!(da_index_debug_snapshot(&state), before,
+        "private hydration must rebuild real DA indexes, not mark an empty cache ready");
+    assert_eq!(state.da_commitments.read().get_committed_by_key(&DaCommitmentKey::from_record(&record))
+        .expect("reconstructed exact commitment").location.block_height, 1);
+    let published = da_index_debug_snapshot(&state);
+    let expected = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"wrong DA prefix hash"));
+    {
+        let mut hashes = state.block_hashes.block_and_revert();
+        hashes.push(expected);
+        hashes.commit_for_tests();
+    }
+    *state.da_indexes_hydrated.write() = None;
+    let error = state.ensure_da_indexes_hydrated_for_replay_prevalidation()
+        .expect_err("private hydration cannot accept an unauthenticated Kura body");
+    assert!(matches!(error, DaIndexHydrationError::BlockHashMismatch {
+        height, expected: found_expected, actual,
+    } if height == nonzero!(1_u64) && found_expected == expected && actual == block.hash()));
+    assert_eq!(da_index_debug_snapshot(&state), published,
+        "failed private hydration cannot publish partial DA indexes");
+    assert_eq!(*state.da_indexes_hydrated.read(), Some(Err(error)));
+}
 state_test! { sync failed_da_rewind_on_missing_body_preserves_all_published_indexes
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();

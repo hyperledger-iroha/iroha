@@ -184,6 +184,14 @@ pub(crate) struct RegisterNameInput {
 /// Errors returned by the ledger-backed SNS helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SnsError {
+    /// The exact canonical registration is absent from authoritative storage.
+    #[error("registration `{label}` not found")]
+    RegistrationNotFound {
+        /// Fixed SNS namespace identifier.
+        suffix_id: SuffixId,
+        /// Canonical registration label.
+        label: String,
+    },
     /// The requested entity is missing from authoritative state.
     #[error("{0}")]
     NotFound(String),
@@ -1904,11 +1912,9 @@ fn record_or_not_found(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
 ) -> Result<NameRecordV1, SnsError> {
-    record_by_selector(world, selector)?.ok_or_else(|| {
-        SnsError::NotFound(format!(
-            "registration `{}` not found",
-            selector.normalized_label()
-        ))
+    record_by_selector(world, selector)?.ok_or_else(|| SnsError::RegistrationNotFound {
+        suffix_id: selector.suffix_id,
+        label: selector.normalized_label().to_owned(),
     })
 }
 fn policy_or_not_found(

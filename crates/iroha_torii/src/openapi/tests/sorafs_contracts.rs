@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 15_417;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 15_793;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "7a02dfd132a9e26da1201a79bd70f3a1f19437075326300aab63485b9e517a68";
+    "9132f43dbc3222368d3978071652c8ab94628c0f20b34cff58d790426de845a1";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",

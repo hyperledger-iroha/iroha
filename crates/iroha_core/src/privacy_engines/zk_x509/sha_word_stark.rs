@@ -3739,7 +3739,7 @@ pub(crate) fn validate_sha_word_stark_trace_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+    use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     use crate::privacy_engines::zk_x509::sha256_word_air::sha256_word_total_rows_for_message_len_v1;
     use std::sync::OnceLock;
     fn challenges() -> ZkX509WordMemoryChallengesV1 {
@@ -3809,11 +3809,11 @@ mod tests {
     }
     #[test]
     fn complete_word_challenges_are_commitment_bound_and_domain_separated() {
-        let profile = GoldilocksDigest384V1::new([0x11; 6]).expect("profile digest");
-        let public = GoldilocksDigest384V1::new([0x22; 6]).expect("public digest");
-        let root = GoldilocksDigest384V1::new([0x33; 6]).expect("base root");
-        let sample = |root: GoldilocksDigest384V1| {
-            let root = root.to_le_bytes();
+        let profile = PrivacyOuterDigestV1::from_bytes([0x11; 48]);
+        let public = PrivacyOuterDigestV1::from_bytes([0x22; 48]);
+        let root = PrivacyOuterDigestV1::from_bytes([0x33; 48]);
+        let sample = |root: PrivacyOuterDigestV1| {
+            let root = root.to_bytes();
             let mut transcript = TransparentTranscriptV1::new(
                 super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
                 b"zk-x509-sha-word-test",
@@ -3829,9 +3829,9 @@ mod tests {
         let challenges = sample(root);
         validate_zk_x509_sha_word_stark_challenges_v1(challenges).expect("valid challenges");
         assert_eq!(challenges, sample(root));
-        let mut changed_words = root.words();
+        let mut changed_words = root.to_bytes();
         changed_words[0] ^= 1;
-        let changed_root = GoldilocksDigest384V1::new(changed_words).expect("changed base root");
+        let changed_root = PrivacyOuterDigestV1::from_bytes(changed_words);
         assert_ne!(challenges, sample(changed_root));
         assert!(
             challenges

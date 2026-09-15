@@ -108,6 +108,9 @@ impl Kura {
         if self.auxiliary_history_deferred
             || self.provisional_snapshot_bootstrap_pending()
             || !self
+                .native_amx_resident_recovery_complete
+                .load(Ordering::Acquire)
+            || !self
                 .post_wsv_resident_recovery_complete
                 .load(Ordering::Acquire)
             || !self
@@ -143,14 +146,16 @@ impl Kura {
             .checked_add(startup_allocations)
             .ok_or(Unavailable::Arithmetic)?;
         let lane_entries = exact(&self.lane_storage_entries.lock())?;
-        let frontier_pairs = exact(&self.certified_frontier_pair_durability.lock())?;
+        let certified_pairs = exact(&self.certified_pair_durability.lock())?;
         let frontier_artifacts = exact(&self.certified_frontier_artifact_validation.lock())?;
+        let native = exact(&self.native_amx_publication_capacity_reservations.lock())?;
         let post_wsv = exact(&self.post_wsv_lane_artifact_budget_reservations.lock())?;
         let certified = exact(&self.certified_bundle_capacity_reservations.lock())?;
         let frontier = [
             lane_entries,
-            frontier_pairs,
+            certified_pairs,
             frontier_artifacts,
+            native,
             post_wsv,
             certified,
         ]

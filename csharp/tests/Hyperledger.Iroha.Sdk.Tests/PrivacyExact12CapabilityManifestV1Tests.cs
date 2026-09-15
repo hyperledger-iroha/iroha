@@ -236,7 +236,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         var cases = new[]
         {
             (
-                Lifecycle: EnumValue(0, Struct(U64(1), U64(4))),
+                Lifecycle: EnumValue(0, Struct(U64(1))),
                 Reason: PrivacyCapabilityUnavailableReasonV1.Proposed,
                 ReasonTag: 2U),
             (
@@ -264,6 +264,146 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
             Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
             Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+        }
+    }
+
+    [Fact]
+    public void PendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights()
+    {
+        (ulong Scheduled, ulong Effective, ulong Committed, bool Accepted)[] cases =
+        [
+            (3, 4, 3, true), (3, 5, 3, true),
+            (ulong.MaxValue - 1, ulong.MaxValue, ulong.MaxValue - 1, true),
+            (0, 4, 3, false), (3, 3, 3, false), (3, 2, 3, false),
+            (4, 5, 3, false), (3, 4, 4, false),
+            (ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, false),
+        ];
+        foreach (var consensus in new[] { true, false })
+        {
+            foreach (var item in cases)
+            {
+                var next = consensus
+                    ? Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9 * 1024 * 1024),
+                        U32(9 * 1024 * 1024), U32(18 * 1024 * 1024), U32(256 * 1024),
+                        U32(8), U32(8), U32(1_024))
+                    : EnumValue(6, Struct(U32(3)));
+                var pending = Struct(U64(item.Scheduled), U64(item.Effective), next);
+                var fixture = BuildFixture(
+                    committedHeight: item.Committed, includeQualification: false,
+                    pendingConsensus: consensus ? pending : null,
+                    pendingJindo: consensus ? null : pending);
+                if (item.Accepted)
+                {
+                    var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                        fixture.Manifest, fixture.Catalog);
+                    Assert.Equal(fixture.Manifest, decoded.CanonicalArchive);
+                    Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+                }
+                else
+                {
+                    Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                        PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                            fixture.Manifest, fixture.Catalog));
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void ProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight()
+    {
+        foreach (var committedHeight in new[] { 1UL, 3UL, ulong.MaxValue })
+        {
+            var lifecycle = EnumValue(0, Struct(U64(1)));
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(2),
+                rowZeroLifecycle: lifecycle,
+                committedHeight: committedHeight,
+                includeQualification: false);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest, fixture.Catalog);
+            Assert.Equal(PrivacyCapabilityUnavailableReasonV1.Proposed,
+                decoded.Protocols[0].UnavailableReason);
+            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: lifecycle), present: true),
+                decoded.Protocols[0].ActivationCanonicalBytes);
+
+            var forged = BuildFixture(
+                rowZeroLifecycle: lifecycle,
+                committedHeight: committedHeight,
+                includeQualification: false);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                    forged.Manifest, forged.Catalog));
+        }
+    }
+
+    [Fact]
+    public void SameHeightActivationRetainsQualificationAndStrictLaterHistory()
+    {
+        var cases = new[]
+        {
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(3))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
+            (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Suspended, Tag: 3U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
+        };
+        foreach (var item in cases)
+        {
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(item.Tag),
+                rowZeroLifecycle: item.Lifecycle,
+                includeQualification: false);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest, fixture.Catalog);
+            Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
+            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: item.Lifecycle), present: true),
+                decoded.Protocols[0].ActivationCanonicalBytes);
+        }
+
+        var qualified = BuildFixture(
+            rowZeroLifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
+            qualificationActivationHeight: 1);
+        var projected = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            qualified.Manifest, qualified.Catalog);
+        Assert.True(projected.Protocols[0].IsNetworkAvailable);
+        // This managed projection preserves evidence; native admission still validates it.
+    }
+
+    [Fact]
+    public void ExplicitActivationRejectsRemovedScheduleAndInvalidHistory()
+    {
+        var cases = new[]
+        {
+            (Lifecycle: EnumValue(0, Struct(U64(1), U64(4))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(1), U64(301))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct()), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(0))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(4))), Tag: 2U),
+            (Lifecycle: EnumValue(1, Struct(U64(2), U64(1), U64(2))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(2), U64(1))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(4), U64(4))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(4))), Tag: 5U),
+            (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(1))), Tag: 3U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(1))), Tag: 4U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(1))), Tag: 4U),
+        };
+        foreach (var item in cases)
+        {
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(item.Tag),
+                rowZeroLifecycle: item.Lifecycle,
+                includeQualification: false);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                    fixture.Manifest, fixture.Catalog));
         }
     }
 
@@ -369,7 +509,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         ulong qualificationActivationHeight = 2,
         ulong qualificationConvergenceHeight = 3,
         byte[]? deploymentNetwork = null,
-        byte[]? deploymentGenesis = null)
+        byte[]? deploymentGenesis = null,
+        byte[]? pendingConsensus = null,
+        byte[]? pendingJindo = null)
     {
         var profiles = new byte[12][];
         profiles[0] = AvailableProfile(
@@ -410,7 +552,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                     0 => rowZeroReadiness ?? (includeQualification
                         ? EnumValue(0)
                         : UnavailableReadiness(5)),
-                    6 => UnavailableReadiness(1),
+                    6 => UnavailableReadiness(pendingJindo is null ? 1U : 5U),
                     _ => UnavailableReadiness(0, EnumValue(0)),
                 };
             var activation = index == 0
@@ -420,7 +562,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                         useLegacyAssurance || useLegacyNineFieldRows,
                         rowZeroLifecycle),
                     present: true)
-                : Option(Array.Empty<byte>(), present: false);
+                : index == 6 && pendingJindo is not null
+                    ? Option(ActivationForJindo(pendingJindo), present: true)
+                    : Option(Array.Empty<byte>(), present: false);
             var fields = new List<byte[]>
             {
                 EnumValue(checked((uint)index)),
@@ -460,7 +604,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             includeQualification,
             new byte[32],
             maxActionsPerTransaction,
-            committedHeight);
+            committedHeight,
+            pendingConsensus);
         var digest = ComputeManifestDigest(manifestWithZeroDigest);
         return new Fixture(
             BuildManifestArchive(
@@ -469,7 +614,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 includeQualification,
                 digest,
                 maxActionsPerTransaction,
-                committedHeight),
+                committedHeight,
+                pendingConsensus),
             catalog,
             profiles);
     }
@@ -494,6 +640,16 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 digest,
                 digest,
                 limits));
+    }
+
+    private static byte[] ActivationForJindo(byte[] pending)
+    {
+        var digest = Struct(Enumerable.Repeat((byte)0x61, 32).ToArray());
+        return Struct(
+            EnumValue(6), EnumValue(5), EnumValue(5),
+            digest, digest, digest, digest, digest,
+            EnumValue(1, Struct(U64(1), U64(2), U64(2))),
+            EnumValue(6, Struct(U32(4))), Option(pending, present: true));
     }
 
     private static byte[] ActivationForProfileZero(
@@ -674,7 +830,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             NoritoCodec.CanonicalLayoutFlags);
     }
 
-    private static byte[] ConsensusPolicy(uint maxActionsPerTransaction = 1)
+    private static byte[] ConsensusPolicy(
+        uint maxActionsPerTransaction = 1, byte[]? pending = null)
     {
         var consensusLimits = Struct(
             U32(maxActionsPerTransaction),
@@ -689,7 +846,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             U32(2_048));
         return Struct(
             consensusLimits,
-            Option(Array.Empty<byte>(), present: false));
+            Option(pending ?? Array.Empty<byte>(), present: pending is not null));
     }
 
     private static byte[] BuildManifestArchive(
@@ -698,14 +855,15 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         bool includeQualification,
         byte[] digest,
         uint maxActionsPerTransaction,
-        ulong committedHeight)
+        ulong committedHeight,
+        byte[]? pendingConsensus = null)
     {
         return NoritoCodec.Encode(
             PrivacyExact12CapabilityManifestCodecV1.ManifestSchemaName,
             Struct(
                 U32(1),
                 U64(committedHeight),
-                ConsensusPolicy(maxActionsPerTransaction),
+                ConsensusPolicy(maxActionsPerTransaction, pendingConsensus),
                 Option(qualification, includeQualification),
                 Sequence(rows),
                 Struct(digest)),

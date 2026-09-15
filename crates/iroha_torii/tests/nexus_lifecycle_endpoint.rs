@@ -40,15 +40,36 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()].into();
     }
-    let kura = Kura::blank_kura_for_testing();
+    // Use the configured-catalog constructor so the primary anchor is authenticated.
+    // It replaces the fixture store path with a directory owned by this Kura instance.
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &cfg.kura,
+        &cfg.nexus.lane_config,
+        &cfg.nexus.configured_lane_catalog,
+    )
+    .expect("open authenticated Nexus endpoint fixture storage");
     let world = iroha_core::prelude::World::with(
         Vec::new(),
         Vec::new(),
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
-    let mut state = State::new_for_testing(world, kura.clone(), LiveQueryStore::start_test());
+    // Core and Torii must share the fixture's explicit genesis-derived identity.
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        LiveQueryStore::start_test(),
+        cfg.common.chain.clone(),
+        network_id,
+    );
     state
-        .set_nexus(cfg.nexus.clone())
+        .prepare_configured_primary_geometry_anchor(&cfg.nexus.configured_lane_catalog)
+        .expect("anchor the authenticated Nexus endpoint primary");
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .expect("restore the authenticated Nexus endpoint primary geometry");
+    state
+        .set_nexus_from_config(cfg.nexus.clone())
         .expect("apply initial Nexus config");
     let state = Arc::new(state);
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;
@@ -72,8 +93,8 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     }
     let torii = fixtures::ToriiHarness::new_without_telemetry(
         &cfg,
-        iroha_model_base::chain::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        state.chain_id_ref().clone(),
+        *state.network_id_ref(),
         &kura,
         &state,
         &queue,
@@ -113,7 +134,7 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok()),
-        Some("application/json")
+        Some("application/json; charset=utf-8")
     );
     let body = response_bytes(response).await;
     let json = std::str::from_utf8(&body).expect("status JSON is UTF-8");
@@ -131,6 +152,7 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
         "incarnations",
         "lane_count",
         "lanes",
+        "runtime_catalog_hash",
         "version",
     ]
     .into_iter()
@@ -142,6 +164,8 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
     assert!(!json.contains("nexus_enabled"));
     let status: LaneLifecycleStatusV1 =
         norito::json::from_slice(&body).expect("decode status JSON");
+    assert_eq!(status.runtime_catalog_hash, None);
+    assert!(json.contains("\"runtime_catalog_hash\":null"));
     assert_eq!(
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
@@ -165,10 +189,55 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
     let status =
         norito::decode_from_bytes::<LaneLifecycleStatusV1>(&response_bytes(response).await)
             .expect("decode status Norito");
+    assert_eq!(status.runtime_catalog_hash, None);
     assert_eq!(
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
     );
+    harness.shutdown().await;
+}
+#[tokio::test]
+async fn lifecycle_get_returns_exact_present_runtime_root_in_both_formats() {
+    use iroha_crypto::Hash;
+    use iroha_data_model::{nexus::NexusRuntimeCatalogV1, parameter::Parameter};
+    let harness = build_app();
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
+            &harness.state.nexus_snapshot().configured_dataspace_catalog,
+        ),
+        baseline_manifests_hash: Hash::new(b"endpoint fixture manifest baseline"),
+        dataspaces: Vec::new(),
+        manifests: Vec::new(),
+    };
+    let expected = runtime.canonical_hash().unwrap();
+    let mut world = harness.state.world.block();
+    world
+        .parameters
+        .get_mut()
+        .set_parameter(Parameter::Custom(runtime.into_custom_parameter().unwrap()));
+    world.commit();
+    for accept in ["application/json", "application/x-norito"] {
+        let response = fixtures::request(
+            &harness.app,
+            Request::builder()
+                .uri(NEXUS_LANE_LIFECYCLE)
+                .header("accept", accept)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response_bytes(response).await;
+        let status: LaneLifecycleStatusV1 = if accept == "application/json" {
+            norito::json::from_slice(&bytes).unwrap()
+        } else {
+            norito::decode_from_bytes(&bytes).unwrap()
+        };
+        status.validate().unwrap();
+        assert_eq!(status.runtime_catalog_hash, Some(expected));
+    }
     harness.shutdown().await;
 }
 #[tokio::test]
@@ -186,7 +255,7 @@ async fn lifecycle_get_honors_api_token_access_policy() {
             fixtures::request(&harness.app, request.body(Body::empty()).expect("request"))
                 .await
                 .expect("response");
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     let response = fixtures::request(
         &harness.app,

@@ -95,7 +95,7 @@ const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 46] = [
     app_routed_read_endpoint!(ExplorerAccountDetail, route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(AccountAssetsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET, AppRoutedReadHttpDecoder::Query("AccountAssetsGetParams")),
     app_routed_read_endpoint!(AccountAssetsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
-    app_routed_read_endpoint!(AccountPermissionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET, AppRoutedReadHttpDecoder::Query("Pagination")),
+    app_routed_read_endpoint!(AccountPermissionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET, AppRoutedReadHttpDecoder::Query("PaginationParams")),
     app_routed_read_endpoint!(AccountTransactionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET, AppRoutedReadHttpDecoder::Query("AccountTransactionsGetParams")),
     app_routed_read_endpoint!(AccountTransactionsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
     app_routed_read_endpoint!(TransactionsQuery, route_catalog::application_api::TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),

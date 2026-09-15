@@ -30,11 +30,16 @@ build, failed whole Swift suite and integrated corrections awaiting execution.
   prohibited. Final V1 interfaces have no compatibility aliases or decoders.
 - One ordered Exact12 catalog, one V1 proof envelope, exact protocol/proof-system/
   engine tuples, and one weakest-composition security model per protocol.
-- Native STARK commitments use the shared six-lane Goldilocks Poseidon-x7
-  construction, canonical 48-byte digests, and role-separated transcripts.
-  Fp4 values have four canonical coefficients and an exact 32-byte encoding.
-  Public metadata hashes remain the hashes explicitly specified by their owning
-  protocol; they are not alternative native STARK commitment backends.
+- Privacy STARK outer commitments and transcripts use SHA3-384 with one
+  checked byte frame and opaque 48-byte digests. Fp4 values retain four canonical
+  coefficients and an exact 32-byte encoding. Compiled privacy tuples admit
+  only `stark-fri-sha3-384-goldilocks-v1` with
+  `native-goldilocks-sha3-384-stark-fri-v1`. Execution STARK, FASTPQ, BFV and
+  inner identity/replay constraints keep their separately specified primitives.
+  SHA3-specific compiled values, complete proofs, SDK artifacts, CPU/ARM parity
+  and commitment/Fiat--Shamir soundness require fresh qualification. The FRI
+  algebraic bound is not a complete hash or qROM claim; ZK-ACE remains unavailable
+  until its existing certification gate passes.
 - The local compiled-profile catalog conveys build metadata. Production
   availability additionally requires committed activation and the complete
   signed release/deployment qualification matching that activation.

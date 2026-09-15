@@ -1,6 +1,7 @@
 include!("autonomous_merge_and_queue_plan_test_support.rs");
 include!("autonomous_merge_admission_intent_tests.rs");
 include!("autonomous_merge_gas_budget_tests.rs");
+include!("historical_merge_registry_recovery_tests.rs");
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4588,4 +4589,372 @@ fn pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_curren
             .1,
         PendingQueuePlanAdmissionDisposition::Stale
     );
+}
+
+state_test!(consensus_stack autonomous_runtime_catalog_effects_commit_and_recover_exactly
+    autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_stack();
+);
+fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_stack() {
+    let (state, entry, carrier) =
+        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    assert!(
+        state
+            .view()
+            .runtime_catalog_hash()
+            .expect("baseline runtime root")
+            .is_none()
+    );
+    {
+        let staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        assert!(
+            staged
+                .pending_autoscale_lifecycle
+                .as_ref()
+                .expect("native catalog effect")
+                .runtime_catalog
+                .is_some()
+        );
+        assert!(staged.lane_manifests.has_manifest(AUTONOMOUS_RUNTIME_LANE));
+        assert_eq!(
+            staged.world.dataspace_catalog,
+            staged.nexus.dataspace_catalog
+        );
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state),
+        before,
+        "dropping an authenticated staged catalog must not publish runtime effects"
+    );
+    let staged = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
+    let expected_runtime = runtime_catalog_from_world(&staged.world)
+        .expect("staged protected runtime")
+        .expect("catalog effect must publish protected runtime");
+    let expected_catalog = staged.nexus.lane_catalog.clone();
+    let expected_dataspaces = staged.nexus.dataspace_catalog.clone();
+    let expected_incarnations = staged.lane_incarnations.clone();
+    let expected_lineage = staged.lane_incarnation_lineage.clone();
+    let expected_activation = staged.lane_incarnation_activation_heights.clone();
+    let expected_manifests = staged.lane_manifests.consensus_policy_digest();
+    commit_staged_autonomous_for_test(staged).expect("exact native catalog merge commits");
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(carrier.header().height().get()).unwrap()
+    );
+    assert_eq!(state.nexus_snapshot().lane_catalog, expected_catalog);
+    assert_eq!(
+        state.nexus_snapshot().dataspace_catalog,
+        expected_dataspaces
+    );
+    assert_eq!(state.lane_incarnations_snapshot(), expected_incarnations);
+    assert_eq!(state.lane_incarnation_lineage_snapshot(), expected_lineage);
+    assert_eq!(
+        state.lane_incarnation_activation_heights_snapshot(),
+        expected_activation
+    );
+    assert_eq!(
+        state.lane_manifests.read().consensus_policy_digest(),
+        expected_manifests
+    );
+    assert_eq!(
+        state.view().runtime_catalog_hash().unwrap(),
+        Some(expected_runtime.canonical_hash().unwrap())
+    );
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("native catalog batch");
+    assert!(
+        state
+            .merge_execution_already_applied(&entry, batch)
+            .expect("exact replay marker")
+    );
+    let committed = crate::snapshot::canonical_state_snapshot_hash(&state);
+    state
+        .recover_merge_ledger_from_kura()
+        .expect("authenticated catalog history recovers");
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state),
+        committed,
+        "recovering an already applied catalog must preserve its exact state"
+    );
+    assert!(
+        state
+            .validate_merge_execution_batch(
+                &entry.active_lanes,
+                batch,
+                MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned)
+            )
+            .is_err(),
+        "the same catalog execution cannot be admitted twice"
+    );
+}
+
+state_test!(consensus_stack autonomous_bootstrap_parameter_effects_commit_and_recover_exactly
+    autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensus_stack();
+);
+fn autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensus_stack() {
+    use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+    let (state, entry, carrier) =
+        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
+    let batch = entry.execution_batch.as_ref().expect("bootstrap batch");
+    let owner = batch.lanes[0].entrypoints[0].authority().clone();
+    let expected = AliasDataspaceBootstrapGrantV1::try_new(AUTONOMOUS_RUNTIME_DATASPACE, owner)
+        .expect("exact native bootstrap grant");
+    let id = expected.parameter_id().unwrap();
+    let baseline_catalog = state.nexus_snapshot().lane_catalog;
+    assert!(!state.world.view().parameters().custom().contains_key(&id));
+    let staged = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
+    assert!(
+        staged.pending_autoscale_lifecycle.is_none(),
+        "bootstrap changes parameters without geometry"
+    );
+    assert_eq!(
+        AliasDataspaceBootstrapGrantV1::from_custom_parameter(
+            staged
+                .world
+                .parameters()
+                .custom()
+                .get(&id)
+                .expect("staged grant")
+        )
+        .unwrap(),
+        Some(expected.clone())
+    );
+    commit_staged_autonomous_for_test(staged).expect("native bootstrap parameter merge commits");
+    assert_eq!(
+        AliasDataspaceBootstrapGrantV1::from_custom_parameter(
+            state
+                .world
+                .view()
+                .parameters()
+                .custom()
+                .get(&id)
+                .expect("committed grant")
+        )
+        .unwrap(),
+        Some(expected)
+    );
+    assert_eq!(state.nexus_snapshot().lane_catalog, baseline_catalog);
+    assert!(state.view().runtime_catalog_hash().unwrap().is_none());
+    assert!(
+        state
+            .merge_execution_already_applied(&entry, batch)
+            .unwrap()
+    );
+    let committed = crate::snapshot::canonical_state_snapshot_hash(&state);
+    state
+        .recover_merge_ledger_from_kura()
+        .expect("authenticated bootstrap history recovers");
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state),
+        committed
+    );
+    assert!(
+        state
+            .validate_merge_execution_batch(
+                &entry.active_lanes,
+                batch,
+                MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned)
+            )
+            .is_err(),
+        "the same bootstrap execution cannot be admitted twice"
+    );
+}
+
+state_test!(consensus_stack autonomous_runtime_catalog_effects_reject_post_stage_tampering
+    autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_stack();
+);
+fn autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_stack() {
+    let (state, entry, carrier) =
+        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    for case in 0..8 {
+        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        match case {
+            0 => staged.world.dataspace_catalog = state.nexus_snapshot().dataspace_catalog,
+            1 => staged.nexus.dataspace_catalog = state.nexus_snapshot().dataspace_catalog,
+            2 => {
+                staged
+                    .lane_incarnations
+                    .insert(AUTONOMOUS_RUNTIME_LANE, Hash::new(b"unbound incarnation"));
+            }
+            3 => {
+                staged
+                    .lane_incarnation_lineage
+                    .remove(&AUTONOMOUS_RUNTIME_LANE);
+            }
+            4 => {
+                staged
+                    .lane_incarnation_activation_heights
+                    .insert(AUTONOMOUS_RUNTIME_LANE, 99);
+            }
+            5 => staged.lane_manifests = state.lane_manifests.read().clone(),
+            6 => {
+                let root = staged.merge_execution_write_set_root();
+                staged
+                    .pending_autoscale_lifecycle
+                    .as_mut()
+                    .unwrap()
+                    .catalog_update
+                    .updated_lane_incarnations
+                    .insert(AUTONOMOUS_RUNTIME_LANE, Hash::new(b"tampered bound effect"));
+                assert_ne!(
+                    staged.merge_execution_write_set_root(),
+                    root,
+                    "pending effects must participate in the certified write root"
+                );
+            }
+            7 => {
+                use iroha_crypto::privacy::{
+                    LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment,
+                };
+                let mut statuses = staged.lane_manifests.statuses();
+                let mut foreign = staged
+                    .lane_manifests
+                    .status(AUTONOMOUS_RUNTIME_LANE)
+                    .expect("native added lane status")
+                    .clone();
+                foreign.lane = LaneId::new(88);
+                foreign.alias = "foreign-privacy".to_owned();
+                foreign.privacy_commitments = vec![LanePrivacyCommitment::merkle(
+                    LaneCommitmentId::new(1),
+                    MerkleCommitment::from_root_bytes([0xA8; 32], 12),
+                )];
+                statuses.push(foreign);
+                staged.lane_privacy_registry =
+                    Arc::new(LanePrivacyRegistry::from_statuses(&statuses));
+                assert!(staged.lane_privacy_registry.lane(LaneId::new(88)).is_some());
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                staged.validate_merge_runtime_catalog_effects(),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
+            ),
+            "runtime projection case {case}"
+        );
+        assert!(
+            matches!(
+                commit_staged_autonomous_for_test(staged),
+                Err(TransactionsBlockError::MergeAdmission)
+            ),
+            "unbound runtime projection must reject at final commit, case {case}"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state),
+            before
+        );
+    }
+}
+
+state_test!(consensus_stack autonomous_parameter_effects_reject_post_stage_tampering
+    autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack();
+);
+fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack() {
+    use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+    let (state, entry, carrier) =
+        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
+    let owner = entry.execution_batch.as_ref().unwrap().lanes[0].entrypoints[0]
+        .authority()
+        .clone();
+    let grant =
+        AliasDataspaceBootstrapGrantV1::try_new(AUTONOMOUS_RUNTIME_DATASPACE, owner).unwrap();
+    let id = grant.parameter_id().unwrap();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    for case in 0..2 {
+        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        let root = staged.merge_execution_write_set_root();
+        if case == 0 {
+            staged.world.parameters.get_mut().custom.remove(&id);
+        } else {
+            let mut changed = grant.clone();
+            changed.owner = AccountId::new(
+                KeyPair::try_from_seed(vec![0xA9; 32], Algorithm::Ed25519)
+                    .expect("deterministic parameter tamper owner")
+                    .public_key()
+                    .clone(),
+            );
+            staged.world.parameters.get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(
+                    changed.into_custom_parameter().unwrap(),
+                ),
+            );
+        }
+        assert_ne!(
+            staged.merge_execution_write_set_root(),
+            root,
+            "the native parameter delta must participate in the write root"
+        );
+        assert!(
+            matches!(
+                commit_staged_autonomous_for_test(staged),
+                Err(TransactionsBlockError::MergeAdmission)
+            ),
+            "parameter removal/change must not reuse an authenticated write root"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state),
+            before
+        );
+    }
+}
+
+state_test!(consensus_stack autonomous_runtime_catalog_effects_require_matching_pending_transition
+    autonomous_runtime_catalog_effects_require_matching_pending_transition_on_consensus_stack();
+);
+fn autonomous_runtime_catalog_effects_require_matching_pending_transition_on_consensus_stack() {
+    use iroha_data_model::nexus::NexusRuntimeCatalogV1;
+    let (state, entry, carrier) =
+        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    for case in 0..4 {
+        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        match case {
+            0 => {
+                staged.pending_autoscale_lifecycle = None;
+            }
+            1 => {
+                staged
+                    .pending_autoscale_lifecycle
+                    .as_mut()
+                    .unwrap()
+                    .runtime_catalog = None;
+            }
+            2 => {
+                let pending = staged.pending_autoscale_lifecycle.as_mut().unwrap();
+                pending.runtime_catalog.as_mut().unwrap().dataspaces[0]
+                    .descriptor
+                    .description = Some("unbound pending runtime".to_owned());
+            }
+            3 => {
+                staged
+                    .world
+                    .parameters
+                    .get_mut()
+                    .custom
+                    .remove(&NexusRuntimeCatalogV1::parameter_id());
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                staged.validate_merge_runtime_catalog_effects(),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
+            ),
+            "missing/mismatched binding case {case}"
+        );
+        assert!(
+            matches!(
+                commit_staged_autonomous_for_test(staged),
+                Err(TransactionsBlockError::MergeAdmission)
+            ),
+            "pending runtime and native protected parameter must remain exact, case {case}"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state),
+            before
+        );
+    }
 }

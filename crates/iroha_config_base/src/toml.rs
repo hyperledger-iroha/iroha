@@ -368,16 +368,14 @@ impl<'a> Writer<'a> {
     }
     /// Write a serializable value by path.
     /// Recursively creates all path segments as tables if they don't exist.
+    /// The returned reference borrows the writer independently of the table's lifetime.
+    /// Separate calls and temporary helper borrows can therefore reuse the writer.
     ///
     /// # Panics
     ///
     /// - If there is existing non-table value along the path
     /// - If value cannot serialize into [`toml::Value`]
-    pub fn write<P: WritePath, T: Into<toml::Value>>(
-        &'a mut self,
-        path: P,
-        value: T,
-    ) -> &'a mut Self {
+    pub fn write<P: WritePath, T: Into<toml::Value>>(&mut self, path: P, value: T) -> &mut Self {
         let mut current: Option<(&mut Table, &str)> = None;
         for i in path.path() {
             if let Some((table, key)) = current {
@@ -672,6 +670,88 @@ mod tests {
         };
         let unknown = find_unknown_parameters(&table, &known);
         assert_eq!(unknown, <_>::default());
+    }
+    #[test]
+    fn writer_supports_sequential_standalone_writes() {
+        let mut table = Table::new();
+        {
+            let mut writer = Writer::new(&mut table);
+            writer.write(
+                ["logger", "filter"],
+                "iroha_torii::queue_plan_admission=debug",
+            );
+            let workers = 4_i64;
+            writer.write(["pipeline", "workers"], workers);
+            writer.write(["logger", "level"], "INFO");
+        }
+        assert_eq!(
+            table,
+            toml! {
+                [logger]
+                filter = "iroha_torii::queue_plan_admission=debug"
+                level = "INFO"
+                [pipeline]
+                workers = 4
+            }
+        );
+    }
+    #[test]
+    fn writer_fluent_chain_preserves_siblings_and_replaces_leaf() {
+        let mut table = toml! {
+            [pipeline]
+            enabled = true
+            workers = 4
+        };
+        Writer::new(&mut table)
+            .write(["pipeline", "workers"], 8_i64)
+            .write(["logger", "level"], "INFO")
+            .write(
+                ["logger", "filter"],
+                "iroha_torii::queue_plan_admission=debug",
+            );
+        assert_eq!(
+            table,
+            toml! {
+                [pipeline]
+                enabled = true
+                workers = 8
+                [logger]
+                level = "INFO"
+                filter = "iroha_torii::queue_plan_admission=debug"
+            }
+        );
+    }
+    #[test]
+    fn writer_releases_helper_borrow_for_caller_reuse() {
+        fn configure_logger(writer: &mut Writer<'_>) {
+            let chain = writer.write(["logger", "level"], "INFO");
+            chain.write(
+                ["logger", "filter"],
+                "iroha_torii::queue_plan_admission=debug",
+            );
+        }
+        let mut table = Table::new();
+        {
+            let mut writer = Writer::new(&mut table);
+            configure_logger(&mut writer);
+            writer.write(["pipeline", "workers"], 8_i64);
+        }
+        assert_eq!(
+            table,
+            toml! {
+                [logger]
+                level = "INFO"
+                filter = "iroha_torii::queue_plan_admission=debug"
+                [pipeline]
+                workers = 8
+            }
+        );
+    }
+    #[test]
+    #[should_panic(expected = "expected a table")]
+    fn writer_rejects_non_table_intermediate_path() {
+        let mut table = toml! { logger = false };
+        Writer::new(&mut table).write(["logger", "level"], "INFO");
     }
     #[test]
     fn writing_into_toml_works() {

@@ -32,6 +32,7 @@ def artifact_receipts():
     ]
     build = {
         "commit": "a" * 40,
+        "environment_sha256": "e" * 64,
         "tree": "c" * 40,
         "source_unchanged": True,
         "toolchain_unchanged": True,
@@ -86,6 +87,13 @@ def full_plan():
     )
 
 
+def core_plan():
+    return {"schema": capacity.PLAN_SCHEMA, "allocations": [
+        {"path": "/runtime", "label": label, "bytes": 10, "inodes": 1}
+        for label in ("coordinator artifact snapshot", "per-role artifact uploads", "per-role installed artifacts")
+    ] + [{"path": "/runtime", "label": "guest filesystem headroom", "bytes": 2 * 1024**3, "inodes": 16384}]}
+
+
 def measured_inputs():
     stage = "/private/runtime/retained/inrou-stage"
     names = {
@@ -111,6 +119,7 @@ def measured_inputs():
             "config",
             "genesis",
             "genesis_hash",
+            "validator_unit",
         )
     ]
     roles += [
@@ -119,6 +128,7 @@ def measured_inputs():
     ]
     inputs = {
         "schema": "taira.public-capacity-inputs.v1",
+        "qualification_scope": "full_inrou",
         "secret_contents_read": False,
         "filesystem": {"fragment_bytes": 4096},
         "artifacts": roles,
@@ -294,6 +304,7 @@ class RetryTests(unittest.TestCase):
         previous = {
             "deployment_id": "retained",
             "qualification_scope": "core_testnet",
+            "inrou_canary": None, "inrou_stage_tree_sha256": None,
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "authorization_nonce": "0" * 32,
             "revision": {"commit": "a" * 40},
@@ -323,13 +334,25 @@ class RetryTests(unittest.TestCase):
 
     def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
         valid = {"qualification_scope": "core_testnet",
+                 "inrou_canary": None, "inrou_stage_tree_sha256": None,
                  "operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
             {"slug": f"taira-validator-{index}",
              "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
             for index in range(1, 5)
         ]}
         retry.require_candidate_probe_inventory(valid)
-        for scope in (None, "", "all", "CORE_TESTNET", True, []):
+        full = dict(valid, qualification_scope="full_inrou", inrou_canary={"stage_tree_sha256": "a" * 64}, inrou_stage_tree_sha256="a" * 64)
+        retry.require_candidate_probe_inventory(full)
+        for value in (dict(valid, inrou_canary={}), dict(valid, inrou_stage_tree_sha256="a" * 64),
+                      dict(full, inrou_canary=None), dict(full, inrou_stage_tree_sha256="b" * 64)):
+            with self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
+        for field in ("inrou_canary", "inrou_stage_tree_sha256"):
+            value = dict(valid)
+            del value[field]
+            with self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
+        for scope in (None, "", "inrou", "all", "CORE_TESTNET", True, []):
             value = copy.deepcopy(valid)
             value["qualification_scope"] = scope
             with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
@@ -389,9 +412,10 @@ class RetryTests(unittest.TestCase):
             retry.require_same_inventory_artifacts(inventory, binary, source)
 
     def test_complete_edge_rollback_is_supported_and_incomplete_edge_rejects(self):
-        inventory = {"revision": {"commit": "a" * 40}, "deployment_id": "actual75"}
+        inventory = {"qualification_scope": "full_inrou", "revision": {"commit": "a" * 40}, "deployment_id": "actual75"}
         value = {
             "deployment_id": "actual75",
+            "qualification_scope": "full_inrou",
             "status": "rolled_back",
             "phase": "rolled_back",
             "next_step": 9,
@@ -513,6 +537,7 @@ class RetryTests(unittest.TestCase):
                 path.read_bytes()
             ).hexdigest()
         inventory = {
+            "qualification_scope": "full_inrou",
             "revision": {"commit": "a" * 40},
             "validators": [
                 {
@@ -641,6 +666,7 @@ class RetryTests(unittest.TestCase):
     def test_runtime_paths_come_from_native_assembly_not_new_attempt_names(self):
         prep = "/private/runtime/prep"
         arguments = {
+            "--public-inputs": [prep + "/public-inputs"],
             "--runtime-client-config": [prep + "/runtime-client.toml"],
             "--validator-client-config": [
                 prep + f"/validator-{i}-client.toml" for i in range(1, 5)
@@ -656,7 +682,7 @@ class RetryTests(unittest.TestCase):
         }
         _, binary, _ = artifact_receipts()
         result = retry.derive_runtime_paths(
-            plan, binary, {"revision": {"commit": "a" * 40}}, arguments
+            plan, binary, {"qualification_scope": "full_inrou", "revision": {"commit": "a" * 40}}, arguments
         )
         self.assertEqual(result["attempts_root"], "/private/runtime/retry-v1")
         self.assertEqual(result["prep_root"], prep)
@@ -670,18 +696,18 @@ class RetryTests(unittest.TestCase):
         arguments["--onboarding-token"] = ["/private/unrelated/token"]
         with self.assertRaises(retry.RetryError):
             retry.derive_runtime_paths(
-                plan, binary, {"revision": {"commit": "a" * 40}}, arguments
+                plan, binary, {"qualification_scope": "full_inrou", "revision": {"commit": "a" * 40}}, arguments
             )
 
     def test_full_capacity_requires_all_four_runtime_footprints(self):
         module = {"validate_plan": capacity.validate_plan}
         plan = full_plan()
-        retry.validate_full_capacity(module, plan)
+        retry.validate_full_capacity(module, plan, "full_inrou")
         plan["allocations"] = [
             row for row in plan["allocations"] if row["label"] != "runtime replica 4"
         ]
         with self.assertRaises(retry.RetryError):
-            retry.validate_full_capacity(module, plan)
+            retry.validate_full_capacity(module, plan, "full_inrou")
 
     def test_capacity_false_and_missing_headroom_fail_before_mutation(self):
         with self.assertRaises(retry.RetryError):
@@ -694,7 +720,7 @@ class RetryTests(unittest.TestCase):
         plan["allocations"][-1]["bytes"] = 1
         with self.assertRaises(retry.RetryError):
             retry.validate_full_capacity(
-                {"validate_plan": capacity.validate_plan}, plan
+                {"validate_plan": capacity.validate_plan}, plan, "full_inrou"
             )
 
     def test_errno_projection_keeps_operation_and_never_key_or_header_values(self):
@@ -714,6 +740,7 @@ class RetryTests(unittest.TestCase):
             {
                 "schema": "iroha.taira.public-reset.journal.v1",
                 "phase": "preseed",
+                "qualification_scope": "full_inrou",
                 "next_step": 5,
                 "touched_validators": ["one", "two", "three", "four"],
                 "edge_touched": False,
@@ -750,7 +777,7 @@ class RetryTests(unittest.TestCase):
             output = self.root / variant
             calls = []
             scope = "full" if variant == "full" else "basic"
-            inventory = {"qualification_scope": "inrou" if variant == "full" else "core_testnet"}
+            inventory = {"qualification_scope": "full_inrou" if variant == "full" else "core_testnet"}
 
             def native(argv, directory, *, phase, env, **kwargs):
                 self.assertEqual(env, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
@@ -946,6 +973,7 @@ class RetryTests(unittest.TestCase):
 
     def test_local_arguments_are_exact_ordered_paths(self):
         flags = (
+            ("--public-inputs", 1),
             ("--runtime-client-config", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
@@ -958,7 +986,7 @@ class RetryTests(unittest.TestCase):
         args = []
         for flag, count in flags:
             args += [flag, *["/runtime/input-" + str(index) for index in range(count)]]
-        actual, grouped = retry.local_arguments(json.dumps(args).encode())
+        actual, grouped = retry.local_arguments(json.dumps(args).encode(), "full_inrou")
         self.assertEqual(actual, args)
         self.assertEqual(len(grouped["--validator-client-config"]), 4)
         self.assertEqual(len(grouped["--validator-operator-key"]), 1)
@@ -968,10 +996,10 @@ class RetryTests(unittest.TestCase):
         offset = missing_key.index("--validator-operator-key")
         del missing_key[offset:offset + 2]
         with self.assertRaises(retry.RetryError):
-            retry.local_arguments(json.dumps(missing_key).encode())
+            retry.local_arguments(json.dumps(missing_key).encode(), "full_inrou")
         args[0] = "--private-key"
         with self.assertRaises(retry.RetryError):
-            retry.local_arguments(json.dumps(args).encode())
+            retry.local_arguments(json.dumps(args).encode(), "full_inrou")
 
     def test_phase_timing_and_failure_record_are_exclusive(self):
         with mock.patch.object(retry, "emit"):
@@ -986,6 +1014,89 @@ class RetryTests(unittest.TestCase):
         )
 
 
+class CoreScopeTests(unittest.TestCase):
+    def test_scope_steps_match_native_preseed_and_seal_boundaries(self):
+        core = retry.qualification_steps("core_testnet")
+        full = retry.qualification_steps("full_inrou")
+        self.assertEqual((len(core), len(full)), (14, 15))
+        self.assertEqual(core, tuple(step for step in full if step != "preseed"))
+        self.assertEqual((core[5], full[5], full[6]), ("start", "preseed", "start"))
+        self.assertEqual((core[12], full[13]), ("seal", "seal"))
+        for scope in (None, "inrou", "basic", "full", ""):
+            with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
+                retry.qualification_steps(scope)
+
+    def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
+        args = []
+        for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
+                            ("--validator-client-config", 4), ("--validator-operator-key", 1),
+                            ("--onboarding-token", 1), ("--validator-unit", 4),
+                            ("--edge-unit", 1), ("--known-hosts", 1)):
+            args += [flag, *[f"/public/{flag[2:]}-{index}" for index in range(count)]]
+        actual, grouped = retry.local_arguments(json.dumps(args).encode(), "core_testnet")
+        self.assertEqual(actual, args)
+        self.assertNotIn("--inrou-stage-dir", grouped)
+        apply_args = actual[actual.index("--runtime-client-config"):actual.index("--validator-unit")]
+        self.assertNotIn("--public-inputs", apply_args)
+        full = list(args)
+        at = full.index("--validator-unit")
+        full[at:at] = ["--inrou-stage-dir", "/public/inrou-stage"]
+        self.assertEqual(retry.local_arguments(json.dumps(full).encode(), "full_inrou")[0], full)
+        for wrong, scope in ((full, "core_testnet"), (args, "full_inrou"), (args[2:], "core_testnet")):
+            with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
+                retry.local_arguments(json.dumps(wrong).encode(), scope)
+
+    def test_core_capacity_reads_only_artifact_metadata(self):
+        inventory = {"qualification_scope": "core_testnet", "revision": {"commit": "a" * 40},
+                     "inrou_canary": None, "inrou_stage_tree_sha256": None,
+                     "validators": [{"slug": "taira-validator-1", "artifacts": [
+                         {"role": "config", "local_path": "/private/config.toml", "size": 101}]}],
+                     "edge": {"slug": "taira-edge", "artifacts": []}}
+        with mock.patch.object(retry, "public_file_metadata", return_value={"path": "/private/config.toml", "bytes": 101}) as metadata, \
+             mock.patch.object(retry.os, "statvfs", return_value=SimpleNamespace(f_frsize=4096, f_bsize=4096)), \
+             mock.patch.object(retry, "public_record", side_effect=AssertionError("must not read any contents")), \
+             mock.patch.object(retry.os, "walk", side_effect=AssertionError("must not walk Inrou stage")), \
+             mock.patch.object(retry, "direct", side_effect=AssertionError("no stage path admission")):
+            inputs, runtime = retry.measured_capacity_inputs(inventory, None)
+            self.assertIsNone(runtime)
+            self.assertEqual(inputs["stage_files"], [])
+            self.assertIsNone(inputs["native_sf1_manifest_bindings"])
+            metadata.assert_called_once_with("/private/config.toml")
+            for stage in ("/unrelated/inrou-stage", ""):
+                with self.assertRaises(retry.RetryError):
+                    retry.measured_capacity_inputs(inventory, stage)
+            for field in ("inrou_canary", "inrou_stage_tree_sha256"):
+                wrong = dict(inventory, **{field: {}})
+                with self.assertRaises(retry.RetryError):
+                    retry.measured_capacity_inputs(wrong, None)
+
+    def test_scope_capacity_cannot_substitute_inrou_or_omit_core_copies(self):
+        module = {"validate_plan": capacity.validate_plan}
+        retry.validate_full_capacity(module, core_plan(), "core_testnet")
+        for plan, scope in ((full_plan(), "core_testnet"), (core_plan(), "full_inrou")):
+            with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
+                retry.validate_full_capacity(module, plan, scope)
+        for index in range(4):
+            plan = core_plan()
+            plan["allocations"].pop(index)
+            with self.subTest(missing=index), self.assertRaises(retry.RetryError):
+                retry.validate_full_capacity(module, plan, "core_testnet")
+        plan = core_plan()
+        plan["allocations"][-1]["bytes"] -= 1
+        with self.assertRaises(retry.RetryError):
+            retry.validate_full_capacity(module, plan, "core_testnet")
+
+    def test_core_rollback_cursor_cannot_cross_seal_or_change_scope(self):
+        inventory = {"qualification_scope": "core_testnet", "revision": {"commit": "a" * 40}, "deployment_id": "core"}
+        value = {"qualification_scope": "core_testnet", "deployment_id": "core", "status": "rolled_back", "phase": "rolled_back",
+                 "next_step": 11, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
+                 "edge_rollback_complete": True, "rollback_next_validator": 4, "rollback_failures": [], "recovery_intent": None}
+        retry._retire_validate_terminal(inventory, value, expected_commit="a" * 40, expected_deployment="core")
+        for field, wrong in (("next_step", 12), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
+            with self.subTest(field=field, wrong=wrong), self.assertRaises(retry._retire_RebindError):
+                retry._retire_validate_terminal(inventory, dict(value, **{field: wrong}), expected_commit="a" * 40, expected_deployment="core")
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -996,6 +1107,7 @@ class WorkflowTests(unittest.TestCase):
         self.inventory = {
             "revision": {"commit": build["commit"], "source_root": "/source"},
             "qualification_scope": "core_testnet",
+            "inrou_canary": None, "inrou_stage_tree_sha256": None,
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "deployment_id": "retained",
             "authorization_nonce": "0" * 32,
@@ -1034,11 +1146,11 @@ class WorkflowTests(unittest.TestCase):
 
         args = []
         for flag, count in (
+            ("--public-inputs", 1),
             ("--runtime-client-config", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
-            ("--inrou-stage-dir", 1),
             ("--validator-unit", 4),
             ("--edge-unit", 1),
             ("--known-hosts", 1),
@@ -1056,6 +1168,7 @@ class WorkflowTests(unittest.TestCase):
             args.extend([flag, *paths])
         reference = {"path": "/public-fixture/helper.py", "sha256": "f" * 64}
         self.plan = {
+            "qualification_scope": "core_testnet",
             "runtime_root": str(self.root),
             "retired_public_imports": [],
             "attempts_root": str(self.attempts),
@@ -1075,7 +1188,7 @@ class WorkflowTests(unittest.TestCase):
             "unit_renderer": reference,
             "local_node": reference,
             "expected_mac": "00:00:00:00:00:00",
-            "capacity_plan": full_plan(),
+            "capacity_plan": core_plan(),
         }
         self.request = {
             "intent": "deployment",
@@ -1153,6 +1266,8 @@ class WorkflowTests(unittest.TestCase):
     ):
         self.calls.append(phase)
         if phase in ("assemble", "apply"):
+            self.assertEqual("--public-inputs" in argv, phase == "assemble")
+            self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
             self.assertIn("--validator-operator-key", argv)
             self.assertEqual(
                 argv[argv.index("--validator-operator-key") + 1],
@@ -1198,7 +1313,7 @@ class WorkflowTests(unittest.TestCase):
                 "authorization_nonce": inventory["authorization_nonce"],
                 "status": "completed",
                 "phase": "completed",
-                "next_step": 15,
+                "next_step": len(retry.qualification_steps(inventory["qualification_scope"])),
                 "recovery_intent": None,
                 "touched_validators": [row["slug"] for row in inventory["validators"]],
                 "edge_touched": True,
@@ -1211,7 +1326,7 @@ class WorkflowTests(unittest.TestCase):
                 ("completed", completed),
                 (
                     "deployment-proven",
-                    dict(completed, status="sealing", phase="seal", next_step=13),
+                    dict(completed, status="sealing", phase="seal", next_step=len(retry.qualification_steps(inventory["qualification_scope"])) - 2),
                 ),
             ):
                 target = self.root / "journal-v1" / kind
@@ -1282,10 +1397,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_inrou_workflow_preserves_its_explicit_scope(self):
-        self.inventory["qualification_scope"] = "inrou"
+        self.inventory["qualification_scope"] = "full_inrou"
+        self.inventory["inrou_canary"] = {"stage_tree_sha256": "a" * 64}
+        self.inventory["inrou_stage_tree_sha256"] = "a" * 64
+        self.plan["qualification_scope"] = "full_inrou"
+        self.plan["capacity_plan"] = full_plan()
+        args_path = Path(self.plan["local_args_path"])
+        args = json.loads(args_path.read_bytes())
+        at = args.index("--validator-unit")
+        args[at:at] = ["--inrou-stage-dir", "/public-fixture/inrou-stage"]
+        args_path.write_text(json.dumps(args))
         Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
         result = retry.guest_locked(self.request, self.capacity, self.attempts)
-        self.assertEqual(result["qualification_scope"], "inrou")
+        self.assertEqual(result["qualification_scope"], "full_inrou")
         self.assertEqual(self.calls.count("apply"), 1)
 
     def test_completed_scope_cannot_be_upgraded_during_recovery(self):
@@ -1294,7 +1418,7 @@ class WorkflowTests(unittest.TestCase):
             retry.guest_locked(self.request, self.capacity, self.attempts)
         target = self.root / "journal-v1/completed" / ("9" * 64 + ".json")
         value = json.loads(target.read_bytes())
-        value["qualification_scope"] = "inrou"
+        value["qualification_scope"] = "full_inrou"
         target.write_text(json.dumps(value))
         with self.assertRaisesRegex(retry.RetryError, "exact completed deployment"):
             retry.previous_attempt(self.plan)
@@ -1660,7 +1784,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
                  ('sorafs_node', 'sorafs-node')]
         for _, name in roles:
             self.file(self.bins / name, b'public executable', 0o755)
-        self.inventory = {'validators': [], 'inrou_canary': {}}
+        self.inventory = {'qualification_scope': 'full_inrou', 'validators': [], 'inrou_canary': {}}
         for index, role in enumerate(('bundle', 'guest', 'discovery'), 1):
             content = ('public ' + role + ' manifest').encode()
             self.inventory['inrou_canary'][role + '_manifest_digest_hex'] = str(index) * 64
@@ -1760,6 +1884,37 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.file(root / 'payloads/guest/aarch64/private-config', b'PRIVATE PRESERVE', 0o600)
         self.file(root / 'manifests/aarch64.to', b'PUBLIC METADATA PRESERVE', 0o400)
         return root
+
+    def test_core_prune_does_not_inspect_unrelated_stage_or_guest_store(self):
+        inventory = dict(self.inventory, qualification_scope="core_testnet", inrou_canary=None, inrou_stage_tree_sha256=None)
+        original_info = retry._retire_prune_info
+        original_marker = retry._retire_prune_marker
+        original_exists = Path.exists
+        original_lexists = retry.os.path.lexists
+        def admitted(path):
+            value = str(path)
+            self.assertFalse(any(part in value for part in ("inrou-stage", "runtime-stage", "fresh-state.after", "sorafs-data")), value)
+        def info(path, **kwargs):
+            admitted(path)
+            return original_info(path, **kwargs)
+        def marker(g, path, context, slug, kind):
+            admitted(path)
+            return original_marker(g, path, context, slug, kind)
+        def exists(path):
+            admitted(path)
+            return original_exists(path)
+        def lexists(path):
+            admitted(path)
+            return original_lexists(path)
+        with mock.patch.object(retry, "_retire_prune_info", side_effect=info), \
+             mock.patch.object(retry, "_retire_prune_marker", side_effect=marker), \
+             mock.patch.object(Path, "exists", exists), \
+             mock.patch.object(retry.os.path, "lexists", side_effect=lexists):
+            exact, chunks, protected, stores = retry._retire_prune_scopes(self.guard, self.context, inventory)
+        self.assertEqual((chunks, stores), (set(), []))
+        self.assertEqual(len(exact), 38)
+        for path in (*exact, *protected):
+            admitted(path)
 
     def test_archived_host_stage_three_payloads_are_pruned_and_resume_preserves_siblings(self):
         root = self.archived_host_stage()
@@ -2007,7 +2162,7 @@ class SupersededImportTests(unittest.TestCase):
             'cargo_lock_sha256': 'd' * 64, 'tracked_files': self.tracked, 'untracked_files': [],
         }
         closure_ref = self.record(self.runtime / 'old-inputs/source-manifest.json', self.closure, 0o644)
-        self.old = {'deployment_id': 'closed-attempt', 'authorization_nonce': 'e' * 32,
+        self.old = {'qualification_scope': 'full_inrou', 'deployment_id': 'closed-attempt', 'authorization_nonce': 'e' * 32,
                     'revision': {'branch': 'optimizations', 'commit': 'a' * 40, 'tree': 'b' * 40,
                         'source_root': str(self.source_root), 'source_manifest_path': closure_ref['path'],
                         'source_manifest_sha256': closure_ref['sha256'], 'source_closure_sha256': 'c' * 64,
@@ -2027,7 +2182,7 @@ class SupersededImportTests(unittest.TestCase):
         inventory_ref = self.record(self.runtime / 'old-inputs/inventory.json', self.old)
         self.terminal = {'deployment_id': self.old['deployment_id'], 'inventory_sha256': inventory_ref['sha256'],
             'authorization_sha256': 'a' * 64, 'authorization_nonce': 'e' * 32,
-            'status': 'rolled_back', 'phase': 'rolled_back', 'next_step': 7, 'recovery_intent': None,
+            'qualification_scope': 'full_inrou', 'status': 'rolled_back', 'phase': 'rolled_back', 'next_step': 7, 'recovery_intent': None,
             'touched_validators': list(retry.RETIRE_SLUGS[:-1]), 'edge_touched': False,
             'edge_rollback_complete': False, 'rollback_next_validator': 4, 'rollback_failures': []}
         terminal_ref = self.record(self.runtime / 'journal-v1/rolled-back' / ('a' * 64 + '.json'), self.terminal)

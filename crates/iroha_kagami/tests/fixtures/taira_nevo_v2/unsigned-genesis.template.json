@@ -103,6 +103,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
@@ -139,6 +141,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
@@ -164,6 +168,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
@@ -187,6 +193,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
               "logo": null,
@@ -236,6 +244,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
@@ -416,7 +426,8 @@
               },
               "payout_account": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "lifecycle": {
-                "state": "staged"
+                "state": "staged",
+                "value": null
               }
             }
           }
@@ -430,13 +441,15 @@
               },
               "revision": 1,
               "eligibility": {
-                "mode": "enrolled_or_route_default"
+                "mode": "enrolled_or_route_default",
+                "value": null
               },
               "rules": [
                 {
                   "id": "taira_writes",
                   "effect": {
-                    "effect": "allow"
+                    "effect": "allow",
+                    "value": null
                   },
                   "selectors": [
                     {
@@ -472,7 +485,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-"wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
+                        "wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
                       }
                     },
                     {
@@ -621,6 +634,17 @@
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
                 "name": "CanRegisterSmartContractCode",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+              "object": {
+                "name": "CanManageSmartContractCodeRegistrars",
                 "payload": null
               }
             }

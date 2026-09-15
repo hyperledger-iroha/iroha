@@ -3247,12 +3247,11 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.RunnerError, "at most"):
             MODULE.verify_seed_policy(tuple(range(MODULE.MAX_FAULT_SEEDS + 1)))
 
-    def test_fault_timeout_covers_activation_and_nonfinalized_expiry_floor(self) -> None:
-        expected_floor = (
-            MODULE.PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS
-            + MODULE.FAULT_NONFINALIZED_EXPIRY_TRIALS
-            * (MODULE.FAULT_BUNDLE_EXPIRY_BLOCKS + 1)
-        ) * MODULE.REAL_PROCESS_BLOCK_CADENCE_SECONDS
+    def test_fault_timeout_covers_nonfinalized_expiry_without_activation_delay(self) -> None:
+        # Four trials must pass their inclusive 96-block expiry at a four-second
+        # cadence. Genesis privacy activation adds no blocks to that budget.
+        expected_floor = 1_552
+        self.assertFalse(hasattr(MODULE, "PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS"))
         self.assertEqual(MODULE.FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS, expected_floor)
         self.assertGreater(MODULE.DEFAULT_HARNESS_TIMEOUT_SECONDS, expected_floor)
 
@@ -3262,6 +3261,11 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             )
         MODULE.validate_campaign_timeout([{"kind": "fault"}], expected_floor)
         MODULE.validate_campaign_timeout([{"kind": "benchmark"}], 1)
+        for kind in ("fault", "benchmark"):
+            for invalid in (0, -1):
+                with self.subTest(kind=kind, timeout=invalid):
+                    with self.assertRaisesRegex(MODULE.RunnerError, "positive"):
+                        MODULE.validate_campaign_timeout([{"kind": kind}], invalid)
         with self.assertRaisesRegex(MODULE.RunnerError, "warmups"):
             MODULE.build_configuration(
                 3,

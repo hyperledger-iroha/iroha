@@ -11251,6 +11251,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "pending certified Fetch differs from the exact body-pipeline owner",
             ));
         }
+        // The coordinator has durable custody but has not yet applied
+        // BodyAvailable. Keep the existing exact guard across that interval:
+        // a retransmission must not treat the retained bytes as unowned and
+        // enqueue a second completion. The authenticated manifest may refine
+        // the certified-only Fetch's original None, never its tag or identity.
+        let body_pipeline_continuation = self
+            .plan_body_pipeline_owner(candidate.fetch_tag(), &response.manifest)
+            .map_err(|error| EffectTransportError::FailClosed(error.to_string()))?;
+        if !body_pipeline_continuation.already_owned {
+            return Err(EffectTransportError::FailClosed(
+                "certified Fetch continuation lost its incumbent body guard".to_owned(),
+            ));
+        }
         let claim_preflight = self
             .outstanding_requests
             .preflight_authenticated_response_claim(authenticated)
@@ -11268,6 +11281,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             certified,
             body_pipeline_key: key,
             body_pipeline_owner,
+            body_pipeline_continuation,
             manifest: response.manifest.clone(),
             durable_receipt: durable_receipt.clone(),
             response_hash: candidate.response_hash,
@@ -11325,11 +11339,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .expect("preflighted pending Fetch remains installed");
         assert_eq!(removed, prepared.pending);
         self.commit_certified_fetch_retirement(prepared.certified);
-        let removed_owner = self
-            .body_pipeline_owners
-            .remove(&prepared.body_pipeline_key)
-            .expect("preflighted body-pipeline owner remains installed");
-        assert_eq!(removed_owner, prepared.body_pipeline_owner);
+        // This is an inert comparison guard, not another physical completion.
+        // The coordinator retains the sole response carrier. Ordinary body
+        // rediscovery coalesces behind this exact tag/manifest until the normal
+        // Store publication, cancellation, or view/Decision cleanup retires it.
+        self.commit_body_pipeline_owner(prepared.body_pipeline_continuation);
         let previous = self.recovered_bodies.insert(
             prepared.body_pipeline_key,
             (prepared.manifest, prepared.durable_receipt.clone()),

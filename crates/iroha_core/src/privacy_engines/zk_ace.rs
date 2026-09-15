@@ -8,7 +8,7 @@
 //! no caller-selected backend, verifier key, parameter record, or legacy generic envelope.
 //!
 //! Every STARK commitment, Fiat--Shamir challenge, FRI phase, and query index uses the shared typed
-//! six-lane Goldilocks digest. The final binary-FRI geometry has an 8x LDE, Fp4 challenges, and 136
+//! opaque SHA3-384 digest. The final binary-FRI geometry has an 8x LDE, Fp4 challenges, and 136
 //! distinct queries selected without replacement. Production remains fail-closed until an
 //! independent qROM Fiat--Shamir reduction and implementation review are registered.
 #[cfg(test)]
@@ -140,15 +140,15 @@ pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:trans
 /// Whether the sole first-release ZK-ACE engine is production-qualified.
 pub const ZK_ACE_FULL_ENGINE_AVAILABLE_V1: bool = false;
 // TODO: Enable the production boundary only after the final qROM Fiat--Shamir
-// reduction, six-lane collision/multi-target accounting, and independent
+// reduction, SHA3-384 outer-hash and constrained Poseidon collision/multi-target accounting, and independent
 // implementation review are registered against this exact profile digest.
 /// Outstanding release evidence required before ZK-ACE can be activated.
-pub const ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1: &[u8] = b"independent-qrom-fiat-shamir-reduction+six-lane-collision-and-multi-target-accounting+implementation-review-not-yet-registered";
+pub const ZK_ACE_QROM_CERTIFICATION_BLOCKER_V1: &[u8] = b"independent-qrom-fiat-shamir-reduction+sha3-384-outer-and-constrained-poseidon-collision-and-multi-target-accounting+implementation-review-not-yet-registered";
 /// Source and relation description frozen into the compiled profile.
-pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:goldilocks-digest384-v1:identity-lanes6-independent:replay-lanes6-independent:typed-catalog+protocol+profile+tree-role+phase+level+index+lane+counter-domains:fp4-deep-ali:independent-pre-batching-fri-mask:binary-fp4-fri:blowup8:queries136:classical-rom128:qrom-certification-pending:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
+pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon-x7-execution-trace:outer-sha3-384-opaque48-v1:identity-lanes6-independent:replay-lanes6-independent:typed-catalog+protocol+profile+tree-role+phase+level+index+counter-byte-frames:fp4-deep-ali:independent-pre-batching-fri-mask:binary-fp4-fri:blowup8:queries136:classical-rom128:qrom-certification-pending:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
-    b"ZKA1:fixed-shape:scalars-big-endian:digest384-six-u64-little-endian:2131222:strict-exact:no-lengths:no-generic-envelope";
+    b"ZKA1:fixed-shape:scalars-big-endian:outer-digest48-opaque-bytes:2131222:strict-exact:no-lengths:no-generic-envelope";
 /// Exact low-level AIR relation schema frozen into the compiled profile.
 pub const ZK_ACE_AIR_RELATION_SCHEMA_V1: &[u8] = AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1;
 /// Exact typed authorization projection frozen into the compiled profile.
@@ -175,8 +175,8 @@ pub const ZK_ACE_MAX_CLASSICAL_ROM_QUERY_LOG2_V1: u8 = MAX_CLASSICAL_ROM_QUERY_L
 /// used by a Merkle tree, Fiat--Shamir transcript, challenge, FRI phase, or
 /// query sampler.
 pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x8b, 0x59, 0x7e, 0xf6, 0x41, 0xd2, 0xa7, 0xe8, 0x0a, 0x0b, 0xc7, 0x2b, 0x29, 0x74, 0x8b, 0x5b,
-    0x18, 0x71, 0xf4, 0x89, 0x8f, 0x0a, 0x19, 0x99, 0x28, 0xa0, 0xf8, 0x74, 0x00, 0x23, 0x90, 0x60,
+    0xb3, 0xee, 0xcf, 0x3d, 0x57, 0x82, 0x6f, 0xbc, 0x6f, 0xa0, 0xdc, 0x68, 0x11, 0x63, 0x17, 0x71,
+    0x62, 0x97, 0x71, 0xee, 0x1f, 0x30, 0xe7, 0x97, 0x57, 0xd9, 0x30, 0x09, 0xf9, 0xe1, 0xeb, 0x4d,
 ];
 /// Return the frozen digest of the exact verifier profile.
 #[must_use]
@@ -547,7 +547,7 @@ mod tests {
             .expect("STARK profile is UTF-8");
         assert!(stark_profile.contains("blowup=8"));
         assert!(stark_profile.contains("queries=136"));
-        assert!(stark_profile.contains("digest384-six-u64-little-endian"));
+        assert!(stark_profile.contains("outer-digest48-opaque-bytes"));
         assert!(stark_profile.contains("classical-rom-bcs-work-normalized-bits128"));
         assert!(stark_profile.contains("qrom-qualification=unavailable"));
         assert!(stark_profile.contains("activation=unavailable"));

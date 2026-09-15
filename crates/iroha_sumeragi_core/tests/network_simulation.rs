@@ -699,7 +699,7 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
         assert!(
             simulation.nodes[source]
                 .reducer
-                .outbound_messages()
+                .retained_control_messages()
                 .any(|message| matches!(
                     message,
                     ConsensusMessageV2::QuorumCertificate(certificate)
@@ -767,7 +767,7 @@ fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
         assert!(
             simulation.nodes[lagger]
                 .reducer
-                .outbound_messages()
+                .retained_control_messages()
                 .any(|message| matches!(
                     message,
                     ConsensusMessageV2::QuorumCertificate(certificate)

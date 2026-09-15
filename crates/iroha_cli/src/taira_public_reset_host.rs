@@ -5,11 +5,14 @@ pub(crate) mod maintenance;
 #[path = "taira_public_reset_stopped_runtime.rs"]
 pub(super) mod stopped_runtime;
 
+#[path = "taira_public_reset_occupied.rs"]
+pub(super) mod occupied;
+
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
     AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1, EndpointV1, InventoryV1,
-    PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome,
-    TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
+    PUBLIC_ROOT, PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1,
+    RecoveryOutcome, TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
     ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
     pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
     validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
@@ -715,6 +718,9 @@ fn validator_start_timeout_secs(inventory: &InventoryV1, host_slug: &str) -> Res
         .iter()
         .find(|validator| validator.slug == host_slug)
         .ok_or_else(|| eyre!("start timeout requires an admitted validator"))?;
+    if !inventory.qualification_scope.includes_inrou() {
+        return Ok(inventory.timeouts.start_secs);
+    }
     let carrier = inrou_stage_carrier(inventory, &validator.endpoint.host_identity_sha256)?;
     if carrier.slug == validator.slug {
         inventory
@@ -1601,7 +1607,7 @@ fn validate_prepared_mutation_envelope(
             ],
             "prepared Inrou stage identity",
         )?;
-        let canary = &admitted.inventory.inrou_canary;
+        let canary = admitted.inventory.inrou_canary()?;
         for (field, expected) in [
             ("service_name", canary.service_name.as_str()),
             ("service_version", canary.service_version.as_str()),
@@ -3370,8 +3376,8 @@ fn validate_host_artifact_request(
             .ok_or_else(|| eyre!("Inrou stage upload inventory has no validator carrier"))?;
         if target.slug() != carrier.slug
             || request.artifact_role != INROU_STAGE_UPLOAD_ROLE_V1
-            || request.artifact_sha256 != inventory.inrou_canary.stage_tree_sha256
-            || request.artifact_size != inventory.inrou_canary.stage_bytes
+            || request.artifact_sha256 != inventory.inrou_canary()?.stage_tree_sha256
+            || request.artifact_size != inventory.inrou_canary()?.stage_bytes
             || request.artifact_mode != 0o400
         {
             return Err(eyre!(
@@ -3574,7 +3580,11 @@ fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Opt
 fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<()> {
     let unit = match &admitted.target {
         HostTarget::Validator(validator) => {
-            attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
+            attest_loaded_systemd_unit(
+                validator,
+                &validator.systemd_unit_sha256,
+                admitted.action_deadline,
+            )?;
             validator.systemd_unit.as_str()
         }
         HostTarget::Edge(edge) => {
@@ -4144,7 +4154,9 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     if uname_system != b"Linux\n" || uname_machine != b"aarch64\n" {
         return Err(eyre!("host platform is not exact Linux/AArch64"));
     }
-    if matches!(&admitted.target, HostTarget::Validator(_)) {
+    if admitted.inventory.qualification_scope.includes_inrou()
+        && matches!(&admitted.target, HostTarget::Validator(_))
+    {
         require_kvm_api_v12()?;
     }
     if admitted.target.is_vacant() {
@@ -4162,40 +4174,15 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     }
     match &admitted.target {
         HostTarget::Validator(validator) => {
-            attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
-            require_root_directory(
-                Path::new(&validator.admitted_release()?.release_root),
-                false,
-                "validator rollback release",
+            occupied::verify_prior_artifacts(validator, true)?;
+            attest_loaded_systemd_unit(
+                validator,
+                &validator
+                    .admitted_release()?
+                    .artifact("validator_unit")?
+                    .sha256,
+                admitted.action_deadline,
             )?;
-            for (name, expected) in [
-                (
-                    "bin/iroha3d_taira",
-                    &validator.admitted_release()?.iroha3d_sha256,
-                ),
-                ("bin/iroha", &validator.admitted_release()?.iroha_cli_sha256),
-                (
-                    "bin/sorafs-node",
-                    &validator.admitted_release()?.sorafs_node_sha256,
-                ),
-                (
-                    "config/config.toml",
-                    &validator.admitted_release()?.config_sha256,
-                ),
-                (
-                    "genesis/genesis.json",
-                    &validator.admitted_release()?.genesis_sha256,
-                ),
-                (
-                    "genesis/genesis.sha256",
-                    &validator.admitted_release()?.genesis_hash_sha256,
-                ),
-            ] {
-                verify_regular_hash(
-                    &Path::new(&validator.admitted_release()?.release_root).join(name),
-                    expected,
-                )?;
-            }
             let active = run_host_command(
                 SYSTEMCTL,
                 &[
@@ -4725,7 +4712,9 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             });
         }
     }
-    if let Some(carrier) = validators.first() {
+    if admitted.inventory.qualification_scope.includes_inrou()
+        && let Some(carrier) = validators.first()
+    {
         for action in [HostAction::InrouStageUpload, HostAction::Preseed] {
             plan.push(HostActionKeyV1 {
                 host_slug: carrier.slug.clone(),
@@ -5363,7 +5352,8 @@ fn revalidate_cached_action_postcondition(
             // receipt. Visible release/selector names do not prove their last
             // rename reached disk; finish publication before acknowledging it.
             sync_release_tree(&candidate, admitted)?;
-            sync_selected_release_namespaces(&candidate, sync_directory)
+            sync_selected_release_namespaces(&candidate, sync_directory)?;
+            occupied::install_validator_unit(admitted)
         }
         HostAction::Reset => {
             verify_fresh_state(admitted)?;
@@ -5394,7 +5384,9 @@ fn revalidate_cached_action_postcondition(
                 label,
                 &validator.systemd_unit,
             )?;
-            verify_preseed_barrier_for_start(admitted)?;
+            if admitted.inventory.qualification_scope.includes_inrou() {
+                verify_preseed_barrier_for_start(admitted)?;
+            }
             require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
             attest_validator_process(admitted, validator, &candidate, true)
         }
@@ -5634,6 +5626,17 @@ fn execute_host_action(
             };
             if validator.is_vacant() {
                 require_vacant_host_precondition(admitted)?;
+            } else if !ensure_host_receipt_dir(admitted)?
+                .join(manager_intent_name("stop")?)
+                .exists()
+            {
+                occupied::verify_prior_artifacts(validator, true)?;
+                attest_validator_process(
+                    admitted,
+                    validator,
+                    Path::new(&validator.admitted_release()?.release_root),
+                    false,
+                )?;
             }
             stop_unit(admitted, "stop", &validator.systemd_unit)?;
             Ok((0, 0, "validator stopped".to_owned()))
@@ -5643,6 +5646,7 @@ fn execute_host_action(
                 return Err(eyre!("install action requires a validator target"));
             };
             install_release(admitted)?;
+            occupied::install_validator_unit(admitted)?;
             Ok((0, 0, "validator release installed and selected".to_owned()))
         }
         HostAction::Reset => {
@@ -5665,14 +5669,16 @@ fn execute_host_action(
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("start action requires a validator target"));
             };
-            let carrier = inrou_stage_carrier(
-                &admitted.inventory,
-                &validator.endpoint.host_identity_sha256,
-            )?;
-            if carrier.slug == validator.slug {
-                preseed_inrou_stores(admitted, false)?;
-            } else {
-                verify_preseed_barrier_for_start(admitted)?;
+            if admitted.inventory.qualification_scope.includes_inrou() {
+                let carrier = inrou_stage_carrier(
+                    &admitted.inventory,
+                    &validator.endpoint.host_identity_sha256,
+                )?;
+                if carrier.slug == validator.slug {
+                    preseed_inrou_stores(admitted, false)?;
+                } else {
+                    verify_preseed_barrier_for_start(admitted)?;
+                }
             }
             start_unit(admitted, "start", &validator.systemd_unit)?;
             let release = Path::new(&validator.service_root)
@@ -5687,7 +5693,9 @@ fn execute_host_action(
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("restart action requires a validator target"));
             };
-            verify_preseed_barrier_for_start(admitted)?;
+            if admitted.inventory.qualification_scope.includes_inrou() {
+                verify_preseed_barrier_for_start(admitted)?;
+            }
             restart_unit(admitted, validator)?;
             let release = Path::new(&validator.service_root)
                 .join("releases")
@@ -5921,9 +5929,9 @@ fn validate_inrou_stage_upload_manifest(
     manifest: &InrouStageUploadManifestV1,
 ) -> Result<()> {
     if manifest.schema != INROU_STAGE_UPLOAD_SCHEMA_V1
-        || manifest.stage_tree_sha256 != admitted.inventory.inrou_canary.stage_tree_sha256
-        || manifest.stage_tree_sha256 != admitted.authorization.claims.inrou_stage_tree_sha256
-        || manifest.stage_bytes != admitted.inventory.inrou_canary.stage_bytes
+        || manifest.stage_tree_sha256 != admitted.inventory.inrou_canary()?.stage_tree_sha256
+        || manifest.stage_tree_sha256 != admitted.authorization.claims.inrou_stage_hash()?
+        || manifest.stage_bytes != admitted.inventory.inrou_canary()?.stage_bytes
         || manifest.files.is_empty()
         || manifest.files.len() > MAX_INROU_STAGE_FILES_V1
     {
@@ -5966,21 +5974,21 @@ fn validate_inrou_stage_upload_manifest(
     for (path, expected) in [
         (
             INROU_STAGE_RECEIPT_FILE_V1,
-            admitted.inventory.inrou_canary.receipt_sha256.as_str(),
+            admitted.inventory.inrou_canary()?.receipt_sha256.as_str(),
         ),
         (
             INROU_STAGE_CONTAINER_FILE_V1,
-            admitted.inventory.inrou_canary.container_sha256.as_str(),
+            admitted.inventory.inrou_canary()?.container_sha256.as_str(),
         ),
         (
             INROU_STAGE_SERVICE_FILE_V1,
-            admitted.inventory.inrou_canary.service_sha256.as_str(),
+            admitted.inventory.inrou_canary()?.service_sha256.as_str(),
         ),
         (
             INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .bundle_payload_sha256
                 .as_str(),
         ),
@@ -5988,7 +5996,7 @@ fn validate_inrou_stage_upload_manifest(
             INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .bundle_manifest_sha256
                 .as_str(),
         ),
@@ -5996,7 +6004,7 @@ fn validate_inrou_stage_upload_manifest(
             INROU_STAGE_GUEST_MANIFEST_FILE_V1,
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .guest_manifest_sha256
                 .as_str(),
         ),
@@ -6004,7 +6012,7 @@ fn validate_inrou_stage_upload_manifest(
             INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .discovery_document_sha256
                 .as_str(),
         ),
@@ -6012,7 +6020,7 @@ fn validate_inrou_stage_upload_manifest(
             INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .discovery_manifest_sha256
                 .as_str(),
         ),
@@ -6263,47 +6271,39 @@ fn validate_host_inrou_stage(admitted: &HostAdmission, root: &Path) -> Result<()
         update_frame(&mut digest, hash.as_bytes());
     }
     if files.is_empty()
-        || total != admitted.inventory.inrou_canary.stage_bytes
-        || hex::encode(digest.finalize()) != admitted.inventory.inrou_canary.stage_tree_sha256
-        || admitted.inventory.inrou_canary.stage_tree_sha256
-            != admitted.authorization.claims.inrou_stage_tree_sha256
+        || total != admitted.inventory.inrou_canary()?.stage_bytes
+        || hex::encode(digest.finalize()) != admitted.inventory.inrou_canary()?.stage_tree_sha256
+        || admitted.inventory.inrou_canary()?.stage_tree_sha256
+            != admitted.authorization.claims.inrou_stage_hash()?
     {
         return Err(eyre!(
             "host Inrou stage tree differs from its signed closure"
         ));
     }
+    let canary = admitted.inventory.inrou_canary()?;
     for (path, expected) in [
-        (
-            INROU_STAGE_RECEIPT_FILE_V1,
-            &admitted.inventory.inrou_canary.receipt_sha256,
-        ),
-        (
-            INROU_STAGE_CONTAINER_FILE_V1,
-            &admitted.inventory.inrou_canary.container_sha256,
-        ),
-        (
-            INROU_STAGE_SERVICE_FILE_V1,
-            &admitted.inventory.inrou_canary.service_sha256,
-        ),
+        (INROU_STAGE_RECEIPT_FILE_V1, &canary.receipt_sha256),
+        (INROU_STAGE_CONTAINER_FILE_V1, &canary.container_sha256),
+        (INROU_STAGE_SERVICE_FILE_V1, &canary.service_sha256),
         (
             INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
-            &admitted.inventory.inrou_canary.bundle_payload_sha256,
+            &canary.bundle_payload_sha256,
         ),
         (
             INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
-            &admitted.inventory.inrou_canary.bundle_manifest_sha256,
+            &canary.bundle_manifest_sha256,
         ),
         (
             INROU_STAGE_GUEST_MANIFEST_FILE_V1,
-            &admitted.inventory.inrou_canary.guest_manifest_sha256,
+            &canary.guest_manifest_sha256,
         ),
         (
             INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
-            &admitted.inventory.inrou_canary.discovery_document_sha256,
+            &canary.discovery_document_sha256,
         ),
         (
             INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
-            &admitted.inventory.inrou_canary.discovery_manifest_sha256,
+            &canary.discovery_manifest_sha256,
         ),
     ] {
         if files.get(path).map(|(_, hash)| hash) != Some(expected) {
@@ -6322,41 +6322,44 @@ fn validate_host_inrou_stage(admitted: &HostAdmission, root: &Path) -> Result<()
         || receipt.sorafs_retention_epoch == 0
         || receipt.placement_targets != expected_placement_targets
         || receipt.mutation_mode != "deploy"
-        || receipt.service_name != admitted.inventory.inrou_canary.service_name
-        || receipt.service_version != admitted.inventory.inrou_canary.service_version
+        || receipt.service_name != admitted.inventory.inrou_canary()?.service_name
+        || receipt.service_version != admitted.inventory.inrou_canary()?.service_version
         || receipt.container_file != INROU_STAGE_CONTAINER_FILE_V1
         || receipt.service_file != INROU_STAGE_SERVICE_FILE_V1
         || receipt.bundle_payload_file != INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1
         || receipt.bundle_manifest_file != INROU_STAGE_BUNDLE_MANIFEST_FILE_V1
-        || receipt.bundle_hash != admitted.inventory.inrou_canary.bundle_hash
-        || receipt.bundle_content_cid != admitted.inventory.inrou_canary.bundle_content_cid
+        || receipt.bundle_hash != admitted.inventory.inrou_canary()?.bundle_hash
+        || receipt.bundle_content_cid != admitted.inventory.inrou_canary()?.bundle_content_cid
         || receipt.bundle_manifest_digest_hex
-            != admitted.inventory.inrou_canary.bundle_manifest_digest_hex
+            != admitted
+                .inventory
+                .inrou_canary()?
+                .bundle_manifest_digest_hex
         || receipt.guest_isa != SoraInrouGuestIsaV1::Aarch64.as_str()
         || receipt.guest_payload_dir != INROU_STAGE_GUEST_PAYLOAD_DIR_V1
         || receipt.guest_manifest_file != INROU_STAGE_GUEST_MANIFEST_FILE_V1
-        || receipt.guest_content_cid != admitted.inventory.inrou_canary.guest_content_cid
+        || receipt.guest_content_cid != admitted.inventory.inrou_canary()?.guest_content_cid
         || receipt.guest_manifest_digest_hex
-            != admitted.inventory.inrou_canary.guest_manifest_digest_hex
+            != admitted.inventory.inrou_canary()?.guest_manifest_digest_hex
         || receipt.discovery_payload_dir != INROU_STAGE_DISCOVERY_PAYLOAD_DIR_V1
         || receipt.discovery_manifest_file != INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1
         || receipt.discovery_document_hash
-            != admitted.inventory.inrou_canary.discovery_document_hash
-        || receipt.discovery_content_cid != admitted.inventory.inrou_canary.discovery_content_cid
+            != admitted.inventory.inrou_canary()?.discovery_document_hash
+        || receipt.discovery_content_cid != admitted.inventory.inrou_canary()?.discovery_content_cid
         || receipt.discovery_manifest_digest_hex
             != admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .discovery_manifest_digest_hex
-        || receipt.public_discovery_url != admitted.inventory.inrou_canary.public_discovery_url
+        || receipt.public_discovery_url != admitted.inventory.inrou_canary()?.public_discovery_url
         || receipt.public_discovery_cid_host_url
             != admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .public_discovery_cid_host_url
         || receipt.container_manifest_hash
-            != admitted.inventory.inrou_canary.container_manifest_hash
-        || receipt.service_manifest_hash != admitted.inventory.inrou_canary.service_manifest_hash
+            != admitted.inventory.inrou_canary()?.container_manifest_hash
+        || receipt.service_manifest_hash != admitted.inventory.inrou_canary()?.service_manifest_hash
     {
         return Err(eyre!(
             "host Inrou stage receipt differs from inventory semantics"
@@ -6427,21 +6430,22 @@ fn validate_host_inrou_stage(admitted: &HostAdmission, root: &Path) -> Result<()
     if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
         || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
         || bundle.service.placement_targets != expected_placement_targets
-        || bundle.service.service_name.to_string() != admitted.inventory.inrou_canary.service_name
-        || bundle.service.service_version != admitted.inventory.inrou_canary.service_version
+        || bundle.service.service_name.to_string()
+            != admitted.inventory.inrou_canary()?.service_name
+        || bundle.service.service_version != admitted.inventory.inrou_canary()?.service_version
         || bundle.service.replicas.get() != 4
-        || route.host != admitted.inventory.inrou_canary.route_host
-        || route.path_prefix != admitted.inventory.inrou_canary.route_path_prefix
+        || route.host != admitted.inventory.inrou_canary()?.route_host
+        || route.path_prefix != admitted.inventory.inrou_canary()?.route_path_prefix
         || bundle.container.lifecycle.healthcheck_path.as_deref()
-            != Some(admitted.inventory.inrou_canary.healthcheck_path.as_str())
+            != Some(admitted.inventory.inrou_canary()?.healthcheck_path.as_str())
         || bundle.container_manifest_hash().to_string()
-            != admitted.inventory.inrou_canary.container_manifest_hash
+            != admitted.inventory.inrou_canary()?.container_manifest_hash
         || bundle.service_manifest_hash().to_string()
-            != admitted.inventory.inrou_canary.service_manifest_hash
+            != admitted.inventory.inrou_canary()?.service_manifest_hash
         || published.published_artifact.manifest_digest_hex
-            != admitted.inventory.inrou_canary.guest_manifest_digest_hex
+            != admitted.inventory.inrou_canary()?.guest_manifest_digest_hex
         || published.published_artifact.content_cid
-            != admitted.inventory.inrou_canary.guest_content_cid
+            != admitted.inventory.inrou_canary()?.guest_content_cid
     {
         return Err(eyre!(
             "host Inrou stage bundle differs from signed canary semantics"
@@ -6463,7 +6467,7 @@ fn validate_host_inrou_stage(admitted: &HostAdmission, root: &Path) -> Result<()
     )?;
     if payload_bytes != payload_snapshot.len
         || payload_hash != bundle.container.bundle_hash
-        || payload_hash.to_string() != admitted.inventory.inrou_canary.bundle_hash
+        || payload_hash.to_string() != admitted.inventory.inrou_canary()?.bundle_hash
     {
         return Err(eyre!(
             "host Inrou stage bundle payload hash is inconsistent"
@@ -6649,7 +6653,7 @@ fn verify_exact_release_tree(
 
 fn copy_verified_file(source: &Path, destination: &Path, artifact: &ArtifactV1) -> Result<()> {
     if destination.exists() {
-        return sync_verified_regular_hash(destination, &artifact.sha256);
+        return sync_copied_artifact(destination, artifact);
     }
     let (mut input, snapshot) = open_pinned_regular(source, "uploaded artifact")?;
     if snapshot.len != artifact.size {
@@ -6666,10 +6670,27 @@ fn copy_verified_file(source: &Path, destination: &Path, artifact: &ArtifactV1) 
         .write(true)
         .create_new(true)
         .open(destination)?;
+    #[cfg(unix)]
+    output.set_permissions(fs::Permissions::from_mode(u32::from(artifact.mode)))?;
     std::io::copy(&mut input, &mut output)?;
     output.sync_all()?;
     ensure_pinned_unchanged(source, "uploaded artifact", &input, &snapshot)?;
-    verify_regular_hash(destination, &artifact.sha256)
+    sync_copied_artifact(destination, artifact)
+}
+
+fn sync_copied_artifact(destination: &Path, artifact: &ArtifactV1) -> Result<()> {
+    let (mut file, snapshot) = open_pinned_regular(destination, "installed artifact")?;
+    #[cfg(unix)]
+    if snapshot.uid != rustix::process::geteuid().as_raw()
+        || snapshot.mode & 0o7777 != u32::from(artifact.mode)
+    {
+        return Err(eyre!("installed artifact exact owner or mode drifted"));
+    }
+    if snapshot.len != artifact.size || hash_reader(&mut file)? != artifact.sha256 {
+        return Err(eyre!("installed artifact exact size or bytes drifted"));
+    }
+    file.sync_all()?;
+    ensure_pinned_unchanged(destination, "installed artifact", &file, &snapshot)
 }
 
 fn ensure_generated_subdirectories(root: &Path, target: &Path) -> Result<()> {
@@ -7204,14 +7225,20 @@ fn validator_preseed_store(
             != Some(
                 admitted
                     .inventory
-                    .inrou_canary
+                    .inrou_canary()?
                     .guest_manifest_digest_hex
                     .as_str(),
             )
         || inrou
             .get("trusted_guest_content_cid")
             .and_then(toml::Value::as_str)
-            != Some(admitted.inventory.inrou_canary.guest_content_cid.as_str())
+            != Some(
+                admitted
+                    .inventory
+                    .inrou_canary()?
+                    .guest_content_cid
+                    .as_str(),
+            )
     {
         return Err(eyre!(
             "installed validator Inrou trust anchor differs from the signed stage"
@@ -7391,7 +7418,7 @@ fn parse_preseed_session_receipt(
         (
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .bundle_manifest_digest_hex
                 .as_str(),
             INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
@@ -7399,7 +7426,7 @@ fn parse_preseed_session_receipt(
         (
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .guest_manifest_digest_hex
                 .as_str(),
             INROU_STAGE_GUEST_MANIFEST_FILE_V1,
@@ -7407,7 +7434,7 @@ fn parse_preseed_session_receipt(
         (
             admitted
                 .inventory
-                .inrou_canary
+                .inrou_canary()?
                 .discovery_manifest_digest_hex
                 .as_str(),
             INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
@@ -7448,6 +7475,7 @@ fn parse_preseed_session_receipt(
 }
 
 fn preseed_inrou_stores(admitted: &HostAdmission, allow_ingest: bool) -> Result<()> {
+    admitted.inventory.inrou_canary()?;
     let stage_root = inrou_stage_root(admitted)?;
     validate_host_inrou_stage(admitted, &stage_root)?;
     let host_identity = admitted.target.endpoint().host_identity_sha256.as_str();
@@ -7520,6 +7548,7 @@ fn preseed_inrou_stores(admitted: &HostAdmission, allow_ingest: bool) -> Result<
 }
 
 fn verify_preseed_barrier_for_start(admitted: &HostAdmission) -> Result<()> {
+    admitted.inventory.inrou_canary()?;
     let host_identity = admitted.target.endpoint().host_identity_sha256.as_str();
     let carrier = inrou_stage_carrier(&admitted.inventory, host_identity)?;
     validate_host_inrou_stage(admitted, &inrou_stage_root(admitted)?)?;
@@ -7532,17 +7561,17 @@ fn verify_preseed_barrier_for_start(admitted: &HostAdmission) -> Result<()> {
     let expected_artifacts = BTreeSet::from([
         admitted
             .inventory
-            .inrou_canary
+            .inrou_canary()?
             .bundle_manifest_digest_hex
             .as_str(),
         admitted
             .inventory
-            .inrou_canary
+            .inrou_canary()?
             .guest_manifest_digest_hex
             .as_str(),
         admitted
             .inventory
-            .inrou_canary
+            .inrou_canary()?
             .discovery_manifest_digest_hex
             .as_str(),
     ]);
@@ -7831,17 +7860,7 @@ fn ensure_manager_intent(
     verb: &str,
     target_unit: &str,
 ) -> Result<(ManagerIntentV1, bool)> {
-    if !matches!(verb, "stop" | "start" | "restart" | "reload")
-        || target_unit.is_empty()
-        || target_unit.len() > 255
-        || !target_unit
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
-    {
-        return Err(eyre!(
-            "manager operation argv is outside its closed grammar"
-        ));
-    }
+    manager_command_arguments(verb, target_unit)?;
     let directory = ensure_host_receipt_dir(admitted)?;
     let name = manager_intent_name(label)?;
     let path = directory.join(&name);
@@ -7877,6 +7896,7 @@ fn validate_manager_intent(
     target_unit: &str,
     intent: &ManagerIntentV1,
 ) -> Result<()> {
+    manager_command_arguments(verb, target_unit)?;
     if intent.schema != MANAGER_INTENT_SCHEMA_V1
         || intent.action != label
         || intent.host_slug != admitted.target.slug()
@@ -7902,6 +7922,7 @@ fn validate_manager_intent_for_session(
     target_unit: &str,
     intent: &ManagerIntentV1,
 ) -> Result<()> {
+    manager_command_arguments(verb, target_unit)?;
     if intent.schema != MANAGER_INTENT_SCHEMA_V1
         || intent.action != label
         || intent.host_slug != admitted.target.slug()
@@ -8035,10 +8056,8 @@ fn classify_manager_operation_evidence(
         return Ok(ManagerOperationEvidence::Pending);
     }
     let invocation = values["InvocationID"];
-    let expected_argv = format!(
-        "argv[]={} {} {}",
-        SYSTEMCTL, intent.verb, intent.target_unit
-    );
+    let command = manager_command_arguments(&intent.verb, &intent.target_unit)?;
+    let expected_argv = format!("argv[]={} {} ;", SYSTEMCTL, command.join(" "));
     if values["LoadState"] != "loaded"
         || invocation.len() != 32
         || !invocation
@@ -8134,20 +8153,19 @@ fn submit_durable_manager_operation(
     }
     ensure_action_deadline(admitted)?;
     let unit_arg = format!("--unit={}", intent.operation_unit);
-    if let Err(error) = run_host_command(
-        SYSTEMD_RUN,
-        &[
-            &unit_arg,
-            "--property=Type=oneshot",
-            "--property=RemainAfterExit=yes",
-            "--no-block",
-            "--",
-            SYSTEMCTL,
-            &intent.verb,
-            &intent.target_unit,
-        ],
-        admitted.action_deadline,
-    ) {
+    let mut arguments = vec![
+        unit_arg.as_str(),
+        "--property=Type=oneshot",
+        "--property=RemainAfterExit=yes",
+        "--no-block",
+        "--",
+        SYSTEMCTL,
+    ];
+    arguments.extend(manager_command_arguments(
+        &intent.verb,
+        &intent.target_unit,
+    )?);
+    if let Err(error) = run_host_command(SYSTEMD_RUN, &arguments, admitted.action_deadline) {
         eprintln!("durable systemd-run submission outcome is ambiguous (ephemeral): {error:#}");
         return Err(LocalMutationRecoveryPending {
             action: "systemd_manager_operation",
@@ -8164,6 +8182,8 @@ fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
             ("stop", "stop", validator.systemd_unit.as_str()),
             ("start", "start", validator.systemd_unit.as_str()),
             ("restart", "restart", validator.systemd_unit.as_str()),
+            ("install-unit-reload", "daemon-reload", ""),
+            ("rollback-unit-reload", "daemon-reload", ""),
         ],
         HostTarget::Edge(edge) => {
             let (label, verb) = edge_forward_operation(edge);
@@ -8207,6 +8227,24 @@ fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
     Ok(())
 }
 
+fn manager_command_arguments<'a>(verb: &'a str, target_unit: &'a str) -> Result<Vec<&'a str>> {
+    if verb == "daemon-reload" && target_unit.is_empty() {
+        return Ok(vec![verb]);
+    }
+    if !matches!(verb, "stop" | "start" | "restart" | "reload")
+        || target_unit.is_empty()
+        || target_unit.len() > 255
+        || !target_unit
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
+    {
+        return Err(eyre!(
+            "manager operation argv is outside its closed grammar"
+        ));
+    }
+    Ok(vec![verb, target_unit])
+}
+
 fn require_session_manager_operation_applied(
     admitted: &HostAdmission,
     label: &str,
@@ -8246,11 +8284,27 @@ fn require_unit_stopped(unit: &str, deadline: Instant) -> Result<()> {
 }
 
 fn start_unit(admitted: &HostAdmission, label: &str, unit: &str) -> Result<()> {
+    if let HostTarget::Validator(validator) = &admitted.target {
+        let expected = if label == "rollback-start" {
+            &validator
+                .admitted_release()?
+                .artifact("validator_unit")?
+                .sha256
+        } else {
+            &validator.systemd_unit_sha256
+        };
+        attest_loaded_systemd_unit(validator, expected, admitted.action_deadline)?;
+    }
     run_durable_manager_operation(admitted, label, "start", unit)?;
     require_unit_active(unit, admitted.action_deadline)
 }
 
 fn restart_unit(admitted: &HostAdmission, validator: &ValidatorV1) -> Result<()> {
+    attest_loaded_systemd_unit(
+        validator,
+        &validator.systemd_unit_sha256,
+        admitted.action_deadline,
+    )?;
     let receipt_dir = ensure_host_receipt_dir(admitted)?;
     let (intent, _) = read_private_json::<HostIntentV1>(
         &receipt_dir.join("restart.intent.json"),
@@ -8306,7 +8360,11 @@ fn require_unit_active(unit: &str, deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn attest_loaded_systemd_unit(validator: &ValidatorV1, deadline: Instant) -> Result<()> {
+fn attest_loaded_systemd_unit(
+    validator: &ValidatorV1,
+    expected_sha256: &str,
+    deadline: Instant,
+) -> Result<()> {
     let expected_fragment = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
     let evidence = run_host_command(
         SYSTEMCTL,
@@ -8320,7 +8378,7 @@ fn attest_loaded_systemd_unit(validator: &ValidatorV1, deadline: Instant) -> Res
         deadline,
     )?;
     validate_loaded_unit_evidence(&evidence, &expected_fragment)?;
-    verify_regular_hash(&expected_fragment, &validator.systemd_unit_sha256)
+    occupied::verify_unit_fragment(&expected_fragment, expected_sha256)
 }
 
 fn validate_loaded_unit_evidence(bytes: &[u8], expected_fragment: &Path) -> Result<()> {
@@ -8433,11 +8491,17 @@ fn observe_validator_process(
     fresh_state: bool,
 ) -> Result<ValidatorProcessReadiness> {
     ensure_action_deadline(admitted)?;
-    attest_loaded_systemd_unit(validator, admitted.action_deadline)?;
-    if validated_current_release_target(admitted)? != release_root {
+    let binding = occupied::process_binding(admitted, validator, fresh_state)?;
+    if release_root != binding.release_root
+        || validated_current_release_target(admitted)? != binding.release_root
+    {
         return Err(eyre!(
-            "validator stable current selector does not resolve to the attested release"
+            "validator selector differs from its exact phase binding"
         ));
+    }
+    attest_loaded_systemd_unit(validator, &binding.unit_sha256, admitted.action_deadline)?;
+    if !fresh_state {
+        occupied::verify_prior_artifacts(validator, true)?;
     }
     let pid_bytes = run_host_command(
         SYSTEMCTL,
@@ -8456,7 +8520,7 @@ fn observe_validator_process(
         .filter(|pid| *pid > 1)
         .ok_or_else(|| eyre!("validator unit has no exact positive MainPID"))?;
     let proc_root = PathBuf::from(format!("/proc/{pid}"));
-    let expected_executable = release_root.join("bin/iroha3d_taira");
+    let expected_executable = binding.executable.clone();
     let executable = fs::read_link(proc_root.join("exe"))?;
     if executable != expected_executable {
         let launcher = fs::canonicalize("/usr/bin/python3")?;
@@ -8478,7 +8542,7 @@ fn observe_validator_process(
             }
             let fragment = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
             let unit = fs::read(&fragment)?;
-            if sha256_hex(&unit) != validator.systemd_unit_sha256 {
+            if sha256_hex(&unit) != binding.unit_sha256 {
                 return Err(eyre!("validator launcher unit changed after attestation"));
             }
             if validator_cmdline_is_complete(&cmdline, 64 * 1024)? {
@@ -8538,22 +8602,12 @@ fn observe_validator_process(
         .split(|byte| *byte == 0)
         .map(|bytes| std::str::from_utf8(bytes).map(PathBuf::from))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let stable_current = Path::new(&validator.service_root).join("current");
-    let stable_executable = stable_current.join("bin/iroha3d_taira");
-    let stable_config = stable_current.join("config/config.toml");
-    let expected_config = release_root.join("config/config.toml");
-    let expected_genesis = release_root.join("genesis/genesis.json");
-    validate_validator_argv(&arguments, &stable_executable, &stable_config)?;
-    let config_hash = if fresh_state {
-        &artifact(&validator.artifacts, "config")?.sha256
-    } else {
-        &validator.admitted_release()?.config_sha256
-    };
-    let genesis_hash = if fresh_state {
-        &artifact(&validator.artifacts, "genesis")?.sha256
-    } else {
-        &validator.admitted_release()?.genesis_sha256
-    };
+    let expected_config = binding.config.clone();
+    let expected_genesis = binding.genesis.clone();
+    let config_hash = &binding.config_sha256;
+    let genesis_hash = &binding.genesis_sha256;
+    let expected_arguments = binding.argv.iter().map(PathBuf::from).collect::<Vec<_>>();
+    validate_validator_argv(&arguments, &expected_arguments[0], &expected_arguments[2])?;
     verify_regular_hash(&expected_config, config_hash)?;
     let (file, snapshot) = open_pinned_regular(&expected_config, "attested validator config")?;
     let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
@@ -8581,6 +8635,9 @@ fn observe_validator_process(
         validate_validator_operator_config(&bytes, &admitted.inventory.operator_public_key)?;
     }
     verify_regular_hash(&expected_genesis, genesis_hash)?;
+    if !fresh_state {
+        occupied::verify_prior_genesis_hash(admitted, validator)?;
+    }
     require_root_directory(
         Path::new(&validator.state_root),
         fresh_state,
@@ -8667,34 +8724,7 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
     match &admitted.target {
         HostTarget::Validator(validator) => {
             if !validator.is_vacant() {
-                for (name, expected) in [
-                    (
-                        "bin/iroha3d_taira",
-                        &validator.admitted_release()?.iroha3d_sha256,
-                    ),
-                    ("bin/iroha", &validator.admitted_release()?.iroha_cli_sha256),
-                    (
-                        "bin/sorafs-node",
-                        &validator.admitted_release()?.sorafs_node_sha256,
-                    ),
-                    (
-                        "config/config.toml",
-                        &validator.admitted_release()?.config_sha256,
-                    ),
-                    (
-                        "genesis/genesis.json",
-                        &validator.admitted_release()?.genesis_sha256,
-                    ),
-                    (
-                        "genesis/genesis.sha256",
-                        &validator.admitted_release()?.genesis_hash_sha256,
-                    ),
-                ] {
-                    verify_regular_hash(
-                        &Path::new(&validator.admitted_release()?.release_root).join(name),
-                        expected,
-                    )?;
-                }
+                occupied::verify_prior_artifacts(validator, false)?;
             }
             stop_unit(admitted, "rollback-stop", &validator.systemd_unit)?;
             if validator.is_vacant() {
@@ -8761,6 +8791,7 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 admitted,
                 Path::new(&validator.admitted_release()?.release_root),
             )?;
+            occupied::restore_validator_unit(admitted)?;
             start_unit(admitted, "rollback-start", &validator.systemd_unit)?;
             wait_for_validator_process(admitted.action_deadline, || {
                 observe_validator_process(
@@ -8857,6 +8888,7 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
             if fresh_trash.exists() {
                 verify_populated_fresh_state_for_quarantine(&fresh_trash, admitted)?;
             }
+            occupied::verify_restored_validator_unit(admitted)?;
             require_session_manager_operation_applied(
                 admitted,
                 "rollback-start",
@@ -9118,7 +9150,9 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
             entries.push(cleanup_plan_entry_from_candidate(&candidate, admitted)?);
         }
     }
-    if matches!(&admitted.target, HostTarget::Validator(_)) {
+    if admitted.inventory.qualification_scope.includes_inrou()
+        && matches!(&admitted.target, HostTarget::Validator(_))
+    {
         // The retained stage is a host-global, authorization-bound transport
         // copy. Once a newer sealed authorization reaches cleanup, older
         // stage trees are superseded and may be reclaimed under the signed
@@ -9195,8 +9229,7 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
                 continue;
             }
             let path = entry.path();
-            if path == current_release
-                || admitted.target.admitted_release_root() == Some(path.as_path())
+            if path == current_release || occupied::protects_prior_artifact(&admitted.target, &path)
             {
                 continue;
             }
@@ -9306,10 +9339,10 @@ fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Re
 #[cfg(any(target_os = "linux", test))]
 fn require_cleanup_release_not_prior(
     admitted: &HostAdmission,
-    kind: &str,
+    _kind: &str,
     path: &Path,
 ) -> Result<()> {
-    if kind == "release" && admitted.target.admitted_release_root() == Some(path) {
+    if occupied::protects_prior_artifact(&admitted.target, path) {
         return Err(eyre!(
             "cleanup must preserve the exact admitted prior release"
         ));
@@ -11893,7 +11926,7 @@ pub(super) struct RuntimeCanaryInputs {
     pub(super) validator_client_configs: Vec<PathBuf>,
     pub(super) validator_operator_key: PathBuf,
     pub(super) onboarding_token: PathBuf,
-    pub(super) inrou_stage_dir: PathBuf,
+    pub(super) inrou_stage_dir: Option<PathBuf>,
     pub(super) fee_args: Vec<OsString>,
 }
 
@@ -11902,10 +11935,14 @@ struct RuntimeCustody {
     validator_client_configs: Vec<super::PinnedInput>,
     validator_operator_key: Option<super::PinnedInput>,
     onboarding_token: Option<super::PinnedInput>,
+    inrou: Option<InrouStageCustody>,
+    fee_args: Vec<OsString>,
+}
+
+struct InrouStageCustody {
     inrou_stage_dir: PathBuf,
     snapshot_stage_files: Vec<(String, super::PinnedInput)>,
     stage_identity: crate::soracloud::TairaInrouStageIdentity,
-    fee_args: Vec<OsString>,
 }
 
 /// Retain the explicit operator credential and bind its public identity to the signed inventory.
@@ -11936,11 +11973,32 @@ fn validate_pinned_validator_operator_key(
 }
 
 impl RuntimeCustody {
+    fn inrou(&self) -> Result<&InrouStageCustody> {
+        self.inrou
+            .as_ref()
+            .ok_or_else(|| eyre!("full_inrou runtime stage is absent"))
+    }
+
+    fn validate_stage_scope(&self, admitted: &AdmittedReset) -> Result<()> {
+        admitted.inventory.validate_inrou_scope()?;
+        if self.inrou.is_some() != admitted.inventory.qualification_scope.includes_inrou() {
+            return Err(eyre!(
+                "runtime Inrou custody does not match the signed qualification scope"
+            ));
+        }
+        Ok(())
+    }
+
     fn admit(
         inputs: RuntimeCanaryInputs,
         admitted: &AdmittedReset,
         journal_dir: &Path,
     ) -> Result<Self> {
+        admitted.inventory.validate_inrou_scope()?;
+        admitted
+            .inventory
+            .qualification_scope
+            .validate_stage_argument(inputs.inrou_stage_dir.as_deref())?;
         if inputs.validator_client_configs.len() != 4 {
             return Err(eyre!(
                 "apply requires exactly four ordered validator client configs"
@@ -11968,7 +12026,7 @@ impl RuntimeCustody {
             "Taira runtime client config",
             &admitted.inventory,
         )?;
-        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
+        let expected_public_root = format!("{PUBLIC_ROOT}/");
         if runtime_config.torii_api_url.as_str() != expected_public_root
             || runtime_config.account.to_string()
                 != admitted.inventory.canary_onboarding_request.account_id
@@ -11979,88 +12037,83 @@ impl RuntimeCustody {
         }
         let validator_operator_key =
             pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
-        let (stage_hash, stage_bytes, stage_files, fixed) =
-            pin_stage_tree(&inputs.inrou_stage_dir, None)?;
         let claims = &admitted.authorization.claims;
         if client_hash != claims.runtime_client_config_sha256
             || token_hash != claims.onboarding_token_sha256
             || validator_hash != claims.validator_client_configs_sha256
-            || stage_hash != claims.inrou_stage_tree_sha256
-            || stage_hash != admitted.inventory.inrou_canary.stage_tree_sha256
-            || stage_bytes != admitted.inventory.inrou_canary.stage_bytes
         {
-            return Err(eyre!(
-                "runtime signing/stage closure is not authorization-bound"
-            ));
+            return Err(eyre!("runtime signing closure is not authorization-bound"));
         }
-        for (path, expected) in [
-            (
-                "receipt.json",
-                &admitted.inventory.inrou_canary.receipt_sha256,
-            ),
-            (
-                "container.json",
-                &admitted.inventory.inrou_canary.container_sha256,
-            ),
-            (
-                "service.json",
-                &admitted.inventory.inrou_canary.service_sha256,
-            ),
-            (
-                "payloads/bundle.bin",
-                &admitted.inventory.inrou_canary.bundle_payload_sha256,
-            ),
-            (
-                "manifests/bundle.to",
-                &admitted.inventory.inrou_canary.bundle_manifest_sha256,
-            ),
-            (
-                "manifests/aarch64.to",
-                &admitted.inventory.inrou_canary.guest_manifest_sha256,
-            ),
-            (
-                INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
-                &admitted.inventory.inrou_canary.discovery_document_sha256,
-            ),
-            (
-                INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
-                &admitted.inventory.inrou_canary.discovery_manifest_sha256,
-            ),
-        ] {
-            if fixed.get(path) != Some(expected) {
-                return Err(eyre!("retained Inrou stage fixed-file hash mismatch"));
+        let inrou = if let Some(stage_dir) = inputs.inrou_stage_dir.as_deref() {
+            let (stage_hash, stage_bytes, stage_files, fixed) = pin_stage_tree(stage_dir, None)?;
+            if stage_hash != admitted.authorization.claims.inrou_stage_hash()?
+                || stage_hash != admitted.inventory.inrou_canary()?.stage_tree_sha256
+                || stage_bytes != admitted.inventory.inrou_canary()?.stage_bytes
+            {
+                return Err(eyre!(
+                    "runtime signing/stage closure is not authorization-bound"
+                ));
             }
-        }
-        let retained_stage_dir =
-            snapshot_stage_tree(journal_dir, &admitted.authorization_sha256, &stage_files)?;
-        let (retained_hash, retained_bytes, snapshot_stage_files, _) =
-            pin_stage_tree(&retained_stage_dir, None)?;
-        if retained_hash != stage_hash || retained_bytes != stage_bytes {
-            return Err(eyre!("snapshotted Inrou stage closure hash drifted"));
-        }
-        let stage_identity = crate::soracloud::load_taira_inrou_stage_identity(
-            &runtime_config,
-            &retained_stage_dir,
-            crate::taira::InrouCanaryMode::Deploy,
-        )?;
-        let (rechecked_hash, rechecked_bytes) =
-            revalidate_stage_files(&inputs.inrou_stage_dir, &stage_files, None)?;
-        if rechecked_hash != stage_hash
-            || rechecked_bytes != stage_bytes
-            || !stage_identity_matches_inventory(&stage_identity, &admitted.inventory.inrou_canary)
-        {
-            return Err(eyre!(
-                "fully validated Inrou stage identity differs from inventory"
-            ));
-        }
+            let canary = admitted.inventory.inrou_canary()?;
+            for (path, expected) in [
+                ("receipt.json", &canary.receipt_sha256),
+                ("container.json", &canary.container_sha256),
+                ("service.json", &canary.service_sha256),
+                ("payloads/bundle.bin", &canary.bundle_payload_sha256),
+                ("manifests/bundle.to", &canary.bundle_manifest_sha256),
+                ("manifests/aarch64.to", &canary.guest_manifest_sha256),
+                (
+                    INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+                    &canary.discovery_document_sha256,
+                ),
+                (
+                    INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+                    &canary.discovery_manifest_sha256,
+                ),
+            ] {
+                if fixed.get(path) != Some(expected) {
+                    return Err(eyre!("retained Inrou stage fixed-file hash mismatch"));
+                }
+            }
+            let retained_stage_dir =
+                snapshot_stage_tree(journal_dir, &admitted.authorization_sha256, &stage_files)?;
+            let (retained_hash, retained_bytes, snapshot_stage_files, _) =
+                pin_stage_tree(&retained_stage_dir, None)?;
+            if retained_hash != stage_hash || retained_bytes != stage_bytes {
+                return Err(eyre!("snapshotted Inrou stage closure hash drifted"));
+            }
+            let stage_identity = crate::soracloud::load_taira_inrou_stage_identity(
+                &runtime_config,
+                &retained_stage_dir,
+                crate::taira::InrouCanaryMode::Deploy,
+            )?;
+            let (rechecked_hash, rechecked_bytes) =
+                revalidate_stage_files(stage_dir, &stage_files, None)?;
+            if rechecked_hash != stage_hash
+                || rechecked_bytes != stage_bytes
+                || !stage_identity_matches_inventory(
+                    &stage_identity,
+                    admitted.inventory.inrou_canary()?,
+                )
+            {
+                return Err(eyre!(
+                    "fully validated Inrou stage identity differs from inventory"
+                ));
+            }
+            Some(InrouStageCustody {
+                inrou_stage_dir: retained_stage_dir,
+                snapshot_stage_files,
+                stage_identity,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             client_config,
             validator_client_configs,
             validator_operator_key: Some(validator_operator_key),
             onboarding_token: Some(onboarding_token),
-            inrou_stage_dir: retained_stage_dir,
-            snapshot_stage_files,
-            stage_identity,
+            inrou,
             fee_args: inputs.fee_args,
         })
     }
@@ -12087,13 +12140,18 @@ impl RuntimeCustody {
         if let Some(input) = &self.validator_operator_key {
             revalidate_pinned(input, "validator operator key")?;
         }
-        for (_, input) in &self.snapshot_stage_files {
-            revalidate_pinned(input, "snapshotted Inrou stage file")?;
-        }
-        validate_owner_private_dir(&self.inrou_stage_dir, "snapshotted Inrou stage")?;
-        if !stage_identity_matches_inventory(&self.stage_identity, &admitted.inventory.inrou_canary)
-        {
-            return Err(eyre!("runtime signing/stage custody drifted"));
+        self.validate_stage_scope(admitted)?;
+        if let Some(stage) = &self.inrou {
+            for (_, input) in &stage.snapshot_stage_files {
+                revalidate_pinned(input, "snapshotted Inrou stage file")?;
+            }
+            validate_owner_private_dir(&stage.inrou_stage_dir, "snapshotted Inrou stage")?;
+            if !stage_identity_matches_inventory(
+                &stage.stage_identity,
+                admitted.inventory.inrou_canary()?,
+            ) {
+                return Err(eyre!("runtime signing/stage custody drifted"));
+            }
         }
         ensure_local_deadline(Some(deadline))?;
         Ok(())
@@ -12105,29 +12163,30 @@ impl RuntimeCustody {
         deadline: Instant,
     ) -> Result<(Vec<u8>, Vec<(File, u64)>)> {
         self.revalidate(admitted, deadline, false)?;
-        if self.snapshot_stage_files.is_empty()
-            || self.snapshot_stage_files.len() > MAX_INROU_STAGE_FILES_V1
+        let stage = self.inrou()?;
+        if stage.snapshot_stage_files.is_empty()
+            || stage.snapshot_stage_files.len() > MAX_INROU_STAGE_FILES_V1
         {
             return Err(eyre!(
                 "retained Inrou stage file count is outside V1 bounds"
             ));
         }
         let (stage_tree_sha256, stage_bytes) = revalidate_stage_files(
-            &self.inrou_stage_dir,
-            &self.snapshot_stage_files,
+            &stage.inrou_stage_dir,
+            &stage.snapshot_stage_files,
             Some(deadline),
         )?;
-        if stage_tree_sha256 != admitted.inventory.inrou_canary.stage_tree_sha256
-            || stage_tree_sha256 != admitted.authorization.claims.inrou_stage_tree_sha256
-            || stage_bytes != admitted.inventory.inrou_canary.stage_bytes
+        if stage_tree_sha256 != admitted.inventory.inrou_canary()?.stage_tree_sha256
+            || stage_tree_sha256 != admitted.authorization.claims.inrou_stage_hash()?
+            || stage_bytes != admitted.inventory.inrou_canary()?.stage_bytes
         {
             return Err(eyre!(
                 "retained Inrou stage changed before its host-scoped upload"
             ));
         }
-        let mut files = Vec::with_capacity(self.snapshot_stage_files.len());
-        let mut sources = Vec::with_capacity(self.snapshot_stage_files.len());
-        for (path, input) in &self.snapshot_stage_files {
+        let mut files = Vec::with_capacity(stage.snapshot_stage_files.len());
+        let mut sources = Vec::with_capacity(stage.snapshot_stage_files.len());
+        for (path, input) in &stage.snapshot_stage_files {
             ensure_local_deadline(Some(deadline))?;
             files.push(InrouStageUploadFileV1 {
                 path: path.clone(),
@@ -12184,7 +12243,7 @@ impl RuntimeCustody {
             "Taira recovery client config",
             &admitted.inventory,
         )?;
-        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
+        let expected_public_root = format!("{PUBLIC_ROOT}/");
         if runtime_config.torii_api_url.as_str() != expected_public_root
             || runtime_config.account.to_string()
                 != admitted.inventory.canary_onboarding_request.account_id
@@ -12224,79 +12283,73 @@ impl RuntimeCustody {
         } else {
             None
         };
-        let inrou_stage_dir = journal_dir
-            .join("runtime-stage-v1")
-            .join(&admitted.authorization_sha256);
-        validate_owner_private_dir(&inrou_stage_dir, "retained recovery Inrou stage")?;
-        let (stage_hash, stage_bytes, snapshot_stage_files, fixed) =
-            pin_stage_tree(&inrou_stage_dir, None)?;
-        if stage_hash != admitted.authorization.claims.inrou_stage_tree_sha256
-            || stage_hash != admitted.inventory.inrou_canary.stage_tree_sha256
-            || stage_bytes != admitted.inventory.inrou_canary.stage_bytes
-        {
-            return Err(eyre!(
-                "retained recovery Inrou stage is not authorization-bound"
-            ));
-        }
-        for (path, expected) in [
-            (
-                "receipt.json",
-                &admitted.inventory.inrou_canary.receipt_sha256,
-            ),
-            (
-                "container.json",
-                &admitted.inventory.inrou_canary.container_sha256,
-            ),
-            (
-                "service.json",
-                &admitted.inventory.inrou_canary.service_sha256,
-            ),
-            (
-                "payloads/bundle.bin",
-                &admitted.inventory.inrou_canary.bundle_payload_sha256,
-            ),
-            (
-                "manifests/bundle.to",
-                &admitted.inventory.inrou_canary.bundle_manifest_sha256,
-            ),
-            (
-                "manifests/aarch64.to",
-                &admitted.inventory.inrou_canary.guest_manifest_sha256,
-            ),
-            (
-                INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
-                &admitted.inventory.inrou_canary.discovery_document_sha256,
-            ),
-            (
-                INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
-                &admitted.inventory.inrou_canary.discovery_manifest_sha256,
-            ),
-        ] {
-            if fixed.get(path) != Some(expected) {
+        admitted.inventory.validate_inrou_scope()?;
+        let inrou = if admitted.inventory.qualification_scope.includes_inrou() {
+            let inrou_stage_dir = journal_dir
+                .join("runtime-stage-v1")
+                .join(&admitted.authorization_sha256);
+            validate_owner_private_dir(&inrou_stage_dir, "retained recovery Inrou stage")?;
+            let (stage_hash, stage_bytes, snapshot_stage_files, fixed) =
+                pin_stage_tree(&inrou_stage_dir, None)?;
+            if stage_hash != admitted.authorization.claims.inrou_stage_hash()?
+                || stage_hash != admitted.inventory.inrou_canary()?.stage_tree_sha256
+                || stage_bytes != admitted.inventory.inrou_canary()?.stage_bytes
+            {
                 return Err(eyre!(
-                    "retained recovery Inrou stage fixed-file hash mismatch"
+                    "retained recovery Inrou stage is not authorization-bound"
                 ));
             }
-        }
-        let stage_identity = crate::soracloud::load_taira_inrou_stage_identity(
-            &runtime_config,
-            &inrou_stage_dir,
-            crate::taira::InrouCanaryMode::Deploy,
-        )?;
-        if !stage_identity_matches_inventory(&stage_identity, &admitted.inventory.inrou_canary) {
-            return Err(eyre!(
-                "retained recovery Inrou stage identity differs from inventory"
-            ));
-        }
+            let canary = admitted.inventory.inrou_canary()?;
+            for (path, expected) in [
+                ("receipt.json", &canary.receipt_sha256),
+                ("container.json", &canary.container_sha256),
+                ("service.json", &canary.service_sha256),
+                ("payloads/bundle.bin", &canary.bundle_payload_sha256),
+                ("manifests/bundle.to", &canary.bundle_manifest_sha256),
+                ("manifests/aarch64.to", &canary.guest_manifest_sha256),
+                (
+                    INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1,
+                    &canary.discovery_document_sha256,
+                ),
+                (
+                    INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1,
+                    &canary.discovery_manifest_sha256,
+                ),
+            ] {
+                if fixed.get(path) != Some(expected) {
+                    return Err(eyre!(
+                        "retained recovery Inrou stage fixed-file hash mismatch"
+                    ));
+                }
+            }
+            let stage_identity = crate::soracloud::load_taira_inrou_stage_identity(
+                &runtime_config,
+                &inrou_stage_dir,
+                crate::taira::InrouCanaryMode::Deploy,
+            )?;
+            if !stage_identity_matches_inventory(
+                &stage_identity,
+                admitted.inventory.inrou_canary()?,
+            ) {
+                return Err(eyre!(
+                    "retained recovery Inrou stage identity differs from inventory"
+                ));
+            }
+            Some(InrouStageCustody {
+                inrou_stage_dir,
+                snapshot_stage_files,
+                stage_identity,
+            })
+        } else {
+            None
+        };
         let fee_args = super::PublicResetApply::fee_args(&admitted.inventory)?;
         Ok(Self {
             client_config,
             validator_client_configs,
             validator_operator_key,
             onboarding_token: None,
-            inrou_stage_dir,
-            snapshot_stage_files,
-            stage_identity,
+            inrou,
             fee_args,
         })
     }
@@ -12570,7 +12623,7 @@ fn inrou_probe_root(inventory: &InventoryV1, scope: crate::taira::InrouProbeScop
         crate::taira::InrouProbeScope::Candidate => inventory.validator_clients[0]
             .probe_origin
             .trim_end_matches('/'),
-        crate::taira::InrouProbeScope::Public => &inventory.inrou_canary.public_root,
+        crate::taira::InrouProbeScope::Public => PUBLIC_ROOT,
     }
 }
 
@@ -13628,10 +13681,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     INROU_STAGE_UPLOAD_ROLE_V1.to_owned(),
                     self.admitted
                         .inventory
-                        .inrou_canary
+                        .inrou_canary()?
                         .stage_tree_sha256
                         .clone(),
-                    self.admitted.inventory.inrou_canary.stage_bytes,
+                    self.admitted.inventory.inrou_canary()?.stage_bytes,
                     0o400,
                     None,
                     files,
@@ -13946,7 +13999,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     fn doctor_with_mode(&mut self, timeout_secs: u64, recovery_only: bool) -> Result<()> {
         let scope = match self.admitted.inventory.qualification_scope {
             super::QualificationScopeV1::CoreTestnet => crate::taira::DoctorScope::Basic,
-            super::QualificationScopeV1::Inrou => crate::taira::DoctorScope::Full,
+            super::QualificationScopeV1::FullInrou => crate::taira::DoctorScope::Full,
         };
         let args = vec![
             "taira".into(),
@@ -13954,12 +14007,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "--scope".into(),
             scope.as_str().into(),
             "--public-root".into(),
-            self.admitted
-                .inventory
-                .inrou_canary
-                .public_root
-                .clone()
-                .into(),
+            PUBLIC_ROOT.into(),
             "--json".into(),
         ];
         let deadline = Instant::now()
@@ -13969,17 +14017,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             require_forward_lease_budget(self.admitted, timeout_secs)?;
         }
         let output = self.run_local_cli_process_until(args, Vec::new(), deadline, recovery_only)?;
-        let output = require_doctor_success(
-            output,
-            &self.admitted.inventory.inrou_canary.public_root,
-            scope,
-        )?;
+        let output = require_doctor_success(output, PUBLIC_ROOT, scope)?;
         let value = parse_json_report(&output, "same-revision Taira doctor")?;
-        validate_doctor_report(
-            &value,
-            &self.admitted.inventory.inrou_canary.public_root,
-            scope,
-        )
+        validate_doctor_report(&value, PUBLIC_ROOT, scope)
     }
 
     fn run_journaled_write_canary_child(
@@ -14776,7 +14816,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("--probe-scope"),
             OsString::from("candidate"),
             OsString::from("--stage-dir"),
-            self.runtime.inrou_stage_dir.as_os_str().to_owned(),
+            self.runtime.inrou()?.inrou_stage_dir.as_os_str().to_owned(),
             OsString::from("--mode"),
             OsString::from("deploy"),
             OsString::from("--operation"),
@@ -15094,7 +15134,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "--probe-scope".into(),
             scope.label().into(),
             "--stage-dir".into(),
-            self.runtime.inrou_stage_dir.as_os_str().to_owned(),
+            self.runtime.inrou()?.inrou_stage_dir.as_os_str().to_owned(),
             "--mode".into(),
             "deploy".into(),
             "--timeout-secs".into(),
@@ -15962,6 +16002,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
     ) -> Result<()> {
         match step {
             ExecutionStep::Preseed => {
+                inventory.inrou_canary()?;
                 let mut physical_hosts = BTreeSet::new();
                 for validator in &inventory.validators {
                     if !physical_hosts.insert(validator.endpoint.host_identity_sha256.clone()) {
@@ -16789,7 +16830,7 @@ fn validate_applied_inrou_service_identity(
     object: &norito::json::Map,
     inventory: &InventoryV1,
 ) -> Result<ValidatedInrouEvidence> {
-    let canary = &inventory.inrou_canary;
+    let canary = inventory.inrou_canary()?;
     let route_path = format!("{}{}", canary.route_path_prefix, canary.healthcheck_path);
     for (field, expected) in [
         ("service_name", canary.service_name.as_str()),
@@ -19229,6 +19270,8 @@ mod tests {
         );
         let mut inventory = super::super::sample_inventory_fixture();
         inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        inventory.inrou_canary = None;
+        inventory.inrou_stage_tree_sha256 = None;
         let final_wave = inventory
             .qualification_scope
             .restart_validator_indices()
@@ -19868,7 +19911,7 @@ mod tests {
                     proposal_round: None,
                     subject: None,
                     execution_commitment: None,
-                    stage: SumeragiV2OutboundIntentStage::Sent,
+                    stage: SumeragiV2OutboundIntentStage::Retained,
                 }],
                 queues: vec![SumeragiV2QueueStatus {
                     queue: SumeragiV2QueueKind::RuntimeProgress,
@@ -20302,7 +20345,7 @@ mod tests {
         }
     }
 
-    fn progress_admission() -> HostAdmission {
+    pub(super) fn progress_admission() -> HostAdmission {
         let mut inventory = super::super::sample_inventory_fixture();
         let shared_identity = "a".repeat(64);
         for validator in &mut inventory.validators {
@@ -20476,20 +20519,54 @@ mod tests {
             .iter()
             .map(|file| (file.path.as_str(), file.sha256.clone()))
             .collect::<BTreeMap<_, _>>();
-        admitted.inventory.inrou_canary.receipt_sha256 = fixed[INROU_STAGE_RECEIPT_FILE_V1].clone();
-        admitted.inventory.inrou_canary.container_sha256 =
-            fixed[INROU_STAGE_CONTAINER_FILE_V1].clone();
-        admitted.inventory.inrou_canary.service_sha256 = fixed[INROU_STAGE_SERVICE_FILE_V1].clone();
-        admitted.inventory.inrou_canary.bundle_payload_sha256 =
-            fixed[INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1].clone();
-        admitted.inventory.inrou_canary.bundle_manifest_sha256 =
-            fixed[INROU_STAGE_BUNDLE_MANIFEST_FILE_V1].clone();
-        admitted.inventory.inrou_canary.guest_manifest_sha256 =
-            fixed[INROU_STAGE_GUEST_MANIFEST_FILE_V1].clone();
-        admitted.inventory.inrou_canary.discovery_document_sha256 =
-            fixed[INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1].clone();
-        admitted.inventory.inrou_canary.discovery_manifest_sha256 =
-            fixed[INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .receipt_sha256 = fixed[INROU_STAGE_RECEIPT_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .container_sha256 = fixed[INROU_STAGE_CONTAINER_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .service_sha256 = fixed[INROU_STAGE_SERVICE_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .bundle_payload_sha256 = fixed[INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .bundle_manifest_sha256 = fixed[INROU_STAGE_BUNDLE_MANIFEST_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .guest_manifest_sha256 = fixed[INROU_STAGE_GUEST_MANIFEST_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .discovery_document_sha256 = fixed[INROU_STAGE_DISCOVERY_DOCUMENT_FILE_V1].clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .discovery_manifest_sha256 = fixed[INROU_STAGE_DISCOVERY_MANIFEST_FILE_V1].clone();
         let mut tree = Sha256::new();
         tree.update(b"iroha:taira:public-reset:inrou-stage-tree:v1\0");
         let mut stage_bytes = 0_u64;
@@ -20500,9 +20577,19 @@ mod tests {
             update_frame(&mut tree, file.sha256.as_bytes());
         }
         let stage_tree_sha256 = hex::encode(tree.finalize());
-        admitted.inventory.inrou_canary.stage_bytes = stage_bytes;
-        admitted.inventory.inrou_canary.stage_tree_sha256 = stage_tree_sha256.clone();
-        admitted.authorization.claims.inrou_stage_tree_sha256 = stage_tree_sha256.clone();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .stage_bytes = stage_bytes;
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .stage_tree_sha256 = stage_tree_sha256.clone();
+        admitted.authorization.claims.inrou_stage_tree_sha256 = Some(stage_tree_sha256.clone());
         let manifest = InrouStageUploadManifestV1 {
             schema: INROU_STAGE_UPLOAD_SCHEMA_V1.to_owned(),
             stage_tree_sha256,
@@ -21001,6 +21088,8 @@ time.sleep(30)
         let mut stores = admitted
             .inventory
             .inrou_canary
+            .as_ref()
+            .expect("full Inrou fixture")
             .placement_targets
             .iter()
             .enumerate()
@@ -21027,7 +21116,11 @@ time.sleep(30)
                 target.store_root.clone(),
             )
         });
-        let canary = &admitted.inventory.inrou_canary;
+        let canary = &admitted
+            .inventory
+            .inrou_canary
+            .as_ref()
+            .expect("full Inrou fixture");
         let mut artifacts = [
             &canary.bundle_manifest_digest_hex,
             &canary.guest_manifest_digest_hex,
@@ -21824,7 +21917,14 @@ time.sleep(30)
         .expect("exact candidate route");
         report.as_object_mut().unwrap().insert(
             "public_root".to_owned(),
-            admitted.inventory.inrou_canary.public_root.clone().into(),
+            admitted
+                .inventory
+                .inrou_canary
+                .as_ref()
+                .expect("full Inrou fixture")
+                .public_root
+                .clone()
+                .into(),
         );
         assert!(
             validate_prepared_write_report(
@@ -21848,7 +21948,12 @@ time.sleep(30)
         }
         assert_eq!(
             mutation_probe_root(&admitted.inventory, "post_edge").unwrap(),
-            admitted.inventory.inrou_canary.public_root
+            admitted
+                .inventory
+                .inrou_canary
+                .as_ref()
+                .expect("full Inrou fixture")
+                .public_root
         );
     }
 
@@ -22278,7 +22383,11 @@ time.sleep(30)
     }
 
     fn exact_inrou_check_report_fixture(admitted: &AdmittedReset) -> norito::json::Value {
-        let canary = &admitted.inventory.inrou_canary;
+        let canary = &admitted
+            .inventory
+            .inrou_canary
+            .as_ref()
+            .expect("full Inrou fixture");
         let validator_account_id = admitted.inventory.validator_clients[1].account_id.clone();
         let peer_id = admitted.inventory.validator_clients[1].peer_id.clone();
         let replicas = (1_u64..=4)
@@ -22912,7 +23021,12 @@ time.sleep(30)
         let mut admitted = progress_admission();
         admitted.inventory.chain_id = "fixture-chain".to_owned();
         admitted.inventory.next_genesis_hash = hex::encode(network_id.as_bytes());
-        admitted.inventory.inrou_canary.public_root = public_root.to_owned();
+        admitted
+            .inventory
+            .inrou_canary
+            .as_mut()
+            .expect("full Inrou fixture")
+            .public_root = public_root.to_owned();
         admitted.inventory.validator_clients[0].probe_origin =
             format!("{}/", public_root.trim_end_matches('/'));
         admitted.inventory.canary_onboarding_request = typed_receipt.body.request.clone();
@@ -23140,7 +23254,7 @@ time.sleep(30)
             let report = norito::json!({
                 "command": "taira_write_canary",
                 "status": "ok",
-                "public_root": (admitted.inventory.inrou_canary.public_root.clone()),
+                "public_root": (admitted.inventory.inrou_canary.as_ref().expect("full Inrou fixture").public_root.clone()),
                 "checks": [],
                 "warnings": [],
                 "failures": [],
@@ -23596,15 +23710,35 @@ time.sleep(30)
         let full_restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
             .expect("full restart intent");
         admitted.inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        admitted.inventory.inrou_canary = None;
+        admitted.inventory.inrou_stage_tree_sha256 = None;
+        admitted.authorization.claims.inrou_stage_tree_sha256 = None;
         let core_plan = host_forward_plan(&admitted);
+        assert!(!core_plan.iter().any(|key| {
+            [
+                HostAction::InrouStageUpload.label(),
+                HostAction::Preseed.label(),
+            ]
+            .contains(&key.action.as_str())
+        }));
         assert_eq!(
             core_plan
                 .iter()
-                .filter(|key| key.action != HostAction::Restart.label())
+                .filter(|key| ![
+                    HostAction::Restart.label(),
+                    HostAction::InrouStageUpload.label(),
+                    HostAction::Preseed.label()
+                ]
+                .contains(&key.action.as_str()))
                 .collect::<Vec<_>>(),
             full_plan
                 .iter()
-                .filter(|key| key.action != HostAction::Restart.label())
+                .filter(|key| ![
+                    HostAction::Restart.label(),
+                    HostAction::InrouStageUpload.label(),
+                    HostAction::Preseed.label()
+                ]
+                .contains(&key.action.as_str()))
                 .collect::<Vec<_>>(),
             "all four validators retain artifact custody, staging, start and seal actions"
         );
@@ -24179,10 +24313,16 @@ time.sleep(30)
     fn cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace() {
         for scope in [
             super::super::QualificationScopeV1::CoreTestnet,
-            super::super::QualificationScopeV1::Inrou,
+            super::super::QualificationScopeV1::FullInrou,
         ] {
             let mut admitted = progress_admission();
             admitted.inventory.qualification_scope = scope;
+            admitted.authorization.claims.qualification_scope = scope;
+            if !scope.includes_inrou() {
+                admitted.inventory.inrou_canary = None;
+                admitted.inventory.inrou_stage_tree_sha256 = None;
+                admitted.authorization.claims.inrou_stage_tree_sha256 = None;
+            }
             validate_inventory(&admitted.inventory).expect("admitted cohost topology");
             let plan = host_forward_plan(&admitted);
             let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
