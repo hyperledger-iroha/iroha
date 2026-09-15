@@ -1,4 +1,4 @@
-//! Public preparation tests use native signed genesis fixtures and temporary output custody.
+//! Public preparation tests use native signed genesis fixtures and owner-controlled ancestor custody.
 
 use super::*;
 use iroha_crypto::{HashOf, KeyPair, SignatureOf};
@@ -267,11 +267,10 @@ fn rejects_noncanonical_identity_and_non_ed25519_canary() {
 #[cfg(unix)]
 #[test]
 fn publishes_complete_public_bundle_and_reuses_identical_request() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let temp = private_custody_test_dir("taira-public-inputs-publish-");
+    let root = temp.path();
     let fixture = Fixture::new();
-    let args = fixture.write(&root);
+    let args = fixture.write(root);
     let original = fs::read(args.localnet_dir.join("genesis.signed.nrt")).unwrap();
     let mut first = Vec::new();
     prepare(&args, &mut first).unwrap();
@@ -303,10 +302,8 @@ fn publishes_complete_public_bundle_and_reuses_identical_request() {
 #[cfg(unix)]
 #[test]
 fn refuses_changed_bundle_and_never_overwrites_existing_output() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let args = Fixture::new().write(&root);
+    let temp = private_custody_test_dir("taira-public-inputs-refusal-");
+    let args = Fixture::new().write(temp.path());
     prepare(&args, &mut Vec::new()).unwrap();
     let original = fs::read(args.output_dir.join("public-inputs.json")).unwrap();
     fs::write(
@@ -314,22 +311,28 @@ fn refuses_changed_bundle_and_never_overwrites_existing_output() {
         line(key(103, Algorithm::Ed25519).public_key()),
     )
     .unwrap();
-    assert!(prepare(&args, &mut Vec::new()).is_err());
+    let error = prepare(&args, &mut Vec::new()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "output already contains a different public input bundle"
+    );
     assert_eq!(
         fs::read(args.output_dir.join("public-inputs.json")).unwrap(),
         original
     );
     fs::write(args.output_dir.join("genesis.hash"), b"wrong\n").unwrap();
-    assert!(load(&args.output_dir).is_err());
+    let error = load(&args.output_dir).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "public input bundle artifact differs from its identity"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn rejects_symlink_input_and_partial_or_surplus_output() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let args = Fixture::new().write(&root);
+    let temp = private_custody_test_dir("taira-public-inputs-invalid-");
+    let args = Fixture::new().write(temp.path());
     let key = fs::read(&args.canary_public_key).unwrap();
     fs::remove_file(&args.canary_public_key).unwrap();
     std::os::unix::fs::symlink(
@@ -337,16 +340,31 @@ fn rejects_symlink_input_and_partial_or_surplus_output() {
         &args.canary_public_key,
     )
     .unwrap();
-    assert!(prepare(&args, &mut Vec::new()).is_err());
+    let error = prepare(&args, &mut Vec::new()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "public reset input must be a direct regular file: `{}`",
+            args.canary_public_key.display()
+        )
+    );
     assert!(!args.output_dir.exists());
     fs::remove_file(&args.canary_public_key).unwrap();
     fs::write(&args.canary_public_key, key).unwrap();
     prepare(&args, &mut Vec::new()).unwrap();
     fs::write(args.output_dir.join("unexpected"), b"extra").unwrap();
-    assert!(load(&args.output_dir).is_err());
+    let error = load(&args.output_dir).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "public input bundle has missing or unexpected files"
+    );
     fs::remove_file(args.output_dir.join("unexpected")).unwrap();
     fs::remove_file(args.output_dir.join("genesis.hash")).unwrap();
-    assert!(load(&args.output_dir).is_err());
+    let error = load(&args.output_dir).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "public input bundle has missing or unexpected files"
+    );
 }
 
 #[test]
