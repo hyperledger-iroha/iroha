@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 665_989
-EXPECTED_ASSET_SHA256 = "963b4c2c72ac484a32001b8587563afce90276e10b68a6e15e1c5854ccaac332"
+EXPECTED_ASSET_LENGTH = 669_904
+EXPECTED_ASSET_SHA256 = "97a6d279fab3244f62ad20945d55046349c17da718cdaf946c72ae995cba30d7"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -167,6 +167,14 @@ def macro_inventory_failures(
 # owner reconciliation. Use their exact source providers, without source globbing
 # or depending on a compiled Core test executable.
 BOUNDARY_CASE_REGIONS = {
+    "cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks": (
+        "catalog_open",
+        "pending_kura_terminal",
+        "activation",
+    ),
+    "transition_surface_is_ordered_borrow_bound_and_published": (
+        "timeout_body_retirement",
+    ),
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
         "leader_wire_replay_lock_authority",
         "actual_consumer_factory",
@@ -196,6 +204,8 @@ BOUNDARY_SOURCE_PATHS = {
     "registry": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
     "turn_driver": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
     "queue": "crates/iroha_core/src/queue.rs",
+    "ledger": "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
+    "launch": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
 }
 # Select the complete lock projection: Prepare and Decision independently use
 # the same round/subject expressions and must not shadow a broken lock guard.
@@ -209,6 +219,66 @@ ACTUAL_LOCKED_CERTIFICATE_PROJECTION = """let protected_lock = durable
             })
             .transpose()?;"""
 BOUNDARY_MUTATIONS = (
+    (
+        "activation recovered Decision authentication",
+        "launch",
+        ".recovered_successor_decision_activation_authority()",
+        ".unchecked_successor_decision_activation_authority()",
+    ),
+    (
+        "activation recovered Decision publication",
+        "launch",
+        "            status,\n            recovered_decision,\n",
+        "            status,\n            None,\n",
+    ),
+    (
+        "pending Kura terminal key equality",
+        "effects",
+        "if terminal.key() != *key",
+        "if false",
+    ),
+    (
+        "pending Kura terminal body equality",
+        "effects",
+        "|| terminal.durable() != durable",
+        "|| false",
+    ),
+    (
+        "pending Kura unique terminal selection",
+        "effects",
+        "|| selected_terminal.replace(*key).is_some()",
+        "|| false",
+    ),
+    (
+        "pending Kura terminal custody release",
+        "effects",
+        "                drop(terminal);\n                if recovered_validations.insert(key, validated).is_some()",
+        "                if recovered_validations.insert(key, validated).is_some()",
+    ),
+    (
+        "pending Kura ordinary owner exclusion",
+        "effects",
+        "|| recovered_validations.contains_key(key)\n                        || recovered_validate_retry_census",
+        "|| false\n                        || recovered_validate_retry_census",
+    ),
+    (
+        "timeout retirement authenticated census",
+        "ledger",
+        "!original.contains_live_ordinal(self.records[index].ordinal())",
+        "false",
+    ),
+    (
+        "timeout retirement supersession authority",
+        "ledger",
+        ".ordinary_body_is_superseded_by_timeout(frontier)",
+        ".ordinary_body_is_superseded_by_timeout(foreign_frontier)",
+    ),
+    (
+        "timeout retirement exact successor publication",
+        "ledger",
+        ".persist_exact_successor(self, &reconciled)",
+        ".persist_exact_successor(self, &foreign)",
+    ),
     (
         "actual consumer rejects a foreign context",
         "leader_wire_consumer",

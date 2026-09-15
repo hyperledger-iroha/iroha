@@ -82,7 +82,8 @@ const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+tru
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
-// manifest, including the compact-CA descriptor and all six algebraic schedules.
+// manifest, including the compact-CA descriptor and all six SHA3-384 algebraic
+// schedule digests in their opaque byte order. The manifest itself uses SHA-256.
 // This identifies the sole compiled geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
@@ -668,20 +669,6 @@ mod tests {
     fn credential_prover_rejects_profile_or_genesis_before_entropy() {
         let fixture = super::super::relation::release_fixture::build_zk_x509_reference_fixture_v1()
             .expect("canonical reference fixture");
-        let (sha_digests, p256_digest) =
-            compiled_profile_schedule_digests_v1().expect("all six frozen schedules");
-        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
-        let independent = independent_compiled_profile_digest_v1(&fields);
-        // Profile admission precedes genesis and witness preparation. Keep that ordering test
-        // independent of release readiness: the separate release-pin equality test above must
-        // still fail if the current manifest and pin disagree.
-        let expected = match ZK_X509_COMPILED_PROFILE_DIGEST_V1 {
-            None => ZkX509EngineErrorV1::CompiledProfileUnpinned,
-            Some(pin) if pin != independent => ZkX509EngineErrorV1::CompiledProfileMismatch,
-            Some(_) => {
-                ZkX509EngineErrorV1::CredentialProof(ZkX509CredentialProofErrorV1::InvalidStatement)
-            }
-        };
         let mut rng = PreflightEntropyV1::default();
         let error = prove_zk_x509_credential_proof_v1_with_rng(
             &fixture.statement,
@@ -693,7 +680,10 @@ mod tests {
             &mut rng,
         )
         .expect_err("invalid genesis must not reach credential proof construction");
-        assert_eq!(error, expected);
+        assert_eq!(
+            error,
+            ZkX509EngineErrorV1::CredentialProof(ZkX509CredentialProofErrorV1::InvalidStatement)
+        );
         assert_eq!(rng.requests, 0, "credential preflight consumed entropy");
     }
 

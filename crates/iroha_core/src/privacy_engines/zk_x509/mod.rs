@@ -4,8 +4,10 @@
 //! prototype.  The first release is an original, versioned Iroha relation:
 //! strict DER, RFC 5280 path processing within a closed P-256/SHA-256 profile,
 //! private certificate and CRL witnesses, fixed SHA-256 Merkle accumulators,
-//! and a purpose-built Goldilocks STARK.  No compatibility or fallback proof
-//! format is accepted.
+//! and a purpose-built Goldilocks STARK with opaque SHA3-384 outer commitments.
+//! The SHA-256 compiled manifest binds the exact SHA3-384 schedule bytes; its
+//! independent pin and deterministic proof vectors describe this sole protocol.
+//! No compatibility or fallback proof format is accepted.
 //!
 //! [`profile`] fixes the intended relation and AIR resource envelope, while [`merkle`] implements
 //! accumulator semantics shared by the native reference relation and constrained execution.

@@ -4283,6 +4283,8 @@ mod tests {
     }
     #[test]
     fn exact_wire_and_committed_values_reject_adversarial_mutations() {
+        use crate::privacy_engines::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
+
         let (adapter, _base, proof) = proof_fixture_v1();
         assert!(verify_proof_managed_note_stark_v1(adapter, &[]).is_err());
         for length in [1, 4, 7, proof.len() / 4, proof.len() / 2, proof.len() - 1] {
@@ -4291,7 +4293,14 @@ mod tests {
         let mut trailing = proof.to_vec();
         trailing.push(0);
         assert!(verify_proof_managed_note_stark_v1(adapter, &trailing).is_err());
-        for offset in [0_usize, 4, 6, 8, 40, 72, 168] {
+        let header_bytes = 8;
+        let digest_bytes = PRIVACY_OUTER_DIGEST_BYTES_V1;
+        // The header is followed by base/aux roots and composition/mask roots.
+        // Opaque SHA3 digests have no Goldilocks canonical-field restriction.
+        for offset in [0_usize, 4, 6].into_iter().chain(
+            (0..2 + 2 * PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
+                .map(|root| header_bytes + root * digest_bytes),
+        ) {
             let mut changed = proof.to_vec();
             changed[offset] ^= 1;
             assert!(
@@ -4311,7 +4320,8 @@ mod tests {
         )
         .expect("mock layout");
         let fri_rounds = layout.fri_rounds(parameters).expect("FRI rounds");
-        let deep_insertion = 8 + 2 * 32 + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * 2 * 32;
+        let deep_insertion =
+            header_bytes + (2 + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * 2) * digest_bytes;
         let deep_bytes =
             aggregate::exact_deep_opening_bytes_v1(parameters, &layout).expect("DEEP byte length");
         let deep_end = deep_insertion + deep_bytes;
@@ -4364,6 +4374,23 @@ mod tests {
                 verify_proof_managed_note_stark_v1(adapter, &changed).is_err(),
                 "mutated DEEP {label} opening must be rejected"
             );
+            for invalid in [
+                super::super::transparent_stark::GOLDILOCKS_MODULUS_V1,
+                u64::MAX,
+            ] {
+                for coefficient in 0..4 {
+                    let mut noncanonical = proof.to_vec();
+                    let start = offset + coefficient * core::mem::size_of::<u64>();
+                    noncanonical[start..start + 8].copy_from_slice(&invalid.to_be_bytes());
+                    assert!(
+                        matches!(
+                            verify_proof_managed_note_stark_v1(adapter, &noncanonical),
+                            Err(ProofManagedNoteStarkErrorV1::ProofWire)
+                        ),
+                        "noncanonical DEEP {label} coefficient {coefficient} must fail decoding"
+                    );
+                }
+            }
         }
         let mut reordered_deep = proof.to_vec();
         let first_current =
@@ -4377,15 +4404,8 @@ mod tests {
             ..deep_insertion + (NOTE_COPY_WIDTH_V1 + 1) * extension_bytes]
             .copy_from_slice(&first_current);
         assert!(verify_proof_managed_note_stark_v1(adapter, &reordered_deep).is_err());
-        let mut noncanonical_deep = proof.to_vec();
-        noncanonical_deep[deep_insertion..deep_insertion + 8]
-            .copy_from_slice(&u64::MAX.to_be_bytes());
-        assert!(matches!(
-            verify_proof_managed_note_stark_v1(adapter, &noncanonical_deep),
-            Err(ProofManagedNoteStarkErrorV1::ProofWire)
-        ));
         let first_terminal =
-            deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * 32;
+            deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * digest_bytes;
         let mut noncanonical = proof.to_vec();
         noncanonical[first_terminal..first_terminal + 8].copy_from_slice(&u64::MAX.to_be_bytes());
         assert!(matches!(

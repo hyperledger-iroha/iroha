@@ -3019,11 +3019,15 @@ impl SumeragiV2Adapter {
                 let durable = body_store
                     .store(manifest, body)
                     .expect("persist CompleteTip successor body");
-                body_store
+                let validated = body_store
                     .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                         Ok::<_, String>(commitment)
                     })
-                    .expect("persist CompleteTip successor validation outcome");
+                    .expect("persist CompleteTip successor validation outcome")
+                    .into_validated_receipt()
+                    .expect("CompleteTip successor validation must succeed");
+                assert_eq!(validated.durable(), &durable);
+                assert_eq!(validated.execution_commitment(), commitment);
             }
             let (mut writer, effects) = Self::open_with_aggregator_and_publication(
                 wal_path,
@@ -3038,17 +3042,24 @@ impl SumeragiV2Adapter {
             )
             .expect("open CompleteTip successor WAL writer");
             assert!(effects.is_empty());
-            writer
+            let envelope = WalEnvelopeV2 {
+                protocol_version: wire::PROTOCOL_VERSION,
+                persistence_id: 1,
+                record: WalRecordV2::Decision(decision),
+            };
+            let payload = envelope.encode();
+            let receipt = writer
                 .wal
-                .append(
-                    &WalEnvelopeV2 {
-                        protocol_version: wire::PROTOCOL_VERSION,
-                        persistence_id: 1,
-                        record: WalRecordV2::Decision(decision),
-                    }
-                    .encode(),
-                )
+                .append(&payload)
                 .expect("fsync actual CompleteTip successor Decision");
+            assert_eq!(
+                receipt.sequence().checked_add(1),
+                Some(envelope.persistence_id)
+            );
+            let records = writer.wal.recovered_records();
+            assert_eq!(records.len(), 1);
+            assert!(records[0].exactly_matches_receipt(receipt));
+            assert_eq!(records[0].payload(), payload.as_slice());
             drop(writer);
         }
         body_store

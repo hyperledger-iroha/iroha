@@ -563,6 +563,8 @@ mod tests {
             ] {
                 assert_ne!(digest, [0; 32]);
             }
+            // Release pins bind the SHA3-384 outer protocol, opaque 48-byte roots,
+            // and the corresponding exact native proof descriptors.
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
                     "b00b724769457ed4cc6640b8246bfb8e9a8c2dde5010882ec8d3d7730cac61ba".to_owned(),

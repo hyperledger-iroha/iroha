@@ -171,6 +171,8 @@ fn double_vote_slashes_plain_lock() {
     // Block 1: seed referendum and cast initial ballot.
     let rid = "rid-slash-plain".to_string();
     {
+        // The direct ballot fixture publishes native transfer transcripts.
+        let fixture_witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
         // This chain later applies signed blocks, so genesis must also produce
         // their state side effects, including the Musubi resolver checkpoint.
         let genesis = BlockBuilder::new(Vec::new())
@@ -206,6 +208,8 @@ fn double_vote_slashes_plain_lock() {
             .execute(&ALICE_ID, &mut stx1)
             .expect("first ballot should succeed");
         stx1.apply();
+        // Signed-block validation acquires its own non-reentrant recorder guard.
+        drop(fixture_witness_guard);
         let valid = genesis
             .validate_and_record_transactions(&mut sblock1)
             .unpack(|_| {});
@@ -395,6 +399,8 @@ fn double_vote_slashes_plain_lock() {
 }
 #[test]
 fn restitution_restores_slashed_balance() {
+    // Direct retained-custody movements share the execution witness recorder.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -552,6 +558,8 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
 }
 #[test]
 fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
+    // Direct retained-custody movements share the execution witness recorder.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain");
     let old_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),

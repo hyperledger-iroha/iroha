@@ -1110,6 +1110,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
 fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
     let digest = der_public_digest_v1(&shape).expect("DER public digest");
+    // Independent SHA3-384 of the exact catalog/protocol/profile frame and
+    // ordered DER descriptors plus the constant public registration label.
     assert_eq!(
         hex::encode(digest.to_bytes()),
         "28b87be1e1bf15664d657d1a2454e37bf190a320ce5bd07e4fc5348db1017e2ea928f47c77e01a310fb4d116fc805b96"

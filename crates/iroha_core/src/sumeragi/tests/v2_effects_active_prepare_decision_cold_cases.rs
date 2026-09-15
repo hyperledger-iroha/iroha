@@ -1073,7 +1073,7 @@ fn recover_stale_prepare_decision_crash_fixture(
     });
     let (owner, executor, services) = (*launched).into_settled_body_fixture_for_test();
     transport.executor = executor;
-    let mut fixture = ReadyBodyFixture {
+    let fixture = ReadyBodyFixture {
         transport,
         owner,
         planner_io: *planner_io,
