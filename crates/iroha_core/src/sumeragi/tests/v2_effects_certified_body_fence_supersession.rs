@@ -51,21 +51,41 @@ mod certified_body_fence_supersession {
     }
 
     struct ReadyBodyFixture {
-        transport: ProductionTransportFixture,
-        owner: ProductionLifecycleOwnerV1,
-        planner_io: LifecyclePlannerIoFixture,
-        services: ProductionV2Services,
+        // Retain the production owners on the heap across fixture handoffs;
+        // copying the aggregate must not consume the stack needed by admission.
+        transport: Box<ProductionTransportFixture>,
+        owner: Box<ProductionLifecycleOwnerV1>,
+        planner_io: Box<LifecyclePlannerIoFixture>,
+        services: Box<ProductionV2Services>,
         _owner_directory: TempDir,
         certificate: wire::QuorumCertificate,
         ordinal: u128,
     }
 
+    #[test]
+    fn ready_body_fixture_keeps_production_owners_on_heap() {
+        let inline = std::mem::size_of::<ReadyBodyFixture>();
+        assert!(inline <= 4096, "fixture handoffs use {inline} inline bytes");
+    }
+
+    /// Construct services separately so their construction temporaries do not
+    /// occupy the fixture frame while authenticated recovery runs.
+    #[inline(never)]
+    fn ready_body_services() -> Box<ProductionV2Services> {
+        let (services, _) = crate::sumeragi::v2_worker::tests::fixture();
+        let mut services = Box::new(services);
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        services
+    }
+
     fn ready_body_fixture() -> ReadyBodyFixture {
         // A fixed roster index can be a dormant Set-B validator. The current
         // leader is always eligible to fetch a certified candidate body.
-        let mut transport = ProductionTransportFixture::new_with_local_role_and_queue_config(
-            Some(crate::sumeragi::v2_core::CommitteeRole::Leader),
-            RuntimeQueueConfig::default(),
+        let mut transport = Box::new(
+            ProductionTransportFixture::new_with_local_role_and_queue_config(
+                Some(crate::sumeragi::v2_core::CommitteeRole::Leader),
+                RuntimeQueueConfig::default(),
+            ),
         );
         let leader = transport.context.leader(0);
         assert_eq!(transport.executor.local_validator, Some(leader));
@@ -79,11 +99,11 @@ mod certified_body_fence_supersession {
         let verified = VerifiedHeightContext::genesis(transport.context.clone(), proofs)
             .expect("authenticate the four-validator owner context");
         let owner_directory = TempDir::new().expect("temporary certified completion owner");
-        let mut owner = ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
+        let mut owner = Box::new(ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
             verified,
             &transport.validator_keys[usize::try_from(leader).expect("leader index fits")],
             owner_directory.path(),
-        );
+        ));
         let ordinals = RuntimeLifecycleOrdinalSource::from_authority(
             owner.bind_empty_ingress_ordinal_authority_for_test(),
         );
@@ -182,20 +202,19 @@ mod certified_body_fence_supersession {
             .expect("derive the exact authenticated response's Fetch wake authority");
         // The production ingress admission obtains the missing manifest from
         // the authenticated response while retaining the original Fetch shape.
-        let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
-        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-        let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
-            &mut services,
+        let mut services = ready_body_services();
+        let mut planner_io = Box::new(owner.bind_body_store_to_planner_io_for_test(
+            services.as_mut(),
             leader,
             Arc::clone(&transport.executor.output_guard),
             1,
-        );
+        ));
         crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
-            &mut services,
+            services.as_mut(),
             &transport.validator_keys[usize::try_from(leader).expect("local validator index")],
         );
         planner_io.install_output_guard_for_test(
-            &mut services,
+            services.as_mut(),
             Arc::clone(&transport.executor.output_guard),
         );
         services
@@ -233,7 +252,7 @@ mod certified_body_fence_supersession {
             owner
                 .complete_certified_fetch_for_test(
                     &mut transport.executor,
-                    &mut services,
+                    services.as_mut(),
                     &ingress,
                     completion,
                 )
@@ -314,7 +333,7 @@ mod certified_body_fence_supersession {
             assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
         }
         let advanced = fixture.owner.dispatch_completion_for_test(
-            &mut fixture.services, &mut fixture.transport.executor, 0,
+            fixture.services.as_mut(), &mut fixture.transport.executor, 0,
         ).expect("the original Ready Fetch still owns the only BodyAvailable transition");
         let ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal, child_ordinal, child: LifecycleWorkClass::Store,
@@ -327,7 +346,7 @@ mod certified_body_fence_supersession {
         assert_eq!(fixture.transport.executor.runtime.queued_commands(), before_commands);
         assert!(!fixture.transport.executor.output_guard.restart_required());
         assert!(!fixture.transport.executor.status().fail_closed);
-        fixture.planner_io.detach(&mut fixture.services);
+        fixture.planner_io.detach(fixture.services.as_mut());
     }
 
     #[test]
@@ -353,11 +372,11 @@ mod certified_body_fence_supersession {
             }).collect(),
         ).expect("reauthenticate the unchanged restart context");
         let wal_path = transport._directory.path().join("transport-regression-safety.wal");
-        planner_io.detach(&mut services);
+        planner_io.detach(services.as_mut());
         drop(services);
         drop(owner);
         drop(transport.executor);
-        let mut owner = SumeragiV2Adapter::reopen_body_owner_for_test(
+        let mut owner = Box::new(SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path, directory.path(), verified, validator,
             &transport.validator_keys[usize::try_from(validator).unwrap()],
             AdapterFingerprints {
@@ -367,24 +386,23 @@ mod certified_body_fence_supersession {
             },
             [0x63; 32],
             |_| panic!("a Ready Fetch has not executed validation"),
-        );
+        ));
         assert!(owner.exact_recovered_body_pipeline_join_for_test());
-        let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
-        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        let mut services = ready_body_services();
         let (executor, planner_io, leader_wire_gate, ordinals) = owner
             .bind_recovered_cancelled_body_executor_for_test(
-                &wal_path, &mut services, ConsensusOutputGuard::isolated(), validator,
+                &wal_path, services.as_mut(), ConsensusOutputGuard::isolated(), validator,
             );
         crate::sumeragi::v2_worker::tests::install_active_tag_for_test(
-            &mut services, executor.current_tag(),
+            services.as_mut(), executor.current_tag(),
         );
         crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
-            &mut services, &transport.validator_keys[usize::try_from(validator).unwrap()],
+            services.as_mut(), &transport.validator_keys[usize::try_from(validator).unwrap()],
         );
         transport.executor = executor;
         transport._lifecycle_ordinals = ordinals;
         (ReadyBodyFixture {
-            transport, owner, planner_io, services,
+            transport, owner, planner_io: Box::new(planner_io), services,
             _owner_directory: directory, certificate, ordinal,
         }, leader_wire_gate)
     }
@@ -415,7 +433,7 @@ mod certified_body_fence_supersession {
             assert!(fixture.transport.executor.status().fail_closed);
             assert!(services.fetch_tasks.is_empty());
             assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
-            fixture.planner_io.detach(&mut fixture.services);
+            fixture.planner_io.detach(fixture.services.as_mut());
         }
     }
 
@@ -467,7 +485,7 @@ mod certified_body_fence_supersession {
         assert!(fixture.transport.executor.published_lifecycle_validate_retry_markers.is_empty());
         assert_eq!(fixture.transport.executor.body_pipeline_owners, guards);
         assert!(!fixture.transport.executor.output_guard.restart_required());
-        fixture.planner_io.detach(&mut fixture.services);
+        fixture.planner_io.detach(fixture.services.as_mut());
     }
 
     #[test]
@@ -476,7 +494,7 @@ mod certified_body_fence_supersession {
         let before = fixture.owner.fetch_registry_snapshot_for_test();
         fixture.owner.assert_cold_ready_fetch_bad_carrier_rejected_for_test();
         assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), before);
-        fixture.planner_io.detach(&mut fixture.services);
+        fixture.planner_io.detach(fixture.services.as_mut());
     }
 
     fn signed_timeout_certificate(
@@ -974,7 +992,7 @@ mod certified_body_fence_supersession {
             let advanced = fixture
                 .owner
                 .dispatch_completion_for_test(
-                    &mut fixture.services,
+                    fixture.services.as_mut(),
                     &mut fixture.transport.executor,
                     0,
                 )
@@ -1013,7 +1031,7 @@ mod certified_body_fence_supersession {
             .lifecycle_reducer_fence_observation();
         let blocked = fixture
             .owner
-            .dispatch_completion_for_test(&mut fixture.services, &mut fixture.transport.executor, 0)
+            .dispatch_completion_for_test(fixture.services.as_mut(), &mut fixture.transport.executor, 0)
             .expect("an active signer must park the exact body carrier without a fault");
         let ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait } = blocked else {
             panic!("the body carrier must wait on the reducer fence");
@@ -1131,7 +1149,7 @@ mod certified_body_fence_supersession {
                 }
             }
             let failed = fixture.owner.dispatch_completion_for_test(
-                &mut fixture.services,
+                fixture.services.as_mut(),
                 &mut fixture.transport.executor,
                 0,
             );
@@ -1176,7 +1194,7 @@ mod certified_body_fence_supersession {
             );
             assert!(fixture.transport.executor.output_guard.restart_required());
             assert!(fixture.transport.executor.status().fail_closed);
-            fixture.planner_io.detach(&mut fixture.services);
+            fixture.planner_io.detach(fixture.services.as_mut());
             assert_reopened_body(&fixture.transport, fixture._owner_directory.path());
             return;
         }
@@ -1190,7 +1208,7 @@ mod certified_body_fence_supersession {
         }
 
         let retry = fixture.owner.dispatch_completion_for_test(
-            &mut fixture.services,
+            fixture.services.as_mut(),
             &mut fixture.transport.executor,
             0,
         );
@@ -1284,7 +1302,7 @@ mod certified_body_fence_supersession {
         assert_eq!(fixture.transport.executor.recovered_bodies, recovered);
         assert!(!fixture.transport.executor.status().fail_closed);
         assert!(current_services.closed.is_empty());
-        fixture.planner_io.detach(&mut fixture.services);
+        fixture.planner_io.detach(fixture.services.as_mut());
         assert_reopened_body(&fixture.transport, fixture._owner_directory.path());
     }
 

@@ -4715,12 +4715,15 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
     carrier: DurableValidateBody,
     replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
 }
+/// One heap-owned authenticated body lineage in the complete startup census.
+/// Keeping every variant indirect bounds the census loop and successor-return
+/// stack frames independently of retained candidate and replay payload sizes.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) enum AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1
 {
-    Fetch(AuthenticatedRecoveredDurableCertifiedFetchV1),
-    Store(AuthenticatedRecoveredDurableCertifiedStoreV1),
-    Validate(AuthenticatedRecoveredDurableCertifiedValidateV1),
-    StandaloneValidate(AuthenticatedRecoveredDurableStandaloneValidateV1),
+    Fetch(Box<AuthenticatedRecoveredDurableCertifiedFetchV1>),
+    Store(Box<AuthenticatedRecoveredDurableCertifiedStoreV1>),
+    Validate(Box<AuthenticatedRecoveredDurableCertifiedValidateV1>),
+    StandaloneValidate(Box<AuthenticatedRecoveredDurableStandaloneValidateV1>),
 }
 /// Aggregate opaque recovery cut for every live ordinary certified-body row.
 ///
@@ -4745,10 +4748,11 @@ pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
     replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
     output_frontier: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
 }
+/// One heap-owned prepared carrier, retained through registry installation errors.
 pub(super) enum PreparedDurableCertifiedBodyPipelineWorkV1 {
-    Fetch(CertifiedFetchCompletion),
-    Store(DurableStoreBody),
-    Validate(DurableValidateBody),
+    Fetch(Box<CertifiedFetchCompletion>),
+    Store(Box<DurableStoreBody>),
+    Validate(Box<DurableValidateBody>),
 }
 struct PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
     candidate: Option<CandidateAdmission>,
@@ -4760,19 +4764,19 @@ impl AuthenticatedRecoveredDurableCertifiedFetchV1 {
     }
 
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_store(
-        self,
+        self: Box<Self>,
         verified: &VerifiedHeightContext,
         ordinal: u128,
-    ) -> Option<AuthenticatedRecoveredDurableCertifiedStoreV1> {
+    ) -> Option<Box<AuthenticatedRecoveredDurableCertifiedStoreV1>> {
         let (carrier, candidate, replay) =
             DurableStoreBody::from_recovered_certified_fetch(self.completion, verified, ordinal)
                 .ok()?;
-        let store = AuthenticatedRecoveredDurableCertifiedStoreV1 {
+        let store = Box::new(AuthenticatedRecoveredDurableCertifiedStoreV1 {
             candidate,
             carrier,
             origin_replay: self.origin_replay,
             replay,
-        };
+        });
         store.is_exact().then_some(store)
     }
 }
@@ -4813,21 +4817,21 @@ impl AuthenticatedRecoveredDurableCertifiedStoreV1 {
     }
 
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_validate(
-        self,
+        self: Box<Self>,
         verified: &VerifiedHeightContext,
         ordinal: u128,
-    ) -> Option<AuthenticatedRecoveredDurableCertifiedValidateV1> {
+    ) -> Option<Box<AuthenticatedRecoveredDurableCertifiedValidateV1>> {
         let fetch_replay = self.replay;
         let (carrier, candidate, store_replay) =
             DurableValidateBody::from_recovered_certified_store(self.carrier, verified, ordinal)
                 .ok()?;
-        let validate = AuthenticatedRecoveredDurableCertifiedValidateV1 {
+        let validate = Box::new(AuthenticatedRecoveredDurableCertifiedValidateV1 {
             candidate,
             carrier,
             origin_replay: self.origin_replay,
             fetch_replay,
             store_replay,
-        };
+        });
         validate.is_exact().then_some(validate)
     }
 }
@@ -4925,7 +4929,9 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
                 replay_steps.push(entry.origin_replay);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
-                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(entry.completion),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(Box::new(
+                        entry.completion,
+                    )),
                 }
             }
             Self::Store(entry) => {
@@ -4933,7 +4939,9 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
                 replay_steps.push(entry.replay);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
-                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Store(entry.carrier),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Store(Box::new(
+                        entry.carrier,
+                    )),
                 }
             }
             Self::Validate(entry) => {
@@ -4942,14 +4950,18 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
                 replay_steps.push(entry.store_replay);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
-                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(entry.carrier),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(Box::new(
+                        entry.carrier,
+                    )),
                 }
             }
             Self::StandaloneValidate(entry) => {
                 replay_steps.extend(entry.replay_steps);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
-                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(entry.carrier),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(Box::new(
+                        entry.carrier,
+                    )),
                 }
             }
         }
@@ -5801,6 +5813,21 @@ include!("v2_lifecycle_replay_authority_payload_projection.rs");
 include!("v2_lifecycle_replay_authority_output_recovery.rs");
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovered_body_census_entries_keep_carriers_on_heap() {
+        let inline =
+            std::mem::size_of::<super::AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1>();
+        assert!(
+            inline <= 2 * std::mem::size_of::<usize>(),
+            "recovery census entries use {inline} inline bytes"
+        );
+        let prepared = std::mem::size_of::<super::PreparedDurableCertifiedBodyPipelineWorkV1>();
+        assert!(
+            prepared <= 2 * std::mem::size_of::<usize>(),
+            "prepared recovery carriers use {prepared} inline bytes"
+        );
+    }
+
     include!("tests/v2_lifecycle_replay_authority_fixtures.rs");
     include!("tests/v2_lifecycle_replay_authority_cases.rs");
 }

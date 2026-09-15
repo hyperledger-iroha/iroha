@@ -8,7 +8,7 @@
 pub(crate) struct RecoveredWalValidateRegistryCut<'registry> {
     registry: Option<&'registry mut ConcreteLifecycleWorkRegistry>,
     address: ConcreteWorkAddress,
-    work: Option<ConcreteLifecycleWork>,
+    work: Option<Box<ConcreteLifecycleWork>>,
 }
 /// Opaque exact LedgerV1 store/frame retained by recovered-parent startup.
 ///
@@ -350,11 +350,13 @@ impl RecoveredWalParentFactoryError<'_> {
 /// The parent address is vacant from the registry detach onward. The child
 /// address is filled only by the pure LedgerV1 staging preflight and must also
 /// be vacant before fsync. Retaining the exclusive registry borrow prevents a
-/// concurrent concrete admission from invalidating either check.
+/// concurrent concrete admission from invalidating either check. Child work
+/// storage is reserved before fsync so publication only initializes its box.
 struct RecoveredWalValidateRegistryReservation<'registry> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     parent_address: ConcreteWorkAddress,
     child: Option<(ConcreteWorkAddress, LifecycleDigest)>,
+    child_storage: Box<std::mem::MaybeUninit<ConcreteLifecycleWork>>,
 }
 /// Fail-stop live use of the recovered-WAL detached-parent reservation.
 ///
@@ -365,7 +367,7 @@ struct RecoveredWalValidateRegistryReservation<'registry> {
 #[must_use = "a live Validate-to-Sign registry reservation has not been published"]
 pub(in crate::sumeragi) struct LiveValidateSignRegistryReservation<'registry> {
     reservation: RecoveredWalValidateRegistryReservation<'registry>,
-    _detached_parent: ConcreteLifecycleWork,
+    _detached_parent: Box<ConcreteLifecycleWork>,
 }
 struct DetachedRecoveredValidateCompletion {
     address: ConcreteWorkAddress,
@@ -948,6 +950,7 @@ impl LiveValidateSignRegistryReservation<'_> {
             registry,
             parent_address,
             child,
+            child_storage,
         } = reservation;
         let (child_address, child_digest) =
             child.expect("pre-fsync live Sign reservation binds one exact child");
@@ -961,7 +964,7 @@ impl LiveValidateSignRegistryReservation<'_> {
                 candidate,
                 DurableLiveWalSignOriginV1::Validate {
                     parent_address,
-                    parent: Box::new(parent),
+                    parent,
                 },
                 child_address,
             )
@@ -976,7 +979,7 @@ impl LiveValidateSignRegistryReservation<'_> {
         else {
             unreachable!("exclusive live Sign reservation kept its child address vacant")
         };
-        entry.insert(work);
+        entry.insert(Box::write(child_storage, work));
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1827,6 +1830,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
             registry,
             parent_address,
             child: _,
+            child_storage,
         } = reservation;
         let work = ConcreteLifecycleWork {
             digest: child_digest,
@@ -1842,7 +1846,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
         else {
             unreachable!("exclusive preflight proved the recovered Sign address vacant")
         };
-        entry.insert(work);
+        entry.insert(Box::write(child_storage, work));
         Ok(InstalledRecoveredWalSignRegistryCut {
             registry,
             parent_address,
@@ -1998,8 +2002,11 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
             registry,
             parent_address,
             child: _,
+            child_storage,
         } = reservation;
-        let previous = registry.entries.insert(broadcast_address, work);
+        let previous = registry
+            .entries
+            .insert(broadcast_address, Box::write(child_storage, work));
         assert!(previous.is_none());
         Ok(InstalledRecoveredWalSignRegistryCut {
             registry,
@@ -2142,17 +2149,18 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
             registry,
             parent_address,
             child: _,
+            child_storage,
         } = reservation;
         assert!(
             registry
                 .entries
-                .insert(broadcast_address, broadcast_work)
+                .insert(broadcast_address, Box::write(child_storage, broadcast_work))
                 .is_none()
         );
         assert!(
             registry
                 .entries
-                .insert(next_sign_address, next_sign_work)
+                .insert(next_sign_address, Box::new(next_sign_work))
                 .is_none()
         );
         Ok(InstalledRecoveredWalSignRegistryCut {
@@ -4368,11 +4376,12 @@ impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
             store,
             adapter,
         } = self;
-        let fetch = registry
+        let mut fetch_work = registry
             .entries
             .remove(&fetch_address)
             .expect("published recovered Store retains its exact Fetch carrier");
-        let ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) = fetch.kind else {
+        let ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) = fetch_work.kind
+        else {
             panic!("published recovered Store cannot replace another carrier class")
         };
         assert!(fetch.dispatch_key.is_some());
@@ -4390,12 +4399,9 @@ impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
             ),
         };
         assert!(replacement.validates_at(store_address));
-        assert!(
-            registry
-                .entries
-                .insert(store_address, replacement)
-                .is_none()
-        );
+        // Keep the registry allocation across the already-published transition.
+        *fetch_work = replacement;
+        assert!(registry.entries.insert(store_address, fetch_work).is_none());
         adapter
     }
 }
@@ -4719,11 +4725,11 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
             verified,
             adapter,
         } = self;
-        let sign = registry
+        let mut sign_work = registry
             .entries
             .remove(&sign_address)
             .expect("published recovered Broadcast retains its exact Sign carrier");
-        let parent = match sign.kind {
+        let parent = match sign_work.kind {
             ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::Live(sign)
             }
@@ -4754,10 +4760,12 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
             )),
         };
         assert!(replacement.validates_at(broadcast_address));
+        // Keep the registry allocation across the already-published transition.
+        *sign_work = replacement;
         assert!(
             registry
                 .entries
-                .insert(broadcast_address, replacement)
+                .insert(broadcast_address, sign_work)
                 .is_none()
         );
         adapter
@@ -4850,6 +4858,7 @@ impl<'registry, 'adapter>
         }
         Ok(BoundRecoveredLifecycleSignBroadcastAndSignSuccessor {
             broadcast_storage: Box::new_uninit(),
+            next_sign_storage: Box::new_uninit(),
             registry: self.registry,
             sign_address: self.sign_address,
             broadcast_address,
@@ -4872,6 +4881,7 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
     ) -> crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter> {
         let Self {
             broadcast_storage,
+            next_sign_storage,
             registry,
             sign_address,
             broadcast_address,
@@ -4880,11 +4890,11 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
             verified,
             adapter,
         } = self;
-        let sign = registry
+        let mut sign_work = registry
             .entries
             .remove(&sign_address)
             .expect("published combined successor retains its exact Sign parent");
-        let parent = match sign.kind {
+        let parent = match sign_work.kind {
             ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
                 DurableRecoveredLifecycleSignParentV1::Live(sign)
             }
@@ -4931,16 +4941,21 @@ impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter
         };
         assert!(broadcast_work.validates_at(broadcast_address));
         assert!(next_sign_work.validates_at(next_sign_address));
+        // The first child reuses its parent box; the second was reserved before fsync.
+        *sign_work = broadcast_work;
         assert!(
             registry
                 .entries
-                .insert(broadcast_address, broadcast_work)
+                .insert(broadcast_address, sign_work)
                 .is_none()
         );
         assert!(
             registry
                 .entries
-                .insert(next_sign_address, next_sign_work)
+                .insert(
+                    next_sign_address,
+                    Box::write(next_sign_storage, next_sign_work)
+                )
                 .is_none()
         );
         adapter

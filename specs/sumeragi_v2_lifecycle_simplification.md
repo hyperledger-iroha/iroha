@@ -789,6 +789,14 @@ logical coordinator still stores only the resulting physical slot and digest.
 Complete process-local `AdapterEffect` values live in a sibling deterministic
 registry keyed by `(OwnerId, record ordinal, PhysicalSlotId)`, never by digest
 alone, because two inherited body authorities may share one concrete carrier.
+The registry stores heap-owned work values so B-tree operations do not place
+complete retained carriers in tree-node stack temporaries. Publication tails
+reuse incumbent allocations or consume storage reserved before durable
+publication; boxing must not introduce an allocation after that boundary.
+Installation and publication failures retain the same heap-owned work. Cold
+startup also keeps authenticated certified-body census entries heap-owned
+through Fetch-to-Store-to-Validate reconstruction; these opaque process-local
+carriers do not change the durable replay schema.
 Registry installation consumes both the effect and pending binding, rejects
 overwrite, digest drift, or disagreement between the pending causal lifecycle
 key and the admitted `OwnerId`, resolves only an exact lease-advertised slot,
