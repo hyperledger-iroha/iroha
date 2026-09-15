@@ -482,6 +482,10 @@ async fn blocking_stream_subscribe_rejects_async_runtime_before_dispatch() {
 
 #[test]
 fn pending_blocking_stream_does_not_serialize_sibling_subscription_receive_or_close() {
+    // Bound a runtime-lock regression without imposing an end-to-end latency
+    // requirement on sibling scheduling, signing, and decoding in parallel tests.
+    let watchdog = Duration::from_secs(30);
+    let sibling_frame = Ok(StreamFrame::Binary(encoded_event()));
     let transport = Arc::new(TestTransport::new([]));
     let (started, waiting) = std::sync::mpsc::channel();
     let (finish, closed) = tokio::sync::oneshot::channel();
@@ -492,39 +496,30 @@ fn pending_blocking_stream_does_not_serialize_sibling_subscription_receive_or_cl
     let facade =
         crate::blocking::AccountClient::from_client(account(Arc::clone(&transport))).unwrap();
     let mut pending = facade.events().subscribe([filter()]).unwrap();
-    let first = std::thread::spawn(move || pending.recv(None));
-    let entered = waiting.recv_timeout(Duration::from_secs(5));
+    let first = std::thread::spawn(move || pending.recv(Some(watchdog)));
+    let entered = waiting.recv_timeout(watchdog);
 
-    transport
-        .frames
-        .lock()
-        .unwrap()
-        .push_back(Ok(StreamFrame::Binary(encoded_event())));
-    let (completed, completion) = std::sync::mpsc::channel();
-    let sibling = std::thread::spawn(move || {
-        let result = (|| -> Result<_> {
-            let mut stream = facade.events().subscribe([filter()])?;
-            let value = stream.recv(Some(Duration::from_secs(1)))?;
-            stream.close()?;
-            Ok(value)
-        })();
-        completed.send(result).unwrap();
-    });
-    let independent = completion.recv_timeout(Duration::from_secs(2));
-    // Always release and join both callers, including when a runtime lock
-    // regression prevented the sibling from completing before this signal.
-    finish.send(()).unwrap();
+    transport.frames.lock().unwrap().push_back(sibling_frame);
+    let independent = (|| -> Result<_> {
+        let mut stream = facade.events().subscribe([filter()])?;
+        let value = stream.recv(Some(Duration::from_secs(1)))?;
+        stream.close()?;
+        Ok(value)
+    })();
+    // The first receiver must stay pending until every sibling operation has
+    // completed. If they share a runtime lock, its watchdog expires first.
+    // Release and join it before asserting, including on sibling errors.
+    let released = finish.send(());
     let first_result = first.join().unwrap();
-    sibling.join().unwrap();
 
     entered.expect("the first receiver was polled before starting its sibling");
-    assert_eq!(first_result.unwrap(), None);
     assert_eq!(
-        independent
-            .expect("a pending receiver must not monopolize the shared runtime")
-            .unwrap(),
-        Some(event())
+        first_result
+            .expect("sibling operations must complete before the pending receiver times out"),
+        None
     );
+    released.expect("the first receiver must remain open until its explicit release");
+    assert_eq!(independent.unwrap(), Some(event()));
     assert_eq!(transport.observed.requests.lock().unwrap().len(), 2);
     assert_eq!(transport.observed.closes.load(Ordering::SeqCst), 1);
     assert_eq!(transport.observed.drops.load(Ordering::SeqCst), 2);
