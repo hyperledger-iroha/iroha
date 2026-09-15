@@ -2571,9 +2571,11 @@ fn deliver_worker_executor_wire(
 #[test]
 fn runtime_executor_publishes_actual_wal_consumer_before_same_round_enter_view_and_vote_retry() {
     let (mut service, keys) = fixture_with_block_payload();
-    service.local_validator = None;
+    // QC publication requires the same frozen-roster role at every runtime layer.
+    let local_validator = service.local_validator;
+    assert_eq!(local_validator, Some(0));
     let directory = TempDir::new().expect("full runtime consumer regression");
-    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, local_validator);
     let context = service.context.clone();
     let mut body_store = V2BodyStore::open_with_policy(
         directory.path().join("body"),
@@ -2615,7 +2617,7 @@ fn runtime_executor_publishes_actual_wal_consumer_before_same_round_enter_view_a
     let (mut executor, _body_store) = V2EffectExecutor::open_with_body_store(
         runtime, body_store,
         super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
-        None, context.clone(), service.local_peer.clone(), None, Arc::clone(&output_guard),
+        None, context.clone(), service.local_peer.clone(), local_validator, Arc::clone(&output_guard),
         EffectQueueConfig::default(),
     ).expect("open actual production executor");
     service.output_guard = output_guard;

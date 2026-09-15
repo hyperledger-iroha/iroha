@@ -5,6 +5,67 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## September 14 privacy and lifecycle contract repair
+
+The eighteen reported failures exposed incomplete first-release protocol and
+fixture updates. The SHA3-384 outer-hash migration changed compiled manifests,
+transcript challenges, native proof vectors and private-note/PQ-MASP profile
+bindings without regenerating every pin. ZK-ACE and X.509 now pin the exact
+current manifests, independently checked with Python's SHA implementations.
+The private-note adversarial test now locates DEEP and terminal fields after
+opaque 48-byte roots and checks every extension coefficient in all five DEEP
+regions against the modulus and `u64::MAX`. Canonical field rejection remains
+enforced by the existing decoder.
+
+The P2P admission fixture derives waiter capacity from the production semantic
+classes and exercises admission, drainage and reuse at capacity one. The timeout
+test checks both validator and observer roles; the WAL-consumer worker regression
+uses one consistent frozen validator identity across its runtime layers.
+
+The live ledger fixture consumes its startup publication witness before later
+transactions, matching production owner construction. Its regression checks the
+unchanged live coordinator and exact persisted successor. Source guards now
+cover the authenticated pending-Kura terminal transfer, recovered Decision
+authority at activation and timeout-body retirement. The publication inventory
+retains an exact count and explicitly checks the added retirement path's
+authentication, cancellation, validation, publication and readback order. Ten
+negative source mutations cover these boundaries.
+
+Validation rebuilt Core and P2P with:
+
+```sh
+cargo test --locked -p iroha_core -p iroha_p2p --lib \
+  --features iroha_core/expensive-telemetry,iroha_core/iroha-core-tests,iroha_core/sumeragi-main-loop-tests \
+  --no-run
+```
+
+The rebuilt Core harness passed 790 tests in 581.72 seconds with zero failures
+and four existing diagnostic ignores (`RAYON_NUM_THREADS=2`, eight test threads).
+The selection covered the complete shared aggregate/transparent/private-note
+STARK modules, ZK-ACE engine, X.509 DER/engine/readiness modules, privacy profiles
+and lifecycle coordinator, plus the four reported X.509 proof/profile cases,
+three reported adapter/worker cases, three reducer role controls and MAIN
+assembly scrubbing. An exact-name audit confirms all eighteen reported failures
+passed. The final P2P admission-class and handle-update selection passes all
+60 tests, including capacity-one actor reuse with canonical BLS identities and
+the existing retransmittable actor payload:
+
+```sh
+cargo test --locked -p iroha_p2p --lib --features test-fixtures --no-run
+target/debug/deps/iroha_p2p-9e3318caaa99f24d \
+  network::admission_class_tests:: network::handle_update_tests:: --test-threads=8
+```
+
+The complete 55-case source-contract census and all six Python asset
+tests, including the ten new mutation controls, also pass. Workspace formatting,
+diff checks, codec-retirement guards and historical archive verification pass.
+The builds retain warnings in unchanged code; full Core/workspace tests were
+not rerun.
+
+The current protocol is the sole accepted V1 path. These corrections do not
+qualify ZK-ACE or X.509 activation, full-size proofs, hardware parity or a full
+workspace release.
+
 ## Follow-up from the 27-failure admission run
 
 The reported full Core run passed 14,951 tests, failed 27 and ignored 32.
