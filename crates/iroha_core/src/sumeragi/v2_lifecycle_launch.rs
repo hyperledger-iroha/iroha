@@ -2909,6 +2909,18 @@ impl ProductionLifecycleOwnerV1 {
                 .install_authenticated_genesis_body(authenticated_genesis)
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
+        for (tag, manifest, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_certified_fetch_body_owners()
+            .map_err(|error| {
+                ProductionLifecycleLaunchErrorV1::Executor(EffectExecutorError::Contract(error))
+            })?
+        {
+            executor
+                .install_recovered_certified_fetch_body_owner(tag, manifest, durable_receipt)
+                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
+        }
         for (effect, pending, durable_receipt) in self
             .registry
             .registry()

@@ -54,7 +54,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "6030d12c01c919f055a58acf85d2dc05f99230a296fd7a3d1c9283018db2fb3d";
+    "41343a63f1fb3bf4cd550e697f316b8e50fe18e06d6daffba48605e228ddda74";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -2357,6 +2357,22 @@ mod tests {
 
         let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
             .expect("parse canonical rollout plan");
+        let mut substituted_lock = rollout.clone();
+        substituted_lock
+            .as_object_mut()
+            .expect("rollout plan object")
+            .insert(
+                "cargo_lock_sha256".to_owned(),
+                JsonValue::String("0".repeat(64)),
+            );
+        let substituted_bytes = json_pretty_bytes_v1(&substituted_lock, "substituted rollout")
+            .expect("encode substituted rollout");
+        assert!(
+            validate_rollout_plan_v1(&substituted_bytes)
+                .expect_err("a substituted dependency lock must be rejected")
+                .to_string()
+                .contains("cargo_lock_sha256")
+        );
         let protocols = rollout
             .get("protocols")
             .and_then(JsonValue::as_array)

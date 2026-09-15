@@ -692,14 +692,15 @@ struct FetchCompletionPlan {
 /// Ordinary certified-Fetch Phase B consumes this plan through the live lifecycle transaction.
 /// This plan reserves no legacy runtime command and mints no lifecycle
 /// ordinal. It freezes only existing exact request, Fetch, and body-pipeline
-/// indexes so the post-dequeue tail can retire them without another fallible
-/// lookup.
+/// indexes so the post-dequeue tail can retire the request and retain the exact
+/// body guard without another fallible lookup.
 #[must_use = "the prepared Fetch owner has not crossed the exact queue dequeue"]
 pub(in crate::sumeragi) struct PreparedLifecycleCertifiedFetchCompletion {
     pending: PendingFetch,
     certified: CertifiedFetchRetirementPlan,
     body_pipeline_key: (wire::ConsensusRound, wire::BlockSubject),
     body_pipeline_owner: BodyPipelineOwner,
+    body_pipeline_continuation: BodyPipelineOwnerBindingPlan,
     manifest: wire::PayloadManifest,
     durable_receipt: DurableBodyReceipt,
     response_hash: HashOf<wire::CertifiedBodyResponse>,

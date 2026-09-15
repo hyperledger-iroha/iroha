@@ -1263,6 +1263,7 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
 pub(in crate::sumeragi) struct PreparedPublishedLifecycleStoreRetryMarkerV1 {
     durable_receipt: DurableBodyReceipt,
     marker: Option<PublishedLifecycleStoreTerminalRetrySealV1>,
+    body_owner: Option<BodyPipelineOwner>,
 }
 
 impl PreparedPublishedLifecycleStoreRetryMarkerV1 {
@@ -1281,6 +1282,21 @@ impl PreparedPublishedLifecycleStoreRetryMarkerV1 {
         .ok_or_else(|| {
             "direct lifecycle Store marker changed its exact Fetch successor".to_owned()
         })?;
+        let AdapterEffect::StoreBody { tag, .. } = effect else {
+            return Err("published Store guard lost its exact effect kind".to_owned());
+        };
+        if let Some(owner) = self.body_owner {
+            if owner.manifest_hash != Some(self.durable_receipt.manifest_hash())
+                || !(owner.tag == *tag || tag.strictly_advances(owner.tag))
+            {
+                return Err("published Store guard changed its tag or manifest".to_owned());
+            }
+            // An older ordinary Store can still own an in-flight worker.
+            // Only this current Fetch guard transfers to the new marker.
+            if owner.tag != *tag {
+                self.body_owner = None;
+            }
+        }
         self.marker = Some(marker);
         Ok(self)
     }
@@ -1548,6 +1564,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             retry_marker: PreparedPublishedLifecycleStoreRetryMarkerV1 {
                 durable_receipt: durable.clone(),
                 marker: None,
+                body_owner: None,
             },
         })
     }
@@ -1608,6 +1625,57 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.commit_published_lifecycle_store_retry_marker(prepared.retry_marker);
     }
 
+    /// Restore only an authenticated Ready Fetch's inert body guard before clocks.
+    ///
+    /// The registry supplies the exact installed completion's replay inputs.
+    /// Old-tag carriers keep their normal durable cancellation path; only a
+    /// current-tag carrier prevents a second current BodyAvailable enqueue.
+    pub(in crate::sumeragi) fn install_recovered_certified_fetch_body_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+        durable: &DurableBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        let key = (manifest.round, manifest.subject);
+        if self.runtime.lifecycle_live_clocks_are_armed()
+            || !store_completion_matches(&self.context, manifest, durable)
+            || self.recovered_bodies.get(&key) != Some(&(manifest.clone(), durable.clone()))
+            || self.durable_bodies.get(&key) != Some(durable)
+        {
+            return Err(EffectExecutorError::Contract(
+                "cold certified Fetch guard changed its authenticated body or startup cut".to_owned(),
+            ));
+        }
+        let current = self.runtime.authoritative_tag().ok_or_else(|| {
+            EffectExecutorError::Contract("cold certified Fetch guard lost its reducer tag".to_owned())
+        })?;
+        if current != tag {
+            if current.strictly_advances(tag) && tag.height() == self.context.height {
+                return Ok(());
+            }
+            return Err(EffectExecutorError::Contract(
+                "cold certified Fetch guard has an unauthenticated future incarnation".to_owned(),
+            ));
+        }
+        if self.body_pipeline_owners.contains_key(&key)
+            || self.ready_bodies.contains_key(&key)
+            || self.validated_bodies.contains_key(&key)
+            || self.rejected_bodies.contains_key(&key)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self.published_lifecycle_store_retry_markers.contains_key(&key)
+            || self.published_lifecycle_validate_retry_markers.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "cold certified Fetch guard overlaps another body owner".to_owned(),
+            ));
+        }
+        let plan = self.plan_body_pipeline_owner(tag, manifest)?;
+        self.commit_body_pipeline_owner(plan);
+        Ok(())
+    }
+
     /// Preflight one inert retry marker before the direct Fetch-to-Store
     /// transaction takes the runtime borrow and publishes its Ledger row.
     pub(in crate::sumeragi) fn prepare_published_lifecycle_store_retry_marker(
@@ -1642,6 +1710,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(PreparedPublishedLifecycleStoreRetryMarkerV1 {
             durable_receipt: durable_receipt.clone(),
             marker: None,
+            body_owner: self.body_pipeline_owners.get(&key).copied(),
         })
     }
 
@@ -1671,6 +1740,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .published_lifecycle_store_retry_markers
             .insert(key, marker);
         assert!(previous.is_none());
+        if let Some(owner) = prepared.body_owner {
+            assert_eq!(self.body_pipeline_owners.get(&key), Some(&owner));
+            assert_eq!(self.body_pipeline_owners.remove(&key), Some(owner));
+        }
     }
 
     /// Preflight one inert retry marker before the direct Store-to-Validate
@@ -1784,6 +1857,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         && HashOf::new(manifest) == durable_receipt.manifest_hash()
                 });
         if !retained_body_is_exact
+            || self.body_pipeline_owners.contains_key(&key)
             || self.durable_bodies.get(&key) != Some(durable_receipt)
             || self.pending_durable_validate_admissions.contains_key(&key)
             || self.durable_validate_retry_seals.contains_key(&key)
@@ -1830,6 +1904,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(EffectExecutorError::Contract(
                 "recovered lifecycle Store marker installation followed live clock activation"
                     .to_owned(),
+            ));
+        }
+        if self.body_pipeline_owners.contains_key(&(durable_receipt.round(), durable_receipt.subject())) {
+            return Err(EffectExecutorError::Contract(
+                "recovered Store overlaps an authenticated Ready Fetch guard".to_owned(),
             ));
         }
         let prepared = self

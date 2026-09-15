@@ -3530,6 +3530,65 @@ impl ConcreteLifecycleWorkRegistry {
         Ok(census)
     }
 
+    /// Borrow all authenticated ordinary Ready Fetch completion guards.
+    ///
+    /// Missing or malformed replay material is an error, never an omitted row.
+    pub(super) fn recovered_certified_fetch_body_owners(
+        &self,
+    ) -> Result<Vec<(EventTag, &wire::PayloadManifest, &DurableBodyReceipt)>, String> {
+        let mut owners = Vec::new();
+        for (address, work) in &self.entries {
+            let ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) = &work.kind else {
+                continue;
+            };
+            if !work.validates_at(*address) {
+                return Err("cold certified Fetch lost its exact installed carrier".to_owned());
+            }
+            let (tag, manifest) = completion
+                .replay_evidence
+                .adapter_preview_inputs(
+                    &completion.incumbent_effect,
+                    &completion.incumbent_pending,
+                    &completion.durable_receipt,
+                )
+                .ok_or_else(|| {
+                    "cold certified Fetch lost its authenticated replay inputs".to_owned()
+                })?;
+            owners.push((tag, manifest, &completion.durable_receipt));
+        }
+        Ok(owners)
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn assert_cold_fetch_guard_rejects_bad_carrier_for_test(&mut self) {
+        let address = *self
+            .entries
+            .iter()
+            .find_map(|(address, work)| {
+                matches!(
+                    &work.kind,
+                    ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_)
+                )
+                .then_some(address)
+            })
+            .expect("the fixture owns a Ready Fetch carrier");
+        let before_count = self.recovered_certified_fetch_body_owners().unwrap().len();
+        assert!(before_count > 0);
+        let original = self.entries[&address].digest;
+        let foreign = LifecycleDigest::new([0xD6; 32]);
+        assert_ne!(original, foreign);
+        self.entries.get_mut(&address).unwrap().digest = foreign;
+        assert!(
+            self.recovered_certified_fetch_body_owners().is_err(),
+            "malformed Fetch evidence must reject the whole census, not omit its row"
+        );
+        self.entries.get_mut(&address).unwrap().digest = original;
+        assert_eq!(
+            self.recovered_certified_fetch_body_owners().unwrap().len(),
+            before_count
+        );
+    }
+
     /// Borrow every exact durable Store row whose executable lifecycle owner
     /// was already published before process restart.
     pub(super) fn recovered_published_store_retry_markers(

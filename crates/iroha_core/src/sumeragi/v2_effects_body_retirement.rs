@@ -4,6 +4,7 @@
 #[must_use = "body marker retirement requires durable cancellation first"]
 pub(in crate::sumeragi) struct PreparedLifecycleBodyMarkerRetirementV1 {
     material: crate::sumeragi::v2_lifecycle_coordinator::CertifiedBodyRetirementMaterialV1,
+    body_owner: Option<BodyPipelineOwner>,
 }
 
 impl PreparedLifecycleBodyMarkerRetirementV1 {
@@ -51,8 +52,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
+        let body_owner = match self.body_pipeline_owners.get(&key).copied() {
+            Some(owner) if owner.tag == material.tag()
+                && owner.manifest_hash == Some(receipt.manifest_hash()) => Some(owner),
+            Some(owner) if owner.tag.strictly_advances(material.tag())
+                && owner.manifest_hash.is_none_or(|hash| hash == receipt.manifest_hash()) => None,
+            None => None,
+            Some(_) => return Err(EffectExecutorError::Contract(
+                "obsolete body retirement changed its exact body guard".to_owned(),
+            )),
+        };
         Ok(PreparedLifecycleBodyMarkerRetirementV1 {
             material: material.clone(),
+            body_owner,
         })
     }
 
@@ -62,6 +74,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         cancelled: crate::sumeragi::v2_lifecycle_coordinator::CancelledCertifiedBodyWorkV1,
     ) {
         let prepared = cancelled.into_marker();
+        if let Some(owner) = prepared.body_owner {
+            let receipt = prepared.material.durable_receipt();
+            let key = (receipt.round(), receipt.subject());
+            assert_eq!(self.body_pipeline_owners.get(&key), Some(&owner));
+            assert_eq!(self.body_pipeline_owners.remove(&key), Some(owner));
+        }
         if let Some(expected) = prepared.material.store_publication() {
             let key = expected.key();
             assert_eq!(

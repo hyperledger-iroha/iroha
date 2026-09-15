@@ -258,6 +258,227 @@ mod certified_body_fence_supersession {
         }
     }
 
+    /// Produce the real reducer's missing-body retransmission, then bind only
+    /// that exact effect through the same test authority used by this fixture's
+    /// initial Fetch. Independent retransmitted control broadcasts are outside
+    /// this body-completion interleaving.
+    fn rediscover_ready_fetch(fixture: &mut ReadyBodyFixture) -> AdapterEffect {
+        let tag = fixture.transport.executor.current_tag();
+        let effects = fixture
+            .transport
+            .executor
+            .runtime
+            .driver_mut_for_test()
+            .retransmit_elapsed(tag)
+            .expect("the real reducer still has a missing certified body")
+            .into_effects();
+        let mut fetches = effects.into_iter().filter(|effect| {
+            matches!(effect, AdapterEffect::FetchBody { .. })
+        });
+        let fetch = fetches.next().expect("Missing rediscovery emits one Fetch");
+        assert!(fetches.next().is_none());
+        assert!(matches!(&fetch,
+            AdapterEffect::FetchBody { tag: observed, round, subject, certificate: Some(certificate), .. }
+                if *observed == tag && *round == fixture.transport.round
+                    && *subject == fixture.transport.subject && certificate == &fixture.certificate
+        ));
+        fixture.transport.executor.runtime
+            .retain_retransmit_effect_ownership_for_test(core::slice::from_ref(&fetch))
+            .expect("retain the exact reducer-emitted retry owner");
+        fetch
+    }
+
+    fn assert_ready_fetch_coalesces_then_advances_once(mut fixture: ReadyBodyFixture) {
+        let key = (fixture.transport.round, fixture.transport.subject);
+        let tag = fixture.transport.executor.current_tag();
+        let guard = fixture.transport.executor.body_pipeline_owners[&key];
+        assert_eq!(guard.tag, tag);
+        assert_eq!(guard.manifest_hash, Some(HashOf::new(&fixture.transport.manifest)));
+        let registry = fixture.owner.fetch_registry_snapshot_for_test();
+        let before_commands = fixture.transport.executor.runtime.queued_commands();
+        let before_receipt = fixture.transport.executor.durable_bodies[&key].clone();
+        let mut retries = FakeServices {
+            requester_key: Some(fixture.transport.requester_key.clone()),
+            ..FakeServices::default()
+        };
+        for _ in 0..3 {
+            let retry = rediscover_ready_fetch(&mut fixture);
+            fixture.transport.executor.consume_effects(vec![retry], &mut retries)
+                .expect("the exact Fetch rediscovery retains coordinator custody");
+            assert_eq!(fixture.transport.executor.runtime.queued_commands(), before_commands,
+                "a durable Ready Fetch must not enqueue a competing BodyAvailable");
+            assert!(retries.fetch_tasks.is_empty(), "the response is already durable");
+            assert!(fixture.transport.executor.pending_fetches.is_empty());
+            assert_eq!(fixture.transport.executor.body_pipeline_owners[&key], guard);
+            assert_eq!(fixture.transport.executor.durable_bodies[&key], before_receipt);
+            assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
+        }
+        let advanced = fixture.owner.dispatch_completion_for_test(
+            &mut fixture.services, &mut fixture.transport.executor, 0,
+        ).expect("the original Ready Fetch still owns the only BodyAvailable transition");
+        let ProductionCompletionDispatchV1::BodyStageAdvanced {
+            parent_ordinal, child_ordinal, child: LifecycleWorkClass::Store,
+        } = advanced else { panic!("the original Fetch must publish exactly one Store") };
+        assert_eq!(parent_ordinal, fixture.ordinal);
+        assert_ne!(child_ordinal, parent_ordinal);
+        assert_eq!(fixture.transport.executor.published_lifecycle_store_retry_markers.len(), 1);
+        assert!(!fixture.transport.executor.body_pipeline_owners.contains_key(&key),
+            "durable Store publication transfers the Fetch guard to its exact retry marker");
+        assert_eq!(fixture.transport.executor.runtime.queued_commands(), before_commands);
+        assert!(!fixture.transport.executor.output_guard.restart_required());
+        assert!(!fixture.transport.executor.status().fail_closed);
+        fixture.planner_io.detach(&mut fixture.services);
+    }
+
+    #[test]
+    fn durable_ready_fetch_retains_guard_against_retransmit_before_completion() {
+        // The fixture performs a real signed response, durable body write,
+        // exact dequeue and coordinator Phase B before the retry interleaving.
+        assert_ready_fetch_coalesces_then_advances_once(ready_body_fixture());
+    }
+
+    fn reopen_ready_fetch_fixture(fixture: ReadyBodyFixture) -> (
+        ReadyBodyFixture,
+        Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) {
+        let ReadyBodyFixture {
+            mut transport, owner, planner_io, mut services,
+            _owner_directory: directory, certificate, ordinal,
+        } = fixture;
+        let validator = transport.context.leader(0);
+        let verified = VerifiedHeightContext::genesis(
+            transport.context.clone(),
+            transport.validator_keys.iter().map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("frozen PoP")
+            }).collect(),
+        ).expect("reauthenticate the unchanged restart context");
+        let wal_path = transport._directory.path().join("transport-regression-safety.wal");
+        planner_io.detach(&mut services);
+        drop(services);
+        drop(owner);
+        drop(transport.executor);
+        let mut owner = SumeragiV2Adapter::reopen_body_owner_for_test(
+            &wal_path, directory.path(), verified, validator,
+            &transport.validator_keys[usize::try_from(validator).unwrap()],
+            AdapterFingerprints {
+                node: Hash::new(b"production transport node"),
+                build: Hash::new(b"production transport build"),
+                config: Hash::new(b"production transport config"),
+            },
+            [0x63; 32],
+            |_| panic!("a Ready Fetch has not executed validation"),
+        );
+        assert!(owner.exact_recovered_body_pipeline_join_for_test());
+        let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+        services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        let (executor, planner_io, leader_wire_gate, ordinals) = owner
+            .bind_recovered_cancelled_body_executor_for_test(
+                &wal_path, &mut services, ConsensusOutputGuard::isolated(), validator,
+            );
+        crate::sumeragi::v2_worker::tests::install_active_tag_for_test(
+            &mut services, executor.current_tag(),
+        );
+        crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+            &mut services, &transport.validator_keys[usize::try_from(validator).unwrap()],
+        );
+        transport.executor = executor;
+        transport._lifecycle_ordinals = ordinals;
+        (ReadyBodyFixture {
+            transport, owner, planner_io, services,
+            _owner_directory: directory, certificate, ordinal,
+        }, leader_wire_gate)
+    }
+
+    #[test]
+    fn cold_ready_fetch_restores_guard_before_retransmit_and_advances_once() {
+        let (fixture, _leader_wire_gate) = reopen_ready_fetch_fixture(ready_body_fixture());
+        assert_ready_fetch_coalesces_then_advances_once(fixture);
+    }
+
+    #[test]
+    fn ready_fetch_wrong_guard_fails_closed_without_consuming_coordinator_carrier() {
+        for wrong_tag in [false, true] {
+            let mut fixture = ready_body_fixture();
+            let key = (fixture.transport.round, fixture.transport.subject);
+            let registry = fixture.owner.fetch_registry_snapshot_for_test();
+            let retry = rediscover_ready_fetch(&mut fixture);
+            let guard = fixture.transport.executor.body_pipeline_owners.get_mut(&key).unwrap();
+            if wrong_tag {
+                guard.tag = EventTag::new(guard.tag.height(), guard.tag.view() + 1, guard.tag.generation());
+            } else {
+                let mut foreign = fixture.transport.manifest.clone();
+                foreign.payload_size_bytes += 1;
+                guard.manifest_hash = Some(HashOf::new(&foreign));
+            }
+            let mut services = FakeServices::default();
+            assert!(fixture.transport.executor.consume_effects(vec![retry], &mut services).is_err());
+            assert!(fixture.transport.executor.status().fail_closed);
+            assert!(services.fetch_tasks.is_empty());
+            assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
+            fixture.planner_io.detach(&mut fixture.services);
+        }
+    }
+
+    #[test]
+    fn cold_ready_fetch_rejects_substituted_restore_inputs_without_mutation() {
+        let (mut fixture, _leader_wire_gate) = reopen_ready_fetch_fixture(ready_body_fixture());
+        let tag = fixture.transport.executor.current_tag();
+        let manifest = fixture.transport.manifest.clone();
+        let key = (manifest.round, manifest.subject);
+        let receipt = fixture.transport.executor.durable_bodies[&key].clone();
+        let guards = fixture.transport.executor.body_pipeline_owners.clone();
+        let mut foreign = manifest.clone();
+        foreign.payload_size_bytes += 1;
+        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
+            tag, &foreign, &receipt,
+        ).is_err());
+        let future = EventTag::new(tag.height(), tag.view() + 1, tag.generation());
+        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
+            future, &manifest, &receipt,
+        ).is_err());
+        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
+            tag, &manifest, &receipt,
+        ).is_err(), "a duplicate cold owner must not overwrite the first guard");
+        let fetch = AdapterEffect::FetchBody {
+            tag, round: manifest.round, subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: fixture.transport.context.roster.iter()
+                .map(|entry| entry.validator.clone()).collect(),
+            certificate: Some(fixture.certificate.clone()),
+        };
+        let store = AdapterEffect::StoreBody { tag, round: manifest.round, subject: manifest.subject };
+        let store_owner = bound_test_effect_ownership(&fetch, tag, 90_027)
+            .rebind_as_inherited_adapter_effect(&store).expect("exact inherited Store owner");
+        let pending = store_owner.exact_pending_adapter_effect_binding(&store)
+            .expect("seal the complete Store binding");
+        assert!(pending.exactly_binds_adapter_effect(&store));
+        let error = fixture.transport.executor.install_recovered_published_lifecycle_store_retry_marker(
+            &store, &pending, &receipt,
+        ).expect_err("a distinct cold Store cannot absorb the Ready Fetch guard");
+        assert!(error.to_string().contains("recovered Store overlaps an authenticated Ready Fetch guard"));
+        let validate = AdapterEffect::ValidateBody { tag, round: manifest.round, subject: manifest.subject };
+        let validate_pending = pending.project_store_validate_successor(&store, &validate)
+            .expect("derive the exact Validate successor binding");
+        assert!(validate_pending.exactly_binds_adapter_effect(&validate));
+        assert!(fixture.transport.executor.install_recovered_published_lifecycle_validate_retry_marker(
+            &validate, &validate_pending, &receipt, 90_028,
+        ).is_err(), "a distinct cold Validate cannot absorb the Ready Fetch guard");
+        assert!(fixture.transport.executor.published_lifecycle_store_retry_markers.is_empty());
+        assert!(fixture.transport.executor.published_lifecycle_validate_retry_markers.is_empty());
+        assert_eq!(fixture.transport.executor.body_pipeline_owners, guards);
+        assert!(!fixture.transport.executor.output_guard.restart_required());
+        fixture.planner_io.detach(&mut fixture.services);
+    }
+
+    #[test]
+    fn ready_fetch_cold_census_rejects_bad_carrier_without_omission() {
+        let mut fixture = ready_body_fixture();
+        let before = fixture.owner.fetch_registry_snapshot_for_test();
+        fixture.owner.assert_cold_ready_fetch_bad_carrier_rejected_for_test();
+        assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), before);
+        fixture.planner_io.detach(&mut fixture.services);
+    }
+
     fn signed_timeout_certificate(
         fixture: &ReadyBodyFixture,
         protect_body: bool,
@@ -985,9 +1206,14 @@ mod certified_body_fence_supersession {
             .assert_body_owner_cancelled_for_test(&before, fixture._owner_directory.path());
         assert_eq!(fixture.transport.executor.durable_bodies, bodies);
         assert_eq!(fixture.transport.executor.recovered_bodies, recovered);
+        let mut expected_owners = current_owners.clone();
+        if expected_owners.get(&key).is_some_and(|owner| owner.tag == old_tag) {
+            let removed = expected_owners.remove(&key).expect("the exact old Fetch guard exists");
+            assert_eq!(removed.manifest_hash, Some(HashOf::new(&fixture.transport.manifest)));
+        }
         assert_eq!(
-            fixture.transport.executor.body_pipeline_owners, current_owners,
-            "retiring an old carrier must retain the exact current executor owner"
+            fixture.transport.executor.body_pipeline_owners, expected_owners,
+            "durable cancellation removes only its old guard and preserves every newer owner"
         );
         assert_eq!(
             format!("{:?}", fixture.transport.executor.retained_effect_batch),
