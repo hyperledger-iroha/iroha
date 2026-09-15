@@ -59,10 +59,9 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 descriptor = stack.enter_context((root / "lock").open("w"))
                 locks = (descriptor.fileno(),)
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
+                existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
-                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
-                    stack.enter_context(patch.object(gate, group, ()))
                 for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, function))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))

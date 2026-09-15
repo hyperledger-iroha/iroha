@@ -466,6 +466,7 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 #[cfg(test)]
 pub(crate) use self::event::EventProducer;
 pub(crate) use self::event::WithEvents;
+pub(crate) use self::valid::VerifiedReplayProposal;
 pub use self::{chained::Chained, commit::CommittedBlock, new::NewBlock, valid::ValidBlock};
 /// Opaque proof that a Sumeragi-v2 finality artifact passed canonical BLS verification.
 ///
@@ -896,7 +897,7 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
     expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
     expected_network_id: iroha_data_model::NetworkId,
     dataspace_catalog: &DataSpaceCatalog,
-    authority: &impl NativeAmxAuthorityContext,
+    authority: &dyn NativeAmxAuthorityContext,
     expected_v2_context: Option<ExpectedNativeAmxV2Context>,
 ) -> Result<(), String> {
     let validation_authority = NativeAmxValidationAuthority::Live {
@@ -4530,6 +4531,235 @@ pub(crate) mod valid {
             self.authenticated_height_context.as_deref()
         }
     }
+    /// Exact canonical proposal admitted by an already verified historical CommitQC.
+    /// Only the dedicated replay entry point can construct this capability; a height,
+    /// missing local slot, or unverified context cannot select historical validation.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) struct VerifiedReplayProposal {
+        network_id: iroha_data_model::NetworkId,
+        block_hash: HashOf<BlockHeader>,
+        proposal_wire_hash: Hash,
+        carrier_header: BlockHeader,
+        merge_entry: Option<std::sync::Arc<iroha_data_model::merge::MergeLedgerEntry>>,
+        context: SumeragiV2ValidationContext,
+    }
+    impl VerifiedReplayProposal {
+        fn new(
+            executed: &SignedBlock,
+            verified: &super::VerifiedV2FinalityArtifact,
+            merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
+        ) -> Result<Self, BlockValidationError> {
+            let artifact = verified.artifact();
+            artifact
+                .validate_for_header(&executed.header())
+                .map_err(|error| {
+                    ValidBlock::execution_context_error(format!(
+                        "replay finality header mismatch: {error}"
+                    ))
+                })?;
+            let wire = executed.encode_wire().map_err(|error| {
+                ValidBlock::execution_context_error(format!(
+                    "replay execution wire is invalid: {error}"
+                ))
+            })?;
+            let commitment = &artifact.commit_qc.execution_commitment;
+            if !executed.has_results()
+                || u64::try_from(wire.len()).ok() != Some(commitment.executed_block_wire_len)
+                || Hash::new(&wire) != commitment.executed_block_wire_hash
+            {
+                return Err(ValidBlock::execution_context_error(
+                    "replay authority does not bind the exact executed block wire",
+                ));
+            }
+            let proposal_wire_hash = executed.canonical_proposal_wire_hash().map_err(|error| {
+                ValidBlock::execution_context_error(format!(
+                    "replay proposal wire is invalid: {error}"
+                ))
+            })?;
+            if proposal_wire_hash != artifact.subject.payload_hash {
+                return Err(ValidBlock::execution_context_error(
+                    "replay authority does not bind the exact canonical proposal wire",
+                ));
+            }
+            match (
+                executed
+                    .execution_context()
+                    .and_then(|context| context.merge_entry.as_ref()),
+                merge_entry,
+            ) {
+                (None, None) => {}
+                (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
+                _ => {
+                    return Err(ValidBlock::execution_context_error(
+                        "replay authority requires the exact retained certified merge sidecar",
+                    ));
+                }
+            }
+            Ok(Self {
+                network_id: artifact.height_context.network_id,
+                block_hash: executed.hash(),
+                proposal_wire_hash,
+                carrier_header: executed.header(),
+                merge_entry: merge_entry.cloned().map(std::sync::Arc::new),
+                context: SumeragiV2ValidationContext::from_height_context(&artifact.height_context),
+            })
+        }
+        fn validate_state_prefix(&self, state: &impl StateReadOnly) -> Result<(), String> {
+            if *state.network_id() != self.network_id
+                || u64::try_from(state.height())
+                    .ok()
+                    .and_then(|height| height.checked_add(1))
+                    != Some(self.context.height)
+                || self.carrier_header.prev_block_hash() != state.latest_block_hash()
+            {
+                return Err(
+                    "verified replay authority differs from the exact committed State prefix"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        }
+        pub(crate) fn merge_entry(
+            &self,
+            reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+        ) -> Result<&iroha_data_model::merge::MergeLedgerEntry, String> {
+            self.merge_entry
+                .as_deref()
+                .filter(|entry| reference.matches_entry(entry))
+                .ok_or_else(|| {
+                    "verified replay authority differs from the exact retained merge entry"
+                        .to_owned()
+                })
+        }
+        pub(crate) fn validate_merge_stage(
+            &self,
+            carrier_header: &BlockHeader,
+            state: &impl StateReadOnly,
+            entry: &iroha_data_model::merge::MergeLedgerEntry,
+        ) -> Result<(), String> {
+            self.validate_state_prefix(state)?;
+            if carrier_header != &self.carrier_header
+                || self.merge_entry.as_deref() != Some(entry)
+                || entry.execution_batch.as_ref().is_some_and(|batch| {
+                    batch.application_block_header
+                        != crate::merge::merge_application_header_from_carrier(carrier_header)
+                })
+            {
+                return Err("verified replay merge stage differs from its exact carrier, sidecar, or application header".to_owned());
+            }
+            Ok(())
+        }
+        pub(crate) fn validate_drain_payload(
+            &self,
+            state: &impl StateReadOnly,
+            carrier_height: u64,
+            active_lanes: &[iroha_data_model::merge::MergeLaneBinding],
+            certificates: &[iroha_data_model::merge::LaneDrainCertificateV1],
+        ) -> Result<(), String> {
+            self.validate_state_prefix(state)?;
+            if self.context.height != carrier_height
+                || self.merge_entry.as_deref().is_none_or(|entry| {
+                    entry.merge_qc.carrier_height != carrier_height
+                        || entry.active_lanes != active_lanes
+                        || entry.lane_drain_certificates != certificates
+                        || entry.execution_batch.is_some()
+                        || !entry.lane_snapshots.is_empty()
+                })
+            {
+                return Err(
+                    "replay drain payload differs from its exact authenticated carrier entry"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        }
+        pub(crate) fn native_amx_authority<'a, S: StateReadOnly>(
+            &'a self,
+            state: &'a S,
+        ) -> Result<ReplayNativeAmxAuthority<'a, S>, String> {
+            self.validate_state_prefix(state)?;
+            Ok(ReplayNativeAmxAuthority {
+                state,
+                _proposal: self,
+            })
+        }
+        fn validate(
+            &self,
+            proposal: &SignedBlock,
+            state: &impl StateReadOnly,
+        ) -> Result<(), BlockValidationError> {
+            let wire = proposal.encode_wire().map_err(|error| {
+                ValidBlock::execution_context_error(format!(
+                    "replay proposal wire is invalid: {error}"
+                ))
+            })?;
+            if !proposal.is_resultless_proposal()
+                || proposal.hash() != self.block_hash
+                || Hash::new(&wire) != self.proposal_wire_hash
+                || *state.network_id() != self.network_id
+                || proposal.header().height().get() != self.context.height
+                || u64::try_from(state.height())
+                    .ok()
+                    .and_then(|height| height.checked_add(1))
+                    != Some(self.context.height)
+                || proposal.header().prev_block_hash() != state.latest_block_hash()
+            {
+                return Err(ValidBlock::execution_context_error(
+                    "replay proposal differs from its verified authority or exact committed State prefix",
+                ));
+            }
+            Ok(())
+        }
+    }
+    /// Preserve all live route, committee and key checks while sourcing historical
+    /// predecessor chains from the exact isolated replay State.
+    pub(crate) struct ReplayNativeAmxAuthority<'a, S> {
+        state: &'a S,
+        _proposal: &'a VerifiedReplayProposal,
+    }
+    impl<S: StateReadOnly> NativeAmxAuthorityContext for ReplayNativeAmxAuthority<'_, S> {
+        fn route_active_at_height(
+            &self,
+            lane: LaneId,
+            dataspace: DataSpaceId,
+            height: u64,
+        ) -> bool {
+            NativeAmxAuthorityContext::route_active_at_height(self.state, lane, dataspace, height)
+        }
+        fn lane_incarnation_at_height(&self, lane: LaneId, height: u64) -> Option<Hash> {
+            NativeAmxAuthorityContext::lane_incarnation_at_height(self.state, lane, height)
+        }
+        fn resolve_lane_committee_at_height(
+            &self,
+            route: crate::state::LaneAuthorityRoute,
+            height: u64,
+        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
+            NativeAmxAuthorityContext::resolve_lane_committee_at_height(self.state, route, height)
+        }
+        fn consensus_pop_matches_authority(
+            &self,
+            lane: LaneId,
+            peer: &PeerId,
+            height: u64,
+            pop: &[u8],
+        ) -> bool {
+            NativeAmxAuthorityContext::consensus_pop_matches_authority(
+                self.state, lane, peer, height, pop,
+            )
+        }
+        fn native_amx_participant_predecessor_is_current(
+            &self,
+            proposal: &LaneBlockProposalV1,
+            previous: Option<
+                HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+            >,
+        ) -> crate::kura::Result<bool> {
+            State::native_amx_control_predecessor_matches_replay_state(
+                self.state, proposal, previous,
+            )
+            .map_err(|error| crate::kura::Error::MergeCarrierConflict(error.to_string()))
+        }
+    }
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
         SignedGenesis {
@@ -4539,22 +4769,27 @@ pub(crate) mod valid {
             block_cadence: Duration,
             context: SumeragiV2ValidationContext,
         },
+        VerifiedReplay {
+            block_cadence: Duration,
+            authority: VerifiedReplayProposal,
+        },
     }
     impl ConsensusValidationProfile {
         /// Return whether validation may publish best-effort pipeline recovery metadata.
         ///
-        /// Signed genesis validation executes against a disposable state overlay before
-        /// consensus. It must not mutate Kura or invalidate the startup replay binding that
-        /// protects the still-empty canonical store.
+        /// Signed genesis and authenticated replay execute against disposable overlays.
+        /// Neither may mutate Kura or invalidate the exact retained recovery boundary
+        /// before the complete validated state is published.
         const fn persist_pipeline_recovery_sidecar(&self) -> bool {
-            !matches!(self, Self::SignedGenesis { .. })
+            matches!(self, Self::SumeragiV2 { .. })
         }
         const fn enforce_local_wall_clock(&self) -> bool {
-            !matches!(self, Self::SumeragiV2 { .. })
+            matches!(self, Self::SignedGenesis { .. })
         }
         const fn v2_block_cadence(&self) -> Option<Duration> {
             match self {
-                Self::SumeragiV2 { block_cadence, .. } => Some(*block_cadence),
+                Self::SumeragiV2 { block_cadence, .. }
+                | Self::VerifiedReplay { block_cadence, .. } => Some(*block_cadence),
                 Self::SignedGenesis { .. } => None,
             }
         }
@@ -4563,12 +4798,14 @@ pub(crate) mod valid {
         ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
             match self {
                 Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
+                Self::VerifiedReplay { authority, .. } => authority.context.snapshot_bootstrap,
                 Self::SignedGenesis { .. } => None,
             }
         }
         const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
+                Self::VerifiedReplay { authority, .. } => Some(&authority.context),
                 Self::SignedGenesis { .. } => None,
             }
         }
@@ -4578,6 +4815,7 @@ pub(crate) mod valid {
             match self {
                 Self::SignedGenesis { consensus_mode } => *consensus_mode,
                 Self::SumeragiV2 { context, .. } => context.consensus_mode,
+                Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
             }
         }
     }
@@ -6997,6 +7235,43 @@ pub(crate) mod valid {
                 None,
             )
         }
+        /// Re-execute an exact historical block authenticated by its verified CommitQC.
+        /// The caller supplies genesis/snapshot-rooted finality, not a proposal-controlled
+        /// roster. Deterministic execution and final commitment comparison remain mandatory.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_sumeragi_v2_replay_keep_voting_block<'state>(
+            executed: SignedBlock,
+            verified: &super::VerifiedV2FinalityArtifact,
+            merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            block_cadence: Duration,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
+                Ok(authority) => authority,
+                Err(error) => return WithEvents::new(Err((Box::new(executed), Box::new(error)))),
+            };
+            Self::validate_keep_voting_block_inner(
+                executed.canonical_resultless_proposal(),
+                topology,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                false,
+                None,
+                true,
+                ConsensusValidationProfile::VerifiedReplay {
+                    block_cadence,
+                    authority,
+                },
+                true,
+                None,
+            )
+        }
         /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
         ///
         /// Callers must only use this after independently verifying that local validation roots
@@ -7114,6 +7389,7 @@ pub(crate) mod valid {
             authenticated_height_context: Option<
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
+            replay: Option<&VerifiedReplayProposal>,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
             crate::smartcontracts::ivm::active_runtime_abi_hash(
@@ -7219,9 +7495,11 @@ pub(crate) mod valid {
                 })?;
                 return state
                     .block_with_pristine_stage(block.header(), |state_block| {
-                        state_block
-                            .stage_certified_merge_reference(reference, frozen_mode)
-                            .map_err(|error| {
+                        let stage = match replay {
+                            Some(authority) => state_block.stage_certified_merge_reference_for_verified_replay(reference, frozen_mode, authority),
+                            None => state_block.stage_certified_merge_reference(reference, frozen_mode),
+                        };
+                        stage.map_err(|error| {
                                 match error {
                                 crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
                                     entry_hash,
@@ -7416,6 +7694,14 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let ConsensusValidationProfile::VerifiedReplay { authority, .. } =
+                &validation_profile
+            {
+                if let Err(error) = authority.validate(&block, &state.query_view()) {
+                    emit_rejection(&block, &error);
+                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                }
+            }
             let static_state_start = Instant::now();
             let static_data = {
                 let view = state.query_view();
@@ -7508,13 +7794,11 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let ConsensusValidationProfile::SumeragiV2 { block_cadence, .. } =
-                &validation_profile
-            {
+            if let Some(block_cadence) = validation_profile.v2_block_cadence() {
                 let time_trigger_clock_progress_required = block
                     .header()
                     .creation_time()
-                    .checked_sub(*block_cadence)
+                    .checked_sub(block_cadence)
                     .is_some_and(|parent_creation_time| {
                         state.time_trigger_clock_progress_required_fast(parent_creation_time)
                     });
@@ -7588,6 +7872,10 @@ pub(crate) mod valid {
                 validation_profile
                     .v2_context()
                     .and_then(SumeragiV2ValidationContext::authenticated_height_context),
+                match &validation_profile {
+                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => Some(authority),
+                    _ => None,
+                },
             ) {
                 Ok(state_block) => state_block,
                 Err(error) => {
@@ -9008,6 +9296,23 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} lane block height must be non-zero"
                     )));
                 }
+                if let ConsensusValidationProfile::VerifiedReplay { authority, .. } =
+                    validation_profile
+                {
+                    authority.validate(block, state)?;
+                    let proposal = native_amx_coordinator_proposal_from_ownership(ownership)
+                        .map_err(Self::execution_context_error)?;
+                    State::validate_merge_execution_predecessor_against_frontier(
+                        state.world(),
+                        &proposal.descriptor,
+                    )
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "historical ordinary lane predecessor is invalid: {error}",
+                        ))
+                    })?;
+                    continue;
+                }
                 if let Some(existing) = state
                     .kura()
                     .consensus_storage_read(state.kura().read_lane_block_artifact_read_only(
@@ -9391,7 +9696,7 @@ pub(crate) mod valid {
                     "genesis cannot carry autonomous lane payload envelopes",
                 ));
             }
-            let v2_context = Self::autonomous_lane_validation_context(validation_profile)?;
+            let v2_context = Self::autonomous_lane_validation_context(validation_profile.clone())?;
             let proposal_height = block.header().height().get();
             if v2_context.height != proposal_height {
                 return Err(Self::execution_context_error(format!(
@@ -9421,16 +9726,19 @@ pub(crate) mod valid {
             let mut merge_reservation_entrypoint_hashes = BTreeSet::new();
             let mut merge_reservation_digests = BTreeSet::new();
             if let Some(reference) = bundle.merge_entry.as_ref() {
-                let Some(entry) = state
-                    .kura()
-                    .merge_entry_by_hash(reference.entry_hash)
-                    .map_err(|error| {
+                let resolved = match &validation_profile {
+                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
+                        authority.validate(block, state)?;
+                        Some(authority.merge_entry(reference).map_err(Self::execution_context_error)?.clone())
+                    }
+                    _ => state.kura().merge_entry_by_hash(reference.entry_hash).map_err(|error| {
                         Self::execution_context_error(format!(
                             "autonomous lane payload could not resolve certified merge sidecar {}: {error}",
                             reference.entry_hash
                         ))
-                    })?
-                else {
+                    })?,
+                };
+                let Some(entry) = resolved else {
                     return Err(BlockValidationError::MissingCertifiedMergeSidecar {
                         entry_hash: reference.entry_hash,
                     });
@@ -9622,21 +9930,37 @@ pub(crate) mod valid {
                         "autonomous lane payload envelope {index} descriptor committee, quorum, or consensus tag differs from the authoritative height context"
                     )));
                 }
-                let exact_current_slot = Self::validate_autonomous_lane_payload_slot(
-                    block,
-                    state,
-                    &payload,
-                    expected_network_id,
-                    v2_context.epoch,
-                )?;
-                if !exact_current_slot
-                    && !Self::autonomous_lane_predecessor_is_current_or_snapshot_anchored(
-                        state, proposal,
-                    )?
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} does not extend the exact latest applied or snapshot-anchored lane predecessor"
-                    )));
+                match &validation_profile {
+                    ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
+                        authority.validate(block, state)?;
+                        State::validate_merge_execution_predecessor_against_frontier(
+                            state.world(),
+                            descriptor,
+                        )
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "historical autonomous lane predecessor is invalid: {error}",
+                            ))
+                        })?;
+                    }
+                    _ => {
+                        let exact_current_slot = Self::validate_autonomous_lane_payload_slot(
+                            block,
+                            state,
+                            &payload,
+                            expected_network_id,
+                            v2_context.epoch,
+                        )?;
+                        if !exact_current_slot
+                            && !Self::autonomous_lane_predecessor_is_current_or_snapshot_anchored(
+                                state, proposal,
+                            )?
+                        {
+                            return Err(Self::execution_context_error(format!(
+                                "autonomous lane payload envelope {index} does not extend the exact latest applied or snapshot-anchored lane predecessor"
+                            )));
+                        }
+                    }
                 }
                 let expected_producer = crate::lane_consensus::deterministic_lane_author(
                     &validator_set,
@@ -9898,6 +10222,21 @@ pub(crate) mod valid {
                                     "native AMX coordinator ownership invalid at index {idx}: {err}"
                                 ))
                             })?;
+                        let replay_authority = match &validation_profile {
+                            ConsensusValidationProfile::VerifiedReplay { authority, .. } => {
+                                authority.validate(block, state)?;
+                                Some(ReplayNativeAmxAuthority {
+                                    state,
+                                    _proposal: authority,
+                                })
+                            }
+                            _ => None,
+                        };
+                        let receipt_authority: &dyn NativeAmxAuthorityContext =
+                            match replay_authority.as_ref() {
+                                Some(authority) => authority,
+                                None => state,
+                            };
                         validate_native_amx_receipt_against_plan(
                             receipt,
                             &coordinator_proposal,
@@ -9906,7 +10245,7 @@ pub(crate) mod valid {
                             expected_source_id,
                             expected_network_id,
                             &nexus.dataspace_catalog,
-                            state,
+                            receipt_authority,
                             expected_native_amx_context,
                         )
                         .map_err(|err| {
@@ -16738,6 +17077,7 @@ pub(crate) mod valid {
             bundle: BlockExecutionContextBundle,
             profile: ConsensusValidationProfile,
             entrypoint: TransactionEntrypoint,
+            validator_keys: Vec<KeyPair>,
         }
         fn autonomous_anchor_fixture(
             lane_incarnation_override: Option<Hash>,
@@ -16753,6 +17093,19 @@ pub(crate) mod valid {
             lane_incarnation_override: Option<Hash>,
             lane_block_view: u64,
             gas_limits: Option<&[u64]>,
+        ) -> AutonomousAnchorFixture {
+            autonomous_anchor_fixture_with_replay_lane(
+                lane_incarnation_override,
+                lane_block_view,
+                gas_limits,
+                None,
+            )
+        }
+        fn autonomous_anchor_fixture_with_replay_lane(
+            lane_incarnation_override: Option<Hash>,
+            lane_block_view: u64,
+            gas_limits: Option<&[u64]>,
+            replay_lane: Option<LaneId>,
         ) -> AutonomousAnchorFixture {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -16780,6 +17133,19 @@ pub(crate) mod valid {
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let proposal_height = 2;
+            if let Some(lane_id) = replay_lane {
+                state
+                    .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![iroha_data_model::nexus::LaneConfig {
+                            id: lane_id,
+                            alias: "replay-added-lane".to_owned(),
+                            ..iroha_data_model::nexus::LaneConfig::default()
+                        }],
+                        retire: Vec::new(),
+                    })
+                    .expect("add the lane through the native runtime lifecycle");
+                install_test_lane_manifests_for_keypairs(&state, &validator_keys);
+            }
             let epoch = 4;
             let context_id = iroha_data_model::block::consensus_v2::HeightContextId(
                 HashOf::from_untyped_unchecked(Hash::new(b"block-autonomous-anchor-context")),
@@ -16797,12 +17163,25 @@ pub(crate) mod valid {
                     authenticated_height_context: None,
                 },
             };
+            let profile = if replay_lane.is_some() {
+                ConsensusValidationProfile::SumeragiV2 {
+                    block_cadence: Duration::from_millis(1),
+                    context: SumeragiV2ValidationContext::from_height_context(
+                        &authenticated_permissioned_successor_context(&state, &validator_keys),
+                    ),
+                }
+            } else {
+                profile
+            };
+            let context = profile.v2_context().expect("fixture has a height context");
+            let epoch = context.epoch;
+            let context_id = context.context_id;
             let context_mode_tag = format!(
                 "{}::height-context:{}::epoch:{epoch}",
                 iroha_data_model::block::consensus_v2::PERMISSIONED_TAG,
                 hex::encode(context_id.0.as_ref()),
             );
-            let lane_id = LaneId::SINGLE;
+            let lane_id = replay_lane.unwrap_or(LaneId::SINGLE);
             let dataspace_id = DataSpaceId::UNIVERSAL;
             let lane_incarnation = lane_incarnation_override.unwrap_or_else(|| {
                 state
@@ -17000,6 +17379,7 @@ pub(crate) mod valid {
                 bundle,
                 profile,
                 entrypoint,
+                validator_keys,
             }
         }
         fn validate_autonomous_anchor_fixture(
@@ -17028,6 +17408,7 @@ pub(crate) mod valid {
             )
             .expect("exact control-only autonomous anchor must validate");
         }
+        include!("block/replay_proposal_authority_tests.rs");
         include!("block/autonomous_anchor_network_tests.rs");
         include!("block/autonomous_anchor_gas_budget_tests.rs");
         #[test]

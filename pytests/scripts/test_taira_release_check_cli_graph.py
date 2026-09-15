@@ -187,8 +187,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
                 raise gate.CheckError("synthetic four-peer failure")
 
         with contextlib.ExitStack() as stack:
-            for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
-                stack.enter_context(patch.object(gate, group, ()))
+            existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", gate.NETWORK_STAGES if network else ()))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", ("cli_fixture",)),)))
             for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):

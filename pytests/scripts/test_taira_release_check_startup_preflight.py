@@ -64,10 +64,9 @@ class StartupPreflightTests(unittest.TestCase):
             updates = []
             error = None
             with contextlib.ExitStack() as stack:
-                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES",
-                              "CORE_STAGES", "DAEMON_STAGES", "CRYPTO_STAGES", "P2P_STAGES",
-                              "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_LIFECYCLE_STAGES"):
-                    stack.enter_context(patch.object(gate, group, groups.get(group, ())))
+                existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
+                for group, stages in groups.items():
+                    stack.enter_context(patch.object(gate, group, stages))
                 stack.enter_context(patch.object(gate, "CORE_STARTUP_STAGES", core_startup))
                 stack.enter_context(patch.object(gate, "DAEMON_STARTUP_STAGES", daemon_startup))
                 stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=()))

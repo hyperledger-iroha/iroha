@@ -27,9 +27,11 @@ endpoint, compiled in the same native graph; no runtime security policy is relax
 Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
-Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: compile the
-entire native harness graph, then execute mandatory configuration and only those
-explicit selected tests. This diagnostic writes no qualification checkpoint and
+Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: first check
+the entire native test graph without harness code generation, then compile that
+same graph and execute mandatory configuration and only the explicit selected
+tests. The metadata pass catches type/import errors early; the mandatory build
+still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
 """
 
@@ -271,6 +273,7 @@ STAGES = (
         "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",
         "taira_public_reset::executor_model::tests::candidate_failure_never_exposes_the_public_edge",
         "taira_public_reset::executor_model::tests::candidate_probe_origins_reject_cross_host_or_substituted_sockets",
+        "taira_public_reset::executor_model::tests::validator_public_origins_require_distinct_canonical_https_roots",
         "taira_public_reset::executor_model::tests::public_verification_failure_rolls_back_edge_before_validators",
         "taira_public_reset::executor_model::tests::every_classifier_reachable_recovery_phase_reopens_with_exact_cursor",
         "taira::tests::candidate_inrou_qualifies_runtime_before_public_discovery_exists",
@@ -903,6 +906,18 @@ CORE_ADMISSION_STARTUP_STAGES += (('typed native SNS registration absence', (
     'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state',
 )), )
 
+CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay against isolated committed state", (
+    "block::valid::tests::authenticated_replay_added_lane_uses_replicated_frontier_without_published_storage",
+    "block::valid::tests::authenticated_replay_authority_rejects_different_proposal_wire_and_state_prefix",
+    "block::valid::tests::authenticated_replay_lane_predecessor_requires_exact_replicated_height_and_hash",
+    "block::valid::tests::authenticated_replay_ordinary_and_native_amx_keep_exact_predecessors_without_live_slots",
+    "state::tests::da_hydration_test_cases::replay_private_da_hydration_reconstructs_exact_prefix_and_rejects_wrong_body",
+    "state::replay_validation_tests::replay_uncached_da_prefix_keeps_shared_journal_unchanged_until_publication",
+    "state::replay_lane_drain::tests::replay_native_drain_frontier_binds_marker_prefix_and_certificate_evidence",
+    "state::tests::pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_change",
+    "state::tests::retired_lane_cleanup_preserves_frontier_for_historical_drain_recovery",
+)),)
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1021,6 +1036,8 @@ NETWORK_OBSERVATION_STAGES = (("complete bounded effective permission observatio
 # four-peer fixture on narrower transaction sequences.
 BASIC_NETWORK_STAGES = NETWORK_OBSERVATION_STAGES + (("four-validator additive catalog with retained history and replay", (
     "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
+)), ("clean-client native paid dataspace deployment with four-peer finality", (
+    "dataspace_deploy_cli::clean_client_deploys_paid_dataspace_once_with_four_peer_finality",
 )), ("four-validator universal-route commit and signed snapshot restart", (
     "four_peer_universal_public_transaction_sequence_reaches_applied",
 )),)
@@ -1282,6 +1299,12 @@ def compile_test_harnesses(root: Path, env: dict[str, str], *,
                           harnesses: tuple[str, ...],
                           lock_fds: tuple[int, ...] = ()) -> NativeArtifactCopies:
     """Build selected library, integration and binary tests with one feature graph."""
+    command = _compile_command(root, env, native_harness_selection(harnesses))
+    return _build_harnesses(root, command, env, harnesses, lock_fds)
+
+
+def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
+    """Share the exact package/target/default-feature union for check and build."""
     if not harnesses or len(harnesses) != len(set(harnesses)):
         raise CheckError("native test batch requires distinct harness selections")
     packages: list[str] = []
@@ -1301,8 +1324,51 @@ def compile_test_harnesses(root: Path, env: dict[str, str], *,
         if arguments[1] not in packages:
             packages.append(arguments[1])
     selection = [argument for package in packages for argument in ("-p", package)]
-    command = _compile_command(root, env, [*selection, *targets])
-    return _build_harnesses(root, command, env, harnesses, lock_fds)
+    return [*selection, *targets]
+
+
+def check_test_harnesses(root: Path, env: dict[str, str], *,
+                        harnesses: tuple[str, ...], lock_fds: tuple[int, ...] = ()) -> None:
+    """Check the selected test graph before codegen; never produce qualification.
+
+    Stable Cargo's --profile test enables cfg(test) for the explicit lib/bin/test
+    targets. --tests would broaden the selection to unrelated integration tests.
+    Reuse the caller's coordinated target, toolchain, features and jobserver.
+    Build scripts and procedural macros can still require host code generation.
+    """
+    selection = native_harness_selection(harnesses)
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+               *selection, "--profile", "test", "--message-format=json-render-diagnostics"]
+    print(f"[taira-prequalify] metadata check for {len(harnesses)} native test harnesses", flush=True)
+    started = time.monotonic()
+    observed = set()
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+        assert child.stdout is not None
+        for line in child.stdout:
+            show_build_diagnostic(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (not isinstance(event, dict) or event.get("reason") != "compiler-artifact"
+                    or event.get("profile", {}).get("test") is not True):
+                continue
+            target = event.get("target", {})
+            for harness in harnesses:
+                _, name, kind, _ = HARNESS_TARGETS[harness]
+                if target.get("name") == name and kind in target.get("kind", []):
+                    observed.add(harness)
+        code = child.wait()
+    elapsed = time.monotonic() - started
+    if code:
+        raise CheckError(f"native test metadata check failed (exit {code}, {elapsed:.1f}s)")
+    missing = [harness for harness in harnesses if harness not in observed]
+    if missing:
+        raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
+    print(f"[taira-prequalify] native test metadata check passed in {elapsed:.1f}s; "
+          "full harness compilation remains required", flush=True)
 
 
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
@@ -2285,7 +2351,7 @@ def focused_regression_stages(qualification_scope: str, requested):
 
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Compile every native harness, then run only configuration and exact focuses.
+    """Check and compile every native harness, then run configuration and exact focuses.
 
     Called only from the coordinated mutable development lane. This function has
     no signed-source, qualification checkpoint, or release-result interface.
@@ -2312,8 +2378,9 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     _, selections, _ = native_harness_plan(scoped, shipping)
     if not set(focused).issubset(selections):
         raise CheckError("focused regression lacks its selected native compile target")
-    print(f"[taira-prequalify] compile all {len(selections)} native harnesses; "
+    print(f"[taira-prequalify] check and compile all {len(selections)} native harnesses; "
           "execute configuration plus explicit focused regressions", flush=True)
+    check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
         # Configuration is always a prerequisite; explicitly focused config
         # tests already execute here and must not execute twice.
@@ -2473,7 +2540,7 @@ def main() -> int:
     parser.add_argument("--native-check-scope", choices=QUALIFICATION_SCOPES, default="basic",
                         help="basic application/startup checks (default), or full advanced regressions")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                        help="development diagnostic: compile all native harnesses, run configuration plus exact focused tests; not qualification")
+                        help="development diagnostic: metadata-check and compile all native test harnesses, then run configuration plus exact focused tests; not qualification")
     args = parser.parse_args()
     # Lazy import keeps the low-level gate loadable from an authenticated source capture.
     import taira_release as release

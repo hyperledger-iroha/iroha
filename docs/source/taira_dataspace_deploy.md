@@ -17,7 +17,8 @@ Export the target profile from the assembled native reset inventory and the
 
 ```sh
 iroha taira public-reset export-deployment-profile \
-  --inventory ASSEMBLED_INVENTORY.json --public-inputs PUBLIC_INPUT_BUNDLE \
+  --inventory /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/assembled-inventory.json \
+  --public-inputs /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/public-inputs \
   --output /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json
 ```
 
@@ -29,15 +30,26 @@ the inventory. Its output is a locally selected target expectation. It does
 not prove authorization, release qualification, or live deployment. The output
 must be a new file under an existing owner-private directory.
 
+The four-validator preflight and completion reads need the runtime operator credential allowlisted
+by all four selected validators for this exact NetworkId. Pass the global
+`--operator-private-key-file` option before `taira`, or use
+`--operator-private-key-fd` for an inherited read-only descriptor. This key is
+separate from the ledger account key and reset authorization signer; the CLI
+does not infer it from `CLIENT.toml` or the environment. Its file must have mode
+0600. Keep the existing parent directory private to its owner (mode 0700).
+
 Generate a native manifest from that profile and current namespace policies:
 
 ```sh
-iroha --config CLIENT.toml taira dataspace-deploy init \
+iroha --config CLIENT.toml \
+  --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
+  taira dataspace-deploy init \
   --dataspace dpn --lane-id 6 --lane-profile restricted-full-replica \
-  --account-alias admin --lane-manifest LANE_MANIFEST.json --trust deployment-profile.json \
+  --account-alias admin --lane-manifest LANE_MANIFEST.json \
+  --trust /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json \
   --payment-asset 6TEAJqbb8oEPmLncoNiMRbLEK6tw \
   --alias-create-maximum 0.5 --transaction-fee-maximum TX_FEE_CAP \
-  --lease-years 1 --output-dir NEW_MANIFEST_BUNDLE
+  --lease-years 1 --output-dir /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/manifest
 ```
 
 Owner and checked NetworkId come from the configured native client. The two
@@ -46,27 +58,59 @@ explicit lane profile selects public or restricted visibility with FullReplica
 storage, four validators and fault tolerance1. The default quote lifetime is
 3600 seconds; `--quote-lifetime-secs` accepts1..86400. The generated account
 alias is additional, preserving any existing primary alias. `init` checks the
-native paid plan and writes `NEW_MANIFEST_BUNDLE/deployment.json` atomically;
-it submits nothing. The trust file contains the independently selected public
-genesis key, exact signed genesis wire and four public peer/fingerprint records.
+native paid plan and atomically writes `deployment.json` inside the selected
+output directory; it submits nothing. In the example, that file is
+`/ABSOLUTE/OWNER_PRIVATE_DIRECTORY/manifest/deployment.json`; the `manifest`
+directory must be new. Supply the native inline lane manifest object in
+`LANE_MANIFEST.json`. The trust file
+contains the independently selected public genesis key, exact signed genesis
+wire and four public peer/fingerprint records.
 
-Create an owner-private journal parent, then run:
+Public-reset inventories select each validator's canonical HTTPS root URL,
+including an explicit nondefault port when needed. Four distinct URLs may use
+one existing DNS hostname and its existing TLS certificate; the four account,
+peer, genesis and fingerprint bindings remain independent. Inventory roots end
+with `/`, such as `https://validator.example.org:8443/`. Path prefixes are not
+accepted because proxy rewriting would change the path covered by native
+request signatures. Select listener ports and verify certificate coverage and
+routing before applying the reviewed inventory; examples do not provision them.
+
+The maintained `scripts/render_taira_edge_nginx_conf.py` reads the roster's
+canonical authority-only `torii_public_address` values, such as
+`https://validator.example.org:8443` (without `/`). It uses each effective HTTPS
+port, rejects duplicate or conflicting listeners, and preserves request paths
+and authentication headers. Select the convenience host's upstream with
+`--public-upstream-validator taira-validator-1`; the selector is the exact
+validator slug, even when all four validators share a hostname. With no
+selector, the first ordered validator is used. Keep `--tls-lineage` pointed at
+the explicitly selected certificate lineage covering that hostname.
+
+Create the journal parent with mode 0700, then use the manifest path
+printed above. Replace `OPERATION_ID` with the exact ID returned by `plan`:
 
 ```sh
-iroha --config CLIENT.toml taira dataspace-deploy plan \
-  --manifest deployment.json --journal-dir JOURNALS
+iroha --config CLIENT.toml \
+  --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
+  taira dataspace-deploy plan \
+  --manifest /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/manifest/deployment.json \
+  --journal-dir /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/journals
 
-iroha --config CLIENT.toml taira dataspace-deploy apply \
-  --journal-dir JOURNALS --operation-id OPERATION_ID
+iroha --config CLIENT.toml \
+  --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
+  taira dataspace-deploy apply \
+  --journal-dir /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/journals --operation-id OPERATION_ID
 
-iroha --config CLIENT.toml taira dataspace-deploy status \
-  --journal-dir JOURNALS --operation-id OPERATION_ID
+iroha --config CLIENT.toml \
+  --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
+  taira dataspace-deploy status \
+  --journal-dir /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/journals --operation-id OPERATION_ID
 ```
 
 `plan` prints the operation ID and writes an immutable native plan below
-`JOURNALS/OPERATION_ID`. Repeating the same plan validates and reads that saved
-plan. A different intent cannot reuse the same operation ID. If `operation_id`
-is null, the ID derives from the canonical intent and checked NetworkId;
+the selected journal parent's `OPERATION_ID` directory. Repeating the same plan
+validates and reads that saved plan. A different intent cannot reuse the same
+operation ID. If `operation_id` is null, the ID derives from the canonical
+intent and checked NetworkId;
 reordering the two alias intents does not generate another identity.
 
 `apply` resumes from the saved plan. It can advance through already applied
@@ -75,9 +119,10 @@ returns the current observations. Run `apply` again with the same operation ID
 to observe it and, once applied, advance. There is no polling loop and no
 transport retry implemented by this controller.
 
-`status` makes only reads. It can inspect a saved operation after write
-permissions have been revoked. Capability, owner, network, native codec and
-retained transaction checks still apply.
+`status` submits no ledger transactions. It can retain verified proofs, canonical
+carrier bytes and completion receipts in the local journal. It can inspect a
+saved operation after write permissions have been revoked. Capability, owner,
+network, native codec and retained transaction checks still apply.
 
 ## Manifest
 
@@ -176,8 +221,9 @@ canonical carrier bytes are retained beside the proof cache and per-peer receipt
 The typed `VerificationRequestV1` carries the original catalog/overlay
 baseline, expected additions and grant, paid alias intent, each retained wire
 SHA256/instruction vector/alias plan, pipeline observations, and committed
-transaction DTO. The native `verification_request` entry point obtains it
-without submitting anything. The integrated native completion layer verifies independently anchored
+transaction DTO. It appears in the `verification` field of `apply` and `status`
+output; `verification_request` is an internal Rust entry point, not a CLI
+subcommand. The integrated native completion layer verifies independently anchored
 finality, the exact native `ExecutionCommitment` and canonical inclusion,
 and all four validators' final state against the independently selected trust
 profile. Neither a single peer observation nor a caller-supplied commitment is

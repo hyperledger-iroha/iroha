@@ -381,6 +381,7 @@ mod committed_transaction_context;
 mod da_hydration;
 mod fastpq_source_inventory;
 mod prepared_transfer_transcript;
+mod replay_lane_drain;
 pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
@@ -3820,6 +3821,12 @@ fn validate_sparse_merge_execution_successor(
 /// historical execution authority even after ordinary or Native sidecars retire.
 struct HistoricalMergeExecutionAuthority<'a> {
     entry: &'a MergeLedgerEntry,
+}
+/// Created only from the exact Kura carrier inventory already authenticated
+/// against retained global finality during merge-ledger recovery.
+struct HistoricalMergeDrainAuthority<'a> {
+    entry: &'a MergeLedgerEntry,
+    carrier: &'a crate::kura::MergeLedgerCarrierRecord,
 }
 enum MergeExecutionValidationAuthority<'a> {
     Live(&'a ConsensusMode),
@@ -32291,11 +32298,11 @@ impl State {
                     &entry.lane_authority_catalog,
                 )?;
                 self.validate_merge_quorum_certificate(entry, false, false)?;
-                self.validate_merge_lane_drain_certificate_payload(
-                    &entry.lane_drain_certificates,
-                    entry.merge_qc.carrier_height,
-                    &entry.active_lanes,
-                    false,
+                self.validate_historical_merge_lane_drain_certificate(
+                    HistoricalMergeDrainAuthority {
+                        entry,
+                        carrier: &carrier,
+                    },
                 )?;
                 let expected_global =
                     crate::merge::reduce_merge_hint_roots(&entry.merge_hint_roots());
@@ -34227,6 +34234,13 @@ impl State {
         state_block: &mut StateBlock<'_>,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<Vec<MergeLaneExecution>, MergeLedgerCommitError> {
+        Self::preexecute_merge_execution_sources_into_with_replay(state_block, sources, None)
+    }
+    fn preexecute_merge_execution_sources_into_with_replay(
+        state_block: &mut StateBlock<'_>,
+        sources: Vec<MergeExecutionSource>,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
+    ) -> Result<Vec<MergeLaneExecution>, MergeLedgerCommitError> {
         // Every validator checks the complete reservation before executing any source.
         // A leader must not turn congestion from combining otherwise-valid sources into
         // permanent transaction rejections after consuming another lane's block budget.
@@ -34388,6 +34402,15 @@ impl State {
                                 "invalid availability-certified native-AMX context: {message}"
                             ))
                         })?;
+                    let replay_authority = replay
+                        .map(|token| token.native_amx_authority(&*state_block))
+                        .transpose()
+                        .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+                    let receipt_authority: &dyn crate::block::NativeAmxAuthorityContext =
+                        match replay_authority.as_ref() {
+                            Some(authority) => authority,
+                            None => &*state_block,
+                        };
                     crate::block::validate_native_amx_receipt_against_plan(
                         receipt,
                         &source.origin_proposal,
@@ -34396,7 +34419,7 @@ impl State {
                         source_id,
                         source_network_id,
                         &state_block.nexus.dataspace_catalog,
-                        &*state_block,
+                        receipt_authority,
                         Some(expected_v2_context),
                     )
                     .map_err(|message| {
@@ -35345,6 +35368,21 @@ impl State {
     pub(crate) fn pending_autoscale_lane_drain_body(
         &self,
     ) -> Option<(LaneDrainCertificateBodyV1, Vec<PeerId>)> {
+        self.pending_autoscale_lane_drain_body_with_frontier(|lane, dataspace, incarnation| {
+            Self::evidence_aware_lane_drain_frontier_from_world(
+                &self.world.view(),
+                &self.kura,
+                lane,
+                dataspace,
+                incarnation,
+            )
+            .ok()
+        })
+    }
+    fn pending_autoscale_lane_drain_body_with_frontier(
+        &self,
+        frontier: impl FnOnce(LaneId, DataSpaceId, Hash) -> Option<LaneDrainFrontierV1>,
+    ) -> Option<(LaneDrainCertificateBodyV1, Vec<PeerId>)> {
         let nexus = self.nexus_snapshot();
         if !nexus.autoscale.enabled {
             return None;
@@ -35403,14 +35441,7 @@ impl State {
         {
             return None;
         }
-        let final_frontier = Self::evidence_aware_lane_drain_frontier_from_world(
-            &self.world.view(),
-            &self.kura,
-            lane.id,
-            lane.dataspace_id,
-            incarnation,
-        )
-        .ok()?;
+        let final_frontier = frontier(lane.id, lane.dataspace_id, incarnation)?;
         let body = LaneDrainCertificateBodyV1 {
             version: 1,
             intent: state.intent,
@@ -36453,7 +36484,7 @@ impl State {
             &candidate.lane_drain_certificates,
             candidate.carrier_height,
             &candidate.active_lanes,
-            true,
+            None,
         )?;
         validate_merge_lane_snapshot_progression_against(
             &admission.latest_lane_snapshots,
@@ -36465,72 +36496,77 @@ impl State {
         certificates: &[LaneDrainCertificateV1],
         carrier_height: u64,
         active_lanes: &[MergeLaneBinding],
-        require_live_intent: bool,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
     ) -> Result<(), MergeLedgerCommitError> {
         if certificates.is_empty() {
             return Ok(());
         }
-        if certificates.len() != 1 {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "a merge entry may carry exactly one lane drain certificate".to_owned(),
-            ));
-        }
-        let certificate = &certificates[0];
-        crate::lane_consensus::validate_lane_drain_certificate(certificate).map_err(|err| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "lane drain certificate is invalid: {err}"
-            ))
-        })?;
-        let intent = &certificate.body.intent;
-        if intent.network_id != self.network_id || carrier_height <= intent.close_global_height {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate has the wrong network or an invalid carrier height"
-                    .to_owned(),
-            ));
-        }
-        if !active_lanes.iter().any(|binding| {
-            binding.lane_id == intent.lane_id
-                && binding.dataspace_id == intent.dataspace_id
-                && binding.incarnation == intent.lane_incarnation
-        }) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate does not name an exact active lane binding".to_owned(),
-            ));
-        }
-        let frontier = Self::evidence_aware_lane_drain_frontier_from_world(
-            &self.world.view(),
-            &self.kura,
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
+        self.validate_merge_lane_drain_certificate_structure(
+            certificates,
+            carrier_height,
+            active_lanes,
         )?;
+        let certificate = &certificates[0];
+        let intent = &certificate.body.intent;
+        let frontier = if let Some(replay) = replay {
+            let state = self.view();
+            replay
+                .validate_drain_payload(&state, carrier_height, active_lanes, certificates)
+                .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+            Self::lane_drain_frontier_from_replay_state(&state, certificate.body.final_frontier)?
+        } else {
+            Self::evidence_aware_lane_drain_frontier_from_world(
+                &self.world.view(),
+                &self.kura,
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )?
+        };
         if frontier != certificate.body.final_frontier {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate does not bind the exact globally applied frontier"
                     .to_owned(),
             ));
         }
-        if self.lane_has_drain_blocking_evidence(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) {
+        let blocked = if replay.is_some() {
+            Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                &self.world.view(),
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+        } else {
+            self.lane_has_drain_blocking_evidence(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+        };
+        if blocked {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate still has unresolved durable evidence".to_owned(),
             ));
         }
-        if require_live_intent {
-            let (body, committee) = self.pending_autoscale_lane_drain_body().ok_or_else(|| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "lane drain certificate has no unique matching committed intent".to_owned(),
-                )
-            })?;
-            if certificate.body != body || certificate.validator_set != committee {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "lane drain certificate differs from committed metadata or its exact committee"
-                        .to_owned(),
-                ));
-            }
+        let pending = if replay.is_some() {
+            self.pending_autoscale_lane_drain_body_with_frontier(|lane, dataspace, incarnation| {
+                frontier
+                    .matches_route(lane, dataspace, incarnation)
+                    .then_some(frontier)
+            })
+        } else {
+            self.pending_autoscale_lane_drain_body()
+        };
+        let (body, committee) = pending.ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "lane drain certificate has no unique matching committed intent".to_owned(),
+            )
+        })?;
+        if certificate.body != body || certificate.validator_set != committee {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "lane drain certificate differs from committed metadata or its exact committee"
+                    .to_owned(),
+            ));
         }
         Ok(())
     }
@@ -37833,6 +37869,47 @@ impl State {
             descriptor.dataspace_id,
             descriptor.lane_incarnation,
         )?;
+        Ok(previous_native_settlement_hash
+            == marker.map(|marker| marker.participant_settlement_hash))
+    }
+    /// Check both predecessor chains in an already authenticated historical State prefix.
+    /// The replay caller owns exact proposal/finality authority; this helper reads only
+    /// replicated markers, including their exact application block identity.
+    pub(crate) fn native_amx_control_predecessor_matches_replay_state(
+        state: &impl StateReadOnly,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+        previous_native_settlement_hash: Option<
+            HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,
+        >,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        Self::validate_merge_execution_predecessor_against_frontier(
+            state.world(),
+            &proposal.descriptor,
+        )?;
+        let descriptor = &proposal.descriptor;
+        let marker = Self::canonical_native_amx_participant_frontier_from_world(
+            state.world(),
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+        )?;
+        if let Some(marker) = marker {
+            Self::validate_native_amx_participant_shared_frontier(state.world(), &marker)?;
+            let index = marker
+                .application_block_height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok());
+            if marker.application_block_height >= descriptor.proposal_height
+                || index.is_none_or(|index| {
+                    state.block_hashes().get(index) != Some(&marker.application_block_hash)
+                })
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "historical Native AMX predecessor lies outside the exact replay State prefix"
+                        .to_owned(),
+                ));
+            }
+        }
         Ok(previous_native_settlement_hash
             == marker.map(|marker| marker.participant_settlement_hash))
     }
@@ -42317,7 +42394,7 @@ impl State {
         })?;
         Ok(frontier)
     }
-    fn validate_merge_execution_predecessor_against_frontier(
+    pub(crate) fn validate_merge_execution_predecessor_against_frontier(
         world: &impl WorldReadOnly,
         descriptor: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
     ) -> Result<(), MergeLedgerCommitError> {
@@ -43218,6 +43295,20 @@ impl State {
         batch: &MergeExecutionBatch,
         validation_authority: MergeExecutionValidationAuthority<'_>,
     ) -> Result<(), MergeLedgerCommitError> {
+        self.validate_merge_execution_batch_with_replay(
+            active_lanes,
+            batch,
+            validation_authority,
+            None,
+        )
+    }
+    fn validate_merge_execution_batch_with_replay(
+        &self,
+        active_lanes: &[MergeLaneBinding],
+        batch: &MergeExecutionBatch,
+        validation_authority: MergeExecutionValidationAuthority<'_>,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
+    ) -> Result<(), MergeLedgerCommitError> {
         let invalid_batch =
             |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
         let frozen_mode = match validation_authority {
@@ -43819,6 +43910,15 @@ impl State {
                             "invalid availability-certified native-AMX context: {message}"
                         ))
                     })?;
+                let replay_authority = replay
+                    .map(|token| token.native_amx_authority(&authority))
+                    .transpose()
+                    .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+                let receipt_authority: &dyn crate::block::NativeAmxAuthorityContext =
+                    match replay_authority.as_ref() {
+                        Some(authority) => authority,
+                        None => &authority,
+                    };
                 crate::block::validate_native_amx_receipt_against_plan(
                     receipt,
                     &source.origin_proposal,
@@ -43827,7 +43927,7 @@ impl State {
                     source_id,
                     execution.autonomous_network_id,
                     &authority.nexus.dataspace_catalog,
-                    &authority,
+                    receipt_authority,
                     Some(expected_v2_context),
                 )
                 .map_err(|message| {
@@ -43843,6 +43943,14 @@ impl State {
         &self,
         entry: &MergeLedgerEntry,
         frozen_mode: ConsensusMode,
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.validate_certified_merge_entry_for_global_order_with_replay(entry, frozen_mode, None)
+    }
+    fn validate_certified_merge_entry_for_global_order_with_replay(
+        &self,
+        entry: &MergeLedgerEntry,
+        frozen_mode: ConsensusMode,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
     ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_merge_history_available()?;
         if !entry.has_current_version() {
@@ -43906,13 +44014,14 @@ impl State {
             &entry.lane_drain_certificates,
             entry.merge_qc.carrier_height,
             &entry.active_lanes,
-            true,
+            replay,
         )?;
         if let Some(batch) = entry.execution_batch.as_ref() {
-            self.validate_merge_execution_batch(
+            self.validate_merge_execution_batch_with_replay(
                 &entry.active_lanes,
                 batch,
                 MergeExecutionValidationAuthority::Live(&frozen_mode),
+                replay,
             )?;
         }
         Ok(())
@@ -52979,32 +53088,36 @@ impl<'state> StateBlock<'state> {
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
         frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
-        let replay_entry = self
-            .state_ref
-            .replay_merge_carriers
-            .read()
-            .get(&reference.entry_hash)
-            .map(|carrier| carrier.entry.clone());
-        let entry = if let Some(entry) = replay_entry {
-            entry
-        } else {
-            self.kura
-                .merge_entry_by_hash(reference.entry_hash)
-                .map_err(|err| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                        "certified merge sidecar lookup failed: {err}"
-                    ))
-                })?
-                .ok_or(MergeLedgerCommitError::MissingCertifiedMergeSidecar {
-                    entry_hash: reference.entry_hash,
-                })?
-        };
+        let entry = self
+            .kura
+            .merge_entry_by_hash(reference.entry_hash)
+            .map_err(|err| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "certified merge sidecar lookup failed: {err}"
+                ))
+            })?
+            .ok_or(MergeLedgerCommitError::MissingCertifiedMergeSidecar {
+                entry_hash: reference.entry_hash,
+            })?;
         if !reference.matches_entry(&entry) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "compact certified merge reference does not match its resolved sidecar".to_owned(),
             ));
         }
         self.stage_certified_merge_entry(&entry, frozen_mode)
+    }
+    /// Stage only the exact retained entry carried by authenticated replay authority.
+    /// The capability stays on this call stack and is never stored in StateBlock.
+    pub(crate) fn stage_certified_merge_reference_for_verified_replay(
+        &mut self,
+        reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+        frozen_mode: ConsensusMode,
+        replay: &crate::block::VerifiedReplayProposal,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let entry = replay
+            .merge_entry(reference)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        self.stage_certified_merge_entry_with_replay(entry, frozen_mode, Some(replay))
     }
     /// Re-execute and stage a caller-resolved certified merge entry before any
     /// lifecycle, policy, or ordinary transaction effect is applied.
@@ -53013,7 +53126,20 @@ impl<'state> StateBlock<'state> {
         entry: &MergeLedgerEntry,
         frozen_mode: ConsensusMode,
     ) -> Result<(), MergeLedgerCommitError> {
+        self.stage_certified_merge_entry_with_replay(entry, frozen_mode, None)
+    }
+    fn stage_certified_merge_entry_with_replay(
+        &mut self,
+        entry: &MergeLedgerEntry,
+        frozen_mode: ConsensusMode,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
+    ) -> Result<(), MergeLedgerCommitError> {
         self.ensure_pristine_execution_control_stage()?;
+        if let Some(authority) = replay {
+            authority
+                .validate_merge_stage(&self._curr_block, &*self, entry)
+                .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        }
         if entry.merge_qc.carrier_height != self._curr_block.height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != self._curr_block.prev_block_hash()
             || entry.merge_qc.view != self._curr_block.view_change_index()
@@ -53023,10 +53149,14 @@ impl<'state> StateBlock<'state> {
             ));
         }
         self.state_ref
-            .validate_certified_merge_entry_for_global_order(entry, frozen_mode)?;
+            .validate_certified_merge_entry_for_global_order_with_replay(
+                entry,
+                frozen_mode,
+                replay,
+            )?;
         let Some(batch) = entry.execution_batch.as_ref() else {
             if !entry.lane_drain_certificates.is_empty() {
-                self.stage_autoscale_lane_drain_commitment(entry)
+                self.stage_autoscale_lane_drain_commitment(entry, replay)
                     .map_err(|err| {
                         MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                             "failed to stage lane drain commitment: {err}"
@@ -53079,7 +53209,8 @@ impl<'state> StateBlock<'state> {
             &mut self._curr_block,
             batch.application_block_header.clone(),
         );
-        let execution = State::preexecute_merge_execution_sources_into(self, sources);
+        let execution =
+            State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay);
         self._curr_block = carrier_header;
         let actual_lanes = execution?;
         if actual_lanes != batch.lanes {
@@ -56168,6 +56299,7 @@ impl<'state> StateBlock<'state> {
     fn stage_autoscale_lane_drain_commitment(
         &mut self,
         entry: &MergeLedgerEntry,
+        replay: Option<&crate::block::VerifiedReplayProposal>,
     ) -> Result<(), LaneLifecycleError> {
         let [certificate] = entry.lane_drain_certificates.as_slice() else {
             return Err(LaneLifecycleError::Storage(
@@ -56214,24 +56346,39 @@ impl<'state> StateBlock<'state> {
                 reason: "drain commitment carrier height is invalid",
             });
         }
-        let current_frontier = State::evidence_aware_lane_drain_frontier_from_world(
-            &self.world,
-            self.kura,
-            previous.intent.lane_id,
-            previous.intent.dataspace_id,
-            previous.intent.lane_incarnation,
-        )
+        let current_frontier = if let Some(replay) = replay {
+            replay
+                .validate_merge_stage(&self._curr_block, &*self, entry)
+                .map_err(LaneLifecycleError::Storage)?;
+            State::lane_drain_frontier_from_replay_state(&*self, certificate.body.final_frontier)
+        } else {
+            State::evidence_aware_lane_drain_frontier_from_world(
+                &self.world,
+                self.kura,
+                previous.intent.lane_id,
+                previous.intent.dataspace_id,
+                previous.intent.lane_incarnation,
+            )
+        }
         .map_err(|_| LaneLifecycleError::InvalidAutoscaleManagedLane {
             lane: lane_id,
             reason: "drain commitment frontier evidence cannot be revalidated",
         })?;
-        if current_frontier != certificate.body.final_frontier
-            || self.state_ref.lane_has_drain_blocking_evidence(
+        let blocked = if replay.is_some() {
+            State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                &self.world,
                 lane_id,
                 previous.intent.dataspace_id,
                 previous.intent.lane_incarnation,
             )
-        {
+        } else {
+            self.state_ref.lane_has_drain_blocking_evidence(
+                lane_id,
+                previous.intent.dataspace_id,
+                previous.intent.lane_incarnation,
+            )
+        };
+        if current_frontier != certificate.body.final_frontier || blocked {
             return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
                 lane: lane_id,
                 reason: "drain commitment does not bind an empty exact durable frontier",
@@ -62328,6 +62475,10 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     *isolated.da_shard_cursors.write() = state.da_shard_cursors.read().clone();
     *isolated.da_pin_intents.write() = state.da_pin_intents.read().clone();
     *isolated.da_indexes_hydrated.write() = *state.da_indexes_hydrated.read();
+    isolated
+        .ensure_da_indexes_hydrated_for_replay_prevalidation()
+        .map_err(|error| eyre!(error))
+        .wrap_err("failed to hydrate isolated replay DA prefix without journal publication")?;
     *isolated.merge_admission.write() = state.merge_admission.read().clone();
     isolated
         .merge_ledger
@@ -62725,7 +62876,7 @@ fn replay_blocks_from_kura_range_inner(
             block: block_arc,
             checkpoint: wsv_checkpoint,
             finality,
-            ..
+            merge_carrier,
         } = bundle_entry
         else {
             if let ReplayBundleEntry::HashOnly { height, hash } = bundle_entry {
@@ -62797,15 +62948,14 @@ fn replay_blocks_from_kura_range_inner(
             }
         }
         let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
-        let validation = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
-            candidate,
+        let validation = ValidBlock::validate_sumeragi_v2_replay_keep_voting_block(
+            signed_block.clone(),
+            finality,
+            merge_carrier.as_ref().map(|carrier| &carrier.entry),
             &validation_topology,
             &genesis_account,
             time_source,
             state.sumeragi_block_cadence(),
-            crate::block::valid::SumeragiV2ValidationContext::from_height_context(
-                &finality.height_context,
-            ),
             state,
             &mut voting_block,
         )

@@ -24317,6 +24317,12 @@ time.sleep(30)
         ] {
             let mut admitted = progress_admission();
             admitted.inventory.qualification_scope = scope;
+            admitted.authorization.claims.qualification_scope = scope;
+            if !scope.includes_inrou() {
+                admitted.inventory.inrou_canary = None;
+                admitted.inventory.inrou_stage_tree_sha256 = None;
+                admitted.authorization.claims.inrou_stage_tree_sha256 = None;
+            }
             validate_inventory(&admitted.inventory).expect("admitted cohost topology");
             let plan = host_forward_plan(&admitted);
             let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
