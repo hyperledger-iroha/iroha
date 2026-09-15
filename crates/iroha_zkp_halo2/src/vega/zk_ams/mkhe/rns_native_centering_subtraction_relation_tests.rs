@@ -678,7 +678,7 @@ fn statement4_boundary_is_private_move_only_and_all_later_claims_fail_closed() {
     assert_eq!(MIN_WIRE_BYTES_V1, 840_265);
     assert_eq!(
         RNS_NATIVE_CENTERING_SUBTRACTION_RESIDUAL_MAX_BYTES_V1,
-        500_639
+        499_343
     );
 
     let source = include_str!("rns_native_centering_subtraction_relation.rs");

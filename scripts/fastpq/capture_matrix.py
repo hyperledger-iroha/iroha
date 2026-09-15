@@ -12,6 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
+try:
+    from .benchmark_operations import ordered_filters, require_filter
+    from .report_projection import project_bundle
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import ordered_filters, require_filter
+    from report_projection import project_bundle
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 ACCEL_HELPERS_DIR = SCRIPT_DIR.parent / "acceleration"
 if ACCEL_HELPERS_DIR.is_dir():
@@ -115,7 +122,7 @@ class DeviceSummary:
             "machines": sorted(self.machines),
             "rows": rows_block,
             "bench_files": [rel(path) for path in sorted(self.bench_files)],
-            "operation_filters": sorted(self.operation_filters),
+            "operation_filters": ordered_filters(self.operation_filters),
             "operations": op_entries,
             "max_operation_ms": max_operation_ms,
             "min_operation_speedup": min_operation_speedup,
@@ -220,25 +227,9 @@ def load_acceleration_state_from_bench(bench_path: Path, data: dict) -> dict | N
     return None
 
 
-def format_operation_filter(benchmarks: dict) -> str | None:
-    raw = benchmarks.get("operation_filter")
-    if isinstance(raw, str) and raw.strip():
-        return raw
-    operations = benchmarks.get("operations")
-    if not isinstance(operations, list):
-        return None
-    names = sorted(
-        {
-            entry.get("operation")
-            for entry in operations
-            if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
-        }
-    )
-    if len(names) == 1:
-        return names[0]
-    if names:
-        return "all"
-    return None
+def format_operation_filter(benchmarks: dict) -> str:
+    """Read the mandatory filter; measured rows never imply a complete capture."""
+    return require_filter(benchmarks.get("operation_filter"))
 
 
 def summarize_device(label: str, bench_paths: Sequence[Path]) -> DeviceSummary:
@@ -253,11 +244,15 @@ def summarize_device(label: str, bench_paths: Sequence[Path]) -> DeviceSummary:
 
     for bench_path in bench_paths:
         data = load_json(bench_path)
+        # Validate raw and flattened copies, evidence and geometry before any
+        # sample contributes to a device median or rollout threshold.
+        benchmarks = project_bundle(data, require_wrapped=True)["report"]
         meta = data.get("metadata") or {}
-        benchmarks = data.get("benchmarks") or {}
-        backend_entry = benchmarks.get("gpu_backend")
-        if backend_entry:
+        backend_entry = benchmarks["gpu_backend"]
+        if backend is None:
             backend = backend_entry
+        elif backend_entry != backend:
+            raise ValueError(f"device {label!r} contains conflicting gpu_backend values")
         platform = meta.get("platform")
         if platform:
             platforms.add(platform)

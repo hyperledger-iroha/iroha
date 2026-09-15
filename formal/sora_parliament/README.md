@@ -171,6 +171,17 @@ Run the deterministic implementation/model binding check independently:
 python3 scripts/formal/check_sora_parliament_source_contract.py
 ```
 
+The checker follows sortition registration and broker dispatch into their
+current implementation helpers and validates the explicit broker frame schema
+identities. Its regression suite runs the complete checker and verifies that
+guard removal, altered ordering, substituted candidates and disconnected broker
+validation still fail:
+
+```sh
+python3 -m pytest -q scripts/tests/check_sora_parliament_source_contract_test.py \
+  scripts/tests/check_sora_parliament_broker_source_contract_test.py
+```
+
 The source contract is deliberately structural. It detects accidental removal
 of the code-side guards represented by the model and separately pins the
 authority-bound registration/dropout and reducer-derived registration/survivor

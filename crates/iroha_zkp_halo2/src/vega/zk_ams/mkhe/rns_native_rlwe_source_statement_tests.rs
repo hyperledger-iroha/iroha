@@ -1,3 +1,7 @@
+//! Exact mixed public/proof statement, source and canonical sampler controls.
+
+use super::super::rns_native_proof_hash::test_proof_digest_v1;
+use super::super::rns_native_proof_sampling::sample_goldilocks_word_modulus_v1;
 use super::*;
 use crate::vega::zk_ams::mkhe::{
     rns_native_source::ZkAmsMkheRnsNativeSourceErrorV1,
@@ -21,6 +25,23 @@ fn digest(label: &[u8], context: u16, ordinal: u32) -> [u8; DIGEST_BYTES_V1] {
     hash.update(&context.to_be_bytes());
     hash.update(&ordinal.to_be_bytes());
     hash.finalize()
+}
+
+fn proof_digest(label: &[u8], context: u16, ordinal: u32) -> ProofDigestV1 {
+    test_proof_digest_v1(label, (u64::from(context) << 32) | u64::from(ordinal))
+}
+
+fn anchor_offset_v1(ordinal: usize) -> usize {
+    ANCHOR_HEADER_BYTES_V1
+        + (0..ordinal)
+            .map(|index| {
+                if anchor_proof_role_v1(index) {
+                    PROOF_DIGEST_BYTES_V1
+                } else {
+                    DIGEST_BYTES_V1
+                }
+            })
+            .sum::<usize>()
 }
 
 fn nonce_bytes(ordinal: usize) -> Vec<u8> {
@@ -201,14 +222,14 @@ struct Fixture {
     ciphertext_c1: Vec<[u8; DIGEST_BYTES_V1]>,
     records: Vec<RnsNativePublicRecordMetadataV1>,
     public_bundle_digest: [u8; DIGEST_BYTES_V1],
-    equation_commitments: [[u8; DIGEST_BYTES_V1]; EQUATION_COUNT_V1],
-    limb_commitments: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    equation_commitments: [ProofDigestV1; EQUATION_COUNT_V1],
+    limb_commitments: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
     evaluations: [u8; QPCS_EVALUATION_BYTES_V1],
     qpcs_parameter_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_section_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_schedule_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_residual_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_section_digest: ProofDigestV1,
+    qpcs_schedule_digest: ProofDigestV1,
+    qpcs_evaluation_binding_digest: ProofDigestV1,
+    qpcs_residual_digest: ProofDigestV1,
 }
 
 impl Fixture {
@@ -339,9 +360,9 @@ impl Fixture {
             .expect("opening transcript");
         let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
             transcript.binding_digest(),
-            digest(b"mapping-root", context, 0),
-            digest(b"terminal-root", context, 0),
-            digest(b"cross-basis-root", context, 0),
+            proof_digest(b"mapping-root", context, 0),
+            proof_digest(b"terminal-root", context, 0),
+            proof_digest(b"cross-basis-root", context, 0),
         )
         .expect("terminal bridge");
         let transcript = transcript
@@ -350,7 +371,7 @@ impl Fixture {
         let fri_roots = core::array::from_fn(|layer| {
             ZkAmsMkheRnsNativeQpcsFriRootV1::new(
                 u8::try_from(layer).expect("layer fits u8"),
-                digest(
+                proof_digest(
                     b"fri-root",
                     context,
                     u32::try_from(layer).expect("layer fits u32"),
@@ -360,9 +381,9 @@ impl Fixture {
         });
         let qpcs_roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
             transcript.binding_digest(),
-            digest(b"qpcs-initial-root", context, 0),
-            digest(b"q-mask-s-root", context, 0),
-            digest(b"qpcs-quotient-root", context, 0),
+            proof_digest(b"qpcs-initial-root", context, 0),
+            proof_digest(b"q-mask-s-root", context, 0),
+            proof_digest(b"qpcs-quotient-root", context, 0),
             fri_roots,
         )
         .expect("qPCS roots");
@@ -371,23 +392,22 @@ impl Fixture {
             .expect("qPCS transcript");
         let terminal_roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
             transcript.binding_digest(),
-            digest(b"cross-field-root", context, 0),
-            digest(b"global-lookup-root", context, 0),
-            digest(b"zero-padding-root", context, 0),
+            proof_digest(b"cross-field-root", context, 0),
+            proof_digest(b"global-lookup-root", context, 0),
         )
         .expect("terminal roots");
         let transcript = transcript
             .bind_terminal_roots(terminal_roots)
             .expect("complete transcript");
         let equation_commitments = core::array::from_fn(|ordinal| {
-            digest(
+            proof_digest(
                 b"equation-commitment",
                 context,
                 u32::try_from(ordinal).expect("equation ordinal fits"),
             )
         });
         let limb_commitments = core::array::from_fn(|limb| {
-            digest(
+            proof_digest(
                 b"limb-commitment",
                 context,
                 u32::try_from(limb).expect("limb ordinal fits"),
@@ -409,11 +429,13 @@ impl Fixture {
             equation_commitments,
             limb_commitments,
             evaluations: [0; QPCS_EVALUATION_BYTES_V1],
-            qpcs_parameter_digest: digest(b"qpcs-parameter", context, 0),
-            qpcs_section_digest: digest(b"qpcs-section", context, 0),
-            qpcs_schedule_digest: digest(b"qpcs-schedule", context, 0),
-            qpcs_evaluation_binding_digest: digest(b"qpcs-evaluation-binding", context, 0),
-            qpcs_residual_digest: digest(b"qpcs-residual", context, 0),
+            qpcs_parameter_digest: RnsNativeProofHashContextV1::canonical()
+                .unwrap()
+                .parameter_digest(),
+            qpcs_section_digest: proof_digest(b"qpcs-section", context, 0),
+            qpcs_schedule_digest: proof_digest(b"qpcs-schedule", context, 0),
+            qpcs_evaluation_binding_digest: proof_digest(b"qpcs-evaluation-binding", context, 0),
+            qpcs_residual_digest: proof_digest(b"qpcs-residual", context, 0),
         }
     }
 
@@ -478,13 +500,14 @@ impl Fixture {
 fn residual_anchor_is_exact_capped_and_digest_bound() {
     let downstream = [0x5a_u8; 17];
     let mut core = core::array::from_fn(|index| {
-        digest(
-            b"anchor-core",
-            1,
-            u32::try_from(index).expect("core ordinal fits"),
-        )
+        if anchor_proof_role_v1(index) {
+            DigestIdentityV1::from(proof_digest(b"anchor-core", 1, index as u32))
+        } else {
+            DigestIdentityV1::from(digest(b"anchor-core", 1, index as u32))
+        }
     });
-    core[CORE_DOWNSTREAM_V1] = downstream_digest_v1(&downstream).expect("downstream digest");
+    core[CORE_DOWNSTREAM_V1] =
+        DigestIdentityV1::from(downstream_digest_v1(&downstream).expect("downstream digest"));
     let anchor = ResidualAnchorV1::from_parts_v1(7, core, &downstream).expect("anchor");
     let encoded = anchor.to_canonical_bytes_v1().expect("encode");
     assert_eq!(encoded.len(), ANCHOR_FIXED_BYTES_V1 + downstream.len());
@@ -553,7 +576,8 @@ fn residual_anchor_is_exact_capped_and_digest_bound() {
     );
 
     let maximum = vec![0x33; RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1];
-    core[CORE_DOWNSTREAM_V1] = downstream_digest_v1(&maximum).expect("maximum digest");
+    core[CORE_DOWNSTREAM_V1] =
+        DigestIdentityV1::from(downstream_digest_v1(&maximum).expect("maximum digest"));
     let maximum = ResidualAnchorV1::from_parts_v1(7, core, &maximum)
         .expect("maximum anchor")
         .to_canonical_bytes_v1()
@@ -636,15 +660,16 @@ fn aggregation_challenges_are_unbiased_distinct_and_axis_separated() {
         mapping,
     )
     .expect("context-separated challenge schedule");
-    let parameter_separated = derive_aggregation_challenges_v1(
-        &fixture.transcript,
-        digest(b"changed-qpcs-parameter", fixture.context, 0),
-        formula,
-        mapping,
-    )
-    .expect("parameter-separated challenge schedule");
+    assert_eq!(
+        derive_aggregation_challenges_v1(
+            &fixture.transcript,
+            digest(b"changed-qpcs-parameter", fixture.context, 0),
+            formula,
+            mapping,
+        ),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
+    );
     assert_ne!(first, context_separated);
-    assert_ne!(first, parameter_separated);
     let mut pairs = Vec::new();
     for (limb, repetitions) in first.iter().enumerate() {
         let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
@@ -662,101 +687,84 @@ fn aggregation_challenges_are_unbiased_distinct_and_axis_separated() {
         assert_eq!(coordinates.len(), ROWS_PER_LIMB_V1);
     }
     let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[0];
-    assert_eq!(map_challenge_candidate_v1(0, modulus, &[]), None);
-    assert_eq!(map_challenge_candidate_v1(u64::MAX, modulus, &[]), None);
-    let candidate = map_challenge_candidate_v1(1, modulus, &[]).expect("one maps to one");
-    assert_eq!(map_challenge_candidate_v1(1, modulus, &[candidate]), None);
-    let kat_gamma = derive_aggregation_challenge_coordinate_v1(
-        [0x11; DIGEST_BYTES_V1],
-        [0x22; DIGEST_BYTES_V1],
-        formula,
-        mapping,
-        0,
-        0,
-        0,
-        modulus,
-        &[],
-    )
-    .expect("KAT gamma");
-    let kat_beta = derive_aggregation_challenge_coordinate_v1(
-        [0x11; DIGEST_BYTES_V1],
-        [0x22; DIGEST_BYTES_V1],
+    assert_eq!(
+        sample_goldilocks_word_modulus_v1(fastpq_isi::poseidon::FIELD_MODULUS - 1, modulus),
+        Ok(None)
+    );
+    assert!(sample_goldilocks_word_modulus_v1(u64::MAX, modulus).is_err());
+    assert_eq!(sample_goldilocks_word_modulus_v1(1, modulus), Ok(Some(1)));
+    let seed = proof_digest(b"canonical-sampler-replay", 11, 0);
+    let parameter = fixture.qpcs_parameter_digest;
+    let sampler = RnsNativeAggregationSamplerV1::new(parameter, seed, formula, mapping).unwrap();
+    let gamma =
+        derive_aggregation_challenge_coordinate_v1(seed, parameter, formula, mapping, 0, 0, 0, &[])
+            .unwrap();
+    let beta = derive_aggregation_challenge_coordinate_v1(
+        seed,
+        parameter,
         formula,
         mapping,
         0,
         0,
         1,
-        modulus,
-        &[kat_gamma],
+        &[gamma],
     )
-    .expect("KAT beta");
-    assert_eq!(kat_gamma, 1_130_366_289_750_495_907);
-    assert_eq!(kat_beta, 413_973_013_125_576_731);
+    .unwrap();
+    // Current fixed-output vectors require a real native replay. These assertions
+    // retain exact owner parity and every axis/nonzero/distinct condition without
+    // relabeling the retired Keccak/u64 sampler's values as current outputs.
+    assert_eq!(gamma, sampler.derive(0, 0, 0, &[]).unwrap());
+    assert_eq!(beta, sampler.derive(0, 0, 1, &[gamma]).unwrap());
+    assert_ne!(gamma, beta);
+    assert_ne!(gamma, 0);
+    assert_ne!(beta, 0);
+    assert_ne!(sampler.derive(0, 0, 0, &[gamma]).unwrap(), gamma);
     assert_eq!(
         derive_aggregation_challenge_coordinate_v1(
-            [0x11; DIGEST_BYTES_V1],
-            [0x22; DIGEST_BYTES_V1],
+            seed,
+            parameter,
+            formula,
+            mapping,
+            40,
+            0,
+            0,
+            &[]
+        ),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
+    );
+    assert_eq!(
+        derive_aggregation_challenge_coordinate_v1(seed, parameter, formula, mapping, 0, 5, 0, &[]),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
+    );
+    assert_eq!(
+        derive_aggregation_challenge_coordinate_v1(seed, parameter, formula, mapping, 0, 0, 2, &[]),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
+    );
+    let next_limb =
+        derive_aggregation_challenge_coordinate_v1(seed, parameter, formula, mapping, 1, 0, 0, &[])
+            .unwrap();
+    let next_repetition =
+        derive_aggregation_challenge_coordinate_v1(seed, parameter, formula, mapping, 0, 1, 0, &[])
+            .unwrap();
+    assert_ne!(gamma, next_limb);
+    assert_ne!(gamma, next_repetition);
+    let mut changed = seed.to_le_bytes();
+    changed[40] ^= 1;
+    let changed = ProofDigestV1::from_le_bytes(changed).unwrap();
+    assert_ne!(
+        gamma,
+        derive_aggregation_challenge_coordinate_v1(
+            changed,
+            parameter,
             formula,
             mapping,
             0,
             0,
             0,
-            3,
-            &[1, 2],
-        ),
-        Err(RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)
+            &[]
+        )
+        .unwrap()
     );
-    let next_limb = derive_aggregation_challenge_coordinate_v1(
-        [0x11; DIGEST_BYTES_V1],
-        [0x22; DIGEST_BYTES_V1],
-        formula,
-        mapping,
-        1,
-        0,
-        0,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[1],
-        &[],
-    )
-    .expect("next-limb challenge");
-    let next_repetition = derive_aggregation_challenge_coordinate_v1(
-        [0x11; DIGEST_BYTES_V1],
-        [0x22; DIGEST_BYTES_V1],
-        formula,
-        mapping,
-        0,
-        1,
-        0,
-        modulus,
-        &[],
-    )
-    .expect("next-repetition challenge");
-    assert_ne!(kat_gamma, next_limb);
-    assert_ne!(kat_gamma, next_repetition);
-    let gamma = derive_aggregation_challenge_coordinate_v1(
-        fixture.transcript.rns_aggregation_challenge_seed(),
-        fixture.qpcs_parameter_digest,
-        formula,
-        mapping,
-        0,
-        0,
-        0,
-        modulus,
-        &[],
-    )
-    .expect("gamma");
-    let beta = derive_aggregation_challenge_coordinate_v1(
-        fixture.transcript.rns_aggregation_challenge_seed(),
-        fixture.qpcs_parameter_digest,
-        formula,
-        mapping,
-        0,
-        0,
-        1,
-        modulus,
-        &[gamma],
-    )
-    .expect("beta");
-    assert_ne!(gamma, beta);
 }
 
 #[test]
@@ -1018,7 +1026,7 @@ fn pretranscript_facts_are_exact_mutation_closed_and_expose_one_pass_blocker() {
     public_bundle_digest[0] ^= 1;
     validate(&records, public_bundle_digest).expect("restored public facts");
 
-    // This legacy fixture deliberately models a single canonical scan and
+    // This single-pass fixture deliberately models a single canonical scan and
     // therefore cannot implement the distinct repeatable-source capability.
     assert_eq!(
         snapshot
@@ -1049,13 +1057,13 @@ fn complete_preflight_is_move_only_non_authorizing_and_anchor_bound() {
     assert_eq!(parts.snapshot.next_record, OPENING_COUNT_V1);
     assert_ne!(
         parts.derived.preflight_statement_digest,
-        [0; DIGEST_BYTES_V1]
+        ProofDigestV1::ZERO
     );
-    assert_ne!(parts.statement_anchor_digest, [0; DIGEST_BYTES_V1]);
+    assert_ne!(parts.statement_anchor_digest, ProofDigestV1::ZERO);
     assert_ne!(parts.derived.formula_digest, parts.derived.mapping_digest);
 
     let mut corrupted = anchor.clone();
-    corrupted[ANCHOR_HEADER_BYTES_V1 + CORE_PUBLIC_BUNDLE_V1 * DIGEST_BYTES_V1] ^= 1;
+    corrupted[anchor_offset_v1(CORE_PUBLIC_BUNDLE_V1)] ^= 1;
     assert_eq!(
         validate_preflight_parts_v1(
             &fixture.transcript,
@@ -1120,7 +1128,7 @@ fn complete_preflight_is_move_only_non_authorizing_and_anchor_bound() {
         Err(RnsNativeRlweSourceStatementErrorV1::InvalidAnchor)
     );
     let mut qpcs = fixture.qpcs(&anchor);
-    qpcs.section_binding_digest = digest(b"spliced-qpcs-section", fixture.context, 0);
+    qpcs.section_binding_digest = proof_digest(b"spliced-qpcs-section", fixture.context, 0);
     assert_eq!(
         validate_preflight_parts_v1(
             &fixture.transcript,

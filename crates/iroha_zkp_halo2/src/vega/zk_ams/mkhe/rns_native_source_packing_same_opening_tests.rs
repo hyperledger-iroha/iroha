@@ -1,3 +1,5 @@
+//! Source-packing same-opening regression tests.
+
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -9,15 +11,17 @@ use super::*;
 
 // Full focused-module execution ledger after the public-fixture cache below.
 // A "relation MSM" is a `prepare_relation_v1` path which reaches the fixed
-// 16,384-term secret multiexponentiation.  Successful replay also counts the
-// two receipt/finish rejection probes which stop immediately before that MSM.
-// A full commitment scan additionally counts the two cached point-root scans,
-// the independent nonidentity reconstruction scan, and the three replay/error
-// probes which stop after collecting all points.
+// 16,384-term secret multiexponentiation. Successful replay also counts a
+// completed aggregate rejected by the later receipt or finish check. A full
+// commitment scan additionally counts independent public point-root scans and
+// paths rejected after collecting all points. The owned-entry child adds two
+// equation verifications and replay/finish error scans; it reuses the existing
+// public proof cache and adds no proof generation. Rejected frame/context and
+// acquisition-panic cases acquire no replay and perform no commitment scan.
 const EXPECTED_FOCUSED_PROOF_WIRES_V1: usize = 2;
-const EXPECTED_FOCUSED_RELATION_MSMS_V1: usize = 11;
-const EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1: usize = 13;
-const EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1: usize = 17;
+const EXPECTED_FOCUSED_RELATION_MSMS_V1: usize = 13;
+const EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1: usize = 16;
+const EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1: usize = 21;
 const FIXTURE_PUBLIC_OWNER_POINTS_V1: usize = 2;
 const FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1: usize = RADIX_LOW_DIGITS_V1 + 1;
 const FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1: usize = FIXTURE_PUBLIC_OWNER_POINTS_V1
@@ -29,6 +33,15 @@ const _: () = {
 
 fn digest_v1(tag: u8) -> [u8; DIGEST_BYTES_V1] {
     [tag; DIGEST_BYTES_V1]
+}
+
+fn proof_digest_v1(tag: u8) -> ProofDigestV1 {
+    let mut bytes = [0_u8; 48];
+    for lane in 0..6 {
+        bytes[lane * 8..(lane + 1) * 8]
+            .copy_from_slice(&(u64::from(tag) + 1 + lane as u64).to_le_bytes());
+    }
+    ProofDigestV1::from_le_bytes(bytes).expect("canonical six-lane fixture")
 }
 
 fn safe_core_v1() -> RnsNativeSourcePackingSafeCoreV1 {
@@ -43,8 +56,8 @@ fn safe_core_v1() -> RnsNativeSourcePackingSafeCoreV1 {
 
 fn outer_bindings_v1(tag: u8) -> RnsNativeSourcePackingCombinedOuterBindingsV1 {
     let mut bindings = RnsNativeSourcePackingCombinedOuterBindingsV1 {
-        source_statement_anchor_digest: digest_v1(tag),
-        source_final_aggregation_schedule_digest: digest_v1(tag.wrapping_add(1)),
+        source_statement_anchor_digest: proof_digest_v1(tag),
+        source_final_aggregation_schedule_digest: proof_digest_v1(tag.wrapping_add(1)),
         enclosing_packing_binding_digest: digest_v1(tag.wrapping_add(2)),
         inventory_prior_context_digest: digest_v1(tag.wrapping_add(3)),
         inventory_root: digest_v1(tag.wrapping_add(4)),
@@ -827,17 +840,17 @@ fn exact_owner_order_geometry_and_cap_are_settled() {
     assert_eq!(OWNED_WIRE_BYTES_V1, 125);
     assert_eq!(MIN_WIRE_BYTES_V1, 126);
     assert_eq!(EXPECTED_FOCUSED_PROOF_WIRES_V1, 2);
-    assert_eq!(EXPECTED_FOCUSED_RELATION_MSMS_V1, 11);
-    assert_eq!(EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1, 13);
-    assert_eq!(EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1, 17);
-    assert_eq!(FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1, 108_464);
+    assert_eq!(EXPECTED_FOCUSED_RELATION_MSMS_V1, 13);
+    assert_eq!(EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1, 16);
+    assert_eq!(EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1, 21);
+    assert_eq!(FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1, 107_201);
     assert_eq!(
         FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
         RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1
     );
     assert_eq!(
         RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1,
-        108_339
+        107_076
     );
     assert_eq!(
         owner_coordinate_v1(0).expect("D0"),
@@ -1130,14 +1143,14 @@ fn combined_predecessor_is_successor_first_safe_core_checked_and_outer_bound_pos
         (
             "statement anchor",
             RnsNativeSourcePackingCombinedOuterBindingsV1 {
-                source_statement_anchor_digest: digest_v1(150),
+                source_statement_anchor_digest: proof_digest_v1(150),
                 ..outer_bindings
             },
         ),
         (
             "final aggregation schedule",
             RnsNativeSourcePackingCombinedOuterBindingsV1 {
-                source_final_aggregation_schedule_digest: digest_v1(151),
+                source_final_aggregation_schedule_digest: proof_digest_v1(151),
                 ..outer_bindings
             },
         ),
@@ -2176,7 +2189,7 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         "let a = non_identity_point_bytes_v1(a)?;",
         "FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1: usize =",
         "RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1",
-        "RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1 == 108_339",
+        "RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1 == 107_076",
         "direct-frame-already-charged-before-comparator-chain",
         "child-is-declared-source-settled-and-non-authorizing",
         "legacy-344-source-order-Csrc-masks-are-not-D-packing-masks",
@@ -2486,6 +2499,9 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
     let owned_successor = owned_handoff
         .find("previous.same_opening_successor_v1()")
         .expect("owned successor");
+    let owned_frame = owned_handoff
+        .find("FrameViewV1::decode_v1")
+        .expect("owned exact frame preflight");
     let owned_context = owned_handoff
         .find("previous.authenticated_same_opening_context_v2()")
         .expect("owned context");
@@ -2496,7 +2512,7 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         .find("previous.begin_authenticated_replay_v2()")
         .expect("owned replay");
     let owned_equation = owned_handoff
-        .find("verify_equation_kernel_v1")
+        .find("verify_decoded_equation_kernel_v1")
         .expect("owned equation");
     let owned_outer = owned_handoff
         .find("previous.combined_outer_bindings_v1()")
@@ -2505,13 +2521,26 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         .find("finalize_verified_kernel_v1")
         .expect("owned finalization");
     assert!(
-        owned_successor < owned_context
+        owned_successor < owned_frame
+            && owned_frame < owned_context
             && owned_context < owned_core
             && owned_core < owned_replay
             && owned_replay < owned_equation
             && owned_equation < owned_outer
             && owned_outer < owned_finalize
     );
+    assert_eq!(owned_handoff.matches("FrameViewV1::decode_v1(").count(), 1);
+    assert!(!owned_handoff.contains("verify_equation_kernel_v1("));
+    let decoded_equation = source
+        .split_once("fn verify_decoded_equation_kernel_v1")
+        .expect("one decoded equation owner")
+        .1
+        .split_once("fn finalize_verified_kernel_v1")
+        .expect("decoded equation boundary")
+        .0;
+    assert!(!decoded_equation.contains("FrameViewV1::decode_v1"));
+    assert!(!decoded_equation.contains("codec_digest_v1("));
+    assert!(decoded_equation.contains("prepare_relation_v1(context, replay_source)?"));
     let owned_signature = source
         .split_once("pub(super) fn verify_rns_native_source_packing_same_opening_owned_v2")
         .expect("owned handoff signature")
@@ -2536,7 +2565,7 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         2
     );
     let outer_order = source
-        .split_once("fn component_digests_v1(self) -> [[u8; DIGEST_BYTES_V1]; 19]")
+        .split_once("fn component_digests_v1(self) -> [DigestIdentityV1; 19]")
         .expect("outer order")
         .1
         .split_once("fn canonical_combined_outer_binding_digest_v1")
@@ -2686,3 +2715,328 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
     let parent = include_str!("../mkhe.rs");
     assert!(parent.contains("mod rns_native_source_packing_same_opening;"));
 }
+
+// Independent byte-oriented oracle: do not route this through the production
+// component iterator or its typed digest list.
+fn outer_component_bytes_reference_v1(
+    bindings: &RnsNativeSourcePackingCombinedOuterBindingsV1,
+) -> [&[u8]; 19] {
+    [
+        bindings.source_statement_anchor_digest.as_bytes(),
+        bindings.source_final_aggregation_schedule_digest.as_bytes(),
+        &bindings.enclosing_packing_binding_digest,
+        &bindings.inventory_prior_context_digest,
+        &bindings.inventory_root,
+        &bindings.inventory_continuation_digest,
+        &bindings.inventory_binding_digest,
+        &bindings.direct_binding_digest,
+        &bindings.comparator_binding_digest,
+        &bindings.comparator_range_carry_binding_digest,
+        &bindings.small_sign_disjointness_binding_digest,
+        &bindings.q_mask_linear_relations_binding_digest,
+        &bindings.existing_radix_binding_digest,
+        &bindings.radix_complement_binding_digest,
+        &bindings.centering_subtraction_binding_digest,
+        &bindings.global_lookup_pre_z_binding_digest,
+        &bindings.global_lookup_post_z_binding_digest,
+        &bindings.global_inverse_product_binding_digest,
+        &bindings.global_membership_binding_digest,
+    ]
+}
+
+fn combined_outer_reference_v1(
+    bindings: &RnsNativeSourcePackingCombinedOuterBindingsV1,
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(COMBINED_OUTER_BINDING_DOMAIN_V1);
+    hash.update(&[VERSION_V1]);
+    for bytes in outer_component_bytes_reference_v1(bindings) {
+        hash.update(bytes);
+    }
+    hash.finalize()
+}
+
+fn finalized_outer_reference_v1(
+    equation: &EquationVerifiedKernelV1<'_>,
+    outer: &RnsNativeSourcePackingCombinedOuterBindingsV1,
+) -> ([u8; 32], [u8; 32]) {
+    let mut residual = Keccak256::new();
+    residual.update(RESIDUAL_DOMAIN_V1);
+    residual.update(&[VERSION_V1]);
+    for bytes in outer_component_bytes_reference_v1(outer) {
+        residual.update(bytes);
+    }
+    residual.update(&outer.combined_outer_binding_digest);
+    residual.update(&equation.proof_digest);
+    residual.update(&(equation.residual.len() as u32).to_be_bytes());
+    residual.update(equation.residual);
+    let residual_digest = residual.finalize();
+    let mut binding = Keccak256::new();
+    binding.update(BINDING_DOMAIN_V1);
+    binding.update(&[VERSION_V1]);
+    for bytes in [
+        equation.manifest_digest,
+        equation.source_context_digest,
+        equation.point_root,
+        equation.replay_receipt_digest,
+        equation.pre_challenge_binding_digest,
+        equation.tau_digest,
+        equation.q_digest,
+        equation.proof_digest,
+        residual_digest,
+        equation.codec_digest,
+    ] {
+        binding.update(&bytes);
+    }
+    for bytes in outer_component_bytes_reference_v1(outer) {
+        binding.update(bytes);
+    }
+    binding.update(&outer.combined_outer_binding_digest);
+    binding.update(&(equation.codec_offset as u32).to_be_bytes());
+    (residual_digest, binding.finalize())
+}
+
+#[test]
+fn native_statement_and_aggregation_schedule_bind_all_six_lanes_after_the_equation_only() {
+    let artifact = identity_public_fixture_v1();
+    let baseline_outer = outer_bindings_v1(92);
+    // Generated independently with PyCryptodome Keccak-256 over the exact
+    // fixed-order byte fields; this does not execute the proof or Rust owner.
+    let expected_combined = [
+        [
+            0xab, 0x2a, 0xe9, 0xe9, 0xd1, 0xf4, 0x26, 0x78, 0xb2, 0xd0, 0xe9, 0xc7, 0x68, 0x7e,
+            0xf1, 0xad, 0xd8, 0x27, 0x8f, 0x25, 0x86, 0x9e, 0x0d, 0x31, 0xe6, 0x60, 0x66, 0x56,
+            0x9d, 0x96, 0xa8, 0x3c,
+        ],
+        [
+            0x59, 0x67, 0x81, 0xe3, 0x57, 0xbd, 0x59, 0xff, 0xb1, 0x1f, 0x95, 0xcd, 0x1b, 0xa8,
+            0x63, 0x2e, 0x07, 0xf0, 0x40, 0x9e, 0x3f, 0x09, 0x35, 0x7d, 0xb3, 0xeb, 0x80, 0x73,
+            0x8f, 0x20, 0x8d, 0x0a,
+        ],
+        [
+            0x7a, 0x56, 0xe3, 0x62, 0xb6, 0x67, 0x3d, 0x2d, 0x41, 0xd8, 0x53, 0xbe, 0x4d, 0xa3,
+            0xf2, 0xca, 0xd8, 0x94, 0xd5, 0x60, 0xdb, 0x23, 0xe6, 0x2b, 0x7b, 0x0a, 0xcb, 0xb2,
+            0xdf, 0x1d, 0x32, 0xca,
+        ],
+        [
+            0x53, 0xeb, 0x6a, 0x92, 0x18, 0x53, 0xb9, 0xc7, 0xaa, 0x00, 0xe7, 0x15, 0xc4, 0x86,
+            0xee, 0x73, 0x2b, 0xb5, 0x70, 0xbb, 0x44, 0x3f, 0x20, 0xa9, 0xd0, 0xb9, 0xe7, 0x1d,
+            0x18, 0xca, 0x6c, 0xc3,
+        ],
+        [
+            0x9c, 0xfa, 0x9b, 0xba, 0xe6, 0xba, 0x5c, 0xce, 0xaa, 0x79, 0xbe, 0x26, 0xe2, 0x26,
+            0xb6, 0x8e, 0xef, 0x88, 0x68, 0x92, 0x1b, 0xae, 0xe1, 0x45, 0xa4, 0x66, 0x13, 0xd8,
+            0x07, 0xa9, 0xfe, 0x09,
+        ],
+        [
+            0xa3, 0x9b, 0x48, 0x5c, 0x47, 0x8a, 0xc0, 0x6b, 0x79, 0x41, 0x76, 0xe1, 0x7e, 0x32,
+            0xad, 0xe2, 0x24, 0x6e, 0xb7, 0xfa, 0x47, 0xd2, 0x57, 0x19, 0xe6, 0x50, 0xd2, 0x4a,
+            0x1c, 0x3e, 0xd2, 0x59,
+        ],
+        [
+            0xf5, 0xd1, 0x8d, 0xc3, 0x5d, 0x12, 0xd0, 0xb2, 0x40, 0xa5, 0x61, 0x78, 0xf6, 0xbb,
+            0x7f, 0x8a, 0xe9, 0xa1, 0x67, 0x32, 0x4c, 0x6d, 0x56, 0xe5, 0xf8, 0x4f, 0x16, 0x48,
+            0xa0, 0xa3, 0xe7, 0x71,
+        ],
+        [
+            0x05, 0x72, 0x35, 0xec, 0x6a, 0x66, 0x50, 0x3b, 0x6b, 0xc8, 0xfb, 0x9d, 0xae, 0xe4,
+            0xa1, 0x6b, 0xa7, 0x39, 0xbc, 0xe4, 0x5f, 0x95, 0xa3, 0x95, 0xb9, 0xcf, 0x97, 0xfb,
+            0xd9, 0xaa, 0xc6, 0x1b,
+        ],
+        [
+            0x4d, 0x50, 0xc2, 0xd6, 0x12, 0x11, 0xbf, 0x48, 0x02, 0x7b, 0x4f, 0xe9, 0x6e, 0x8a,
+            0x14, 0x41, 0xc3, 0x69, 0x3f, 0xd7, 0x2c, 0x07, 0x2c, 0x10, 0x48, 0x17, 0xab, 0x37,
+            0xa9, 0x0d, 0x99, 0x34,
+        ],
+        [
+            0xa6, 0x03, 0x57, 0x3c, 0x78, 0x67, 0x45, 0xb5, 0x4d, 0xd1, 0x39, 0xf9, 0xc5, 0x99,
+            0xf7, 0x36, 0x10, 0x78, 0x23, 0x65, 0xe6, 0xd7, 0x6e, 0x09, 0xd6, 0xfc, 0x07, 0x91,
+            0x96, 0x69, 0x99, 0xda,
+        ],
+        [
+            0x02, 0x0a, 0x74, 0x1a, 0x8f, 0x18, 0xa0, 0xb5, 0x47, 0x15, 0x59, 0x3a, 0xa5, 0x97,
+            0xbc, 0xb5, 0x98, 0xe5, 0xaa, 0xf9, 0x7e, 0x96, 0x46, 0xf3, 0x1c, 0xfc, 0x45, 0x2d,
+            0x34, 0x30, 0xac, 0x7a,
+        ],
+        [
+            0x37, 0x2c, 0x59, 0x96, 0x8d, 0xec, 0x18, 0x73, 0x50, 0xa0, 0xb2, 0x66, 0xb5, 0x1a,
+            0x6b, 0x2b, 0xf1, 0x2a, 0x4a, 0xee, 0x86, 0x1d, 0x82, 0xbc, 0x0d, 0x8e, 0x0a, 0x4d,
+            0xa2, 0xb3, 0xd3, 0x2c,
+        ],
+        [
+            0x46, 0xf9, 0x58, 0xe5, 0x53, 0x2f, 0x7a, 0x52, 0x7a, 0x70, 0xc7, 0xcd, 0x50, 0x3e,
+            0xaf, 0x44, 0x43, 0x55, 0xda, 0x76, 0x70, 0x63, 0xf8, 0x57, 0xe7, 0x75, 0x67, 0xb7,
+            0x87, 0xcc, 0xa9, 0x66,
+        ],
+    ];
+    assert_eq!(
+        baseline_outer.combined_outer_binding_digest,
+        expected_combined[0]
+    );
+    let baseline = finalize_verified_kernel_v1(artifact.equation_verified_v1(), baseline_outer)
+        .expect("verified fixture finalization");
+    let components = baseline_outer.component_digests_v1();
+    assert_eq!(components.len(), 19);
+    assert!(
+        components[..2]
+            .iter()
+            .all(|value| matches!(value, DigestIdentityV1::Proof384(_)))
+    );
+    assert!(
+        components[2..]
+            .iter()
+            .all(|value| matches!(value, DigestIdentityV1::Public32(_)))
+    );
+    assert_eq!(
+        components
+            .iter()
+            .map(|value| value.as_bytes().len())
+            .sum::<usize>(),
+        2 * 48 + 17 * 32
+    );
+    assert_eq!(baseline_outer.digests_v1().len(), 20);
+    assert_eq!(
+        combined_outer_reference_v1(&baseline_outer),
+        baseline_outer.combined_outer_binding_digest
+    );
+    assert_eq!(
+        finalized_outer_reference_v1(&artifact.equation_verified_v1(), &baseline_outer),
+        (baseline.residual_digest, baseline.binding_digest)
+    );
+    for ordinal in 0..2 {
+        for lane in 0..6 {
+            let mut outer = baseline_outer;
+            let native = if ordinal == 0 {
+                &mut outer.source_statement_anchor_digest
+            } else {
+                &mut outer.source_final_aggregation_schedule_digest
+            };
+            let baseline_native = if ordinal == 0 {
+                baseline_outer.source_statement_anchor_digest
+            } else {
+                baseline_outer.source_final_aggregation_schedule_digest
+            };
+            let mut bytes = native.to_le_bytes();
+            let offset = lane * 8;
+            let word = u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("one lane"));
+            bytes[offset..offset + 8].copy_from_slice(&(word + 1).to_le_bytes());
+            *native = ProofDigestV1::from_le_bytes(bytes).expect("canonical mutation");
+            if lane >= 4 {
+                assert_eq!(&native.as_bytes()[..32], &baseline_native.as_bytes()[..32]);
+            }
+            outer.combined_outer_binding_digest = combined_outer_reference_v1(&outer);
+            assert_eq!(
+                outer.combined_outer_binding_digest,
+                expected_combined[ordinal * 6 + lane + 1]
+            );
+            assert_eq!(
+                outer.canonical_combined_outer_binding_digest_v1(),
+                outer.combined_outer_binding_digest
+            );
+            assert_ne!(
+                outer.combined_outer_binding_digest, baseline_outer.combined_outer_binding_digest,
+                "lane {lane}"
+            );
+            let equation = artifact.equation_verified_v1();
+            let expected = finalized_outer_reference_v1(&equation, &outer);
+            let changed = finalize_verified_kernel_v1(equation, outer)
+                .expect("post-equation native mutation");
+            assert_eq!(
+                (changed.residual_digest, changed.binding_digest),
+                expected,
+                "lane {lane}"
+            );
+            assert_ne!(
+                changed.residual_digest, baseline.residual_digest,
+                "lane {lane}"
+            );
+            assert_ne!(
+                changed.binding_digest, baseline.binding_digest,
+                "lane {lane}"
+            );
+            assert_eq!(changed.point_root, baseline.point_root);
+            assert_eq!(
+                changed.pre_challenge_binding_digest,
+                baseline.pre_challenge_binding_digest
+            );
+            assert_eq!(changed.tau_digest, baseline.tau_digest);
+            assert_eq!(changed.q_digest, baseline.q_digest);
+            assert_eq!(changed.proof_digest, baseline.proof_digest);
+            assert_eq!(changed.residual, baseline.residual);
+        }
+    }
+}
+
+#[test]
+fn native_statement_and_aggregation_schedule_have_no_zero_noncanonical_or_curve_alias_adapter() {
+    let baseline = outer_bindings_v1(92);
+    for ordinal in 0..2 {
+        let mut zero = baseline;
+        let native = if ordinal == 0 {
+            &mut zero.source_statement_anchor_digest
+        } else {
+            &mut zero.source_final_aggregation_schedule_digest
+        };
+        *native = ProofDigestV1::ZERO;
+        zero.combined_outer_binding_digest = combined_outer_reference_v1(&zero);
+        assert_eq!(
+            zero.validate_v1(),
+            Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext)
+        );
+        let baseline_native = if ordinal == 0 {
+            baseline.source_statement_anchor_digest
+        } else {
+            baseline.source_final_aggregation_schedule_digest
+        };
+        for lane in 0..6 {
+            let mut bytes = baseline_native.to_le_bytes();
+            bytes[lane * 8..(lane + 1) * 8]
+                .copy_from_slice(&0xffff_ffff_0000_0001_u64.to_le_bytes());
+            assert!(
+                ProofDigestV1::from_le_bytes(bytes).is_none(),
+                "ordinal {ordinal} lane {lane}"
+            );
+        }
+    }
+    let mut duplicate_native = baseline;
+    duplicate_native.source_final_aggregation_schedule_digest =
+        duplicate_native.source_statement_anchor_digest;
+    duplicate_native.combined_outer_binding_digest = combined_outer_reference_v1(&duplicate_native);
+    assert_eq!(
+        duplicate_native.validate_v1(),
+        Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext)
+    );
+    // A 32-byte curve identity is a separate role, including when it matches
+    // the first four lanes. No zero extension or prefix comparison is allowed.
+    let mut same_prefix = baseline;
+    same_prefix.enclosing_packing_binding_digest =
+        baseline.source_statement_anchor_digest.as_bytes()[..32]
+            .try_into()
+            .expect("public prefix fixture");
+    same_prefix.combined_outer_binding_digest = combined_outer_reference_v1(&same_prefix);
+    same_prefix
+        .validate_v1()
+        .expect("distinct typed identity roles");
+    assert_ne!(
+        same_prefix.component_digests_v1()[0],
+        same_prefix.component_digests_v1()[2]
+    );
+    let mut duplicate_curve = same_prefix;
+    duplicate_curve.inventory_prior_context_digest =
+        duplicate_curve.enclosing_packing_binding_digest;
+    duplicate_curve.combined_outer_binding_digest = combined_outer_reference_v1(&duplicate_curve);
+    assert_eq!(
+        duplicate_curve.validate_v1(),
+        Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext)
+    );
+    let mut generator_alias = baseline;
+    generator_alias.enclosing_packing_binding_digest = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1;
+    generator_alias.combined_outer_binding_digest = combined_outer_reference_v1(&generator_alias);
+    assert_eq!(
+        generator_alias.validate_v1(),
+        Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext)
+    );
+}
+
+#[path = "rns_native_source_packing_same_opening_tests/owned_replay_v2.rs"]
+mod owned_replay_v2;

@@ -856,3 +856,268 @@ fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
     assert!(!fcmp_bulletproof.contains("new_with_scalar_commitments"));
     assert!(!fcmp_circuit.contains("new_with_scalar_commitments"));
 }
+
+fn polynomial_storage_fixture_v1(
+    commitment_count: usize,
+    n: usize,
+) -> (
+    Vec<ScalarVector<TrackingScalar>>,
+    Vec<ScalarVector<TrackingScalar>>,
+) {
+    let ni = 2 + 2 * (commitment_count / 2);
+    let half = ni / 2;
+    let mut left: Vec<_> = (0..ni + 2).map(|_| ScalarVector(Vec::new())).collect();
+    let mut right: Vec<_> = (0..ni + 2).map(|_| ScalarVector(Vec::new())).collect();
+    for (ordinal, slot) in [half, ni, ni + 1].into_iter().enumerate() {
+        left[slot] = ScalarVector(
+            (0..n)
+                .map(|j| TrackingScalar((ordinal * n + j + 1) as u64))
+                .collect(),
+        );
+    }
+    for (ordinal, slot) in [half, 0, ni + 1].into_iter().enumerate() {
+        right[slot] = ScalarVector(
+            (0..n)
+                .map(|j| TrackingScalar((ordinal * n + j + 7) as u64))
+                .collect(),
+        );
+    }
+    for commitment in 0..commitment_count {
+        let slot = commitment + usize::from(commitment >= half);
+        // Full-length zero-valued vectors are assigned owners too; their
+        // pointer must survive exactly like every nonzero opening.
+        let values = if commitment == 0 {
+            vec![TrackingScalar::ZERO; n]
+        } else {
+            (0..n)
+                .map(|j| TrackingScalar((commitment * n + j + 19) as u64))
+                .collect()
+        };
+        let mut mask = TrackingScalar(13);
+        let mut opening = VectorCommitmentOpening::take_mask_from_slot(values, &mut mask);
+        let allocation = opening.values.0.as_ptr();
+        left[slot] = opening.take_values();
+        assert_eq!(left[slot].0.as_ptr(), allocation);
+        right[ni - slot] = ScalarVector(
+            (0..n)
+                .map(|j| TrackingScalar((commitment * n + j + 31) as u64))
+                .collect(),
+        );
+    }
+    (left, right)
+}
+
+#[test]
+fn polynomial_storage_fills_only_public_unassigned_slots_after_owner_moves() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+    for commitments in [0, 1, 2, 3, 100] {
+        let n = 8;
+        let (mut left, mut right) = polynomial_storage_fixture_v1(commitments, n);
+        let before: Vec<_> = left
+            .iter()
+            .chain(&right)
+            .map(|coefficient| {
+                (
+                    coefficient.len(),
+                    coefficient.0.capacity(),
+                    coefficient.0.as_ptr(),
+                )
+            })
+            .collect();
+        let unassigned = before.iter().filter(|(len, _, _)| *len == 0).count();
+        assert_eq!(
+            unassigned,
+            if commitments.is_multiple_of(2) { 2 } else { 0 }
+        );
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        fill_unassigned_polynomial_coefficients_v1(&mut left, n).expect("left shape");
+        fill_unassigned_polynomial_coefficients_v1(&mut right, n).expect("right shape");
+        assert_eq!(
+            CLEAR_CALLS.load(Ordering::SeqCst),
+            0,
+            "no overwritten dense allocation"
+        );
+        for (coefficient, (len, capacity, allocation)) in left.iter().chain(&right).zip(before) {
+            assert_eq!(coefficient.len(), n);
+            if len == 0 {
+                assert_eq!(coefficient.0.capacity(), n);
+                assert!(
+                    coefficient
+                        .0
+                        .iter()
+                        .all(|value| *value == TrackingScalar::ZERO)
+                );
+            } else {
+                assert_eq!(coefficient.0.capacity(), capacity);
+                assert_eq!(
+                    coefficient.0.as_ptr(),
+                    allocation,
+                    "owned coefficient reallocated"
+                );
+            }
+        }
+        let retained_scalars = (left.len() + right.len()) * n;
+        drop(left);
+        drop(right);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), retained_scalars);
+    }
+}
+
+#[test]
+fn polynomial_storage_preserves_dense_product_and_evaluation_reference() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+    for commitments in [0, 1, 2, 3, 100] {
+        let n = 3;
+        let (mut left, mut right) = polynomial_storage_fixture_v1(commitments, n);
+        // Independent scalar arrays model absent public coefficient slots as
+        // mathematical zero. Form the reference one coordinate at a time.
+        let dense = |polynomial: &[ScalarVector<TrackingScalar>]| -> Vec<Vec<u64>> {
+            polynomial
+                .iter()
+                .map(|coefficient| {
+                    if coefficient.is_empty() {
+                        vec![0; n]
+                    } else {
+                        coefficient.0.iter().map(|value| value.0).collect()
+                    }
+                })
+                .collect()
+        };
+        let expected_l = dense(&left);
+        let expected_r = dense(&right);
+        let mut reference = vec![0_u64; left.len() + right.len() - 1];
+        for coordinate in 0..n {
+            for (i, l) in expected_l.iter().enumerate() {
+                for (j, r) in expected_r.iter().enumerate() {
+                    reference[i + j] =
+                        reference[i + j].wrapping_add(l[coordinate].wrapping_mul(r[coordinate]));
+                }
+            }
+        }
+        fill_unassigned_polynomial_coefficients_v1(&mut left, n).expect("left shape");
+        fill_unassigned_polynomial_coefficients_v1(&mut right, n).expect("right shape");
+        assert_eq!(dense(&left), expected_l);
+        assert_eq!(dense(&right), expected_r);
+        let mut actual = ScalarVector::<TrackingScalar>::zero(reference.len());
+        for (i, l) in left.iter().enumerate() {
+            for (j, r) in right.iter().enumerate() {
+                let product = l.inner_product(r.0.iter());
+                actual[i + j] += *product.expose_ref();
+            }
+        }
+        assert_eq!(
+            actual.0.iter().map(|value| value.0).collect::<Vec<_>>(),
+            reference
+        );
+        let powers = ScalarVector::powers(TrackingScalar(7), left.len());
+        for (polynomial, reference) in [(&left, &expected_l), (&right, &expected_r)] {
+            let mut evaluated = ScalarVector::zero(n);
+            for (index, coefficient) in polynomial.iter().enumerate() {
+                evaluated.add_scaled_assign(coefficient, &powers[index]);
+            }
+            for coordinate in 0..n {
+                let expected = reference.iter().rev().fold(0_u64, |value, coefficient| {
+                    value.wrapping_mul(7).wrapping_add(coefficient[coordinate])
+                });
+                assert_eq!(evaluated[coordinate].0, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn polynomial_storage_errors_and_unwind_preserve_zeroizing_owners() {
+    let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+    CLEAR_CALLS.store(0, Ordering::SeqCst);
+    let mut malformed = vec![
+        ScalarVector(Vec::new()),
+        ScalarVector(vec![TrackingScalar(7), TrackingScalar(11)]),
+        ScalarVector(vec![TrackingScalar(13)]),
+    ];
+    let allocation = malformed[1].0.as_ptr();
+    assert_eq!(
+        fill_unassigned_polynomial_coefficients_v1(&mut malformed, 2),
+        Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+    );
+    assert_eq!(
+        malformed[0].0.capacity(),
+        0,
+        "late invalid shape must precede zero allocation"
+    );
+    assert_eq!(malformed[1].0.as_ptr(), allocation);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
+    drop(malformed);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+    let mut absent = [ScalarVector::<TrackingScalar>(Vec::new())];
+    assert_eq!(
+        fill_unassigned_polynomial_coefficients_v1(&mut absent, 0),
+        Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+    );
+    assert_eq!(
+        fill_unassigned_polynomial_coefficients_v1(&mut absent, usize::MAX),
+        Err(GeneralizedBulletproofErrorV1::ResourceOverflow)
+    );
+    assert_eq!(absent[0].0.capacity(), 0);
+
+    CLEAR_CALLS.store(0, Ordering::SeqCst);
+    let unwind = std::panic::catch_unwind(|| {
+        let mut polynomial = [
+            ScalarVector(Vec::new()),
+            ScalarVector(vec![
+                TrackingScalar(17),
+                TrackingScalar(19),
+                TrackingScalar(23),
+            ]),
+            ScalarVector(Vec::new()),
+        ];
+        fill_unassigned_polynomial_coefficients_v1(&mut polynomial, 3).expect("complete shape");
+        panic!("exercise completed polynomial ownership unwind");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
+}
+
+#[test]
+fn polynomial_storage_completion_follows_all_commitment_moves_in_actual_prover() {
+    let source = include_str!("generalized_bulletproof.rs");
+    let prover = source
+        .split_once("pub fn prove<R, T>(")
+        .expect("prover owner")
+        .1
+        .split_once("/// Consume and verify one proof transcript")
+        .expect("prover boundary")
+        .0;
+    let left_move = prover
+        .find("l[index] = opening.take_values();")
+        .expect("left owner move");
+    let right_move = prover
+        .find("r[reverse] = weights;")
+        .expect("right owner move");
+    let left_fill = prover
+        .find("fill_unassigned_polynomial_coefficients_v1(&mut l, n)?;")
+        .expect("left completion");
+    let right_fill = prover
+        .find("fill_unassigned_polynomial_coefficients_v1(&mut r, n)?;")
+        .expect("right completion");
+    let product = prover.find("let t_poly_len").expect("dense product");
+    assert!(left_move < left_fill && right_move < left_fill);
+    assert!(left_fill < right_fill && right_fill < product);
+    assert_eq!(
+        prover
+            .matches("fill_unassigned_polynomial_coefficients_v1(")
+            .count(),
+        2
+    );
+    assert!(!prover.contains("for coefficient in &mut l"));
+    assert!(!prover.contains("for coefficient in &mut r"));
+    let helper = source
+        .split_once("fn fill_unassigned_polynomial_coefficients_v1<")
+        .expect("shape helper")
+        .1
+        .split_once("/// Sample a secret vector")
+        .expect("shape helper boundary")
+        .0;
+    assert!(!helper.contains(".is_zero("));
+    assert!(!helper.contains(".clone("));
+}

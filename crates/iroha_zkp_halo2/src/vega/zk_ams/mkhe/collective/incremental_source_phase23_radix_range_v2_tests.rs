@@ -9,7 +9,7 @@ const REPLAY_SOURCE_V2: &str =
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
 static RADIX_WITNESS_TEST_LOCK_V2: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn radix_witness_test_guard_v2() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn radix_witness_test_guard_v2() -> std::sync::MutexGuard<'static, ()> {
     RADIX_WITNESS_TEST_LOCK_V2
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -409,11 +409,11 @@ fn secret_copy_source_uses_drop_owners_for_all_named_arithmetic_scratch() {
 #[test]
 fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
     for required in [
-        "evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>",
+        "evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>>",
         "read_next_canonical_block_v2",
         "read_canonical_plaintext_block_v1(record, block)?",
         "validate_canonical_source_block_v1(source.as_mut_bytes_v1())?",
-        "complete_for_radix_materializer_v2",
+        "complete_authenticated_source_replay_v1",
         "schedule.finish_v2()?",
         "into_radix_witness_materialized_v2",
     ] {
@@ -422,16 +422,23 @@ fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
             "missing cursor guard: {required}"
         );
     }
-    let completion_calls = [PRODUCTION_SOURCE_V2, CURSOR_SOURCE_V2, REPLAY_SOURCE_V2]
-        .into_iter()
-        .map(|source| {
-            source
-                .matches("complete_for_radix_materializer_v2()?")
-                .count()
-        })
-        .sum::<usize>();
-    assert_eq!(completion_calls, 1);
-    assert!(PRODUCTION_SOURCE_V2.contains("cursor.complete_for_radix_materializer_v2()?"));
+    let low_digit_source =
+        include_str!("incremental_source_phase23_radix_range_v2/prepared_low_digit_plane_v1.rs");
+    let completion_calls = [
+        PRODUCTION_SOURCE_V2,
+        CURSOR_SOURCE_V2,
+        REPLAY_SOURCE_V2,
+        low_digit_source,
+    ]
+    .into_iter()
+    .map(|source| {
+        source
+            .matches("complete_authenticated_source_replay_v1()?")
+            .count()
+    })
+    .sum::<usize>();
+    assert_eq!(completion_calls, 2);
+    assert!(PRODUCTION_SOURCE_V2.contains("cursor.complete_authenticated_source_replay_v1()?"));
     assert!(
         PRODUCTION_SOURCE_V2.contains("materialization_seal: RadixWitnessMaterializationSealV2")
     );
@@ -445,7 +452,7 @@ fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
     assert!(PRODUCTION_SOURCE_V2.contains("fn bind_materialized_radix_hyrax_replay_v2"));
     assert!(
         PRODUCTION_SOURCE_V2
-            .contains("materialized: Option<Phase23RadixWitnessMaterializedV2<K, P>>")
+            .contains("materialized: Option<Phase23RadixWitnessMaterializedV2<R, K, P>>")
     );
     assert!(
         PRODUCTION_SOURCE_V2

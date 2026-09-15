@@ -1,3 +1,5 @@
+//! Current three-section transport, typed digest and ownership controls.
+
 use super::*;
 use crate::vega::zk_ams::mkhe::{
     rns_native_profile::{
@@ -31,14 +33,21 @@ fn digest(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     hash.finalize()
 }
 
-fn indexed<const N: usize>(label: &[u8], context: u16) -> [[u8; 32]; N] {
+fn indexed<const N: usize>(label: &[u8], context: u16) -> [ProofDigestV1; N] {
     core::array::from_fn(|ordinal| {
-        digest(
+        proof_digest(
             label,
             context,
             u16::try_from(ordinal).expect("test ordinal fits u16"),
         )
     })
+}
+
+fn proof_digest(label: &[u8], context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        label,
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
 }
 
 struct TestChunk {
@@ -146,9 +155,9 @@ fn transcript_source_fixture(
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        digest(b"mapping-root", context, 0),
-        digest(b"hyrax-root", context, 0),
-        digest(b"cross-basis-root", context, 0),
+        proof_digest(b"mapping-root", context, 0),
+        proof_digest(b"hyrax-root", context, 0),
+        proof_digest(b"cross-basis-root", context, 0),
     )
     .expect("bridge");
     let transcript = transcript
@@ -157,7 +166,7 @@ fn transcript_source_fixture(
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest(
                 b"fri-root",
                 context,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -167,18 +176,17 @@ fn transcript_source_fixture(
     });
     let qpcs = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
-        digest(b"qpcs-initial", context, 0),
-        digest(b"q-mask-s-root", context, 0),
-        digest(b"qpcs-quotient", context, 0),
+        proof_digest(b"qpcs-initial", context, 0),
+        proof_digest(b"q-mask-s-root", context, 0),
+        proof_digest(b"qpcs-quotient", context, 0),
         fri_roots,
     )
     .expect("qPCS roots");
     let transcript = transcript.bind_qpcs_roots(qpcs).expect("qPCS transcript");
     let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         transcript.binding_digest(),
-        digest(b"cross-field-root", context, 0),
-        digest(b"lookup-root", context, 0),
-        digest(b"padding-root", context, 0),
+        proof_digest(b"cross-field-root", context, 0),
+        proof_digest(b"lookup-root", context, 0),
     )
     .expect("terminal roots");
     let seeds = transcript
@@ -195,17 +203,15 @@ struct CodecFixture {
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equations: [[u8; 32]; EQUATION_COUNT_V1],
-    qpcs_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    queries: [[u8; 32]; QUERY_COUNT_V1],
-    points: [[u8; 32]; POINT_COUNT_V1],
-    cross_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    sumcheck: [[u8; 32]; SUMCHECK_COUNT_V1],
-    padding_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    equations: [ProofDigestV1; EQUATION_COUNT_V1],
+    qpcs_limbs: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    queries: [ProofDigestV1; QUERY_COUNT_V1],
+    points: [ProofDigestV1; POINT_COUNT_V1],
+    cross_limbs: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    sumcheck: [ProofDigestV1; SUMCHECK_COUNT_V1],
     terminal: Vec<u8>,
     rns_qpcs: Vec<u8>,
     cross_lookup: Vec<u8>,
-    zero_padding: Vec<u8>,
 }
 
 fn codec_fixture(context: u16) -> CodecFixture {
@@ -216,7 +222,6 @@ fn codec_fixture(context: u16) -> CodecFixture {
     let points = indexed(b"point", context);
     let cross_limbs = indexed(b"cross-limb", context);
     let sumcheck = indexed(b"sumcheck", context);
-    let padding_limbs = indexed(b"padding-limb", context);
     let terminal = ZkAmsMkheRnsNativeTerminalBridgeSectionV1::new(&transcript, b"terminal-proof")
         .expect("terminal")
         .to_canonical_bytes_v1()
@@ -241,11 +246,6 @@ fn codec_fixture(context: u16) -> CodecFixture {
     .expect("cross/lookup")
     .to_canonical_bytes_v1()
     .expect("cross/lookup encoding");
-    let zero_padding =
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(&transcript, &padding_limbs, b"padding-proof")
-            .expect("padding")
-            .to_canonical_bytes_v1()
-            .expect("padding encoding");
     CodecFixture {
         layout,
         receipt,
@@ -256,11 +256,9 @@ fn codec_fixture(context: u16) -> CodecFixture {
         points,
         cross_limbs,
         sumcheck,
-        padding_limbs,
         terminal,
         rns_qpcs,
         cross_lookup,
-        zero_padding,
     }
 }
 
@@ -271,13 +269,43 @@ fn envelope_fixture(fixture: &CodecFixture) -> ZkAmsMkheRnsNativeProofEnvelopeV1
         fixture.terminal.clone(),
         fixture.rns_qpcs.clone(),
         fixture.cross_lookup.clone(),
-        fixture.zero_padding.clone(),
     )
     .expect("canonical envelope")
 }
 
 #[test]
-fn all_four_codecs_roundtrip_with_exact_counts() {
+fn indexed_root_writers_preserve_all_six_native_lanes() {
+    let mut words = [0_u8; 48];
+    for (lane, bytes) in words.chunks_exact_mut(8).enumerate() {
+        bytes.copy_from_slice(&(lane as u64 + 1).to_le_bytes());
+    }
+    let first = ProofDigestV1::from_le_bytes(words).expect("canonical six-lane fixture");
+    words[40..].copy_from_slice(&42_u64.to_le_bytes());
+    let second = ProofDigestV1::from_le_bytes(words).expect("distinct final lane");
+    assert_eq!(&first.as_bytes()[..32], &second.as_bytes()[..32]);
+    let roots = [first, second];
+    let mut bytes_u8 = Vec::new();
+    let mut bytes_u16 = Vec::new();
+    write_indexed_u8_v1(&mut bytes_u8, &roots).expect("u8 indexed roots");
+    write_indexed_u16_v1(&mut bytes_u16, &roots).expect("u16 indexed roots");
+    assert_eq!(bytes_u8.len(), 98);
+    assert_eq!(bytes_u16.len(), 100);
+    for (index, root) in roots.iter().enumerate() {
+        assert_eq!(bytes_u8[index * 49], index as u8);
+        assert_eq!(&bytes_u8[index * 49 + 1..(index + 1) * 49], root.as_bytes());
+        assert_eq!(
+            &bytes_u16[index * 50..index * 50 + 2],
+            &(index as u16).to_be_bytes()
+        );
+        assert_eq!(
+            &bytes_u16[index * 50 + 2..(index + 1) * 50],
+            root.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn all_three_codecs_roundtrip_with_exact_counts() {
     let fixture = codec_fixture(1);
     let terminal = ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(
         &fixture.terminal,
@@ -310,16 +338,6 @@ fn all_four_codecs_roundtrip_with_exact_counts() {
         fixture.cross_limbs.as_slice()
     );
     assert_eq!(cross.sumcheck_round_digests(), fixture.sumcheck.as_slice());
-
-    let padding = ZkAmsMkheRnsNativeZeroPaddingSectionV1::from_canonical_bytes_exact_v1(
-        &fixture.zero_padding,
-        &fixture.transcript,
-    )
-    .expect("padding decode");
-    assert_eq!(
-        padding.limb_padding_digests(),
-        fixture.padding_limbs.as_slice()
-    );
 }
 
 #[test]
@@ -372,7 +390,6 @@ fn envelope_preflight_accepts_provisional_foreign_context_but_final_bind_rejects
         fixture.terminal,
         fixture.rns_qpcs,
         foreign.cross_lookup,
-        fixture.zero_padding,
     )
     .expect("transport-valid mixed envelope");
     let unbound = preflight_rns_native_cross_field_global_lookup_from_envelope_v1(&envelope)
@@ -410,7 +427,7 @@ fn identity_challenge_root_and_proof_mutations_are_rejected() {
     ));
 
     let mut changed = fixture.cross_lookup.clone();
-    changed[COMMON_PREFIX_BYTES_V1 + 3 + 2 * 32] ^= 1;
+    changed[COMMON_PREFIX_BYTES_V1 + 3 + 2 * PROOF_DIGEST_BYTES_V1] ^= 1;
     // The cross-lookup split validates transport integrity before binding
     // its provisional context to the final transcript.
     assert!(matches!(
@@ -421,11 +438,11 @@ fn identity_challenge_root_and_proof_mutations_are_rejected() {
         Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity)
     ));
 
-    let mut changed = fixture.zero_padding.clone();
-    let proof_byte = changed.len() - CODEC_DIGEST_BYTES_V1 - b"padding-proof".len();
+    let mut changed = fixture.terminal.clone();
+    let proof_byte = changed.len() - CODEC_DIGEST_BYTES_V1 - b"terminal-proof".len();
     changed[proof_byte] ^= 1;
     assert!(matches!(
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1::from_canonical_bytes_exact_v1(
+        ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(
             &changed,
             &fixture.transcript,
         ),
@@ -439,11 +456,20 @@ fn cross_lookup_context_mutations_with_valid_integrity_fail_final_binding() {
     let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
     let context_offset = COMMON_PREFIX_BYTES_V1 + 3;
     for (field, offset) in [
-        ("transcript", COMMON_PREFIX_BYTES_V1 - 32),
+        ("transcript", COMMON_PREFIX_BYTES_V1 - PROOF_DIGEST_BYTES_V1),
         ("cross-field challenge", context_offset),
-        ("global-lookup challenge", context_offset + 32),
-        ("cross-field root", context_offset + 2 * 32),
-        ("global-lookup root", context_offset + 3 * 32),
+        (
+            "global-lookup challenge",
+            context_offset + PROOF_DIGEST_BYTES_V1,
+        ),
+        (
+            "cross-field root",
+            context_offset + 2 * PROOF_DIGEST_BYTES_V1,
+        ),
+        (
+            "global-lookup root",
+            context_offset + 3 * PROOF_DIGEST_BYTES_V1,
+        ),
     ] {
         let mut changed = fixture.cross_lookup.clone();
         changed[offset] ^= 1;
@@ -516,7 +542,7 @@ fn truncation_trailing_and_cross_transcript_splices_are_rejected() {
 fn explicit_opening_query_and_sumcheck_reordering_is_rejected() {
     let fixture = codec_fixture(5);
     let mut terminal = fixture.terminal.clone();
-    let openings = COMMON_PREFIX_BYTES_V1 + 1 + 5 * 32;
+    let openings = COMMON_PREFIX_BYTES_V1 + 1 + 5 * PROOF_DIGEST_BYTES_V1;
     terminal[openings + 2] = 1;
     assert!(matches!(
         ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(
@@ -529,12 +555,12 @@ fn explicit_opening_query_and_sumcheck_reordering_is_rejected() {
     let mut rns = fixture.rns_qpcs.clone();
     let queries = COMMON_PREFIX_BYTES_V1
         + 5
-        + 4 * 32
-        + FRI_COUNT_V1 * (1 + 32)
-        + 2 * 32
-        + FRI_COUNT_V1 * (1 + 32)
-        + EQUATION_COUNT_V1 * (1 + 32)
-        + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + 32);
+        + 4 * PROOF_DIGEST_BYTES_V1
+        + FRI_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+        + 2 * PROOF_DIGEST_BYTES_V1
+        + FRI_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+        + EQUATION_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+        + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + PROOF_DIGEST_BYTES_V1);
     rns[queries..queries + 2].copy_from_slice(&1_u16.to_be_bytes());
     assert!(matches!(
         ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::from_canonical_bytes_exact_v1(
@@ -547,9 +573,9 @@ fn explicit_opening_query_and_sumcheck_reordering_is_rejected() {
     let mut cross = fixture.cross_lookup.clone();
     let sumcheck = COMMON_PREFIX_BYTES_V1
         + 3
-        + 4 * 32
-        + POINT_COUNT_V1 * (1 + 32)
-        + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + 32);
+        + 4 * PROOF_DIGEST_BYTES_V1
+        + POINT_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+        + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + PROOF_DIGEST_BYTES_V1);
     cross[sumcheck] = 1;
     assert!(matches!(
         ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::from_canonical_bytes_exact_v1(
@@ -567,7 +593,6 @@ fn every_outer_cap_is_checked_before_parsing() {
         ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge,
         ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs,
         ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup,
-        ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
     ];
     for kind in cases {
         let bytes = vec![0_u8; usize::try_from(kind.max_bytes()).expect("cap fits usize") + 1];
@@ -592,13 +617,6 @@ fn every_outer_cap_is_checked_before_parsing() {
                     &transcript,
                 )
                 .expect_err("cross cap")
-            }
-            ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding => {
-                ZkAmsMkheRnsNativeZeroPaddingSectionV1::from_canonical_bytes_exact_v1(
-                    &bytes,
-                    &transcript,
-                )
-                .expect_err("padding cap")
             }
         };
         assert_eq!(
@@ -646,24 +664,26 @@ fn forged_length_count_and_digest_aliases_are_rejected() {
         Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::AliasedDigest)
     ));
 
-    let mut cross_section_alias = fixture.padding_limbs;
+    let mut cross_section_alias = fixture.cross_limbs;
     cross_section_alias[0] = fixture.equations[0];
-    let aliased_padding = ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(
+    let aliased_cross = ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::new(
         &fixture.transcript,
+        &fixture.points,
         &cross_section_alias,
-        b"different-padding-proof",
+        &fixture.sumcheck,
+        b"different-cross-proof",
     )
-    .expect("alias is outside the standalone padding section")
+    .expect("alias is outside the standalone cross section")
     .to_canonical_bytes_v1()
-    .expect("standalone padding encoding");
-    let outer_section_digests: [[u8; 32]; 4] = indexed(b"outer-section", 7);
+    .expect("standalone cross encoding");
+    let outer_section_digests: [[u8; 32]; 3] =
+        core::array::from_fn(|index| digest(b"outer-section", 7, index as u16));
     let outer_proof_digest = digest(b"outer-proof", 7, 0);
     assert_eq!(
         validate_composite_section_set_exact_v1(
             &fixture.terminal,
             &fixture.rns_qpcs,
-            &fixture.cross_lookup,
-            &aliased_padding,
+            &aliased_cross,
             &fixture.transcript,
             &outer_section_digests,
             outer_proof_digest,
@@ -713,11 +733,11 @@ fn sealed_envelope_surface_is_move_only_private_and_fail_closed() {
             "sealed proof escape present: {forbidden}"
         );
     }
-    assert!(source.contains("CROSS_LOOKUP_FIXED_BYTES_V1 == 2_811"));
-    assert!(source.contains("CROSS_LOOKUP_PROOF_OFFSET_V1 == 2_779"));
-    assert!(source.contains("CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_385_797"));
-    assert!(source.contains("CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_774_480"));
-    assert!(source.contains("CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 16_384"));
+    assert!(source.contains("CROSS_LOOKUP_FIXED_BYTES_V1 == 4_075"));
+    assert!(source.contains("CROSS_LOOKUP_PROOF_OFFSET_V1 == 4_043"));
+    assert!(source.contains("CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_384_533"));
+    assert!(source.contains("CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_773_210"));
+    assert!(source.contains("CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 25_088"));
     assert!(source.contains("PRE_QPCS_CROSS_ENVELOPE_SOURCE_IMPLEMENTED_V1: bool = true"));
     for false_gate in [
         "PRE_QPCS_CROSS_ENVELOPE_LIVE_INTEGRATED_V1: bool = false",
@@ -730,7 +750,7 @@ fn sealed_envelope_surface_is_move_only_private_and_fail_closed() {
         .split_once("pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1")
         .expect("sealed identity consumer")
         .1
-        .split_once("/// Borrowed, typed forty-limb zero-padding proof section")
+        .split_once("/// Internal classification for one atomic three-section decode.")
         .expect("sealed identity consumer boundary")
         .0;
     for required in [
@@ -757,4 +777,78 @@ fn sealed_envelope_surface_is_move_only_private_and_fail_closed() {
             "identity consumer repeats parsing or hashing: {forbidden_repeat}"
         );
     }
+}
+
+#[test]
+fn retired_padding_tags_do_not_enter_any_current_typed_section() {
+    let fixture = codec_fixture(40);
+    for (kind, bytes) in [
+        (
+            ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge,
+            &fixture.terminal,
+        ),
+        (
+            ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs,
+            &fixture.rns_qpcs,
+        ),
+        (
+            ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup,
+            &fixture.cross_lookup,
+        ),
+    ] {
+        for retired in [*b"ZAZP", *b"ZZPC"] {
+            let mut changed = bytes.clone();
+            changed[..4].copy_from_slice(&retired);
+            let prefix = changed.len() - CODEC_DIGEST_BYTES_V1;
+            let hash = codec_digest_v1(kind, &changed[..prefix]);
+            changed[prefix..].copy_from_slice(&hash);
+            let result = match kind {
+                ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge =>
+                    ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(&changed, &fixture.transcript).map(|_| ()),
+                ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs =>
+                    ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::from_canonical_bytes_exact_v1(&changed, &fixture.transcript).map(|_| ()),
+                ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup =>
+                    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::from_canonical_bytes_exact_v1(&changed, &fixture.transcript).map(|_| ()),
+            };
+            assert_eq!(
+                result,
+                Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)
+            );
+        }
+    }
+}
+
+#[test]
+fn typed_sections_reject_all_noncanonical_native_lanes_and_retired_width() {
+    let fixture = codec_fixture(41);
+    let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
+    let start = COMMON_PREFIX_BYTES_V1 + 3;
+    for offset in [
+        COMMON_PREFIX_BYTES_V1 - PROOF_DIGEST_BYTES_V1,
+        start,
+        start + 48,
+        start + 96,
+        start + 144,
+    ] {
+        for lane in 0..6 {
+            let mut changed = fixture.cross_lookup.clone();
+            changed[offset + lane * 8..offset + (lane + 1) * 8]
+                .copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+            let prefix = changed.len() - CODEC_DIGEST_BYTES_V1;
+            let hash = codec_digest_v1(kind, &changed[..prefix]);
+            changed[prefix..].copy_from_slice(&hash);
+            assert!(
+                decode_unbound_cross_field_global_lookup_v1(&changed).is_err(),
+                "field {offset}, lane {lane}"
+            );
+        }
+    }
+    let mut old_width = fixture.cross_lookup.clone();
+    old_width.drain(start + 32..start + 48);
+    let length = old_width.len() as u32;
+    old_width[6..10].copy_from_slice(&length.to_be_bytes());
+    let prefix = old_width.len() - CODEC_DIGEST_BYTES_V1;
+    let hash = codec_digest_v1(kind, &old_width[..prefix]);
+    old_width[prefix..].copy_from_slice(&hash);
+    assert!(decode_unbound_cross_field_global_lookup_v1(&old_width).is_err());
 }

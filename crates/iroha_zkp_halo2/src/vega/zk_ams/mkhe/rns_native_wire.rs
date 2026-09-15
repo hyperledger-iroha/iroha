@@ -24,7 +24,7 @@ const SECTION_DESCRIPTORS_OFFSET_V1: usize = 4 + 1 + IDENTITY_DIGEST_COUNT_V1 * 
 const WHOLE_PROOF_DIGEST_BYTES_V1: usize = 32;
 
 /// Exact number of ordered sections in one replacement composite proof.
-pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1: usize = 4;
+pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1: usize = 3;
 /// Exact composite-proof envelope schema version.
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1: u8 = 1;
 /// Maximum terminal Hyrax/Bulletproof bridge section bytes.
@@ -34,9 +34,7 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1: u32 =
     ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1 as u32;
 /// Maximum cross-field/global-lookup section bytes.
 pub const ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1: u32 = 8 * 1024 * 1024;
-/// Maximum zero-padding proof section bytes.
-pub const ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1: u32 = 512 * 1024;
-/// Exact bytes before the four ordered section payloads.
+/// Exact bytes before the three ordered section payloads.
 pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1: usize =
     SECTION_DESCRIPTORS_OFFSET_V1
         + ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1 * SECTION_DESCRIPTOR_BYTES_V1
@@ -46,7 +44,7 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1: u32 =
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1 as u32;
 
 const _: () = {
-    assert!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1 == 398);
+    assert!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1 == 357);
     assert!(
         ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1 as u64
             == ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1
@@ -60,7 +58,6 @@ const _: () = {
             + ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1 as u64
             + ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1 as u64
             + ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1 as u64
-            + ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1 as u64
             <= ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1
     );
 };
@@ -75,8 +72,6 @@ pub enum ZkAmsMkheRnsNativeProofSectionKindV1 {
     RnsRelationQpcs = 2,
     /// Cross-field checks and the committed global lookup.
     CrossFieldGlobalLookup = 3,
-    /// Proof that every governed padding lane is zero.
-    ZeroPadding = 4,
 }
 
 impl ZkAmsMkheRnsNativeProofSectionKindV1 {
@@ -91,7 +86,6 @@ impl ZkAmsMkheRnsNativeProofSectionKindV1 {
             Self::CrossFieldGlobalLookup => {
                 ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1
             }
-            Self::ZeroPadding => ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1,
         }
     }
 
@@ -108,7 +102,6 @@ impl TryFrom<u8> for ZkAmsMkheRnsNativeProofSectionKindV1 {
             1 => Ok(Self::TerminalHyraxBpBridge),
             2 => Ok(Self::RnsRelationQpcs),
             3 => Ok(Self::CrossFieldGlobalLookup),
-            4 => Ok(Self::ZeroPadding),
             _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
     }
@@ -120,7 +113,6 @@ pub const ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1: [ZkAmsMkheRnsNativeProo
     ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge,
     ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs,
     ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup,
-    ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
 ];
 
 /// Fixed-width descriptor of one ordered proof section.
@@ -237,14 +229,12 @@ impl ZkAmsMkheRnsNativeProofEnvelopeV1 {
         terminal_hyrax_bp_bridge: Vec<u8>,
         rns_relation_qpcs: Vec<u8>,
         cross_field_global_lookup: Vec<u8>,
-        zero_padding: Vec<u8>,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         let source = validated_source_context_v1(source_layout, source_receipt)?;
         let sections = [
             terminal_hyrax_bp_bridge,
             rns_relation_qpcs,
             cross_field_global_lookup,
-            zero_padding,
         ];
         for (kind, section) in ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1
             .into_iter()
@@ -428,7 +418,7 @@ impl ZkAmsMkheRnsNativeProofEnvelopeV1 {
         self.total_wire_bytes
     }
 
-    /// Four fixed ordered descriptors.
+    /// Three fixed ordered descriptors.
     #[must_use]
     pub const fn descriptors(
         &self,
@@ -597,7 +587,6 @@ fn preflight_v1(
         section_slice_v1(bytes, section_offsets[0], descriptors[0])?,
         section_slice_v1(bytes, section_offsets[1], descriptors[1])?,
         section_slice_v1(bytes, section_offsets[2], descriptors[2])?,
-        section_slice_v1(bytes, section_offsets[3], descriptors[3])?,
     ];
     if cursor != bytes.len()
         || proof_digest
@@ -766,6 +755,7 @@ fn section_slice_v1(
         .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
 
+// Public transport integrity; native proof roots/state are typed separately in the section owners.
 fn section_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, bytes: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-proof-section");
@@ -776,6 +766,7 @@ fn section_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, bytes: &[u8]) -
     hash.finalize()
 }
 
+// Public complete-envelope identity, never a native STARK challenge seed or Merkle root.
 fn whole_proof_digest_v1(envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1) -> [u8; 32] {
     whole_proof_digest_from_parts_v1(
         ReplacementBindingsV1 {
@@ -792,7 +783,6 @@ fn whole_proof_digest_v1(envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1) -> [u8; 3
             &envelope.sections[0],
             &envelope.sections[1],
             &envelope.sections[2],
-            &envelope.sections[3],
         ],
     )
 }
@@ -995,7 +985,6 @@ mod tests {
             vec![0x11; 3],
             vec![0x22; 5],
             vec![0x33; 7],
-            vec![0x44; 9],
         )
         .expect("canonical replacement proof envelope")
     }
@@ -1017,7 +1006,7 @@ mod tests {
 
         assert_eq!(
             bytes.len(),
-            ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1 + 24
+            ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1 + 15
         );
         assert_eq!(decoded.to_canonical_bytes_v1().unwrap(), bytes);
         assert_eq!(decoded, envelope);
@@ -1133,7 +1122,7 @@ mod tests {
         );
 
         let mut payload_cursor = ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1;
-        for length in [3, 5, 7, 9] {
+        for length in [3, 5, 7] {
             let mut changed_payload = canonical.clone();
             changed_payload[payload_cursor] ^= 1;
             assert_eq!(
@@ -1180,7 +1169,6 @@ mod tests {
                 vec![1],
                 vec![2],
                 vec![3],
-                vec![4],
             )
             .is_err()
         );
@@ -1209,7 +1197,6 @@ mod tests {
                 vec![1],
                 vec![2],
                 vec![3],
-                vec![4],
             )
             .is_err()
         );
@@ -1248,5 +1235,69 @@ mod tests {
             &(ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_MAX_BYTES_V1 + 1).to_be_bytes(),
         );
         assert_eq!(decode(&changed_total), Err(ZkAmsMkheErrorV1::WireTooLarge));
+    }
+
+    #[test]
+    fn retired_fourth_section_is_rejected_even_with_recomputed_transport_hashes() {
+        assert_eq!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1, 3);
+        assert_eq!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1, 357);
+        assert_eq!(
+            ZkAmsMkheRnsNativeProofSectionKindV1::try_from(4),
+            Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+        );
+        let canonical = envelope().to_canonical_bytes_v1().unwrap();
+        let old_hash_offset = SECTION_DESCRIPTORS_OFFSET_V1 + 4 * SECTION_DESCRIPTOR_BYTES_V1;
+        let current_hash_offset = SECTION_DESCRIPTORS_OFFSET_V1 + 3 * SECTION_DESCRIPTOR_BYTES_V1;
+        let retired_payload = b"ZAZPZZPC";
+        let retired_cap = 512_u32 * 1024;
+        let mut retired_section_hash = Keccak256::new();
+        retired_section_hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-proof-section");
+        retired_section_hash.update(&[1, 4]);
+        retired_section_hash.update(&retired_cap.to_be_bytes());
+        retired_section_hash.update(&(retired_payload.len() as u64).to_be_bytes());
+        retired_section_hash.update(retired_payload);
+        let mut old = canonical[..current_hash_offset].to_vec();
+        old.extend_from_slice(&[4]);
+        old.extend_from_slice(&retired_cap.to_be_bytes());
+        old.extend_from_slice(&(retired_payload.len() as u32).to_be_bytes());
+        old.extend_from_slice(&retired_section_hash.finalize());
+        old.extend_from_slice(&[0; 32]);
+        old.extend_from_slice(&canonical[ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1..]);
+        old.extend_from_slice(retired_payload);
+        old[TOTAL_WIRE_BYTES_OFFSET - 1] = 4;
+        let length = old.len() as u32;
+        old[TOTAL_WIRE_BYTES_OFFSET..TOTAL_WIRE_BYTES_OFFSET + 4]
+            .copy_from_slice(&length.to_be_bytes());
+        let mut old_hash = Keccak256::new();
+        old_hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-composite-proof-envelope");
+        old_hash.update(&old[..old_hash_offset]);
+        old_hash.update(&old[old_hash_offset + 32..]);
+        old[old_hash_offset..old_hash_offset + 32].copy_from_slice(&old_hash.finalize());
+        assert_eq!(decode(&old), Err(ZkAmsMkheErrorV1::InvalidWireEncoding));
+        // Hiding the retired descriptor behind the current count cannot cause
+        // the parser to ignore its extra descriptor or payload.
+        old[TOTAL_WIRE_BYTES_OFFSET - 1] = 3;
+        // Recompute at the current three-section checksum slot as well, so
+        // rejection cannot be attributed to the old count's stale checksum.
+        let mut hidden_hash = Keccak256::new();
+        hidden_hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-composite-proof-envelope");
+        hidden_hash.update(&old[..current_hash_offset]);
+        hidden_hash.update(&old[current_hash_offset + 32..]);
+        old[current_hash_offset..current_hash_offset + 32].copy_from_slice(&hidden_hash.finalize());
+        assert_eq!(decode(&old), Err(ZkAmsMkheErrorV1::InvalidWireEncoding));
+        for index in 0..3 {
+            let mut replaced_kind = canonical.clone();
+            replaced_kind[SECTION_DESCRIPTORS_OFFSET_V1 + index * SECTION_DESCRIPTOR_BYTES_V1] = 4;
+            let mut hash = Keccak256::new();
+            hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-composite-proof-envelope");
+            hash.update(&replaced_kind[..current_hash_offset]);
+            hash.update(&replaced_kind[current_hash_offset + 32..]);
+            replaced_kind[current_hash_offset..current_hash_offset + 32]
+                .copy_from_slice(&hash.finalize());
+            assert_eq!(
+                decode(&replaced_kind),
+                Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+            );
+        }
     }
 }

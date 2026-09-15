@@ -385,7 +385,40 @@ fn source_budget_and_uninhabited_api_boundary_are_static() {
     let parent = include_str!("phase23_rns_link.rs");
     assert!(production.lines().count() <= 1_200);
     assert!(tests.lines().count() <= 700);
-    assert_eq!(parent.matches("mod cross_field_v2;").count(), 1);
+    let parent_production = parent
+        .split_once("#[cfg(test)]\nmod tests {")
+        .expect("canonical parent test-module boundary")
+        .0;
+    // The exact module graph has a separate lexical authority guard. This
+    // local registration count must not include its quoted test adversaries.
+    let registration_count = |source: &str| {
+        source
+            .lines()
+            .filter(|line| line.trim() == "mod cross_field_v2;")
+            .count()
+    };
+    assert_eq!(registration_count(parent_production), 1);
+    assert!(
+        parent_production
+            .contains("#[path = \"phase23_rns_link_cross_field_v2.rs\"]\nmod cross_field_v2;")
+    );
+    assert_eq!(
+        registration_count(&format!("{parent_production}\nmod cross_field_v2;\n")),
+        2,
+        "a second actual registration must not pass the exact-count guard"
+    );
+    assert_eq!(
+        registration_count(&parent_production.replace("mod cross_field_v2;", "")),
+        0,
+        "a missing registration must not pass the exact-count guard"
+    );
+    assert_eq!(
+        registration_count(
+            "// mod cross_field_v2;\nconst QUOTED: &str = \"mod cross_field_v2;\";\n"
+        ),
+        0,
+        "comments and quoted assertions are not module registrations"
+    );
     let code_lines = production
         .lines()
         .map(str::trim_start)

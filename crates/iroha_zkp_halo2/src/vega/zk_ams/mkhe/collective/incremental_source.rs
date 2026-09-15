@@ -63,7 +63,7 @@ impl CollectiveRnsComponentV1 {
     }
 }
 /// Incremental hash state for exactly two flat, component-major RNS polynomials. Limb and modulus
-/// ordinals are validation inputs only: the legacy framing commits one big-endian flat coefficient
+/// ordinals are validation inputs only: the canonical framing commits one big-endian flat coefficient
 /// count followed by every big-endian residue of component zero, then repeats that framing for
 /// component one.
 ///
@@ -3248,6 +3248,14 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
     ) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         self.validate_with_profile_digest_v1(&profile, authority.profile_digest())?;
+        self.validate_key_authority_axes_v1(authority)
+    }
+    // Exact retained-key comparison shared with component-level hostile tests.
+    // This alone is not manifest/profile or key-admission validation.
+    fn validate_key_authority_axes_v1(
+        &self,
+        authority: &ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
         let binding = authority.binding_v1();
         if self.profile_digest != binding.profile_digest
             || self.security_certificate_digest != binding.security_certificate_digest
@@ -3615,9 +3623,8 @@ pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publica
 // readiness, and release flag stays false.
 #[path = "incremental_source_rns_native_publication_assembler_v2.rs"]
 mod incremental_source_rns_native_publication_assembler_v2;
-// TODO: Reconnect the private Phase-23 source prototype after its confidential
-// spool dependency can enter the authorized workspace lock graph.
-#[cfg(any())]
+// Compile the private source owner and its tests with the canonical crypto
+// spool dependency; this does not change any proof/release admission gate.
 #[path = "incremental_source_phase23.rs"]
 mod incremental_source_phase23;
 #[cfg(test)]

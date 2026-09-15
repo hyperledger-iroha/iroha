@@ -1198,7 +1198,7 @@ where
         hash.update(&self.handoff_digest);
         hash.update(&self.publication_set_digest);
         hash.update(&read_receipt.read_set_digest_v1());
-        hash.update(&read_receipt.qpcs_schedule_digest_v1());
+        hash.update(read_receipt.qpcs_schedule_digest_v1().as_bytes());
         let digest = hash.finalize();
         if digest == [0; DIGEST_BYTES_V1] {
             return Err(RnsNativePublicPolynomialPublisherErrorV1::ReaderHandoff);

@@ -591,7 +591,7 @@ fn production_codec_and_soundness_accounting_are_exact_and_fail_closed() {
     assert_eq!(MIN_WIRE_BYTES_V1, 4_370);
     assert_eq!(
         RNS_NATIVE_GLOBAL_INVERSE_PRODUCT_RESIDUAL_MAX_BYTES_V1,
-        110_115
+        108_852
     );
     const {
         assert!(INVERSE_PRODUCT_RELATION_VERIFIED_V1);
@@ -630,7 +630,7 @@ fn production_codec_and_soundness_accounting_are_exact_and_fail_closed() {
         "48*2^-256",
         "standard-Keccak-ROM-query-loss",
         "exclude-current-frame-residual-and-binding-from-all-challenges",
-        "dedicated-inverse-product-mask-distinct-from-global-lookup-mask",
+        "dedicated-inverse-product-mask-distinct-from-multiplicity",
         "pub(super) trait RnsNativeGlobalInverseProductOpeningSourceV1",
         "fn replay_active_plane_values_v1(",
         "fn take_active_plane_opening_v1(",
@@ -676,4 +676,26 @@ fn production_codec_and_soundness_accounting_are_exact_and_fail_closed() {
     assert!(!source.contains("fn replay_active_plane_v1("));
     assert!(!source.contains("LOOKUP_MEMBERSHIP_VERIFIED_V1: bool = true"));
     assert!(!source.contains("RELEASE_READY_V1: bool = true"));
+}
+
+#[test]
+fn inverse_mask_manifest_binds_the_two_point_pre_z_contract() {
+    // The scalar mask and its actual 29-round equation remain unchanged;
+    // canonical language binds its distinct multiplicity owner.
+    assert_eq!(
+        manifest_digest_v1(KernelGeometryV1::PRODUCTION).expect("production geometry"),
+        [
+            0xd3, 0xfa, 0x7f, 0x29, 0xe5, 0x0f, 0x7d, 0x2c, 0xbd, 0xee, 0x5f, 0x2f, 0xad, 0x0d,
+            0x7c, 0x3d, 0x82, 0xc5, 0x58, 0x43, 0x8f, 0x10, 0xb7, 0x11, 0xec, 0xe3, 0x7c, 0x4f,
+            0x43, 0x58, 0xa1, 0xe6
+        ]
+    );
+    assert_ne!(
+        manifest_digest_v1(KernelGeometryV1::PRODUCTION).expect("production geometry"),
+        [
+            0x58, 0xd2, 0x80, 0x32, 0xbb, 0x55, 0x4b, 0x94, 0x2c, 0xfc, 0xda, 0xda, 0xc8, 0x44,
+            0x50, 0xf6, 0x8a, 0x3c, 0xa0, 0xca, 0xe3, 0x19, 0xfd, 0x02, 0x9e, 0xd4, 0x8e, 0x77,
+            0x9e, 0x54, 0xbd, 0xe3
+        ]
+    );
 }

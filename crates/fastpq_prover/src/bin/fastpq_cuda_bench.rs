@@ -6,11 +6,12 @@
 
 #![allow(clippy::missing_panics_doc)]
 use clap::Parser;
-use fastpq_isi::{GoldilocksDigest384V1, find_by_name};
+use fastpq_isi::{FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1, find_by_name};
 use fastpq_prover::{
-    Bn254PoseidonBatchSlice, CudaBackendError, Digest384BenchmarkDeviceV1,
+    BenchmarkGeometryV1, Bn254PoseidonBatchSlice, CudaBackendError, Digest384BenchmarkDeviceV1,
     Digest384BenchmarkInputV1, ExecutionMode, Planner, TraceColumn, benchmark_digest384_v1,
-    clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
+    clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde,
+    preflight_benchmark_geometry_v1, set_execution_mode_observer,
     try_hash_bn254_poseidon_word_batches,
 };
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
@@ -127,6 +128,16 @@ struct Config {
     /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `digest384_trace_columns`, `digest384_merkle_pairs`, `bn254_poseidon_words`, or `all`).
     #[arg(long, default_value = "all", value_parser = parse_operation_filter)]
     operation: OperationFilter,
+}
+impl Config {
+    fn geometry(&self) -> Result<BenchmarkGeometryV1, String> {
+        if self.parameter != FASTPQ_FINAL_V1_ID {
+            return Err(
+                "benchmark requires the exact canonical FASTPQ V1 parameter set".to_owned(),
+            );
+        }
+        preflight_benchmark_geometry_v1(self.rows, self.column_count, self.warmups, self.iterations)
+    }
 }
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchMetadata {
@@ -318,22 +329,12 @@ impl Summary {
 }
 fn run() -> Result<(), String> {
     let config = Config::parse();
-    if config.rows == 0 {
-        return Err("rows must be greater than zero".to_owned());
-    }
-    if config.iterations == 0 {
-        return Err("iterations must be greater than zero".to_owned());
-    }
+    let geometry = config.geometry()?;
     let params = find_by_name(&config.parameter)
         .ok_or_else(|| format!("parameter set '{}' not found", config.parameter))?;
     let planner = Planner::new(params);
-    let padded = config
-        .rows
-        .checked_next_power_of_two()
-        .ok_or_else(|| format!("rows {} exceed supported range", config.rows))?;
-    let eval_len = padded
-        .checked_shl(planner.blowup_log())
-        .ok_or_else(|| "evaluation domain overflow".to_owned())?;
+    let padded = geometry.padded_rows();
+    let eval_len = geometry.evaluation_rows();
     let probe = resolve_execution_metadata(config.require_gpu)?;
     let columns = prepare_columns(&planner, padded, config.column_count);
     let bn254_capture = collect_bn254_metrics(&config, padded, planner.blowup_log(), &probe)?;
@@ -346,7 +347,7 @@ fn run() -> Result<(), String> {
         &operations,
         bn254_capture.metrics.clone(),
         (!bn254_capture.warnings.is_empty()).then_some(bn254_capture.warnings.clone()),
-    );
+    )?;
     for warning in &bn254_capture.warnings {
         eprintln!("fastpq_cuda_bench: warning: {warning}");
     }
@@ -407,7 +408,8 @@ fn build_report(
     operations: &[OperationEntry],
     bn254_metrics: Option<Value>,
     bn254_warnings: Option<Vec<String>>,
-) -> ReportBlock {
+) -> Result<ReportBlock, String> {
+    let geometry = config.geometry()?;
     let report_ops = operations
         .iter()
         .map(|entry| ReportOperation {
@@ -432,11 +434,11 @@ fn build_report(
             }),
         })
         .collect();
-    ReportBlock {
+    Ok(ReportBlock {
         producer_schema: "cuda_nested",
         column_count: config.column_count,
         rows: config.rows,
-        padded_rows: padded_rows(config.rows),
+        padded_rows: geometry.padded_rows(),
         iterations: config.iterations,
         warmups: config.warmups,
         execution_mode: probe.resolved_mode.as_str().to_owned(),
@@ -450,7 +452,7 @@ fn build_report(
             generated_at: metadata.generated_at.clone(),
             host: metadata.host.clone(),
         },
-    }
+    })
 }
 fn build_metadata(config: &Config) -> Result<BenchMetadata, String> {
     let generated_at = OffsetDateTime::now_utc()
@@ -1421,9 +1423,6 @@ fn detect_machine() -> String {
 fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
-fn padded_rows(rows: usize) -> usize {
-    rows.next_power_of_two()
-}
 fn round3(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
@@ -1442,6 +1441,61 @@ impl Display for Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parsed_config_enforces_final_geometry_before_native_work() {
+        let defaults = Config::try_parse_from(["fastpq_cuda_bench"]).unwrap();
+        assert_eq!(
+            (
+                defaults.rows,
+                defaults.column_count,
+                defaults.warmups,
+                defaults.iterations
+            ),
+            (20_000, 16, 1, 5)
+        );
+        assert_eq!(defaults.geometry().unwrap().padded_rows(), 32_768);
+        let maximum = Config::try_parse_from([
+            "fastpq_cuda_bench",
+            "--rows",
+            "65536",
+            "--warmups",
+            "0",
+            "--iterations",
+            "1",
+        ])
+        .unwrap();
+        assert_eq!(maximum.geometry().unwrap().padded_rows(), 65_536);
+        for args in [
+            vec!["--rows".into(), "65537".into()],
+            vec!["--rows".into(), usize::MAX.to_string()],
+            vec!["--rows".into(), "0".into()],
+            vec!["--iterations".into(), "0".into()],
+            vec![
+                "--warmups".into(),
+                usize::MAX.to_string(),
+                "--iterations".into(),
+                "1".into(),
+            ],
+            vec![
+                "--warmups".into(),
+                "0".into(),
+                "--iterations".into(),
+                usize::MAX.to_string(),
+            ],
+            vec!["--column-count".into(), "0".into()],
+            vec!["--column-count".into(), usize::MAX.to_string()],
+            vec![
+                "--parameter".into(),
+                "FASTPQ-STATE-TRANSITION-STARK-V1".into(),
+            ],
+        ] {
+            let mut invocation = vec!["fastpq_cuda_bench".to_owned()];
+            invocation.extend(args);
+            let config = Config::try_parse_from(invocation).unwrap();
+            assert!(config.geometry().is_err());
+        }
+    }
+
     #[test]
     fn summary_rounding_matches_expected() {
         let summary = Summary::from_samples(&[1.2346, 2.0, 3.9999]).expect("summary");
@@ -1817,7 +1871,8 @@ mod tests {
             &operations,
             bn254_metrics.clone(),
             bn254_warnings.clone(),
-        );
+        )
+        .expect("preflighted report geometry");
         let report_value: Value =
             json::from_slice(&json::to_vec_pretty(&report).expect("serialize report"))
                 .expect("parse report");
@@ -1831,10 +1886,23 @@ mod tests {
             report_value["bn254_warnings"][0],
             norito::json!("bn254 fft gpu timing skipped: cudaError_t(1)")
         );
+        let mut oversized = config.clone();
+        oversized.rows = usize::MAX;
+        assert!(
+            build_report(
+                &oversized,
+                &probe,
+                &metadata,
+                &operations,
+                bn254_metrics.clone(),
+                bn254_warnings.clone(),
+            )
+            .is_err()
+        );
         let benchmarks = BenchmarksBlock {
             producer_schema: "cuda_nested",
             rows: config.rows,
-            padded_rows: padded_rows(config.rows),
+            padded_rows: config.geometry().unwrap().padded_rows(),
             iterations: config.iterations,
             warmups: config.warmups,
             column_count: config.column_count,

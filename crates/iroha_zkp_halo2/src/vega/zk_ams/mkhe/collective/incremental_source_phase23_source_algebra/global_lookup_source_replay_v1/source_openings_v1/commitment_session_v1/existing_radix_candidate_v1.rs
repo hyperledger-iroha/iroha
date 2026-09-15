@@ -350,9 +350,9 @@ impl Drop for ExistingRadixSecretScalarWireV1 {
     }
 }
 
-/// Move-only sampled blinding. Production sees an opaque token: scalar access
-/// and raw-point adoption are fixture-only until a private prepared-commitment
-/// owner can consume the exact value vector and blinding internally.
+/// Move-only sampled blinding. Only the private prepared-values commitment
+/// owner can borrow its scalar and compute/adopt the matching point. The token
+/// does not expose a scalar or point-adoption surface outside this module.
 #[must_use = "dropping this opaque token closes the source-only candidate assembly"]
 pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateBlindingV1 {
     assembly_instance: u64,
@@ -363,18 +363,16 @@ pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateBlinding
 }
 
 impl RnsNativeExistingRadixCandidateBlindingV1 {
-    // The scalar is intentionally visible only to this module's fixtures.
-    // `Scalar` is `Copy`, so exposing even `&Scalar` outside this boundary would
-    // defeat the move-only zeroizing owner.
-    #[cfg(test)]
+    // Borrowed only by the private computed-commitment owner and its tests.
+    // Never expose this Copy scalar beyond this module's custody boundary.
     fn scalar_v1(&self) -> &Scalar {
         self.scalar.as_ref()
     }
 }
 
-struct ExistingRadixCandidateAssemblyLiveV1 {
+struct ExistingRadixCandidateAssemblyLiveV1<R> {
     assembly_instance: u64,
-    session: GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1>,
+    session: GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>,
     blindings: ZeroizingT256ScalarVecV1,
     candidate_root_hash: Keccak256,
     blinding_root_hash: Keccak256,
@@ -385,16 +383,18 @@ struct ExistingRadixCandidateAssemblyLiveV1 {
 /// One-shot group/role/column assembly.  Every operation removes `live` before
 /// validation, entropy, or inventory mutation, so no error is retryable.
 #[must_use = "dropping this assembly closes the proof-session candidate inventory"]
-pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateAssemblyV1 {
-    live: Option<ExistingRadixCandidateAssemblyLiveV1>,
+pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateAssemblyV1<R> {
+    live: Option<ExistingRadixCandidateAssemblyLiveV1<R>>,
 }
 
 pub(super) struct ExistingRadixCandidateCompleteStageV1;
 
-impl GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
+    GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>
+{
     pub(in crate::vega::zk_ams::mkhe) fn into_existing_radix_candidate_assembly_v1(
         self,
-    ) -> Result<RnsNativeExistingRadixCandidateAssemblyV1, ZkAmsMkheErrorV1> {
+    ) -> Result<RnsNativeExistingRadixCandidateAssemblyV1<R>, ZkAmsMkheErrorV1> {
         validate_existing_radix_candidate_ingress_v1(&self)?;
         let session_live = self
             .live
@@ -419,7 +419,7 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1> {
     }
 }
 
-impl RnsNativeExistingRadixCandidateAssemblyV1 {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeExistingRadixCandidateAssemblyV1<R> {
     pub(in crate::vega::zk_ams::mkhe) fn sample_next_blinding_v1(
         &mut self,
         group: usize,
@@ -465,9 +465,8 @@ impl RnsNativeExistingRadixCandidateAssemblyV1 {
         })
     }
 
-    // Fixture-only until a private prepared-commitment owner can consume the
-    // exact value vector and blinding without exposing a copyable scalar.
-    #[cfg(test)]
+    // Only the private prepared-values MSM owner calls this in production.
+    // Tests also exercise its token, chronology and point-adoption rejection.
     fn adopt_next_commitment_v1(
         &mut self,
         mut blinding: RnsNativeExistingRadixCandidateBlindingV1,
@@ -524,7 +523,7 @@ impl RnsNativeExistingRadixCandidateAssemblyV1 {
 
     pub(in crate::vega::zk_ams::mkhe) fn finish_v1(
         mut self,
-    ) -> Result<RnsNativeExistingRadixCandidateOwnerV1, ZkAmsMkheErrorV1> {
+    ) -> Result<RnsNativeExistingRadixCandidateOwnerV1<R>, ZkAmsMkheErrorV1> {
         let mut live = self
             .live
             .take()
@@ -591,8 +590,8 @@ impl RnsNativeExistingRadixCandidateAssemblyV1 {
 /// candidate blindings, and the physical inventory; it exposes no tuple split,
 /// raw root getter, point getter, or blinding getter.
 #[must_use = "dropping this owner closes the existing-radix candidate openings"]
-pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateOwnerV1 {
-    session: GlobalLookupCommitmentSessionV1<ExistingRadixCandidateCompleteStageV1>,
+pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateOwnerV1<R> {
+    session: GlobalLookupCommitmentSessionV1<R, ExistingRadixCandidateCompleteStageV1>,
     blindings: ZeroizingT256ScalarVecV1,
     candidate_root: [u8; 32],
     blinding_root: [u8; 32],
@@ -611,7 +610,7 @@ pub(in crate::vega::zk_ams::mkhe) struct RnsNativeExistingRadixCandidateAppendRe
     owner_binding_digest: [u8; 32],
 }
 
-impl RnsNativeExistingRadixCandidateOwnerV1 {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeExistingRadixCandidateOwnerV1<R> {
     /// Append exactly the frozen 385,968-byte point section.  This deliberately
     /// does not fabricate the predecessor-bound `ZER1` header or residual.
     pub(in crate::vega::zk_ams::mkhe) fn append_candidate_section_v1(
@@ -673,8 +672,10 @@ impl RnsNativeExistingRadixCandidateOwnerV1 {
     }
 }
 
-fn validate_existing_radix_candidate_ingress_v1(
-    session: &GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1>,
+pub(super) fn validate_existing_radix_candidate_ingress_v1<
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+>(
+    session: &GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let live = session
         .live
@@ -682,7 +683,7 @@ fn validate_existing_radix_candidate_ingress_v1(
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     let source = live
         .inventory
-        .source_binding
+        .source_prefix
         .as_ref()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     if live.next_global_ordinal != EXISTING_RADIX_CANDIDATE_FIRST_INVENTORY_ORDINAL_V1
@@ -705,8 +706,10 @@ fn validate_existing_radix_candidate_ingress_v1(
     validate_existing_radix_source_axes_v1(live)
 }
 
-fn validate_existing_radix_candidate_complete_session_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn validate_existing_radix_candidate_complete_session_v1<
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_existing_radix_source_axes_v1(live)?;
     if live.next_global_ordinal != EXISTING_RADIX_CANDIDATE_AFTER_INVENTORY_ORDINAL_V1
@@ -725,39 +728,30 @@ fn validate_existing_radix_candidate_complete_session_v1(
     Ok(())
 }
 
-fn validate_existing_radix_source_axes_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn validate_existing_radix_source_axes_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let source = live
         .inventory
-        .source_binding
+        .source_prefix
         .as_ref()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-    if live.proof_session_context_digest == [0; 32]
-        || source.proof_session_context_digest != live.proof_session_context_digest
-        || [
-            source.source_opening_context_digest,
-            source.commitments_root,
-            source.blinding_snapshot_root,
-        ]
-        .contains(&[0; 32])
-        || live
-            .inventory
-            .adopted_source_commitments_root_v1(source.source_opening_context_digest)?
-            != source.commitments_root
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    Ok(())
+    validate_completed_source_prefix_v1(
+        live,
+        source.source_record_digest,
+        source.source_opening_context_digest,
+        source.commitments_root,
+        source.blinding_snapshot_root,
+    )
 }
 
-fn begin_existing_radix_blinding_root_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn begin_existing_radix_blinding_root_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
 ) -> Result<Keccak256, ZkAmsMkheErrorV1> {
     validate_existing_radix_source_axes_v1(live)?;
     let source = live
         .inventory
-        .source_binding
+        .source_prefix
         .as_ref()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     let mut hash = Keccak256::new();
@@ -783,8 +777,8 @@ fn absorb_existing_radix_blinding_v1(
     hash.update(scalar_wire);
 }
 
-fn existing_radix_blinding_root_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn existing_radix_blinding_root_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
     blindings: &ZeroizingT256ScalarVecV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if blindings.len() != EXISTING_RADIX_CANDIDATE_POINT_COUNT_V1 {
@@ -802,15 +796,15 @@ fn existing_radix_blinding_root_v1(
     require_nonzero_existing_radix_digest_v1(hash.finalize())
 }
 
-fn existing_radix_blinding_token_digest_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn existing_radix_blinding_token_digest_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
     coordinate: ExistingRadixCandidateCoordinateV1,
     scalar: &Scalar,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     validate_existing_radix_source_axes_v1(live)?;
     let source = live
         .inventory
-        .source_binding
+        .source_prefix
         .as_ref()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     let mut hash = Keccak256::new();
@@ -829,15 +823,15 @@ fn existing_radix_blinding_token_digest_v1(
     require_nonzero_existing_radix_digest_v1(hash.finalize())
 }
 
-fn existing_radix_owner_binding_digest_v1(
-    live: &GlobalLookupCommitmentSessionLiveV1,
+fn existing_radix_owner_binding_digest_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
     candidate_root: [u8; 32],
     blinding_root: [u8; 32],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     validate_existing_radix_source_axes_v1(live)?;
     let source = live
         .inventory
-        .source_binding
+        .source_prefix
         .as_ref()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     let mut hash = Keccak256::new();
@@ -877,6 +871,13 @@ fn require_nonzero_existing_radix_digest_v1(
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
+#[path = "existing_radix_candidate_v1/prepared_comparator_commitment_v1.rs"]
+mod prepared_comparator_commitment_v1;
+pub(super) use prepared_comparator_commitment_v1::RnsNativeComparatorTopCommitmentsV1;
+
+#[path = "existing_radix_candidate_v1/prepared_commitment_v1.rs"]
+mod prepared_commitment_v1;
+
 #[cfg(test)]
 #[path = "existing_radix_candidate_v1_tests.rs"]
-mod tests;
+pub(super) mod tests;

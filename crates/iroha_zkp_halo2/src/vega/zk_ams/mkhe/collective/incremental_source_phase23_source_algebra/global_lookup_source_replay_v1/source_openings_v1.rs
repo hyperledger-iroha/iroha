@@ -40,7 +40,7 @@ use crate::{
     },
 };
 use core::convert::Infallible;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
 use std::path::PathBuf;
@@ -247,11 +247,19 @@ fn source_opening_mapping_digest_for_orders_v1(
     require_nonzero_opening_digest_v1(hash.finalize())
 }
 fn exact_source_opening_mapping_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    let group_order: [u16; SOURCE_OPENING_GROUP_COUNT_V1] =
-        core::array::from_fn(|index| index as u16);
-    let source_order: [u16; SOURCE_OPENING_SCALARS_PER_GROUP_V1] =
-        core::array::from_fn(|index| index as u16);
-    source_opening_mapping_digest_for_orders_v1(&group_order, &source_order)
+    // This digest depends only on this binary's fixed topology and canonical
+    // coordinate orders. Cache the computed result, including failure, rather
+    // than rebuilding the 16,384-coordinate map for each sampled blinding.
+    // Session/source roots and caller-provided order validation remain live.
+    static DIGEST: std::sync::OnceLock<Result<[u8; 32], ZkAmsMkheErrorV1>> =
+        std::sync::OnceLock::new();
+    *DIGEST.get_or_init(|| {
+        let group_order: [u16; SOURCE_OPENING_GROUP_COUNT_V1] =
+            core::array::from_fn(|index| index as u16);
+        let source_order: [u16; SOURCE_OPENING_SCALARS_PER_GROUP_V1] =
+            core::array::from_fn(|index| index as u16);
+        source_opening_mapping_digest_for_orders_v1(&group_order, &source_order)
+    })
 }
 struct SourceOpeningContextAxesV1 {
     source_receipt_digest: [u8; 32],
@@ -311,7 +319,6 @@ fn source_opening_blinding_context_digest_v1(
 #[path = "source_openings_v1/commitment_session_v1.rs"]
 mod commitment_session_v1;
 pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::GlobalLookupProofSessionEntropySealV1;
-use commitment_session_v1::{GlobalLookupCommitmentSessionV1, SourceOpeningCompleteStageV1};
 #[allow(
     unused_imports,
     reason = "the source-only existing-radix owner awaits the live Phase-23 bridge"
@@ -321,8 +328,8 @@ pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::{
     RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1,
     RnsNativeExistingRadixCandidateRoleV1,
 };
-struct SourceOpeningLiveV1 {
-    proof_session: GlobalLookupProofSessionEntropySealV1,
+struct SourceOpeningLiveV1<R> {
+    proof_session: GlobalLookupProofSessionEntropySealV1<R>,
     group_scalars: ZeroizingT256ScalarVecV1,
     blinding_writer: ConfidentialSpoolWriterV1,
     commitments: Vec<Point>,
@@ -338,15 +345,15 @@ struct SourceOpeningLiveV1 {
     next_block: u16,
     next_group: u16,
 }
-pub(super) struct SourceOpeningAssemblyV1 {
-    live: Option<SourceOpeningLiveV1>,
+pub(super) struct SourceOpeningAssemblyV1<R> {
+    live: Option<SourceOpeningLiveV1<R>>,
 }
-impl SourceOpeningAssemblyV1 {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1> SourceOpeningAssemblyV1<R> {
     pub(super) fn begin_v1(
         source_receipt_digest: [u8; 32],
         prerequisite_record_digest: [u8; 32],
         replay_spool_context_digest: [u8; 32],
-        mut proof_session: GlobalLookupProofSessionEntropySealV1,
+        mut proof_session: GlobalLookupProofSessionEntropySealV1<R>,
         directory: &PathBuf,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         // Establish every local allocation and the pinned basis before any
@@ -504,7 +511,7 @@ impl SourceOpeningAssemblyV1 {
     }
     pub(super) fn finish_v1(
         mut self,
-    ) -> Result<GlobalLookupSourceOpeningMaterialV1, ZkAmsMkheErrorV1> {
+    ) -> Result<GlobalLookupSourceOpeningMaterialV1<R>, ZkAmsMkheErrorV1> {
         let live = self
             .live
             .take()
@@ -570,6 +577,7 @@ impl SourceOpeningAssemblyV1 {
         record.record_digest = source_opening_record_digest_v1(&record)?;
         validate_source_opening_record_v1(&record)?;
         let proof_session = live.proof_session.complete_source_opening_v1(
+            record.record_digest,
             record.context_digest,
             record.commitments_root,
             record.blinding_snapshot_root,
@@ -578,7 +586,9 @@ impl SourceOpeningAssemblyV1 {
             blinding_snapshot,
             commitments: live.commitments,
             record,
-            proof_session,
+            proof_session: commitment_session_v1::RetainedSourceSessionV1::from_source_complete_v1(
+                proof_session,
+            )?,
         };
         material.validate_v1()?;
         Ok(material)
@@ -609,7 +619,9 @@ fn append_canonical_block_scalars_v1(
     }
     Ok(())
 }
-fn source_opening_commitment_for_suite_v1<S>(
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn source_opening_commitment_for_suite_v1<
+    S,
+>(
     values: &[Scalar],
     blinding: &Scalar,
     exact_values: usize,
@@ -781,16 +793,50 @@ fn validate_source_opening_record_v1(
     Ok(())
 }
 /// Opaque move-only source-opening material.
-pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1 {
+pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> {
     blinding_snapshot: ConfidentialSpoolSnapshotV1,
     commitments: Vec<Point>,
     record: SourceOpeningRecordV1,
-    proof_session: GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1>,
+    proof_session: commitment_session_v1::RetainedSourceSessionV1<R>,
 }
-impl GlobalLookupSourceOpeningMaterialV1 {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMaterialV1<R> {
+    pub(super) fn require_comparator_position_v1(
+        &self,
+        ordinal: u16,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.require_comparator_position_v1(ordinal)
+    }
+
+    pub(super) fn commit_prepared_comparator_v1(
+        &mut self,
+        statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedComparatorStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session
+            .commit_prepared_comparator_v1(statement)?;
+        self.validate_v1()
+    }
+
+    pub(super) fn require_low_digit_start_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.require_low_digit_start_v1()
+    }
+
+    pub(super) fn commit_prepared_low_digit_v1(
+        &mut self,
+        statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedLowDigitStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        // The enclosing cursor owns source-poisoning on every error and unwind.
+        self.validate_v1()?;
+        self.proof_session.commit_prepared_low_digit_v1(statement)?;
+        self.validate_v1()
+    }
+
     pub(super) fn validate_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         validate_source_opening_record_v1(&self.record)?;
-        self.proof_session.validate_source_opening_v1(
+        self.proof_session.validate_completed_source_prefix_v1(
+            self.record.record_digest,
             self.record.context_digest,
             self.record.commitments_root,
             self.record.blinding_snapshot_root,

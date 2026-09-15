@@ -1,9 +1,12 @@
+//! Source replay arithmetic, authority and ingress controls.
 use super::*;
+const INGRESS_SOURCE_V1: &str =
+    include_str!("global_lookup_source_replay_v1/original_source_ingress_v1.rs");
 const PRODUCTION_SOURCE_V1: &str = include_str!("global_lookup_source_replay_v1.rs");
 const PARENT_SOURCE_V1: &str = include_str!("../incremental_source_phase23_source_algebra.rs");
 const EXTERNAL_SOURCE_V1: &str = include_str!("../../phase23_rns_link_external_source.rs");
 const LEAF_SOURCE_V1: &str =
-    include_str!("../../../../../../../iroha_confidential_spool/src/lib.rs");
+    include_str!("../../../../../../../iroha_crypto/src/confidential_spool.rs");
 fn context_axes_v1() -> SourceReplayContextAxesV1 {
     SourceReplayContextAxesV1 {
         source_receipt_digest: [0x11; 32],
@@ -150,7 +153,7 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
     let mapping = mapping_digest_for_plane_order_v1(&exact).unwrap();
     assert_eq!(
         hex::encode(mapping),
-        "df87ce02f22af1a5e961cda99b1bcab0582271ead7a6aeb9f3dd113e7ffc084c"
+        "ab15c02725501032777e4bd99ce4fa752d9211b76dec061ae52639c3cc24652d"
     );
     assert_eq!(mapping, exact_mapping_digest_v1().unwrap());
     let mut reordered = exact;
@@ -170,7 +173,7 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
         spool_context_digest_v1(context_axes_v1(), mapping, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1).unwrap();
     assert_eq!(
         hex::encode(context),
-        "95ed1042c52ac3dad526a45fc0dfdbb40aa5152743e51d119170d07b7aed8bd4"
+        "229d729607f82f2222b3f25edca2c10ee551ccc81df2c1ca7fb2a302b78ab9d6"
     );
     let mut changed = context_axes_v1();
     changed.source_receipt_digest[0] ^= 1;
@@ -178,6 +181,12 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
         spool_context_digest_v1(changed, mapping, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1).unwrap(),
         context
     );
+    let retired_topology = [
+        0x3a, 0xf9, 0xa6, 0xad, 0x67, 0x38, 0x3c, 0x32, 0xb0, 0x6b, 0xb5, 0xd9, 0x5a, 0x05, 0x86,
+        0x3b, 0x8c, 0xb0, 0xb3, 0x33, 0x86, 0x60, 0x17, 0x7b, 0xc2, 0xa9, 0x2e, 0x1b, 0xbf, 0x40,
+        0xb4, 0xab,
+    ];
+    assert!(spool_context_digest_v1(context_axes_v1(), mapping, retired_topology).is_err());
     let mut wrong_topology = GLOBAL_LOOKUP_TOPOLOGY_KAT_V1;
     wrong_topology[0] ^= 1;
     assert!(spool_context_digest_v1(context_axes_v1(), mapping, wrong_topology).is_err());
@@ -242,9 +251,9 @@ fn canonical_scalar_blocks_reject_modulus_and_trailing_width() {
 #[test]
 fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
     for required in [
-        "prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>",
-        "struct Phase23GlobalLookupSourceReplayEvidenceV1<K, P>",
-        "replay: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>",
+        "prerequisite: Phase23SourceAlgebraPrerequisiteV2<R, K, P>",
+        "struct Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>",
+        "replay: Option<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>>",
         "materialization: Option<RadixWitnessMaterializationSealV2>",
         "radix_hyrax_proof: Option<RadixHyraxProofSealV2>",
         "_radix_witness_materialization: RadixWitnessMaterializationSealV2",
@@ -304,7 +313,7 @@ fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
         "authenticated_read_schedule_hash.update(source_bytes)",
     ] {
         assert!(
-            !PRODUCTION_SOURCE_V1.contains(forbidden),
+            !PRODUCTION_SOURCE_V1.contains(forbidden) && !INGRESS_SOURCE_V1.contains(forbidden),
             "forbidden surface: {forbidden}"
         );
     }
@@ -361,7 +370,7 @@ fn authority_dag_is_replay_then_materialization_then_radix_hyrax_and_poisoned_be
             && proof_take < validate
             && validate < materialization_validate
     );
-    assert!(binding.contains("Result<Phase23GlobalLookupSourceReplayV1<K, P>"));
+    assert!(binding.contains("Result<Phase23GlobalLookupSourceReplayV1<R, K, P>"));
     assert!(!binding.contains("Ok(("));
     assert_eq!(
         PRODUCTION_SOURCE_V1

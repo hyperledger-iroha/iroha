@@ -67,6 +67,11 @@ use super::super::super::super::super::{
         },
     },
     rns_native_profile::{ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1},
+    rns_native_proof_hash::{
+        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+        RnsNativeProofHashWorkV1,
+    },
     rns_native_public_polynomial_reader::{
         RnsNativePublicPolynomialEvaluationV1, RnsNativePublicPolynomialReadReceiptV1,
     },
@@ -77,6 +82,7 @@ use super::super::super::super::super::{
     rns_native_qpcs_fri_complete::{
         RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1,
         RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1,
+        RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1,
         RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1,
         RnsNativeQpcsClaimedInventoryChronologyV2, RnsNativeQpcsFriCompleteErrorV1,
         RnsNativeQpcsSchedulelessClaimedSourceV1, authenticate_rns_native_qpcs_pre_auth_claimed_v1,
@@ -107,7 +113,6 @@ use super::super::super::super::super::{
         ZkAmsMkheRnsNativeTerminalRootsV1,
     },
     rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
-    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 
 use super::super::{
@@ -117,9 +122,8 @@ use super::super::{
 use super::{
     RnsNativePreTranscriptPublicStatementFactsV2, RnsNativeStartedPreTranscriptPublicStatementV2,
 };
-use crate::vega::sponge::Keccak256;
 
-const VERSION_V2: u8 = 2;
+const BINDING_VERSION_V1: u8 = 1;
 const RECORDS_V2: usize = 43;
 const EQUATIONS_V2: usize = 2;
 const REPETITIONS_V2: usize = 5;
@@ -130,7 +134,7 @@ const RETAINED_PUBLIC_EVALUATION_BYTES_V2: usize = RELATIONS_V2 * PUBLIC_EVALUAT
 const RETAINED_NUMERIC_CACHE_BYTES_V2: usize =
     RETAINED_PUBLIC_EVALUATION_BYTES_V2 + RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1;
 const RETAINED_COMMITMENT_DIGEST_BYTES_V2: usize =
-    (EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1) * 32;
+    (EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1) * 48;
 const RETAINED_PAYLOAD_BYTES_V2: usize = RETAINED_NUMERIC_CACHE_BYTES_V2
     + RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1
     + RETAINED_COMMITMENT_DIGEST_BYTES_V2;
@@ -143,27 +147,39 @@ const NUMERIC_VALIDATION_WORK_UNITS_V2: u64 =
 const NUMERIC_TAIL_RETENTION_WORK_UNITS_V2: u64 =
     RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1 as u64;
 
-const CARRIER_BINDING_DOMAIN_V2: &[u8] =
-    b"iroha.zk-ams.v2.mkhe.rns-native.claimed-qpcs-source-carrier.binding";
+const CARRIER_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native.claimed-qpcs-source-carrier.binding";
 // Domain, version, four u16 geometry values, lifecycle digest, five public-read
 // receipt digests, receipt object count/four u64 counters, the opaque claimed-
 // source digest, and the exact two-equation/40-limb digest arrays.
-const CARRIER_BINDING_HASH_BYTES_V2: usize = CARRIER_BINDING_DOMAIN_V2.len()
+const CARRIER_BINDING_HASH_BYTES_V2: usize = CARRIER_BINDING_DOMAIN_V1.len()
     + 1
     + 4 * 2
     + 32
-    + 5 * 32
+    + 4 * 32
+    + 48
     + 2
     + 4 * 8
-    + 32
+    + 48
     + RETAINED_COMMITMENT_DIGEST_BYTES_V2;
 const PRE_BINDING_LOCAL_WORK_UNITS_V2: u64 = NUMERIC_VALIDATION_WORK_UNITS_V2
     + NUMERIC_TAIL_RETENTION_WORK_UNITS_V2
     + RETAINED_COMMITMENT_DIGEST_BYTES_V2 as u64;
 const COMBINED_BINDING_HASH_BYTES_V2: usize =
     RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 + CARRIER_BINDING_HASH_BYTES_V2;
-const LOCAL_WORK_UNITS_V2: u64 =
-    PRE_BINDING_LOCAL_WORK_UNITS_V2 + COMBINED_BINDING_HASH_BYTES_V2 as u64;
+const CARRIER_BINDING_HASH_WORK_V1: RnsNativeProofHashWorkV1 =
+    match RnsNativeProofHashWorkV1::from_word_count(538) {
+        Ok(work) => work,
+        Err(_) => panic!("fixed carrier frame must fit"),
+    };
+const BINDING_FIELD_MULTIPLICATIONS_V1: u64 = CARRIER_BINDING_HASH_WORK_V1.field_multiplications
+    + RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1.field_multiplications;
+const BINDING_FIELD_ADDITIONS_V1: u64 = CARRIER_BINDING_HASH_WORK_V1.field_additions
+    + RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1.field_additions;
+const LOCAL_WORK_UNITS_V2: u64 = PRE_BINDING_LOCAL_WORK_UNITS_V2
+    + COMBINED_BINDING_HASH_BYTES_V2 as u64
+    + BINDING_FIELD_MULTIPLICATIONS_V1
+    + BINDING_FIELD_ADDITIONS_V1;
 
 /// Source-only declaration and chronology implementation are settled.
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_SOURCE_CARRIER_SOURCE_SETTLED_V2: bool = true;
@@ -181,7 +197,6 @@ pub(super) const RNS_NATIVE_CLAIMED_QPCS_PRE_DIRECT_AXES_INTEGRATED_V2: bool = f
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_DIRECT_RELATION_INTEGRATED_V2: bool = false;
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_INVENTORY_MEMBERSHIP_INTEGRATED_V2: bool = false;
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_GLOBAL_ROOT_DISCHARGED_V2: bool = false;
-pub(super) const RNS_NATIVE_CLAIMED_QPCS_ZERO_ROOT_DISCHARGED_V2: bool = false;
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_DIRECT_OPENINGS_AVAILABLE_V2: bool = false;
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_RESOURCE_EVIDENCE_QUALIFIED_V2: bool = false;
 pub(super) const RNS_NATIVE_CLAIMED_QPCS_READINESS_V2: bool = false;
@@ -197,12 +212,13 @@ pub(super) const RNS_NATIVE_CLAIMED_QPCS_RELEASE_AUTHORIZED_V2: bool = false;
 /// new heap/authenticated-I/O bytes therefore means zero additive carrier-local
 /// bytes after those separately accounted sub-transitions; the 4,800-byte
 /// numeric tail is retained inline. The retained payload intentionally excludes
-/// two non-authorizing 32-byte binding digests and ordinary owner headers,
-/// matching the prior numeric ledger scope. Exact local work is 28,144 before
-/// binding absorption plus 6,962 binding bytes, for 35,106 total units.
-/// One work unit is charged per canonical check, modular operation, retained
-/// or copied byte, and absorbed binding byte named in the ledger; this is not
-/// an instruction count and excludes control-flow comparisons.
+/// two non-authorizing 48-byte binding digests and ordinary owner headers,
+/// matching the numeric ledger scope. Exact local work is 28,816 before
+/// binding absorption plus 7,826 binding bytes and 7,163,076 hash field
+/// operations, for 7,199,718 total units. One work unit is charged per
+/// canonical check, modular operation, retained or copied byte, absorbed
+/// binding byte and actual dense-MDS hash multiplication/addition. This is
+/// not an instruction count and excludes control-flow comparisons.
 pub(super) struct RnsNativeClaimedQpcsSourceCarrierLocalResourceLedgerV2 {
     pub(super) relations: u16,
     pub(super) retained_public_evaluation_bytes: u32,
@@ -220,6 +236,10 @@ pub(super) struct RnsNativeClaimedQpcsSourceCarrierLocalResourceLedgerV2 {
     pub(super) claimed_source_binding_hash_bytes: u16,
     pub(super) carrier_binding_hash_bytes: u16,
     pub(super) combined_binding_hash_bytes: u16,
+    pub(super) binding_lane_permutations: u32,
+    pub(super) binding_poseidon_rounds: u32,
+    pub(super) binding_field_multiplications: u32,
+    pub(super) binding_field_additions: u32,
     pub(super) local_work_units: u32,
     pub(super) new_heap_bytes: u8,
     pub(super) new_spool_bytes: u8,
@@ -248,6 +268,14 @@ pub(super) const RNS_NATIVE_CLAIMED_QPCS_SOURCE_CARRIER_LOCAL_RESOURCE_LEDGER_V2
             as u16,
         carrier_binding_hash_bytes: CARRIER_BINDING_HASH_BYTES_V2 as u16,
         combined_binding_hash_bytes: COMBINED_BINDING_HASH_BYTES_V2 as u16,
+        binding_lane_permutations: (CARRIER_BINDING_HASH_WORK_V1.lane_permutations
+            + RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1.lane_permutations)
+            as u32,
+        binding_poseidon_rounds: (CARRIER_BINDING_HASH_WORK_V1.poseidon_rounds
+            + RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1.poseidon_rounds)
+            as u32,
+        binding_field_multiplications: BINDING_FIELD_MULTIPLICATIONS_V1 as u32,
+        binding_field_additions: BINDING_FIELD_ADDITIONS_V1 as u32,
         local_work_units: LOCAL_WORK_UNITS_V2 as u32,
         new_heap_bytes: 0,
         new_spool_bytes: 0,
@@ -265,23 +293,21 @@ const _: () = {
     assert!(RETAINED_PUBLIC_EVALUATION_BYTES_V2 == 140_800);
     assert!(RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1 == 4_800);
     assert!(RETAINED_NUMERIC_CACHE_BYTES_V2 == 145_600);
-    assert!(RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1 == 5_384);
-    assert!(RETAINED_COMMITMENT_DIGEST_BYTES_V2 == 1_344);
-    assert!(RETAINED_PAYLOAD_BYTES_V2 == 152_328);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1 == 6_264);
+    assert!(RETAINED_COMMITMENT_DIGEST_BYTES_V2 == 2_016);
+    assert!(RETAINED_PAYLOAD_BYTES_V2 == 153_880);
     assert!(CANONICAL_CHECKS_V2 == 18_200);
     assert!(RING_POWER_SQUARINGS_V2 == 3_400);
     assert!(MODULAR_MULTIPLICATIONS_V2 == 3_600);
     assert!(MODULAR_ADDITIONS_V2 == 200);
     assert!(NUMERIC_VALIDATION_WORK_UNITS_V2 == 22_000);
     assert!(NUMERIC_TAIL_RETENTION_WORK_UNITS_V2 == 4_800);
-    assert!(PRE_BINDING_LOCAL_WORK_UNITS_V2 == 28_144);
-    assert!(RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 == 5_284);
-    assert!(CARRIER_BINDING_HASH_BYTES_V2 == 1_678);
-    assert!(COMBINED_BINDING_HASH_BYTES_V2 == 6_962);
-    assert!(LOCAL_WORK_UNITS_V2 == 35_106);
-    // Historical old-local-ledger-plus-tail floor only; not a pre-binding
-    // claim. The exact pre-binding amount is 28,144 above.
-    assert!(LOCAL_WORK_UNITS_V2 >= 28_808);
+    assert!(PRE_BINDING_LOCAL_WORK_UNITS_V2 == 28_816);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 == 5_444);
+    assert!(CARRIER_BINDING_HASH_BYTES_V2 == 2_382);
+    assert!(COMBINED_BINDING_HASH_BYTES_V2 == 7_826);
+    assert!(LOCAL_WORK_UNITS_V2 == 7_199_718);
+    assert!(LOCAL_WORK_UNITS_V2 > PRE_BINDING_LOCAL_WORK_UNITS_V2);
     assert!(RNS_NATIVE_CLAIMED_QPCS_SOURCE_CARRIER_SOURCE_SETTLED_V2);
     assert!(RNS_NATIVE_CLAIMED_QPCS_SOURCE_CARRIER_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_CLAIMED_QPCS_SOURCE_PREFLIGHT_ORDER_IMPLEMENTED_V2);
@@ -293,7 +319,6 @@ const _: () = {
     assert!(!RNS_NATIVE_CLAIMED_QPCS_DIRECT_RELATION_INTEGRATED_V2);
     assert!(!RNS_NATIVE_CLAIMED_QPCS_INVENTORY_MEMBERSHIP_INTEGRATED_V2);
     assert!(!RNS_NATIVE_CLAIMED_QPCS_GLOBAL_ROOT_DISCHARGED_V2);
-    assert!(!RNS_NATIVE_CLAIMED_QPCS_ZERO_ROOT_DISCHARGED_V2);
     assert!(!RNS_NATIVE_CLAIMED_QPCS_DIRECT_OPENINGS_AVAILABLE_V2);
     assert!(!RNS_NATIVE_CLAIMED_QPCS_RESOURCE_EVIDENCE_QUALIFIED_V2);
     assert!(!RNS_NATIVE_CLAIMED_QPCS_READINESS_V2);
@@ -346,17 +371,17 @@ impl std::error::Error for RnsNativeClaimedQpcsCompositeVerificationErrorV2 {}
 /// There is deliberately no final transcript field: qPCS borrows final seeds
 /// from the provisional chronology already owned by its pre-auth typestate.
 pub(super) struct RnsNativeClaimedQpcsAuthenticationInputV2<'digests, 'proof> {
-    equation_commitment_digests: &'digests [[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: &'digests [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    query_opening_digests: &'digests [[u8; 32]; QUERY_OPENINGS_V2],
+    equation_commitment_digests: &'digests [ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: &'digests [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    query_opening_digests: &'digests [ProofDigestV1; QUERY_OPENINGS_V2],
     proof: &'proof [u8],
 }
 
 impl<'digests, 'proof> RnsNativeClaimedQpcsAuthenticationInputV2<'digests, 'proof> {
     pub(super) const fn new_v2(
-        equation_commitment_digests: &'digests [[u8; 32]; EQUATIONS_V2],
-        limb_commitment_digests: &'digests [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-        query_opening_digests: &'digests [[u8; 32]; QUERY_OPENINGS_V2],
+        equation_commitment_digests: &'digests [ProofDigestV1; EQUATIONS_V2],
+        limb_commitment_digests: &'digests [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+        query_opening_digests: &'digests [ProofDigestV1; QUERY_OPENINGS_V2],
         proof: &'proof [u8],
     ) -> Self {
         Self {
@@ -388,9 +413,9 @@ struct RnsNativeClaimedQpcsRetainedPublicationV2 {
     owners: RnsNativeWholePublicationOwnersV2,
     read_receipt: RnsNativePublicPolynomialReadReceiptV1,
     facts: RnsNativePreTranscriptPublicStatementFactsV2,
-    equation_commitment_digests: [[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    carrier_binding_digest: [u8; 32],
+    equation_commitment_digests: [ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    carrier_binding_digest: ProofDigestV1,
 }
 
 /// Move-only qPCS/publication authority retained by the final composite input.
@@ -411,7 +436,8 @@ impl RnsNativeQpcsCompositeAuthorityV2<'_> {
         envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     ) -> Result<(), RnsNativeClaimedQpcsSourceCarrierErrorV2> {
-        let mut publication_digests = [[0; 32]; EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 1];
+        let mut publication_digests =
+            [ProofDigestV1::ZERO; EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 + 1];
         publication_digests[..EQUATIONS_V2]
             .copy_from_slice(&self.retained.equation_commitment_digests);
         publication_digests[EQUATIONS_V2..EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1]
@@ -425,7 +451,7 @@ impl RnsNativeQpcsCompositeAuthorityV2<'_> {
             || envelope.statement_digest() != transcript.statement_digest()
             || envelope.operational_context_digest() != transcript.operational_context_digest()
             || envelope.source_receipt_digest() != transcript.source_receipt_digest()
-            || publication_digests.contains(&[0; 32])
+            || publication_digests.contains(&ProofDigestV1::ZERO)
             || publication_digests
                 .iter()
                 .enumerate()
@@ -442,7 +468,7 @@ impl RnsNativeQpcsCompositeAuthorityV2<'_> {
 /// The digest bytes are intentionally trapped in a non-`Copy`, non-`Clone`
 /// wrapper and have no accessor.
 struct RnsNativeClaimedQpcsRetainedPublicationOriginBindingV2 {
-    digest: [u8; 32],
+    digest: ProofDigestV1,
 }
 
 /// Unmintable outside this child: the sole direct numeric origin combines the
@@ -466,7 +492,7 @@ impl RnsNativeClaimedDirectNumericOriginV2 {
         public_evaluations: Box<[RnsNativePublicPolynomialEvaluationV1]>,
         cursor: RnsNativeClaimedSourceCursorV2,
     ) -> Result<Self, RnsNativeClaimedQpcsSourceCarrierErrorV2> {
-        if retained.carrier_binding_digest == [0; 32]
+        if retained.carrier_binding_digest == ProofDigestV1::ZERO
             || cursor.next_relation != 0
             || cursor.poisoned
         {
@@ -486,7 +512,7 @@ impl RnsNativeClaimedDirectNumericOriginV2 {
     }
 
     pub(in crate::vega::zk_ams::mkhe) fn is_fresh_v2(&self) -> bool {
-        self.retained_publication_binding.digest != [0; 32]
+        self.retained_publication_binding.digest != ProofDigestV1::ZERO
             && self.next_relation == 0
             && !self.poisoned
     }
@@ -520,7 +546,7 @@ impl RnsNativeClaimedDirectNumericOriginV2 {
     }
 
     pub(in crate::vega::zk_ams::mkhe) fn is_complete_v2(&self) -> bool {
-        self.retained_publication_binding.digest != [0; 32]
+        self.retained_publication_binding.digest != ProofDigestV1::ZERO
             && self.next_relation as usize == RELATIONS_V2
             && !self.poisoned
     }
@@ -608,7 +634,6 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
     pub(super) fn authenticate_claimed_inventory_v2<'cross>(
         self,
         terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-        zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
         pending_cross: RnsNativePendingCrossFieldGlobalLookupContextV1<'cross>,
         preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'cross>,
     ) -> Result<
@@ -623,7 +648,7 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
             cursor,
         } = stage;
         let claimed_inventory = claimed_source
-            .authenticate_claimed_inventory_v2(terminal, zero_padding, pending_cross, preflight)
+            .authenticate_claimed_inventory_v2(terminal, pending_cross, preflight)
             .map_err(|_| RnsNativeClaimedQpcsSourceCarrierErrorV2::Inventory)?;
         Ok(RnsNativeClaimedQpcsInventoryCarrierV2 {
             owned: RnsNativeClaimedQpcsOwnedStageV2 {
@@ -831,64 +856,123 @@ fn map_qpcs_error_v2(
     RnsNativeClaimedQpcsSourceCarrierErrorV2::Qpcs
 }
 
-fn carrier_binding_digest_v2<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>(
-    owners: &RnsNativeWholePublicationOwnersV2,
-    receipt: &RnsNativePublicPolynomialReadReceiptV1,
-    claimed_source: &RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S>,
-    equation_commitment_digests: &[[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: &[[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-) -> Result<[u8; 32], RnsNativeClaimedQpcsSourceCarrierErrorV2> {
-    if owners.lifecycle_digest == [0; 32]
-        || [
-            receipt.manifest_digest_v1(),
-            receipt.qpcs_schedule_digest_v1(),
-            receipt.provider_identity_v1(),
-            receipt.snapshot_identity_v1(),
-            receipt.read_set_digest_v1(),
-            claimed_source.claimed_source_binding_digest_v1(),
-        ]
-        .contains(&[0; 32])
+/// Scalar/count axes owned by the actual publication and native read receipt.
+#[derive(Clone, Copy)]
+struct CarrierBindingContextV1 {
+    public: [[u8; 32]; 5],      // lifecycle, manifest, provider, snapshot, read-set
+    native: [ProofDigestV1; 2], // qPCS schedule, claimed source
+    objects: u16,
+    counters: [u64; 4], // bytes, coefficients, multiplications, additions
+}
+
+fn carrier_binding_hash_v1(
+    axes: CarrierBindingContextV1,
+    equations: &[ProofDigestV1; EQUATIONS_V2],
+    limbs: &[ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+) -> Result<ProofDigestV1, RnsNativeClaimedQpcsSourceCarrierErrorV2> {
+    if axes.public.contains(&[0; 32])
+        || axes.native.contains(&ProofDigestV1::ZERO)
+        || equations.contains(&ProofDigestV1::ZERO)
+        || limbs.contains(&ProofDigestV1::ZERO)
     {
         return Err(RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding);
     }
-    let mut hash = Keccak256::new();
-    hash.update(CARRIER_BINDING_DOMAIN_V2);
-    hash.update(&[VERSION_V2]);
-    for geometry in [
+    let geometry = [
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
         REPETITIONS_V2,
         RECORDS_V2,
         RELATIONS_V2,
-    ] {
-        hash.update(&(geometry as u16).to_be_bytes());
-    }
-    hash.update(&owners.lifecycle_digest);
-    for digest in [
-        receipt.manifest_digest_v1(),
-        receipt.qpcs_schedule_digest_v1(),
-        receipt.provider_identity_v1(),
-        receipt.snapshot_identity_v1(),
-        receipt.read_set_digest_v1(),
-    ] {
-        hash.update(&digest);
-    }
-    hash.update(&receipt.object_count_v1().to_be_bytes());
-    hash.update(&receipt.canonical_bytes_v1().to_be_bytes());
-    hash.update(&receipt.coefficient_count_v1().to_be_bytes());
-    hash.update(&receipt.modular_multiplications_v1().to_be_bytes());
-    hash.update(&receipt.modular_additions_v1().to_be_bytes());
-    hash.update(&claimed_source.claimed_source_binding_digest_v1());
-    for digest in equation_commitment_digests
-        .iter()
-        .chain(limb_commitment_digests.iter())
+    ]
+    .map(|value| (value as u16).to_be_bytes());
+    let version = [BINDING_VERSION_V1];
+    let objects = axes.objects.to_be_bytes();
+    let counters = axes.counters.map(u64::to_be_bytes);
+    let mut fields: [&[u8]; 60] = [&[]; 60];
+    fields[..18].copy_from_slice(&[
+        CARRIER_BINDING_DOMAIN_V1,
+        &version,
+        &geometry[0],
+        &geometry[1],
+        &geometry[2],
+        &geometry[3],
+        &axes.public[0],
+        &axes.public[1],
+        axes.native[0].as_bytes(),
+        &axes.public[2],
+        &axes.public[3],
+        &axes.public[4],
+        &objects,
+        &counters[0],
+        &counters[1],
+        &counters[2],
+        &counters[3],
+        axes.native[1].as_bytes(),
+    ]);
+    for (slot, digest) in fields[18..]
+        .iter_mut()
+        .zip(equations.iter().chain(limbs.iter()))
     {
-        hash.update(digest);
+        *slot = digest.as_bytes();
     }
-    let digest = hash.finalize();
-    if digest == [0; 32] {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding)?;
+    let frame = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 7,
+                index: 0,
+                counter: 0,
+            },
+            &fields,
+        )
+        .map_err(|_| RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding)?;
+    if fields.iter().map(|field| field.len()).sum::<usize>() != CARRIER_BINDING_HASH_BYTES_V2
+        || RnsNativeProofHashWorkV1::from_frame(&frame)
+            .map_err(|_| RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding)?
+            != CARRIER_BINDING_HASH_WORK_V1
+    {
+        return Err(RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding);
+    }
+    let digest = ProofDigestV1::from_shared(frame.hash());
+    if digest == ProofDigestV1::ZERO {
         return Err(RnsNativeClaimedQpcsSourceCarrierErrorV2::InvalidBinding);
     }
     Ok(digest)
+}
+
+fn carrier_binding_digest_v2<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>(
+    owners: &RnsNativeWholePublicationOwnersV2,
+    receipt: &RnsNativePublicPolynomialReadReceiptV1,
+    claimed_source: &RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S>,
+    equation_commitment_digests: &[ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: &[ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+) -> Result<ProofDigestV1, RnsNativeClaimedQpcsSourceCarrierErrorV2> {
+    carrier_binding_hash_v1(
+        CarrierBindingContextV1 {
+            public: [
+                owners.lifecycle_digest,
+                receipt.manifest_digest_v1(),
+                receipt.provider_identity_v1(),
+                receipt.snapshot_identity_v1(),
+                receipt.read_set_digest_v1(),
+            ],
+            native: [
+                receipt.qpcs_schedule_digest_v1(),
+                claimed_source.claimed_source_binding_digest_v1(),
+            ],
+            objects: receipt.object_count_v1(),
+            counters: [
+                receipt.canonical_bytes_v1(),
+                receipt.coefficient_count_v1(),
+                receipt.modular_multiplications_v1(),
+                receipt.modular_additions_v1(),
+            ],
+        },
+        equation_commitment_digests,
+        limb_commitment_digests,
+    )
 }
 
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>

@@ -1,3 +1,5 @@
+//! Public object metadata KATs and exact native384 schedule-reader regression tests.
+
 use super::super::ZkAmsMkheErrorV1;
 use super::*;
 
@@ -415,10 +417,10 @@ fn digest_from_hex_v1(encoded: &str) -> [u8; DIGEST_BYTES_V1] {
 
 fn schedule_v1(points: [u64; TEST_SCHEDULE_POINT_COUNT_V1]) -> RnsNativeQpcsRelationScheduleV1 {
     RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
-        [0x91; DIGEST_BYTES_V1],
-        [0x92; DIGEST_BYTES_V1],
-        [0x93; DIGEST_BYTES_V1],
-        [0x94; DIGEST_BYTES_V1],
+        super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1().expect("parameter"),
+        super::super::rns_native_proof_hash::test_proof_digest_v1(b"reader-schedule", 146),
+        super::super::rns_native_proof_hash::test_proof_digest_v1(b"reader-schedule", 147),
+        super::super::rns_native_proof_hash::test_proof_digest_v1(b"reader-schedule", 148),
         points,
     )
 }
@@ -579,7 +581,7 @@ fn exact_manifest_is_position_bound_and_statement_addressable() {
 }
 
 #[test]
-fn representative_encoding_artifact_manifest_and_qpcs_digests_are_frozen() {
+fn representative_public_identity_kats_and_native_schedule_frame_are_exact() {
     assert_eq!(
         public_polynomial_encoding_digest_v1(),
         digest_from_hex_v1("b63d7fa91179d4c57550f3cb8c7727e93b4dc8e31c53da19102ceb478c4e7b36")
@@ -614,7 +616,7 @@ fn representative_encoding_artifact_manifest_and_qpcs_digests_are_frozen() {
         .expect("canonical KAT schedule");
     assert_eq!(
         identity.binding_digest,
-        digest_from_hex_v1("e07d958499fb92bbd8d7cc57728c087e6796280d00067b1095981343a0cdf9be")
+        independent_native_schedule_frame_v1(&schedule_v1(points))
     );
 }
 
@@ -903,7 +905,7 @@ fn captured_qpcs_identity_binds_all_200_points_and_rejects_invalid_limb_schedule
     });
     let identity = QpcsScheduleIdentityV1::from_schedule_v1(&schedule_v1(points))
         .expect("canonical test schedule");
-    assert_ne!(identity.binding_digest, [0; DIGEST_BYTES_V1]);
+    assert_ne!(identity.binding_digest, ProofDigestV1::ZERO);
 
     let mut substituted = points;
     substituted[TEST_SCHEDULE_POINT_COUNT_V1 - 1] = 6;
@@ -1010,8 +1012,8 @@ fn source_contract_is_move_only_poisoned_bounded_and_authenticates_before_escape
         assert!(!attributes.contains("derive(Copy"));
     }
     assert!(source.contains("P: ZkAmsMkheDirectObjectReadAtProviderV1"));
-    assert!(source.contains("qpcs_schedule_digest: [u8; DIGEST_BYTES_V1]"));
-    assert!(source.contains("self.read_set_hash.update(&schedule_identity.binding_digest)"));
+    assert!(source.contains("qpcs_schedule_digest: ProofDigestV1"));
+    assert!(source.contains(".update(schedule_identity.binding_digest.as_bytes());"));
     assert!(source.contains("ZkAmsMkheDirectObjectReadTransactionV1::begin"));
     assert!(source.contains("transaction.remaining_bytes() != 0"));
     assert!(source.contains("usize::try_from(u32::from_be_bytes(count)).ok()"));
@@ -1113,4 +1115,99 @@ fn source_is_settled_but_integration_and_release_remain_explicitly_false() {
 
     let parent = include_str!("../mkhe.rs");
     assert!(parent.contains("mod rns_native_public_polynomial_reader;"));
+}
+
+fn independent_native_schedule_frame_v1(
+    schedule: &RnsNativeQpcsRelationScheduleV1,
+) -> ProofDigestV1 {
+    let mut points = Vec::new();
+    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+        points.extend_from_slice(&(limb as u16).to_be_bytes());
+        points.extend_from_slice(&ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb].to_be_bytes());
+        for repetition in 0..REPETITIONS_V1 {
+            points.extend_from_slice(&(repetition as u16).to_be_bytes());
+            points.extend_from_slice(
+                &schedule
+                    .point(limb, repetition)
+                    .expect("point")
+                    .to_be_bytes(),
+            );
+        }
+    }
+    assert_eq!(points.len(), 2_400);
+    RnsNativeProofHashContextV1::canonical()
+        .expect("context")
+        .hash(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 4,
+                index: 1,
+                counter: 0,
+            },
+            &[
+                QPCS_SCHEDULE_DOMAIN_V1,
+                &[VERSION_V1],
+                &schedule.parameter_digest(),
+                schedule.q_mask_s_root().as_bytes(),
+                schedule.qpcs_pre_relation_transcript_digest().as_bytes(),
+                schedule.relation_seed().as_bytes(),
+                &40_u16.to_be_bytes(),
+                &5_u16.to_be_bytes(),
+                &points,
+            ],
+        )
+        .expect("independent actual shared frame")
+}
+
+#[test]
+fn reader_schedule_binds_every_native_lane_and_rejects_foreign_profile() {
+    let points = core::array::from_fn(|ordinal| (ordinal % REPETITIONS_V1 + 1) as u64);
+    let schedule = schedule_v1(points);
+    let base = QpcsScheduleIdentityV1::from_schedule_v1(&schedule).expect("base");
+    assert_eq!(
+        base.binding_digest,
+        independent_native_schedule_frame_v1(&schedule)
+    );
+    for role in 0..3 {
+        let mut roots = [
+            schedule.q_mask_s_root(),
+            schedule.qpcs_pre_relation_transcript_digest(),
+            schedule.relation_seed(),
+        ];
+        let mut bytes = roots[role].to_le_bytes();
+        let old = u64::from_le_bytes(bytes[40..48].try_into().expect("lane"));
+        bytes[40..48].copy_from_slice(&(if old == 0 { 1 } else { old - 1 }).to_le_bytes());
+        roots[role] = ProofDigestV1::from_le_bytes(bytes).expect("canonical changed lane");
+        let changed = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+            schedule.parameter_digest(),
+            roots[0],
+            roots[1],
+            roots[2],
+            points,
+        );
+        assert_ne!(
+            QpcsScheduleIdentityV1::from_schedule_v1(&changed)
+                .expect("changed")
+                .binding_digest,
+            base.binding_digest
+        );
+        roots[role] = ProofDigestV1::ZERO;
+        let zero = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+            schedule.parameter_digest(),
+            roots[0],
+            roots[1],
+            roots[2],
+            points,
+        );
+        assert!(QpcsScheduleIdentityV1::from_schedule_v1(&zero).is_err());
+    }
+    let foreign = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+        [0x91; 32],
+        schedule.q_mask_s_root(),
+        schedule.qpcs_pre_relation_transcript_digest(),
+        schedule.relation_seed(),
+        points,
+    );
+    assert!(QpcsScheduleIdentityV1::from_schedule_v1(&foreign).is_err());
 }

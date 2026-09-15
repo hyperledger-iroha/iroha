@@ -5,6 +5,55 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## September 15 block-construction stack overflow
+
+The default-stack `merge_entrypoints_commit_in_canonical_carrier_membership`
+regression aborted while reserving the stack frame for
+`State::block_with_pristine_stage`, during fixture genesis construction after
+Kura stored height one. The debugger identified a 741,304-byte constructor
+frame, with large state values also retained by its callers.
+
+Four existing lifecycle transaction phases now run in separate, non-inlined
+borrowed helpers. Their execution order and transaction apply/drop boundaries
+are preserved. The measured constructor frame is now 581,496 bytes in the
+same unoptimized Linux build. The original test passes without a stack-size
+override. A new pristine-stage failure regression verifies skipped lifecycle
+work, discarded writes, released locks and rollback when a successful scope
+is dropped.
+
+Validation used `scripts/cargo_fast.sh --stable-local-metadata --incremental --
+test -p iroha_core --lib` with exact test selection. The reported case and 34
+additional checks pass, covering normal/replacement source-context ordering,
+merge membership, privacy schedules and expiry, confidential transitions,
+sponsor activation and governance sweeps. Workspace formatting and diff checks
+pass. The Parliament source-check failures found during this run are repaired
+and validated below. Full workspace tests were not run.
+
+## September 15 Parliament source/model bindings
+
+The checker now follows both sortition registration transitions into their
+shared admission helper and broker dispatch into the consensus attestation
+handler. Certificate supporter ordering tolerates Rust whitespace changes
+while still requiring strict ordering in certificate validation. Broker checks
+bind Parliament operations 124/125 and their explicit framed schema identities;
+adding unrelated operations no longer invalidates this contract.
+
+The full source/model checker passes. Its Python selection passes 80 tests and
+218 subtests, including new complete-checker coverage and mutations of ordering,
+canonical candidates, shared admission, broker operation IDs, framing, routing,
+attestation and requalification. All 134 Core tests selected by `parliament`
+pass with four test workers. These changes update structural validation only;
+four-validator network execution and a new TLC run were not part of this check.
+
+```sh
+python3 scripts/formal/check_sora_parliament_source_contract.py
+python3 -m pytest -q scripts/tests/check_sora_parliament_source_contract_test.py \
+  scripts/tests/check_sora_parliament_broker_source_contract_test.py \
+  scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- \
+  test -p iroha_core --lib parliament -- --test-threads=4
+```
+
 ## September 14 privacy and lifecycle contract repair
 
 The eighteen reported failures exposed incomplete first-release protocol and

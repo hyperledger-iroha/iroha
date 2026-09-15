@@ -30566,434 +30566,445 @@ impl State {
         }
         let current_slot =
             current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
+        // Keep independent transaction phases in separate frames. Unoptimized
+        // builds otherwise reserve all of their large overlay temporaries for
+        // this entire constructor, even when a phase has no work to apply.
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot);
+        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h);
+        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
+        Self::apply_block_start_confidential_policies(&mut sb, now_h);
+        sb.start_of_block_effects_applied = true;
+        Ok(sb)
+    }
+    /// Apply scheduled world transitions within their shared transaction.
+    #[inline(never)]
+    fn apply_block_start_world_transitions(sb: &mut StateBlock<'_>, now_h: u64, current_slot: u64) {
         let transitions = collect_confidential_transitions(&sb.world, now_h);
-        {
-            let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-            let mut wtx = sb.world.trasaction_with_axt_lane_map(
-                #[cfg(feature = "telemetry")]
-                Some(sb.telemetry),
-                sb.nexus.lane_config.clone(),
-                current_slot,
-                axt_lane_map,
-            );
-            // Scheduled sponsor-program activation heights are lower bounds.
-            // Recheck older-revision spend leases at block start so legacy or
-            // inconsistent persisted schedules cannot activate over live locks.
-            let due_fee_sponsor_programs: Vec<_> = wtx
+        let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
+        let mut wtx = sb.world.trasaction_with_axt_lane_map(
+            #[cfg(feature = "telemetry")]
+            Some(sb.telemetry),
+            sb.nexus.lane_config.clone(),
+            current_slot,
+            axt_lane_map,
+        );
+        // Scheduled sponsor-program activation heights are lower bounds.
+        // Recheck older-revision spend leases at block start so legacy or
+        // inconsistent persisted schedules cannot activate over live locks.
+        let due_fee_sponsor_programs: Vec<_> = wtx
+            .fee_sponsor_programs
+            .iter()
+            .filter_map(|(id, program)| {
+                program
+                    .scheduled_activation
+                    .filter(|activation| activation.activate_at_height <= now_h)
+                    .map(|activation| (id.clone(), activation))
+            })
+            .collect();
+        for (program_id, activation) in due_fee_sponsor_programs {
+            let mut program = wtx
                 .fee_sponsor_programs
-                .iter()
-                .filter_map(|(id, program)| {
-                    program
-                        .scheduled_activation
-                        .filter(|activation| activation.activate_at_height <= now_h)
-                        .map(|activation| (id.clone(), activation))
-                })
-                .collect();
-            for (program_id, activation) in due_fee_sponsor_programs {
-                let mut program = wtx
-                    .fee_sponsor_programs
-                    .get(&program_id)
-                    .cloned()
-                    .expect("scheduled fee sponsor program must remain persisted");
-                let safe_height = match fee_sponsor_revision_safe_activation_height(
-                    &wtx,
-                    &program_id,
-                    activation.revision,
-                    now_h,
-                    now_h,
-                ) {
-                    Ok(safe_height) => safe_height,
-                    Err(error) => {
-                        warn!(
-                            program_id = %program_id,
-                            revision = activation.revision,
-                            %error,
-                            "fee sponsor revision activation remains blocked by invalid lease state"
-                        );
-                        continue;
-                    }
-                };
-                if safe_height > now_h {
-                    let Some(scheduled_activation) = program.scheduled_activation.as_mut() else {
-                        warn!(
-                            program_id = %program_id,
-                            revision = activation.revision,
-                            "due fee sponsor activation disappeared before drain rescheduling"
-                        );
-                        continue;
-                    };
-                    scheduled_activation.activate_at_height = safe_height;
-                    wtx.fee_sponsor_programs.insert(program_id, program);
+                .get(&program_id)
+                .cloned()
+                .expect("scheduled fee sponsor program must remain persisted");
+            let safe_height = match fee_sponsor_revision_safe_activation_height(
+                &wtx,
+                &program_id,
+                activation.revision,
+                now_h,
+                now_h,
+            ) {
+                Ok(safe_height) => safe_height,
+                Err(error) => {
+                    warn!(
+                        program_id = %program_id,
+                        revision = activation.revision,
+                        %error,
+                        "fee sponsor revision activation remains blocked by invalid lease state"
+                    );
                     continue;
                 }
-                assert!(
-                    wtx.fee_sponsor_program_revisions
-                        .get(&FeeSponsorProgramRevisionKey::new(
-                            program_id.clone(),
-                            activation.revision,
-                        ))
-                        .is_some(),
-                    "scheduled fee sponsor revision must remain persisted"
-                );
-                program.active_revision = Some(activation.revision);
-                if program.staged_revision == Some(activation.revision) {
-                    program.staged_revision = None;
-                }
-                program.scheduled_activation = None;
-                program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            };
+            if safe_height > now_h {
+                let Some(scheduled_activation) = program.scheduled_activation.as_mut() else {
+                    warn!(
+                        program_id = %program_id,
+                        revision = activation.revision,
+                        "due fee sponsor activation disappeared before drain rescheduling"
+                    );
+                    continue;
+                };
+                scheduled_activation.activate_at_height = safe_height;
                 wtx.fee_sponsor_programs.insert(program_id, program);
+                continue;
             }
-            let _expired_manifests = wtx.expire_due_space_directory_manifests(
-                now_h.saturating_sub(1),
-                &sb.nexus.lane_config,
-                current_slot,
+            assert!(
+                wtx.fee_sponsor_program_revisions
+                    .get(&FeeSponsorProgramRevisionKey::new(
+                        program_id.clone(),
+                        activation.revision,
+                    ))
+                    .is_some(),
+                "scheduled fee sponsor revision must remain persisted"
             );
-            apply_confidential_transitions(
-                &mut wtx,
-                &transitions,
-                sb.zk.registry_max_delta_per_block,
-            );
-            let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
-                .runtime_upgrades
-                .iter()
-                .filter_map(|(id, rec)| {
-                    if matches!(
-                        rec.status,
-                        iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                    ) && rec.manifest.start_height == now_h
-                        && now_h < rec.manifest.end_height
-                    {
-                        Some((*id, rec.manifest.abi_version))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            for (id, abi_version) in upgrades_to_activate {
-                if let Some(mut rec) = wtx.runtime_upgrades.get(&id).cloned()
-                    && matches!(
-                        rec.status,
-                        iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                    )
-                    && rec.manifest.start_height == now_h
+            program.active_revision = Some(activation.revision);
+            if program.staged_revision == Some(activation.revision) {
+                program.staged_revision = None;
+            }
+            program.scheduled_activation = None;
+            program.lifecycle = FeeSponsorProgramLifecycle::Active;
+            wtx.fee_sponsor_programs.insert(program_id, program);
+        }
+        let _expired_manifests = wtx.expire_due_space_directory_manifests(
+            now_h.saturating_sub(1),
+            &sb.nexus.lane_config,
+            current_slot,
+        );
+        apply_confidential_transitions(&mut wtx, &transitions, sb.zk.registry_max_delta_per_block);
+        let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
+            .runtime_upgrades
+            .iter()
+            .filter_map(|(id, rec)| {
+                if matches!(
+                    rec.status,
+                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
+                ) && rec.manifest.start_height == now_h
                     && now_h < rec.manifest.end_height
                 {
-                    crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
-                        &rec.manifest,
+                    Some((*id, rec.manifest.abi_version))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (id, abi_version) in upgrades_to_activate {
+            if let Some(mut rec) = wtx.runtime_upgrades.get(&id).cloned()
+                && matches!(
+                    rec.status,
+                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
+                )
+                && rec.manifest.start_height == now_h
+                && now_h < rec.manifest.end_height
+            {
+                crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
+                    &rec.manifest,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
                     )
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
-                        )
-                    });
-                    rec.status =
-                        iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
-                    wtx.runtime_upgrades.insert(id, rec);
-                    wtx.emit_events(Some(
-                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
-                            iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
-                                id,
-                                abi_version,
-                                at_height: now_h,
-                            },
-                        ),
-                    ));
-                    #[cfg(feature = "telemetry")]
-                    {
-                        if let Some(telemetry) = wtx.telemetry {
-                            telemetry.inc_runtime_upgrade_event("activated");
-                        }
+                });
+                rec.status = iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
+                wtx.runtime_upgrades.insert(id, rec);
+                wtx.emit_events(Some(
+                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
+                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
+                            id,
+                            abi_version,
+                            at_height: now_h,
+                        },
+                    ),
+                ));
+                #[cfg(feature = "telemetry")]
+                {
+                    if let Some(telemetry) = wtx.telemetry {
+                        telemetry.inc_runtime_upgrade_event("activated");
                     }
                 }
             }
-            // Collect candidates to open (avoid borrow conflicts)
-            let to_open: Vec<(String, u64, u64)> = wtx
+        }
+        // Collect candidates to open (avoid borrow conflicts)
+        let to_open: Vec<(String, u64, u64)> = wtx
+            .governance_referenda
+            .iter()
+            .filter_map(|(rid, rec)| {
+                if rec.status != super::state::GovernanceReferendumStatus::Proposed {
+                    return None;
+                }
+                if rec.h_start > now_h || now_h > rec.h_end {
+                    return None;
+                }
+                Some((rid.clone(), rec.h_start, rec.h_end))
+            })
+            .collect();
+        for (rid, h_start, h_end) in to_open {
+            let mut rec = wtx
                 .governance_referenda
-                .iter()
-                .filter_map(|(rid, rec)| {
-                    if rec.status != super::state::GovernanceReferendumStatus::Proposed {
-                        return None;
-                    }
-                    if rec.h_start > now_h || now_h > rec.h_end {
-                        return None;
-                    }
-                    Some((rid.clone(), rec.h_start, rec.h_end))
-                })
-                .collect();
-            for (rid, h_start, h_end) in to_open {
-                let mut rec = wtx
-                    .governance_referenda
-                    .get(&rid)
-                    .copied()
-                    .unwrap_or_else(|| super::state::GovernanceReferendumRecord {
+                .get(&rid)
+                .copied()
+                .unwrap_or_else(|| super::state::GovernanceReferendumRecord {
+                    h_start,
+                    h_end,
+                    status: super::state::GovernanceReferendumStatus::Proposed,
+                    mode: super::state::GovernanceReferendumMode::default(),
+                });
+            rec.status = super::state::GovernanceReferendumStatus::Open;
+            wtx.governance_referenda.insert(rid.clone(), rec);
+            wtx.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
+                    iroha_data_model::events::data::governance::GovernanceReferendumOpened {
+                        id: rid,
                         h_start,
                         h_end,
-                        status: super::state::GovernanceReferendumStatus::Proposed,
-                        mode: super::state::GovernanceReferendumMode::default(),
-                    });
-                rec.status = super::state::GovernanceReferendumStatus::Open;
-                wtx.governance_referenda.insert(rid.clone(), rec);
-                wtx.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
-                        iroha_data_model::events::data::governance::GovernanceReferendumOpened {
-                            id: rid,
-                            h_start,
-                            h_end,
-                        },
-                    ),
-                ));
-            }
-            // Close after the inclusive end height so ballots submitted in the
-            // `h_end` block remain eligible for the deterministic final tally.
-            let to_close: Vec<(String, u64)> = wtx
-                .governance_referenda
-                .iter()
-                .filter_map(|(rid, rec)| match rec.status {
-                    super::state::GovernanceReferendumStatus::Open
-                        if rec.h_end.checked_add(1) == Some(now_h) =>
-                    {
-                        Some((rid.clone(), rec.h_end))
-                    }
-                    _ => None,
-                })
-                .collect();
-            for (rid, at_h) in to_close {
-                let mut mode = super::state::GovernanceReferendumMode::default();
-                if let Some(mut rec) = wtx.governance_referenda.get(&rid).copied() {
-                    mode = rec.mode;
-                    rec.status = super::state::GovernanceReferendumStatus::Closed;
-                    wtx.governance_referenda.insert(rid.clone(), rec);
+                    },
+                ),
+            ));
+        }
+        // Close after the inclusive end height so ballots submitted in the
+        // `h_end` block remain eligible for the deterministic final tally.
+        let to_close: Vec<(String, u64)> = wtx
+            .governance_referenda
+            .iter()
+            .filter_map(|(rid, rec)| match rec.status {
+                super::state::GovernanceReferendumStatus::Open
+                    if rec.h_end.checked_add(1) == Some(now_h) =>
+                {
+                    Some((rid.clone(), rec.h_end))
                 }
-                wtx.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::ReferendumClosed(
-                        iroha_data_model::events::data::governance::GovernanceReferendumClosed {
-                            id: rid.clone(),
-                            at_height: at_h,
-                        },
-                    ),
-                ));
-                // Compute the exact standalone-referendum tally after its inclusive end height.
-                let mut approve: u128 = 0;
-                let mut reject: u128 = 0;
-                let mut abstain: u128 = 0;
-                let mut decision_ready = true;
-                match mode {
-                    super::state::GovernanceReferendumMode::Plain => {
-                        if let Some(locks) = wtx.governance_locks.get(&rid) {
-                            [approve, reject, abstain] =
-                                crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
-                                    locks,
-                                    None,
-                                    Some(at_h),
-                                    sb.gov.conviction_step_blocks,
-                                    sb.gov.max_conviction,
-                                )
-                                .expect(
-                                    "persisted plain-governance locks must retain an exact bounded tally",
-                                );
-                        }
+                _ => None,
+            })
+            .collect();
+        for (rid, at_h) in to_close {
+            let mut mode = super::state::GovernanceReferendumMode::default();
+            if let Some(mut rec) = wtx.governance_referenda.get(&rid).copied() {
+                mode = rec.mode;
+                rec.status = super::state::GovernanceReferendumStatus::Closed;
+                wtx.governance_referenda.insert(rid.clone(), rec);
+            }
+            wtx.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ReferendumClosed(
+                    iroha_data_model::events::data::governance::GovernanceReferendumClosed {
+                        id: rid.clone(),
+                        at_height: at_h,
+                    },
+                ),
+            ));
+            // Compute the exact standalone-referendum tally after its inclusive end height.
+            let mut approve: u128 = 0;
+            let mut reject: u128 = 0;
+            let mut abstain: u128 = 0;
+            let mut decision_ready = true;
+            match mode {
+                super::state::GovernanceReferendumMode::Plain => {
+                    if let Some(locks) = wtx.governance_locks.get(&rid) {
+                        [approve, reject, abstain] =
+                            crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+                                locks,
+                                None,
+                                Some(at_h),
+                                sb.gov.conviction_step_blocks,
+                                sb.gov.max_conviction,
+                            )
+                            .expect(
+                                "persisted plain-governance locks must retain an exact bounded tally",
+                            );
                     }
-                    super::state::GovernanceReferendumMode::Zk => {
-                        if let Some(e) = wtx.elections.get(&rid) {
-                            if e.finalized && e.tally.len() >= 2 {
-                                approve = u128::from(e.tally[0]);
-                                reject = u128::from(e.tally[1]);
-                                abstain = e.tally.get(2).copied().map_or(0, u128::from);
-                            } else {
-                                decision_ready = false;
-                            }
+                }
+                super::state::GovernanceReferendumMode::Zk => {
+                    if let Some(e) = wtx.elections.get(&rid) {
+                        if e.finalized && e.tally.len() >= 2 {
+                            approve = u128::from(e.tally[0]);
+                            reject = u128::from(e.tally[1]);
+                            abstain = e.tally.get(2).copied().map_or(0, u128::from);
                         } else {
                             decision_ready = false;
                         }
+                    } else {
+                        decision_ready = false;
                     }
                 }
-                if decision_ready {
-                    let decision =
-                        crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
-                            rid,
-                            approve,
-                            reject,
-                            abstain,
-                            sb.gov.approval_threshold_q_num,
-                            sb.gov.approval_threshold_q_den,
-                            sb.gov.min_turnout,
-                        )
-                        .expect("persisted standalone referendum tally must remain exact");
-                    wtx.emit_events(Some(governance_events::GovernanceEvent::ReferendumDecided(
-                        decision,
-                    )));
-                }
             }
-            wtx.apply();
-        }
-        {
-            let mut stx = sb.transaction();
-            let mut expired_by_referendum = BTreeMap::<String, Vec<AccountId>>::new();
-            for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
-                for (referendum_id, owner) in bucket {
-                    expired_by_referendum
-                        .entry(referendum_id.clone())
-                        .or_default()
-                        .push(owner.clone());
-                }
-            }
-            // Publish audit cells only when a due expiry entry made a sweep observable.
-            let (sweep_attempted, mut sweep_failed) = (!expired_by_referendum.is_empty(), false);
-            for (rid, expired_owners) in expired_by_referendum {
-                if let Some(mut locks) = stx.world.governance_locks.get(&rid).cloned() {
-                    let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
-                    for owner in expired_owners {
-                        let Some(rec) = locks.locks.get(&owner).cloned() else {
-                            warn!(
-                                %rid,
-                                %owner,
-                                "governance lock expiry index references a missing lock"
-                            );
-                            sweep_failed = true;
-                            continue;
-                        };
-                        if rec.expiry_height >= now_h {
-                            warn!(
-                                %rid,
-                                %owner,
-                                indexed_expiry = rec.expiry_height,
-                                current_height = now_h,
-                                "governance lock expiry index is inconsistent with its lock"
-                            );
-                            sweep_failed = true;
-                            continue;
-                        }
-                        let custody = rec.custody.clone();
-                        let release = if custody.escrowed && !rec.amount.is_zero() {
-                            let owner_asset_id = iroha_data_model::asset::AssetId::new(
-                                custody.asset_definition_id.clone(),
-                                owner.clone(),
-                            );
-                            let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-                                custody.asset_definition_id,
-                                custody.bond_escrow_account,
-                            );
-                            let authorization = VerifiedGovernanceUnlock::new(
-                                rid.clone(),
-                                owner.clone(),
-                                escrow_asset_id,
-                                owner_asset_id,
-                                rec.amount.clone(),
-                            );
-                            crate::smartcontracts::isi::asset::isi::execute_verified_governance_unlock(
-                                    &mut stx,
-                                    authorization,
-                                )
-                        } else {
-                            Ok(())
-                        };
-                        if let Err(err) = release {
-                            warn!(
-                                %rid,
-                                owner = %owner,
-                                error = %err,
-                                "retaining governance lock after atomic escrow release failed"
-                            );
-                            sweep_failed = true;
-                            continue;
-                        }
-                        // Emit unlock event
-                        stx.world.emit_events(Some(
-                                iroha_data_model::events::data::governance::GovernanceEvent::LockUnlocked(
-                                    iroha_data_model::events::data::governance::GovernanceLockUnlocked {
-                                        referendum_id: rid.clone(),
-                                        owner: owner.clone(),
-                                        amount: rec.amount.clone(),
-                                    },
-                                ),
-                        ));
-                        to_remove.push(owner);
-                    }
-                    if !to_remove.is_empty() {
-                        for owner in to_remove {
-                            locks.locks.remove(&owner);
-                        }
-                        stx.world.put_governance_locks(rid.clone(), locks);
-                    }
-                } else {
-                    warn!(
-                        %rid,
-                        "governance lock expiry index references a missing referendum lock container"
-                    );
-                    sweep_failed = true;
-                }
-            }
-            if sweep_attempted {
-                if !sweep_failed {
-                    *stx.world.governance_last_unlock_sweep_height.get_mut() = now_h;
-                }
-                let mut retained_expired_locks = 0_u64;
-                let mut referenda_with_retained_expired = BTreeSet::<String>::new();
-                for (_expiry_height, bucket) in
-                    stx.world.governance_lock_expiry_index.range(..now_h)
-                {
-                    retained_expired_locks = retained_expired_locks
-                        .saturating_add(u64::try_from(bucket.len()).unwrap_or(u64::MAX));
-                    referenda_with_retained_expired.extend(
-                        bucket
-                            .iter()
-                            .map(|(referendum_id, _)| referendum_id.clone()),
-                    );
-                }
-                *stx.world.governance_unlock_stats.get_mut() = GovernanceUnlockStatsSnapshot {
-                    evaluated_height: now_h,
-                    expired_locks_now: retained_expired_locks,
-                    referenda_with_expired: u64::try_from(referenda_with_retained_expired.len())
-                        .unwrap_or(u64::MAX),
-                };
-                stx.apply();
-            }
-        }
-        {
-            let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-            let mut wtx = sb.world.trasaction_with_axt_lane_map(
-                #[cfg(feature = "telemetry")]
-                Some(sb.telemetry),
-                sb.nexus.lane_config.clone(),
-                current_slot,
-                axt_lane_map,
-            );
-            update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
-            crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
-                |error| {
-                    panic!(
-                        "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
+            if decision_ready {
+                let decision =
+                    crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
+                        rid,
+                        approve,
+                        reject,
+                        abstain,
+                        sb.gov.approval_threshold_q_num,
+                        sb.gov.approval_threshold_q_den,
+                        sb.gov.min_turnout,
                     )
-                },
-            );
-            wtx.apply();
-        }
-        {
-            let pending_assets: BTreeSet<_> = sb
-                .world
-                .confidential_policy_transition_index
-                .iter()
-                .take_while(|(key, _)| key.0 <= now_h)
-                .map(|(key, _)| key.1.clone())
-                .collect();
-            if !pending_assets.is_empty() {
-                let mut stx = sb.transaction();
-                let block_height = stx.block_height();
-                for asset_id in pending_assets {
-                    if let Err(err) = apply_policy_if_due(&mut stx, &asset_id) {
-                        error!(
-                            asset = %asset_id,
-                            block_height,
-                            error = %err,
-                            "failed to apply pending confidential policy transition"
-                        );
-                    }
-                }
-                stx.apply();
+                    .expect("persisted standalone referendum tally must remain exact");
+                wtx.emit_events(Some(governance_events::GovernanceEvent::ReferendumDecided(
+                    decision,
+                )));
             }
         }
-        sb.start_of_block_effects_applied = true;
-        Ok(sb)
+        wtx.apply();
+    }
+
+    /// Release expired governance locks and publish the existing sweep audit atomically.
+    #[inline(never)]
+    fn sweep_expired_governance_locks_at_block_start(sb: &mut StateBlock<'_>, now_h: u64) {
+        let mut stx = sb.transaction();
+        let mut expired_by_referendum = BTreeMap::<String, Vec<AccountId>>::new();
+        for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
+            for (referendum_id, owner) in bucket {
+                expired_by_referendum
+                    .entry(referendum_id.clone())
+                    .or_default()
+                    .push(owner.clone());
+            }
+        }
+        // Publish audit cells only when a due expiry entry made a sweep observable.
+        let (sweep_attempted, mut sweep_failed) = (!expired_by_referendum.is_empty(), false);
+        for (rid, expired_owners) in expired_by_referendum {
+            if let Some(mut locks) = stx.world.governance_locks.get(&rid).cloned() {
+                let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
+                for owner in expired_owners {
+                    let Some(rec) = locks.locks.get(&owner).cloned() else {
+                        warn!(
+                            %rid,
+                            %owner,
+                            "governance lock expiry index references a missing lock"
+                        );
+                        sweep_failed = true;
+                        continue;
+                    };
+                    if rec.expiry_height >= now_h {
+                        warn!(
+                            %rid,
+                            %owner,
+                            indexed_expiry = rec.expiry_height,
+                            current_height = now_h,
+                            "governance lock expiry index is inconsistent with its lock"
+                        );
+                        sweep_failed = true;
+                        continue;
+                    }
+                    let custody = rec.custody.clone();
+                    let release = if custody.escrowed && !rec.amount.is_zero() {
+                        let owner_asset_id = iroha_data_model::asset::AssetId::new(
+                            custody.asset_definition_id.clone(),
+                            owner.clone(),
+                        );
+                        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
+                            custody.asset_definition_id,
+                            custody.bond_escrow_account,
+                        );
+                        let authorization = VerifiedGovernanceUnlock::new(
+                            rid.clone(),
+                            owner.clone(),
+                            escrow_asset_id,
+                            owner_asset_id,
+                            rec.amount.clone(),
+                        );
+                        crate::smartcontracts::isi::asset::isi::execute_verified_governance_unlock(
+                            &mut stx,
+                            authorization,
+                        )
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(err) = release {
+                        warn!(
+                            %rid,
+                            owner = %owner,
+                            error = %err,
+                            "retaining governance lock after atomic escrow release failed"
+                        );
+                        sweep_failed = true;
+                        continue;
+                    }
+                    // Emit unlock event
+                    stx.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::LockUnlocked(
+                            iroha_data_model::events::data::governance::GovernanceLockUnlocked {
+                                referendum_id: rid.clone(),
+                                owner: owner.clone(),
+                                amount: rec.amount.clone(),
+                            },
+                        ),
+                    ));
+                    to_remove.push(owner);
+                }
+                if !to_remove.is_empty() {
+                    for owner in to_remove {
+                        locks.locks.remove(&owner);
+                    }
+                    stx.world.put_governance_locks(rid.clone(), locks);
+                }
+            } else {
+                warn!(
+                    %rid,
+                    "governance lock expiry index references a missing referendum lock container"
+                );
+                sweep_failed = true;
+            }
+        }
+        if sweep_attempted {
+            if !sweep_failed {
+                *stx.world.governance_last_unlock_sweep_height.get_mut() = now_h;
+            }
+            let mut retained_expired_locks = 0_u64;
+            let mut referenda_with_retained_expired = BTreeSet::<String>::new();
+            for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
+                retained_expired_locks = retained_expired_locks
+                    .saturating_add(u64::try_from(bucket.len()).unwrap_or(u64::MAX));
+                referenda_with_retained_expired.extend(
+                    bucket
+                        .iter()
+                        .map(|(referendum_id, _)| referendum_id.clone()),
+                );
+            }
+            *stx.world.governance_unlock_stats.get_mut() = GovernanceUnlockStatsSnapshot {
+                evaluated_height: now_h,
+                expired_locks_now: retained_expired_locks,
+                referenda_with_expired: u64::try_from(referenda_with_retained_expired.len())
+                    .unwrap_or(u64::MAX),
+            };
+            stx.apply();
+        }
+    }
+
+    /// Apply scheduled oracle changes and validate the resulting runtime ABI.
+    #[inline(never)]
+    fn apply_block_start_oracle_changes(sb: &mut StateBlock<'_>, now_h: u64, current_slot: u64) {
+        let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
+        let mut wtx = sb.world.trasaction_with_axt_lane_map(
+            #[cfg(feature = "telemetry")]
+            Some(sb.telemetry),
+            sb.nexus.lane_config.clone(),
+            current_slot,
+            axt_lane_map,
+        );
+        update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
+        crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
+            |error| {
+                panic!(
+                    "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
+                )
+            },
+        );
+        wtx.apply();
+    }
+
+    /// Apply due confidential policies without retaining their transaction in the constructor.
+    #[inline(never)]
+    fn apply_block_start_confidential_policies(sb: &mut StateBlock<'_>, now_h: u64) {
+        let pending_assets: BTreeSet<_> = sb
+            .world
+            .confidential_policy_transition_index
+            .iter()
+            .take_while(|(key, _)| key.0 <= now_h)
+            .map(|(key, _)| key.1.clone())
+            .collect();
+        if !pending_assets.is_empty() {
+            let mut stx = sb.transaction();
+            let block_height = stx.block_height();
+            for asset_id in pending_assets {
+                if let Err(err) = apply_policy_if_due(&mut stx, &asset_id) {
+                    error!(
+                        asset = %asset_id,
+                        block_height,
+                        error = %err,
+                        "failed to apply pending confidential policy transition"
+                    );
+                }
+            }
+            stx.apply();
+        }
     }
     /// Create a non-committing block scope for deterministic merge pre-execution.
     ///

@@ -8,6 +8,11 @@
 //! the RLWE/source linkage is retained as a nonempty digest-bound residual and
 //! the composite verifier continues to fail closed.
 
+use super::rns_native_proof_hash::{
+    RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+    RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+    RnsNativeProofHashWorkV1, decode_proof_digest_v1,
+};
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_cross_field_inventory::{
@@ -54,9 +59,7 @@ use super::{
         ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1, ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
         ZkAmsMkheRnsNativeTerminalRootsV1,
     },
-    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
-use crate::vega::sponge::Keccak256;
 
 const CLOSURE_MAGIC_V1: [u8; 4] = *b"ZQFC";
 const CLOSURE_VERSION_V1: u8 = 1;
@@ -67,20 +70,22 @@ const FIRST_CHECKED_FOLD_V1: u8 = 1;
 const LAST_CHECKED_FOLD_V1: u8 = ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 - 1;
 const TERMINAL_DERIVED_V1: u8 = 1;
 const TREE_DESCRIPTOR_BYTES_V1: usize = 2 + 2 + 4 + 4;
-const CLOSURE_HEADER_BYTES_V1: usize = 4
+pub(super) const CLOSURE_HEADER_BYTES_V1: usize = 4
     + 4
     + 2
     + 6
     + 2 * 2
     + 3 * 4
     + ENCODED_LAYER_COUNT_V1 * TREE_DESCRIPTOR_BYTES_V1
-    + 6 * DIGEST_BYTES_V1;
+    + 32
+    + 5 * DIGEST_BYTES_V1;
 const MAX_FRI_OPENED_LEAVES_V1: usize = 4_028;
 const MAX_FRI_AUTHENTICATION_HASHES_V1: usize = 20_030;
-const MAX_CHALLENGE_ATTEMPTS_V1: u16 = 256;
+
+pub(super) const MAX_CORRELATED_FRI_AUTHENTICATION_BYTES_V1: usize =
+    MAX_FRI_OPENED_LEAVES_V1 * LEAF_BYTES_V1 + MAX_FRI_AUTHENTICATION_HASHES_V1 * DIGEST_BYTES_V1;
 
 const SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.schedule";
-const FOLD_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.fold";
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.rlwe-source-residual";
 
@@ -101,10 +106,10 @@ const _: () = {
     assert!(FIRST_ENCODED_LAYER_V1 == 2);
     assert!(LAST_LAYER_V1 == 17);
     assert!(ENCODED_LAYER_COUNT_V1 == 16);
-    assert!(CLOSURE_HEADER_BYTES_V1 == 416);
+    assert!(CLOSURE_HEADER_BYTES_V1 == 496);
     assert!(QUERY_COUNT_V1 == 160);
     assert!(MAX_OPENED_LEAVES_V1 == 320);
-    assert!(LEAF_BYTES_V1 == 6_400);
+    assert!(LEAF_BYTES_V1 == 6_000);
     assert!(MAX_FRI_OPENED_LEAVES_V1 == 4_028);
     assert!(MAX_FRI_AUTHENTICATION_HASHES_V1 == 20_030);
     assert!(ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1 == 26_409_984);
@@ -144,14 +149,14 @@ impl std::error::Error for RnsNativeQpcsFriCompleteErrorV1 {}
 
 #[derive(Clone, Copy)]
 struct FriClosureContextV1 {
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
-    section_binding_digest: [u8; DIGEST_BYTES_V1],
-    roots: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize],
-    fold_seeds: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize],
-    schedule_digest: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
+    qpcs_bound_transcript_state: ProofDigestV1,
+    query_seed: ProofDigestV1,
+    section_binding_digest: ProofDigestV1,
+    roots: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize],
+    fold_seeds: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize],
+    schedule_digest: ProofDigestV1,
 }
 
 impl FriClosureContextV1 {
@@ -171,19 +176,21 @@ impl FriClosureContextV1 {
         let qpcs_bound_transcript_state = transcript.qpcs_bound_transcript_state_v1();
         let query_seed = transcript.qpcs_query_challenge_seed();
         let section_binding_digest = prefix.section_binding_digest();
-        if transcript_digest != prefix.transcript_digest()
+        let canonical = RnsNativeProofHashContextV1::canonical()
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+        if parameter_digest != canonical.parameter_digest()
+            || transcript_digest != prefix.transcript_digest()
             || query_seed != prefix.query_seed()
             || roots[1] != prefix.fri_one_root()
             || [
-                parameter_digest,
                 transcript_digest,
                 qpcs_bound_transcript_state,
                 query_seed,
                 section_binding_digest,
             ]
-            .contains(&[0; DIGEST_BYTES_V1])
-            || roots.contains(&[0; DIGEST_BYTES_V1])
-            || fold_seeds.contains(&[0; DIGEST_BYTES_V1])
+            .contains(&ProofDigestV1::ZERO)
+            || roots.contains(&ProofDigestV1::ZERO)
+            || fold_seeds.contains(&ProofDigestV1::ZERO)
         {
             return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
         }
@@ -195,7 +202,7 @@ impl FriClosureContextV1 {
             section_binding_digest,
             roots,
             fold_seeds,
-            schedule_digest: [0; DIGEST_BYTES_V1],
+            schedule_digest: ProofDigestV1::ZERO,
         };
         context.schedule_digest = schedule_digest_v1(context)?;
         Ok(context)
@@ -260,10 +267,15 @@ impl<'a> DecoderV1<'a> {
         ))
     }
 
-    fn digest(&mut self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsFriCompleteErrorV1> {
-        self.take(DIGEST_BYTES_V1)?
+    fn public_digest(&mut self) -> Result<[u8; 32], RnsNativeQpcsFriCompleteErrorV1> {
+        self.take(32)?
             .try_into()
             .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::Truncated)
+    }
+
+    fn digest(&mut self) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
+        decode_proof_digest_v1(self.take(DIGEST_BYTES_V1)?)
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidHeader)
     }
 }
 
@@ -278,15 +290,15 @@ impl<'a> DecoderV1<'a> {
 )]
 pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
     relation_schedule: Option<RnsNativeQpcsRelationScheduleV1>,
-    qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
-    section_binding_digest: [u8; DIGEST_BYTES_V1],
-    schedule_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_bound_transcript_state: ProofDigestV1,
+    parameter_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
+    query_seed: ProofDigestV1,
+    section_binding_digest: ProofDigestV1,
+    schedule_digest: ProofDigestV1,
     evaluations: &'a [u8],
-    evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
-    residual_digest: [u8; DIGEST_BYTES_V1],
+    evaluation_binding_digest: ProofDigestV1,
+    residual_digest: ProofDigestV1,
     rlwe_source_residual: &'a [u8],
 }
 
@@ -305,7 +317,7 @@ pub(super) struct RnsNativeQpcsFriCompleteStageV1<'a> {
 #[must_use = "the pre-auth claimed-qPCS owner must be consumed by qPCS authentication"]
 pub(super) struct RnsNativeQpcsPreAuthClaimedV1 {
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
-    expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+    expected_qpcs_bound_transcript_state: ProofDigestV1,
     terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
 }
 
@@ -370,8 +382,16 @@ const CLAIMED_SOURCE_BINDING_DOMAIN_V1: &[u8] =
 pub(super) const RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1: usize =
     CLAIMED_SOURCE_BINDING_DOMAIN_V1.len()
         + 1
-        + 13 * DIGEST_BYTES_V1
+        + 3 * 32
+        + 10 * DIGEST_BYTES_V1
         + RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1;
+
+/// Exact work of the sole claimed-source numeric frame, checked at hashing.
+pub(super) const RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1: RnsNativeProofHashWorkV1 =
+    match RnsNativeProofHashWorkV1::from_word_count(874) {
+        Ok(work) => work,
+        Err(_) => panic!("fixed claimed-source hash frame must fit"),
+    };
 
 pub(super) const RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1: usize =
     CLAIMED_SOURCE_RELATIONS_V1 * core::mem::size_of::<RnsNativeQpcsAuthenticatedNumericTailV1>();
@@ -384,8 +404,8 @@ const _: () = {
     assert!(CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1 == 3_200);
     assert!(core::mem::size_of::<RnsNativeQpcsAuthenticatedNumericTailV1>() == 24);
     assert!(RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1 == 4_800);
-    assert!(RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1 == 5_384);
-    assert!(RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 == 5_284);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_TERMINAL_CHRONOLOGY_BYTES_V1 == 6_264);
+    assert!(RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_BYTES_V1 == 5_444);
 };
 
 /// The only retained qPCS values needed by a schedule-free direct numeric
@@ -434,7 +454,7 @@ impl std::error::Error for RnsNativeQpcsClaimedSourceErrorV1 {}
 
 /// Opaque owner after the exact authenticated-claimed qPCS has passed source
 /// preflight. The sole schedule is still present inside `source.qpcs()` and
-/// the complete three-obligation terminal chronology remains paired with it.
+/// the complete two-obligation terminal chronology remains paired with it.
 #[allow(
     dead_code,
     missing_copy_implementations,
@@ -468,7 +488,7 @@ pub(super) struct RnsNativeQpcsSchedulelessClaimedSourceV1<
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
     terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
     numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
-    source_binding_digest: [u8; DIGEST_BYTES_V1],
+    source_binding_digest: ProofDigestV1,
 }
 
 /// One move-only owner joining the authenticated claimed qPCS chronology to
@@ -492,11 +512,11 @@ pub(super) struct RnsNativeQpcsClaimedInventoryChronologyV2<
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
     terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
     numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
-    source_binding_digest: [u8; DIGEST_BYTES_V1],
+    source_binding_digest: ProofDigestV1,
 }
 
 impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S> {
-    pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn claimed_source_binding_digest_v1(&self) -> ProofDigestV1 {
         self.source_binding_digest
     }
 }
@@ -511,7 +531,6 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) fn authenticate_claimed_inventory_v2<'cross>(
         self,
         terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-        zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
         pending_cross: RnsNativePendingCrossFieldGlobalLookupContextV1<'cross>,
         preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'cross>,
     ) -> Result<
@@ -533,7 +552,6 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
                 terminal_chronology.final_challenge_seeds_v1(),
                 source,
                 terminal,
-                zero_padding,
                 bound,
                 preflight,
             )
@@ -611,13 +629,13 @@ impl RnsNativeQpcsCompletedLineageV1 {
 
     fn from_completed_fri_v1(
         relation_schedule: RnsNativeQpcsRelationScheduleV1,
-        expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+        expected_qpcs_bound_transcript_state: ProofDigestV1,
         qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
     ) -> Result<Self, RnsNativeQpcsFriCompleteErrorV1> {
         relation_schedule
             .validate_qpcs_bound_lineage_v1(&qpcs_transcript)
             .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
-        if expected_qpcs_bound_transcript_state == [0; DIGEST_BYTES_V1]
+        if expected_qpcs_bound_transcript_state == ProofDigestV1::ZERO
             || qpcs_transcript.binding_digest() != expected_qpcs_bound_transcript_state
         {
             return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
@@ -639,7 +657,7 @@ impl RnsNativeQpcsCompletedLineageV1 {
     #[cfg(test)]
     pub(super) fn qpcs_transcript_binding_digest_v1(
         &self,
-    ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsFriCompleteErrorV1> {
+    ) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
         self.qpcs_transcript
             .as_ref()
             .map(ZkAmsMkheRnsNativeQpcsBoundTranscriptV1::binding_digest)
@@ -688,7 +706,7 @@ impl RnsNativeQpcsCompletedLineageV1 {
     #[cfg(test)]
     pub(super) fn test_fixture_v1(
         relation_schedule: RnsNativeQpcsRelationScheduleV1,
-        expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+        expected_qpcs_bound_transcript_state: ProofDigestV1,
         qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
     ) -> Result<Self, RnsNativeQpcsFriCompleteErrorV1> {
         Self::from_completed_fri_v1(
@@ -742,23 +760,23 @@ impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
         )
     }
 
-    pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
 
-    pub(super) const fn transcript_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn transcript_digest(&self) -> ProofDigestV1 {
         self.transcript_digest
     }
 
-    pub(super) const fn query_seed(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn query_seed(&self) -> ProofDigestV1 {
         self.query_seed
     }
 
-    pub(super) const fn section_binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn section_binding_digest(&self) -> ProofDigestV1 {
         self.section_binding_digest
     }
 
-    pub(super) const fn schedule_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn schedule_digest(&self) -> ProofDigestV1 {
         self.schedule_digest
     }
 
@@ -766,11 +784,11 @@ impl<'a> RnsNativeQpcsFriCompleteStageV1<'a> {
         self.evaluations
     }
 
-    pub(super) const fn evaluation_binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn evaluation_binding_digest(&self) -> ProofDigestV1 {
         self.evaluation_binding_digest
     }
 
-    pub(super) const fn residual_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn residual_digest(&self) -> ProofDigestV1 {
         self.residual_digest
     }
 
@@ -796,7 +814,7 @@ pub(super) fn prepare_rns_native_qpcs_pre_auth_claimed_v1(
     terminal_roots: ZkAmsMkheRnsNativeTerminalRootsV1,
 ) -> Result<RnsNativeQpcsPreAuthClaimedV1, RnsNativeQpcsFriCompleteErrorV1> {
     let expected_qpcs_bound_transcript_state = qpcs_transcript.binding_digest();
-    if expected_qpcs_bound_transcript_state == [0; DIGEST_BYTES_V1] {
+    if expected_qpcs_bound_transcript_state == ProofDigestV1::ZERO {
         return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
     }
     relation_schedule
@@ -825,9 +843,9 @@ pub(super) fn prepare_rns_native_qpcs_pre_auth_claimed_v1(
 )]
 pub(super) fn authenticate_rns_native_qpcs_pre_auth_claimed_v1<'a>(
     claimed: RnsNativeQpcsPreAuthClaimedV1,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsAuthenticatedClaimedV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     let RnsNativeQpcsPreAuthClaimedV1 {
@@ -852,7 +870,7 @@ pub(super) fn authenticate_rns_native_qpcs_pre_auth_claimed_v1<'a>(
 
 fn finish_rns_native_qpcs_pre_auth_claimed_v1<'a>(
     qpcs: RnsNativeQpcsFriCompleteStageV1<'a>,
-    expected_qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+    expected_qpcs_bound_transcript_state: ProofDigestV1,
     terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
 ) -> Result<RnsNativeQpcsAuthenticatedClaimedV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     if qpcs.relation_schedule.is_none()
@@ -878,8 +896,8 @@ pub(super) fn preflight_rns_native_qpcs_authenticated_claimed_source_v1<'proof, 
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
     public: RnsNativePublicArtifactViewV1<'_>,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
     snapshot: S,
 ) -> Result<RnsNativeQpcsPreflightedClaimedSourceV1<'proof, S>, RnsNativeQpcsClaimedSourceErrorV1>
 where
@@ -997,44 +1015,115 @@ impl<'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 }
 
+/// Exact mixed-role axes of the final claimed-source numeric binding.
+///
+/// Both ownership boundaries reconstruct these fields independently and call
+/// this one frame owner. Computing a digest grants no source/proof authority.
+#[derive(Clone, Copy)]
+pub(super) struct RnsNativeClaimedNumericBindingAxesV1 {
+    pub(super) statement_anchor: ProofDigestV1,
+    pub(super) preflight_statement: ProofDigestV1,
+    pub(super) public_bundle: [u8; 32],
+    pub(super) source_parameter: [u8; 32],
+    pub(super) source_transcript: ProofDigestV1,
+    pub(super) source_schedule: ProofDigestV1,
+    pub(super) source_evaluation: ProofDigestV1,
+    pub(super) source_residual: ProofDigestV1,
+    pub(super) schedule_parameter: [u8; 32],
+    pub(super) q_mask_s_root: ProofDigestV1,
+    pub(super) pre_relation_transcript: ProofDigestV1,
+    pub(super) relation_seed: ProofDigestV1,
+    pub(super) final_transcript: ProofDigestV1,
+}
+
+impl RnsNativeClaimedNumericBindingAxesV1 {
+    pub(super) fn digest_v1(
+        self,
+        numeric_tails: impl IntoIterator<Item = (u64, u64, u64)>,
+    ) -> Result<ProofDigestV1, RnsNativeQpcsClaimedSourceErrorV1> {
+        if self.public_bundle == [0; 32]
+            || self.source_parameter != self.schedule_parameter
+            || [
+                self.statement_anchor,
+                self.preflight_statement,
+                self.source_transcript,
+                self.source_schedule,
+                self.source_evaluation,
+                self.source_residual,
+                self.q_mask_s_root,
+                self.pre_relation_transcript,
+                self.relation_seed,
+                self.final_transcript,
+            ]
+            .contains(&ProofDigestV1::ZERO)
+        {
+            return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidBinding);
+        }
+        let mut tails = [0_u8; RNS_NATIVE_QPCS_CLAIMED_NUMERIC_TAIL_BYTES_V1];
+        let mut count = 0_usize;
+        let mut entries = tails.chunks_exact_mut(24);
+        for (a, product, opening_quotient) in numeric_tails {
+            let entry = entries
+                .next()
+                .ok_or(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)?;
+            entry[..8].copy_from_slice(&a.to_be_bytes());
+            entry[8..16].copy_from_slice(&product.to_be_bytes());
+            entry[16..].copy_from_slice(&opening_quotient.to_be_bytes());
+            count += 1;
+        }
+        if count != CLAIMED_SOURCE_RELATIONS_V1 {
+            return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount);
+        }
+        binding_hash_v1(
+            ClosureBindingRoleV1::ClaimedSource,
+            self.schedule_parameter,
+            &[
+                CLAIMED_SOURCE_BINDING_DOMAIN_V1,
+                &[CLOSURE_VERSION_V1],
+                self.statement_anchor.as_bytes(),
+                self.preflight_statement.as_bytes(),
+                &self.public_bundle,
+                &self.source_parameter,
+                self.source_transcript.as_bytes(),
+                self.source_schedule.as_bytes(),
+                self.source_evaluation.as_bytes(),
+                self.source_residual.as_bytes(),
+                &self.schedule_parameter,
+                self.q_mask_s_root.as_bytes(),
+                self.pre_relation_transcript.as_bytes(),
+                self.relation_seed.as_bytes(),
+                self.final_transcript.as_bytes(),
+                &tails,
+            ],
+        )
+        .map_err(|_| RnsNativeQpcsClaimedSourceErrorV1::InvalidBinding)
+    }
+}
+
 fn claimed_source_numeric_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     schedule: &RnsNativeQpcsRelationScheduleV1,
     terminal_chronology: &ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
     numeric_tails: &[RnsNativeQpcsAuthenticatedNumericTailV1; CLAIMED_SOURCE_RELATIONS_V1],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsClaimedSourceErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(CLAIMED_SOURCE_BINDING_DOMAIN_V1);
-    hash.update(&[CLOSURE_VERSION_V1]);
-    for digest in [
-        source.statement_anchor_digest(),
-        source.preflight_statement_digest(),
-        source.public_bundle_digest(),
-        source.qpcs().parameter_digest(),
-        source.qpcs().transcript_digest(),
-        source.qpcs().schedule_digest(),
-        source.qpcs().evaluation_binding_digest(),
-        source.qpcs().residual_digest(),
-        schedule.parameter_digest(),
-        schedule.q_mask_s_root(),
-        schedule.qpcs_pre_relation_transcript_digest(),
-        schedule.relation_seed(),
-        terminal_chronology
+) -> Result<ProofDigestV1, RnsNativeQpcsClaimedSourceErrorV1> {
+    RnsNativeClaimedNumericBindingAxesV1 {
+        statement_anchor: source.statement_anchor_digest(),
+        preflight_statement: source.preflight_statement_digest(),
+        public_bundle: source.public_bundle_digest(),
+        source_parameter: source.qpcs().parameter_digest(),
+        source_transcript: source.qpcs().transcript_digest(),
+        source_schedule: source.qpcs().schedule_digest(),
+        source_evaluation: source.qpcs().evaluation_binding_digest(),
+        source_residual: source.qpcs().residual_digest(),
+        schedule_parameter: schedule.parameter_digest(),
+        q_mask_s_root: schedule.q_mask_s_root(),
+        pre_relation_transcript: schedule.qpcs_pre_relation_transcript_digest(),
+        relation_seed: schedule.relation_seed(),
+        final_transcript: terminal_chronology
             .final_challenge_seeds_v1()
             .transcript_digest(),
-    ] {
-        hash.update(&digest);
     }
-    for tail in numeric_tails {
-        hash.update(&tail.a.to_be_bytes());
-        hash.update(&tail.product.to_be_bytes());
-        hash.update(&tail.opening_quotient.to_be_bytes());
-    }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidBinding);
-    }
-    Ok(digest)
+    .digest_v1(numeric_tails.iter().copied().map(|tail| tail.values_v1()))
 }
 
 fn claimed_source_qpcs_pair_v1(
@@ -1125,9 +1214,9 @@ fn claimed_source_ring_power_v1(mut value: u64, modulus: u64) -> u64 {
 /// Consume the authenticated fold-zero stage and complete correlated FRI.
 pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     let prefix = authenticate_rns_native_qpcs_prefix_v1(
@@ -1149,9 +1238,9 @@ pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1<'a>(
 pub(super) fn authenticate_rns_native_qpcs_fri_complete_with_schedule_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsFriCompleteStageV1<'a>, RnsNativeQpcsFriCompleteErrorV1> {
     let prefix = authenticate_rns_native_qpcs_prefix_with_schedule_v1(
@@ -1190,7 +1279,7 @@ struct FriClosurePartsV1<'input, 'proof> {
     fri_one_indices: IndexSetV1,
     fri_one_values: &'input [u8],
     evaluations: &'proof [u8],
-    evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
+    evaluation_binding_digest: ProofDigestV1,
     closure: &'proof [u8],
 }
 
@@ -1214,7 +1303,7 @@ fn verify_closure_parts_with_retained_evaluations_v1<'proof>(
         != expected_fri_one.values[..expected_fri_one.len]
         || fri_one_values.len() != fri_one_indices.len * LEAF_BYTES_V1
         || evaluations.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5 * 2 * 8
-        || evaluation_binding_digest == [0; DIGEST_BYTES_V1]
+        || evaluation_binding_digest == ProofDigestV1::ZERO
     {
         return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidPrefix);
     }
@@ -1291,7 +1380,10 @@ fn verify_closure_parts_v1<'a>(
         fri_one_indices,
         fri_one_values,
         evaluations: &TEST_EVALUATIONS_V1,
-        evaluation_binding_digest: [0x5e; DIGEST_BYTES_V1],
+        evaluation_binding_digest: super::rns_native_proof_hash::test_proof_digest_v1(
+            b"fri-complete-evaluation",
+            0,
+        ),
         closure,
     };
     verify_closure_parts_with_retained_evaluations_v1(
@@ -1413,7 +1505,7 @@ fn decode_closure_exact_v1<'a>(
         descriptor.authentication_bytes = usize::try_from(decoder.u32()?)
             .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?;
     }
-    let parameter_digest = decoder.digest()?;
+    let parameter_digest = decoder.public_digest()?;
     let transcript_digest = decoder.digest()?;
     let query_seed = decoder.digest()?;
     let section_binding_digest = decoder.digest()?;
@@ -1509,7 +1601,7 @@ fn verify_fold_v1(
         let layer_root = field.pow(field.domain_root, 1_u128 << layer);
         let mut alphas = [Fq2V1::ZERO; ROWS_PER_LIMB_V1];
         for (row, alpha) in alphas.iter_mut().enumerate() {
-            *alpha = derive_fold_challenge_v1(context, layer, limb, row, field.modulus)?;
+            *alpha = derive_fold_challenge_v1(context, layer, limb, row)?;
         }
         for &query in queries {
             let base = query % half;
@@ -1556,7 +1648,7 @@ fn verify_terminal_degree_v1(
         let inverse_layer_root = field.pow(layer_root, 3);
         let mut alphas = [Fq2V1::ZERO; ROWS_PER_LIMB_V1];
         for (row, alpha) in alphas.iter_mut().enumerate() {
-            *alpha = derive_fold_challenge_v1(context, LAST_LAYER_V1, limb, row, field.modulus)?;
+            *alpha = derive_fold_challenge_v1(context, LAST_LAYER_V1, limb, row)?;
         }
         for (row, &alpha) in alphas.iter().enumerate() {
             let coordinate = limb * ROWS_PER_LIMB_V1 + row;
@@ -1586,116 +1678,260 @@ fn derive_fold_challenge_v1(
     layer: usize,
     limb: usize,
     row: usize,
-    modulus: u64,
 ) -> Result<Fq2V1, RnsNativeQpcsFriCompleteErrorV1> {
-    if layer >= context.fold_seeds.len()
-        || limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
-        || row >= ROWS_PER_LIMB_V1
+    let seed = *context
+        .fold_seeds
+        .get(layer)
+        .ok_or(RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)?;
+    // This layer's seed was derived immediately after its root. Later roots
+    // and terminal commitments never enter this earlier challenge.
+    super::rns_native_qpcs_prefix::derive_fold_challenge_v1(
+        context.parameter_digest,
+        seed,
+        layer,
+        limb,
+        row,
+    )
+    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)
+}
+
+#[derive(Clone, Copy)]
+enum ClosureBindingRoleV1 {
+    Schedule,
+    Residual,
+    ClaimedSource,
+}
+
+fn binding_hash_v1(
+    role: ClosureBindingRoleV1,
+    parameter_digest: [u8; 32],
+    fields: &[&[u8]],
+) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+    if context.parameter_digest() != parameter_digest {
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
+    }
+    let index = match role {
+        ClosureBindingRoleV1::Schedule => 0,
+        ClosureBindingRoleV1::Residual => 1,
+        ClosureBindingRoleV1::ClaimedSource => 2,
+    };
+    let frame = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 2,
+                index,
+                counter: 0,
+            },
+            fields,
+        )
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?;
+    if index == 2
+        && RnsNativeProofHashWorkV1::from_frame(&frame)
+            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidContext)?
+            != RNS_NATIVE_QPCS_CLAIMED_SOURCE_BINDING_HASH_WORK_V1
     {
-        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge);
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
     }
-    let zone = u64::MAX - u64::MAX % modulus;
-    for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
-        let candidate = |half| {
-            let mut hash = Keccak256::new();
-            hash.update(FOLD_CHALLENGE_DOMAIN_V1);
-            hash.update(&[CLOSURE_VERSION_V1]);
-            hash.update(&context.parameter_digest);
-            // The transcript seed was derived immediately after this layer's
-            // root. Do not mix later roots or terminal commitments back into
-            // the fold challenge and thereby permit post-challenge grinding.
-            hash.update(&context.fold_seeds[layer]);
-            hash.update(&[
-                u8::try_from(layer)
-                    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?,
-                u8::try_from(limb)
-                    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?,
-                u8::try_from(row)
-                    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?,
-                half,
-            ]);
-            hash.update(&modulus.to_be_bytes());
-            hash.update(&attempt.to_be_bytes());
-            let digest = hash.finalize();
-            Ok::<u64, RnsNativeQpcsFriCompleteErrorV1>(u64::from_be_bytes(
-                digest[..8]
-                    .try_into()
-                    .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)?,
-            ))
-        };
-        let c0 = candidate(0)?;
-        let c1 = candidate(1)?;
-        if c0 < zone && c1 < zone {
-            let value = Fq2V1 {
-                c0: c0 % modulus,
-                c1: c1 % modulus,
-            };
-            if value != Fq2V1::ZERO {
-                return Ok(value);
-            }
-        }
+    let digest = ProofDigestV1::from_shared(frame.hash());
+    if digest == ProofDigestV1::ZERO {
+        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
     }
-    Err(RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)
+    Ok(digest)
 }
 
 fn schedule_digest_v1(
     context: FriClosureContextV1,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsFriCompleteErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(SCHEDULE_DOMAIN_V1);
-    hash.update(&[CLOSURE_VERSION_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1]);
-    for digest in [
+) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
+    const ENTRY_BYTES: usize = 1 + 2 * DIGEST_BYTES_V1;
+    let mut ordered_layers = [0_u8; ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize * ENTRY_BYTES];
+    for (layer, entry) in ordered_layers.chunks_exact_mut(ENTRY_BYTES).enumerate() {
+        entry[0] =
+            u8::try_from(layer).map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?;
+        entry[1..1 + DIGEST_BYTES_V1].copy_from_slice(context.roots[layer].as_bytes());
+        entry[1 + DIGEST_BYTES_V1..].copy_from_slice(context.fold_seeds[layer].as_bytes());
+    }
+    binding_hash_v1(
+        ClosureBindingRoleV1::Schedule,
         context.parameter_digest,
-        context.transcript_digest,
-        context.qpcs_bound_transcript_state,
-        context.query_seed,
-        context.section_binding_digest,
-    ] {
-        hash.update(&digest);
-    }
-    for layer in 0..context.roots.len() {
-        hash.update(&[
-            u8::try_from(layer).map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?
-        ]);
-        hash.update(&context.roots[layer]);
-        hash.update(&context.fold_seeds[layer]);
-    }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
-    }
-    Ok(digest)
+        &[
+            SCHEDULE_DOMAIN_V1,
+            &[CLOSURE_VERSION_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1],
+            &context.parameter_digest,
+            context.transcript_digest.as_bytes(),
+            context.qpcs_bound_transcript_state.as_bytes(),
+            context.query_seed.as_bytes(),
+            context.section_binding_digest.as_bytes(),
+            &ordered_layers,
+        ],
+    )
 }
 
 fn residual_digest_v1(
     context: FriClosureContextV1,
     residual: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsFriCompleteErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(RESIDUAL_DOMAIN_V1);
-    hash.update(&[CLOSURE_VERSION_V1]);
-    for digest in [
+) -> Result<ProofDigestV1, RnsNativeQpcsFriCompleteErrorV1> {
+    let len = u32::try_from(residual.len())
+        .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?
+        .to_be_bytes();
+    binding_hash_v1(
+        ClosureBindingRoleV1::Residual,
         context.parameter_digest,
-        context.transcript_digest,
-        context.query_seed,
-        context.section_binding_digest,
-        context.schedule_digest,
-    ] {
-        hash.update(&digest);
-    }
-    hash.update(
-        &u32::try_from(residual.len())
-            .map_err(|_| RnsNativeQpcsFriCompleteErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(residual);
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext);
-    }
-    Ok(digest)
+        &[
+            RESIDUAL_DOMAIN_V1,
+            &[CLOSURE_VERSION_V1],
+            &context.parameter_digest,
+            context.transcript_digest.as_bytes(),
+            context.query_seed.as_bytes(),
+            context.section_binding_digest.as_bytes(),
+            context.schedule_digest.as_bytes(),
+            &len,
+            residual,
+        ],
+    )
 }
 
 #[cfg(test)]
 #[path = "rns_native_qpcs_fri_complete_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod claimed_numeric_binding_frame_tests {
+    use super::*;
+
+    fn axes() -> RnsNativeClaimedNumericBindingAxesV1 {
+        let parameter = RnsNativeProofHashContextV1::canonical()
+            .expect("context")
+            .parameter_digest();
+        let proof = |index| {
+            super::super::rns_native_proof_hash::test_proof_digest_v1(
+                b"claimed-numeric-binding",
+                index,
+            )
+        };
+        RnsNativeClaimedNumericBindingAxesV1 {
+            statement_anchor: proof(1),
+            preflight_statement: proof(2),
+            public_bundle: [3; 32],
+            source_parameter: parameter,
+            source_transcript: proof(5),
+            source_schedule: proof(6),
+            source_evaluation: proof(7),
+            source_residual: proof(8),
+            schedule_parameter: parameter,
+            q_mask_s_root: proof(10),
+            pre_relation_transcript: proof(11),
+            relation_seed: proof(12),
+            final_transcript: proof(13),
+        }
+    }
+
+    #[test]
+    fn shared_claimed_numeric_frame_preserves_all_typed_axes_and_exact_200_tails() {
+        let base = axes();
+        let tails = core::array::from_fn::<_, 200, _>(|index| {
+            (index as u64 + 1, index as u64 + 101, index as u64 + 201)
+        });
+        let mut packed = Vec::new();
+        for (a, product, quotient) in tails {
+            packed.extend_from_slice(&a.to_be_bytes());
+            packed.extend_from_slice(&product.to_be_bytes());
+            packed.extend_from_slice(&quotient.to_be_bytes());
+        }
+        let context = RnsNativeProofHashContextV1::canonical().expect("context");
+        let expected = context
+            .hash(
+                RnsNativeProofHashRoleV1::Transcript,
+                RnsNativeProofHashPhaseV1::Binding,
+                RnsNativeProofHashPositionV1 {
+                    level: 2,
+                    index: 2,
+                    counter: 0,
+                },
+                &[
+                    CLAIMED_SOURCE_BINDING_DOMAIN_V1,
+                    &[CLOSURE_VERSION_V1],
+                    base.statement_anchor.as_bytes(),
+                    base.preflight_statement.as_bytes(),
+                    &base.public_bundle,
+                    &base.source_parameter,
+                    base.source_transcript.as_bytes(),
+                    base.source_schedule.as_bytes(),
+                    base.source_evaluation.as_bytes(),
+                    base.source_residual.as_bytes(),
+                    &base.schedule_parameter,
+                    base.q_mask_s_root.as_bytes(),
+                    base.pre_relation_transcript.as_bytes(),
+                    base.relation_seed.as_bytes(),
+                    base.final_transcript.as_bytes(),
+                    &packed,
+                ],
+            )
+            .expect("independent shared frame replay");
+        assert_eq!(base.digest_v1(tails), Ok(expected));
+        for selector in 0..10 {
+            let mut changed = base;
+            let field = match selector {
+                0 => &mut changed.statement_anchor,
+                1 => &mut changed.preflight_statement,
+                2 => &mut changed.source_transcript,
+                3 => &mut changed.source_schedule,
+                4 => &mut changed.source_evaluation,
+                5 => &mut changed.source_residual,
+                6 => &mut changed.q_mask_s_root,
+                7 => &mut changed.pre_relation_transcript,
+                8 => &mut changed.relation_seed,
+                9 => &mut changed.final_transcript,
+                _ => unreachable!(),
+            };
+            let mut bytes = field.to_le_bytes();
+            let old = u64::from_le_bytes(bytes[40..48].try_into().expect("sixth lane"));
+            bytes[40..48].copy_from_slice(&(if old == 0 { 1 } else { old - 1 }).to_le_bytes());
+            *field = ProofDigestV1::from_le_bytes(bytes).expect("canonical sixth lane mutation");
+            assert_ne!(changed.digest_v1(tails).expect("bound mutation"), expected);
+            let field = match selector {
+                0 => &mut changed.statement_anchor,
+                1 => &mut changed.preflight_statement,
+                2 => &mut changed.source_transcript,
+                3 => &mut changed.source_schedule,
+                4 => &mut changed.source_evaluation,
+                5 => &mut changed.source_residual,
+                6 => &mut changed.q_mask_s_root,
+                7 => &mut changed.pre_relation_transcript,
+                8 => &mut changed.relation_seed,
+                9 => &mut changed.final_transcript,
+                _ => unreachable!(),
+            };
+            *field = ProofDigestV1::ZERO;
+            assert_eq!(
+                changed.digest_v1(tails),
+                Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidBinding)
+            );
+        }
+        let mut changed = base;
+        changed.public_bundle = [0; 32];
+        assert!(changed.digest_v1(tails).is_err());
+        let mut changed = base;
+        changed.source_parameter[0] ^= 1;
+        assert!(changed.digest_v1(tails).is_err());
+        changed.schedule_parameter = changed.source_parameter;
+        assert!(
+            changed.digest_v1(tails).is_err(),
+            "equal foreign profiles are not current context"
+        );
+        assert_eq!(
+            base.digest_v1(tails[..199].iter().copied()),
+            Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)
+        );
+        assert_eq!(
+            base.digest_v1(tails.into_iter().chain([(1, 2, 3)])),
+            Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)
+        );
+        let mut changed_tails = tails;
+        changed_tails[199].2 ^= 1;
+        assert_ne!(base.digest_v1(changed_tails).expect("last tail"), expected);
+    }
+}

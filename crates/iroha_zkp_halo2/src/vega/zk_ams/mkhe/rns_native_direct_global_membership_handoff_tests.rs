@@ -35,7 +35,7 @@ fn handoff_is_zero_wire_and_all_activation_authorities_remain_false() {
     );
     assert_eq!(
         DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_SUCCESSOR_MAX_BYTES_V1,
-        108_464
+        107_201
     );
     const {
         assert!(VERIFIER_SIDE_DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_IMPLEMENTED_V1);

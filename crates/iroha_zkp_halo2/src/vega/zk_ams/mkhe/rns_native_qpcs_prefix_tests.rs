@@ -1,10 +1,17 @@
+//! Membership, field-equation and strict-wire controls for the native prefix.
+//! Synthetic sibling frontiers are not full source trees or a complete proof.
+
+use super::super::{
+    rns_native_proof_hash::{RnsNativeProofHashContextV1, test_proof_digest_v1},
+    rns_native_qpcs_field_wire::encode_fq2_v1,
+};
 use super::*;
 
 const PARAMETER_DIGEST_OFFSET_V1: usize = 60;
 const TRANSCRIPT_DIGEST_OFFSET_V1: usize = 92;
-const SECTION_BINDING_DIGEST_OFFSET_V1: usize = 380;
-const EVALUATION_BINDING_DIGEST_OFFSET_V1: usize = 412;
-const RESIDUAL_DIGEST_OFFSET_V1: usize = 444;
+const SECTION_BINDING_DIGEST_OFFSET_V1: usize = 524;
+const EVALUATION_BINDING_DIGEST_OFFSET_V1: usize = 572;
+const RESIDUAL_DIGEST_OFFSET_V1: usize = 620;
 
 struct FixtureV1 {
     context: PrefixContextV1,
@@ -16,63 +23,23 @@ struct FixtureV1 {
     prefix: Vec<u8>,
 }
 
-fn fixture_digest_v1(label: &[u8], ordinal: usize) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.test-fixture");
-    hash.update(
-        &u16::try_from(label.len())
-            .expect("test label fits u16")
-            .to_be_bytes(),
-    );
-    hash.update(label);
-    hash.update(
-        &u16::try_from(ordinal)
-            .expect("test ordinal fits u16")
-            .to_be_bytes(),
-    );
-    hash.finalize()
+fn fixture_digest_v1(label: &[u8], ordinal: usize) -> ProofDigestV1 {
+    test_proof_digest_v1(label, ordinal as u64)
 }
 
-fn zero_tree_digests_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    role: TreeRoleV1,
-    layer: u8,
-    length: usize,
-) -> [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1 as usize + 1] {
-    let mut digests =
-        [[0_u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1 as usize + 1];
-    digests[0] = tree_leaf_hash_v1(
-        parameter_digest,
-        role,
-        layer,
-        length,
-        &[0_u8; LEAF_BYTES_V1],
-    )
-    .expect("zero leaf hash");
-    let depth = length.ilog2() as usize;
-    for height in 1..=depth {
-        digests[height] = tree_node_hash_v1(
-            parameter_digest,
-            role,
-            layer,
-            length,
-            height,
-            digests[height - 1],
-            digests[height - 1],
-        )
-        .expect("zero node hash");
-    }
-    digests
+fn change_sixth_lane_v1(digest: ProofDigestV1) -> ProofDigestV1 {
+    let mut bytes = digest.to_le_bytes();
+    bytes[40] ^= 1;
+    ProofDigestV1::from_le_bytes(bytes).expect("canonical sixth-lane mutation")
 }
 
-fn build_zero_authentication_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+fn build_membership_authentication_v1(
+    parameter_digest: [u8; 32],
     role: TreeRoleV1,
     layer: u8,
     length: usize,
     indices: IndexSetV1,
-) -> (Vec<u8>, [u8; DIGEST_BYTES_V1]) {
-    let zero = zero_tree_digests_v1(parameter_digest, role, layer, length);
+) -> (Vec<u8>, ProofDigestV1) {
     let values = vec![0_u8; indices.len * LEAF_BYTES_V1];
     let mut current = [EMPTY_FRONTIER_NODE_V1; MAX_OPENED_LEAVES_V1];
     let mut next = [EMPTY_FRONTIER_NODE_V1; MAX_OPENED_LEAVES_V1];
@@ -85,6 +52,7 @@ fn build_zero_authentication_v1(
                 role,
                 layer,
                 length,
+                indices.values[position],
                 &values[start..start + LEAF_BYTES_V1],
             )
             .expect("canonical zero leaf"),
@@ -109,8 +77,15 @@ fn build_zero_authentication_v1(
                 right = current[cursor + 1].digest;
                 cursor += 2;
             } else {
-                let sibling = zero[height - 1];
-                authentication.extend_from_slice(&sibling);
+                // Opaque canonical sibling commitment scoped to membership only.
+                let sibling = test_proof_digest_v1(
+                    b"prefix-membership-frontier",
+                    ((role as u64) << 56)
+                        | (u64::from(layer) << 48)
+                        | (((height - 1) as u64) << 32)
+                        | u64::from(sibling_index),
+                );
+                authentication.extend_from_slice(sibling.as_bytes());
                 if node.index.is_multiple_of(2) {
                     left = node.digest;
                     right = sibling;
@@ -128,6 +103,7 @@ fn build_zero_authentication_v1(
                     layer,
                     length,
                     height,
+                    node.index / 2,
                     left,
                     right,
                 )
@@ -142,7 +118,6 @@ fn build_zero_authentication_v1(
     }
     assert_eq!(current_len, 1);
     assert_eq!(current[0].index, 0);
-    assert_eq!(current[0].digest, zero[length.ilog2() as usize]);
     (authentication, current[0].digest)
 }
 
@@ -207,8 +182,8 @@ fn encode_prefix_v1(
                 .to_be_bytes(),
         );
     }
+    prefix.extend_from_slice(&context.parameter_digest);
     for digest in [
-        context.parameter_digest,
         context.transcript_digest,
         context.rns_aggregation_seed,
         context.relation_seed,
@@ -222,7 +197,7 @@ fn encode_prefix_v1(
         evaluation_binding,
         residual_digest,
     ] {
-        prefix.extend_from_slice(&digest);
+        prefix.extend_from_slice(digest.as_bytes());
     }
     assert_eq!(prefix.len(), PREFIX_HEADER_BYTES_V1);
     prefix.extend_from_slice(evaluations);
@@ -234,7 +209,9 @@ fn encode_prefix_v1(
 }
 
 fn fixture_v1() -> FixtureV1 {
-    let parameter_digest = fixture_digest_v1(b"parameters", 0);
+    let parameter_digest = RnsNativeProofHashContextV1::canonical()
+        .unwrap()
+        .parameter_digest();
     let mut queries =
         core::array::from_fn(|ordinal| u32::try_from(ordinal).expect("query fits u32"));
     // Exercise the upper member of a FRI-1 query pair. The fold output for
@@ -242,21 +219,21 @@ fn fixture_v1() -> FixtureV1 {
     queries[0] = u32::try_from(FRI_ONE_SIZE_V1 / 2 + 7).expect("upper FRI-1 query fits u32");
     let initial_indices = query_pair_indices_v1(&queries, DOMAIN_SIZE_V1).expect("initial indices");
     let fri_one_indices = query_pair_indices_v1(&queries, FRI_ONE_SIZE_V1).expect("FRI-1 indices");
-    let quotient = build_zero_authentication_v1(
+    let quotient = build_membership_authentication_v1(
         parameter_digest,
         TreeRoleV1::Quotient,
         0,
         DOMAIN_SIZE_V1,
         initial_indices,
     );
-    let fri_zero = build_zero_authentication_v1(
+    let fri_zero = build_membership_authentication_v1(
         parameter_digest,
         TreeRoleV1::Fri,
         0,
         DOMAIN_SIZE_V1,
         initial_indices,
     );
-    let fri_one = build_zero_authentication_v1(
+    let fri_one = build_membership_authentication_v1(
         parameter_digest,
         TreeRoleV1::Fri,
         1,
@@ -267,7 +244,7 @@ fn fixture_v1() -> FixtureV1 {
         core::array::from_fn(|ordinal| fixture_digest_v1(b"equation-commitment", ordinal));
     let limb_commitment_digests =
         core::array::from_fn(|ordinal| fixture_digest_v1(b"limb-commitment", ordinal));
-    let query_opening_digests: [[u8; DIGEST_BYTES_V1]; QUERY_COUNT_V1] =
+    let query_opening_digests: [ProofDigestV1; QUERY_COUNT_V1] =
         core::array::from_fn(|ordinal| fixture_digest_v1(b"query-opening", ordinal));
     let transcript_digest = fixture_digest_v1(b"transcript", 0);
     let section_binding_digest = section_binding_digest_v1(
@@ -344,8 +321,9 @@ fn write_value_v1(
         .binary_search(&index)
         .expect("opened test index");
     let offset = position * LEAF_BYTES_V1 + coordinate * FQ2_BYTES_V1;
-    values[offset..offset + 8].copy_from_slice(&value.c0.to_be_bytes());
-    values[offset + 8..offset + 16].copy_from_slice(&value.c1.to_be_bytes());
+    values[offset..offset + FQ2_BYTES_V1].copy_from_slice(
+        &encode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, value).expect("canonical exact field pair"),
+    );
 }
 
 #[test]
@@ -414,10 +392,24 @@ fn quotient_and_fri_roots_paths_roles_and_layers_are_exact() {
             fixture.context.parameter_digest,
             fixture.context.fri_zero_root,
         ),
+        Err(RnsNativeQpcsPrefixErrorV1::InvalidCount)
+    );
+    // A valid layer-zero geometry with another role reaches authentication
+    // and still cannot reuse the quotient root as a FRI commitment.
+    assert_eq!(
+        authenticate_tree_v1(
+            view.quotient,
+            fixture.initial_indices,
+            DOMAIN_SIZE_V1,
+            TreeRoleV1::Fri,
+            0,
+            fixture.context.parameter_digest,
+            fixture.context.quotient_root,
+        ),
         Err(RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)
     );
     let mut changed_root = fixture.context.fri_one_root;
-    changed_root[0] ^= 1;
+    changed_root = change_sixth_lane_v1(changed_root);
     assert_eq!(
         authenticate_tree_v1(
             view.fri_one,
@@ -560,14 +552,12 @@ fn first_fold_checks_direction_coset_sign_and_both_values() {
     write_value_v1(fixture.initial_indices, &mut fri_zero, paired, 0, negative);
     let field = Fq2ParametersV1::derive(ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[0])
         .expect("canonical first field");
-    let alpha = derive_fq2_challenge_v1(
-        FOLD_CHALLENGE_DOMAIN_V1,
+    let alpha = derive_fold_challenge_v1(
         fixture.context.parameter_digest,
         fixture.context.fold_zero_seed,
         0,
         0,
         0,
-        field.modulus,
     )
     .expect("fold challenge");
     let x = field.pow(field.domain_root, u128::from(base));
@@ -635,7 +625,7 @@ fn move_only_relation_schedule_binds_q_mask_root_seed_and_all_exact_points() {
     assert!(!schedule.has_qpcs_relation_lineage_v1());
 
     let mut changed = fixture.context;
-    changed.q_mask_s_root[0] ^= 1;
+    changed.q_mask_s_root = change_sixth_lane_v1(changed.q_mask_s_root);
     assert!(matches!(
         verify_prefix_parts_with_schedule_v1(
             changed,
@@ -710,14 +700,15 @@ fn caps_lengths_trailing_noncanonical_context_and_residual_fail_closed() {
         Err(RnsNativeQpcsPrefixErrorV1::InvalidHeader)
     );
     let mut changed_context = fixture.context;
-    changed_context.transcript_digest[0] ^= 1;
+    changed_context.transcript_digest = change_sixth_lane_v1(changed_context.transcript_digest);
     assert_eq!(
         decode_prefix_exact_v1(&fixture.prefix, changed_context, fixture.descriptors).map(|_| ()),
         Err(RnsNativeQpcsPrefixErrorV1::InvalidHeader)
     );
     let view = decoded_fixture_v1(&fixture);
     let mut noncanonical = view.quotient.values.to_vec();
-    noncanonical[..8].copy_from_slice(&ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[0].to_be_bytes());
+    let noncanonical_pair = (u128::from(ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[0]) << 60).to_be_bytes();
+    noncanonical[..FQ2_BYTES_V1].copy_from_slice(&noncanonical_pair[1..]);
     assert_eq!(
         validate_leaf_values_v1(&noncanonical, fixture.initial_indices.len),
         Err(RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue)
@@ -728,16 +719,60 @@ fn caps_lengths_trailing_noncanonical_context_and_residual_fail_closed() {
         fixture.context.parameter_digest.as_slice()
     );
     assert_eq!(
-        &fixture.prefix[TRANSCRIPT_DIGEST_OFFSET_V1..TRANSCRIPT_DIGEST_OFFSET_V1 + 32],
+        &fixture.prefix[TRANSCRIPT_DIGEST_OFFSET_V1..TRANSCRIPT_DIGEST_OFFSET_V1 + DIGEST_BYTES_V1],
         fixture.context.transcript_digest.as_slice()
     );
     assert_ne!(
-        &fixture.prefix
-            [EVALUATION_BINDING_DIGEST_OFFSET_V1..EVALUATION_BINDING_DIGEST_OFFSET_V1 + 32],
-        &[0_u8; 32]
+        &fixture.prefix[EVALUATION_BINDING_DIGEST_OFFSET_V1
+            ..EVALUATION_BINDING_DIGEST_OFFSET_V1 + DIGEST_BYTES_V1],
+        &[0_u8; DIGEST_BYTES_V1]
     );
     assert_ne!(
-        &fixture.prefix[RESIDUAL_DIGEST_OFFSET_V1..RESIDUAL_DIGEST_OFFSET_V1 + 32],
-        &[0_u8; 32]
+        &fixture.prefix[RESIDUAL_DIGEST_OFFSET_V1..RESIDUAL_DIGEST_OFFSET_V1 + DIGEST_BYTES_V1],
+        &[0_u8; DIGEST_BYTES_V1]
     );
 }
+
+#[test]
+fn prefix_wire_rejects_all_noncanonical_lanes_retired_roots_and_wide_pairs() {
+    let fixture = fixture_v1();
+    for field in 0..12 {
+        for lane in 0..6 {
+            let mut prefix = fixture.prefix.clone();
+            let offset = TRANSCRIPT_DIGEST_OFFSET_V1 + field * DIGEST_BYTES_V1 + lane * 8;
+            prefix[offset..offset + 8]
+                .copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+            assert!(matches!(
+                decode_prefix_exact_v1(&prefix, fixture.context, fixture.descriptors),
+                Err(RnsNativeQpcsPrefixErrorV1::InvalidHeader)
+            ));
+        }
+    }
+    let mut retired = fixture.prefix[..TRANSCRIPT_DIGEST_OFFSET_V1].to_vec();
+    for field in 0..12 {
+        let offset = TRANSCRIPT_DIGEST_OFFSET_V1 + field * DIGEST_BYTES_V1;
+        retired.extend_from_slice(&fixture.prefix[offset..offset + 32]);
+    }
+    retired.extend_from_slice(&fixture.prefix[PREFIX_HEADER_BYTES_V1..]);
+    assert!(decode_prefix_exact_v1(&retired, fixture.context, fixture.descriptors).is_err());
+    assert_eq!(
+        validate_leaf_values_v1(&[0; 400 * 16], 1),
+        Err(RnsNativeQpcsPrefixErrorV1::InvalidCount)
+    );
+    let mut values = [0; LEAF_BYTES_V1];
+    for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
+        for pair in [(modulus, 0), (0, modulus)] {
+            let offset = limb * ROWS_PER_LIMB_V1 * FQ2_BYTES_V1;
+            let packed = ((u128::from(pair.0) << 60) | u128::from(pair.1)).to_be_bytes();
+            values[offset..offset + FQ2_BYTES_V1].copy_from_slice(&packed[1..]);
+            assert_eq!(
+                validate_leaf_values_v1(&values, 1),
+                Err(RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue)
+            );
+            values[offset..offset + FQ2_BYTES_V1].fill(0);
+        }
+    }
+}
+
+#[path = "rns_native_qpcs_prefix_tests/nonzero_arithmetic_v1.rs"]
+mod nonzero_arithmetic_v1;

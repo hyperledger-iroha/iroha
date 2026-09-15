@@ -219,10 +219,185 @@ execution/report consistency, not production performance. Results reside in
 `target/ivm-only-validation/fastpq-metal-capture-native/`,
 `fastpq-metal-rust-readback/` and `fastpq-profile-native/`.
 The same candidate passes the IVM-only guard, its 47 regressions, retired-codec
-guards and exact historical-archive verification. The wider xtask rebuild finds
-a separate merged Core caller of the now-private ledger replay-authority field;
-its owning-API repair and signed-manifest tests remain pending. All failed
-builds remain preserved. See [the benchmark contract](../specs/fastpq_benchmark_v1.md).
+guards and exact historical-archive verification. The wider xtask rebuild found
+a merged Core caller of the now-private ledger replay-authority field. Its
+ledger-owned API now requires the exact claim, retained row and verified context
+before authenticating historical source coverage. The fresh merged Core binary
+passes the direct claim-join test, five cold-owner tests, the marker-authority
+test and two additional timeout-history/cancellation tests. The additional
+checks retain their source and binary hashes under
+`target/ivm-only-validation/ledger-merged-additional-native/`.
+The earlier combined Core/xtask build changed source during a merge and failed
+with zero tests executed; its drift record remains preserved. The subsequent
+stable xtask build passes 40 tests and fails one matrix-filter ordering assertion.
+The writer now emits the canonical inventory order, and signed-manifest admission
+rejects empty, duplicate and reordered filter arrays even with a valid signature.
+The writer also omits an empty source filter set as absent metadata. All 43
+actual manifest/report tests pass on unchanged source
+`65a6198425cc1e5cfb4b24c19b936e7db6a94d3161c450e4ed9ec9729a71618e`.
+Both the original failure and corrected run remain under
+`target/ivm-only-validation/fastpq-manifest-merged-native/` and
+`fastpq-manifest-final-filters-native/`. The preceding 42-test ordering-only
+run remains separately preserved. Synthetic signing fixtures establish
+validator behavior; they are not actual release signatures or device provenance.
+
+The matrix builder now requires wrapped, fully validated reports and explicit
+filters before deriving measurements or thresholds. A single device label cannot
+combine CPU, Metal and CUDA backends. Its ordered filter-array rule matches Rust
+manifest admission, including rejection through the isolated release runner.
+The composed Python consumer/release suite passes all 598 tests and 14 subtests
+on unchanged source `8f35e289bd1c653c354243ab8c522eadddcf82dca59fbeaad1f6988612e6aa1d`;
+results are in `target/ivm-only-validation/fastpq-matrix-contract-python/`.
+All device/timing values in this suite are synthetic.
+
+That merge also reintroduced four generated Wasm SDK files. All four were
+removed from the checkout and index; the IVM-only guard, all 47 guard regressions
+and all 19 focused JavaScript packaging/type tests pass after removal. The
+exact removed artifact hashes and focused results reside under
+`target/ivm-only-validation/merge-wasm-retirement-20260913/`.
+Both native benchmark entry points now share preflight checks for canonical row
+geometry, count overflow and actual contiguous allocation limits before tracing
+or device work. On unchanged source `b513939ec34970be0961cce65992858c845c977e179196243f9e2ed3f97b07ae`,
+all 72 native geometry/producer tests and 16 actual invalid-input processes pass.
+Invalid rows/counts, unrepresentable sample/flattened buffers and the parameter
+alias exit with status 1 and no report or trace artifact. An eight-row,
+six-operation required-Metal capture passes the wrapper and complete projection.
+The same native artifact passes 20 executor/dispatch controls plus explicit
+actual-Metal tests for all six lanes at framing boundaries and indexed predicates
+at nonce boundaries. CUDA device parity remains unexecuted. Logs, commands,
+source and binary hashes are retained under
+`target/ivm-only-validation/fastpq-benchmark-preflight-native/` and
+`fastpq-benchmark-merged-digest-native/`. These are bounded native behavior and
+primitive checks; full proof/performance qualification remains open. See
+[the benchmark contract](../specs/fastpq_benchmark_v1.md).
+
+The native40 RNS cutover is now composed: full six-lane proof digests, typed
+15-byte Fq2 fields, the sole three-section V1 envelope, and canonical confidential
+spool callers replace the disconnected proof and detached-padding owners.
+The 44 disconnected proof files are removed; live source padding and curve-verifier authority
+remain enforced. Cargo resolved exactly three new proof-crate dependency edges
+without changing package versions. The first production build exits 101 with
+29 compiler diagnostics and zero tests on unchanged source
+`5327ca03d03202672c0b5c5862f7d512c19939aadaa143ac988db08616973fe8`.
+Its logs remain in `target/ivm-only-validation/rns-native40-initial-native-20260914/`.
+The first retry compiles far enough to expose two production and 28 unit-test
+diagnostics on unchanged source
+`dcc73cf26d2e9ad49df34627d3054bc82802e07df66458b154befccccb7cb977`;
+no tests execute. Its separate logs remain in `rns-native40-compiler-retry01-20260914/`.
+Corrections restore missing private module registrations, preserve both native48
+source-packing inputs, update derived accounting assertions and repair typed
+test fixtures. Two obsolete topology-only adapter files and their bulk preflight
+are removed because their accumulator and collective verifier APIs were already
+retired; the actual streaming encryption/source owners remain. The next build
+compiles production, unit and both integration-test targets on unchanged source
+`a564f63d2ee076fedb4ccf7439af9339dd30232cd78906314d0b637f41e59333`.
+The first 84 native foundation tests pass 21 and fail 63: two mistyped roots in
+the duplicated parameter table cause profile rejection. The corrected table now
+derives the exact source prefix under one owner; all 40 roots are independently
+reproduced. The rebuilt unchanged source
+`5a595aa37310d4bd97bf1e36cc620cfa92b48fa442db40fa65a6358b3ed9c560`
+passes all 95 selected native tests with no ignores: hash, field, sampling,
+wire, leaf/tree, profile, transcript, section codec and nine ordered-storage tests.
+Real small encrypted-file pairs exercise order, context, partial seal, substitution,
+malformed plaintext and failure cleanup; full-size storage is not measured.
+Results and hashes remain in `rns-native40-foundations-retry01-native-20260914/`.
+The next unchanged source
+`c629dd31cc52e8633f8b51e390132a645a4ab0f2736f6e54466ca3e574264445`
+passes 91 of 95 source-ownership tests, including all 23 source-packing, ten
+plane-opening and seven plane-codec cases. The four failures identify fragile
+source guards: unary logical-not misread as a macro, a quoted declaration
+counted as a registration, an unrelated derive attributed to a secret owner,
+and a stale byte pin for the unchanged context leaf. Their corrections preserve
+the full adversarial inventory and add compiler-checked non-Clone/non-Copy
+assertions for all six confidential source owners.
+
+On that same source, the initial qPCS tests pass eight, complete FRI passes 15,
+and prefix passes nine with one outdated expected error: invalid layer geometry
+rejects before Merkle traversal. These positive fixtures authenticate synthetic
+frontiers and local equations, not a full transcript-bound production proof.
+IPA minimum-dimension integration passes three; Vega reachability passes nine
+with one stale expectation for the existing `parallel -> full` feature edge.
+The data-model library freshly compiles and all eight selected catalog/wire
+tests pass, including independent catalog reproduction and canonical six-lane
+encoding. Native receipts retain complete test lists, failures and executable
+hashes in `rns-native40-source-ownership-native-20260914/`,
+`rns-native40-qpcs-stages-native-20260914/`, the two named integration directories,
+and `privacy-catalog-model-native-20260914/` under `target/ivm-only-validation/`.
+
+The candidate removes the unused 702-scalar mask commitment from the
+native40 global lookup wire, typed roles, transcript and profile identity.
+Multiplicity and the inverse-product mask remain mandatory and distinct. Exact
+two-point framing rejects the former three-point shape; the parent proof limit
+is unchanged. Compiler retry 06 passes on unchanged source
+`02b9f2f03c932d82bacd47688060edc5b47c5593c09334c3473ae9fd7d0aed3c`,
+discovering 1,586 unit tests and 13 integration tests. Its separate native runs
+pass 96 foundation/storage, 90 global-wire/composite, 34 qPCS, ten Vega and three
+IPA tests. All 11 phase-2/3 guards, 44 link guards and 19 radix/comparator tests
+also pass. The new nonzero prefix arithmetic vectors independently reproduce all
+1,480 field words; their native test passes without qualifying a complete proof.
+
+The original source-replay selection is incomplete: its third test repeatedly
+recomputed the same fixed mapping and was explicitly stopped after the first
+two passed. The full direct-proof selection fails a stale descriptor assertion
+and then aborts with an ordinary-stack overflow in the four-core proof path.
+Its partial output and 25,755,648-byte maximum RSS do not qualify full proof
+execution. Core freshly compiles on the same source and discovers 15,241 tests;
+its privacy-profile selection reports 26 passes, one digest-KAT failure and one
+ignored operator printer. Receipts remain under `target/ivm-only-validation/`
+in the retry-06, source-guards, direct-full-GBP and privacy-core directories.
+
+The next applied repairs cache only the fixed source mapping, reject malformed
+owned source-packing frames before acquiring replay, and retain prepared direct
+rows and the four-proof bundle in bounded heap owners. Authenticated D/S-low
+preparation emits the exact 11,696 value planes through the existing source
+cursor; prepared values do not confer commitment or proof authority. Its docs
+distinguish polynomial coefficients from logical-slot padding checked by NTT.
+Exact preimages and reviewed composition are recorded in
+`rns-owned-preparation-composition-20260914/composition.json`. The corrected
+native candidate `295f1e17abd9193167c1bea15cc6733e2ca41156b996aef2ab39677b9acb4c94`
+now passes all 34 direct-proof tests, including actual four-core, 16,384-gate
+proof generation, verification, discharge and mutations on the default stack.
+The complete selected process takes 468.04 seconds and peaks at 443,777,024 bytes
+RSS. Its fixture source and deterministic test entropy do not establish a
+production source; concurrent compilation means this is not a controlled release
+benchmark. Results remain in
+`rns-next-private-full-direct-native-20260914/result.json` under the same target root.
+
+The exact 72,386-entry inventory replaces 22 disconnected challenge/session
+owners. Original fallible entropy now moves from encryption into the source
+commitment session and authenticated D/S preparation; no detached replacement
+entropy is accepted there. Corrections to the consuming-signature assertion and
+test-owner size split now pass all 49 source-algebra and 40 cleanup tests on main
+source `8322c0a0f5e7c62a62690433399e860343aa912ea1cccd8619947c87bc135334`.
+The separate nine-test streaming ingress selection passes eight, including both
+new actual key/manifest mutation tests; its remaining source guard still expects
+the phase-2/3 module to be compiled out instead of compiled privately. Results
+remain in `rns-main-successor-selected-native-20260914/result.json`; that combined
+98-test run is recorded as failed until the guard is corrected and rerun.
+All 19 complete inventory tests and seven additional affected source guards pass.
+The predecessor candidate separately passes 116 inventory/Z/link/initial tests,
+nine lifetime/poison resource tests and the actual small T256 GBP roundtrip.
+Do not add overlapping selections into a purported full-suite count.
+
+The reviewed 87-path transfer is applied to the main checkout with the index
+unchanged; exact provenance is retained in
+`rns-next-private-transfer-20260914/application.json`. Core's profile KAT and
+ordinary election-boundary repairs are applied, but fresh grouped compilation
+exposed an accidentally deleted `checked_zk_stark_keypair` test helper. Restoring
+its exact fallible generation and regression makes the grouped rebuild succeed.
+The 181 selected Core cases, added Parliament deadline/retry test and real
+four-validator execution remain pending. IVM-only, codec, formatting and the
+historical archive guards pass at the native candidate checkpoint.
+
+Full qPCS construction still exceeds the unchanged 128-billion-operation cap:
+initial raw-payload absorption alone requires 436,224,393,216 nonlinear field
+multiplications under the current round program, even granting framing, linear
+layers and Merkle nodes for free. Allocation lifetime accounting does not solve
+that design gap. A reviewed commitment/evaluation design is required; no raised
+cap, per-stage meter reset or hardware discount authorizes the current full tree.
+Complete source/prover authority, source-to-storage handoff, actual replay,
+composite admission and resource qualification remain unfinished. See
+[the native wire contract](../specs/crypto/zk_ams_rns_native_wire_v1.md).
 
 The full privacy/ZK, SDK, hardware, audit and four-validator release gates remain
 open. These checks do not establish production qualification.

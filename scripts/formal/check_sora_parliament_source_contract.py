@@ -19,10 +19,15 @@ execution corridor is an additive dependency of Parliament hardening and must
 remain typed, admitted, replayed, fee-checked, visited, and API-visible.
 It also keeps the PR model run bound to archived copies of its exact inputs and
 to stable, source-identified result metadata.
+
+Requires Python 3.10+ and the repository sources; no third-party dependencies or
+environment variables are needed. Paths resolve from this script and checks are
+read-only.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -202,6 +207,211 @@ def require_opaque_casting_authorization(casting: str) -> None:
             raise RuntimeError(
                 f"{casting_path}: opaque casting authorization exposes {forbidden!r}"
             )
+
+def require_parliament_broker_primitives(source: str) -> None:
+    """Bind Parliament operation IDs and their explicitly framed attestation DTOs."""
+    relative = "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    require_all(
+        relative,
+        source,
+        (
+            "OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 124",
+            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125",
+        ),
+    )
+    ordinal_test = section(
+        source,
+        "fn post_soracloud_operation_ids_are_exact_and_contiguous() {",
+        "\n}\n",
+        relative,
+    )
+    require_all(
+        relative,
+        " ".join(ordinal_test.split()),
+        (
+            "(OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1, 124)",
+            "(OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1, 125)",
+            "for (index, (operation, expected)) in exact.into_iter().enumerate() {",
+            "assert_eq!(operation, expected);",
+            "assert!(super::super::operation_is_known(operation));",
+        ),
+    )
+    for name, fields in (
+        (
+            "ParliamentTleCapabilityAttestRequestWireV1",
+            (
+                "pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1",
+                "pub(super) participant_index: u16",
+            ),
+        ),
+        (
+            "ParliamentTleCapabilityAttestResultWireV1",
+            (
+                "pub(super) key_session_id: iroha_data_model::governance::types::TleKeySessionId",
+                "pub(super) transcript_hash: [u8; 32]",
+                "pub(super) participant_index: u16",
+            ),
+        ),
+    ):
+        frame_id = f"irohad::runtime_provider_broker::protocol::primitives::{name}"
+        pattern = (
+            r"define_broker_wire_struct!\(\s*owned\s+frame\s+"
+            + re.escape(f'"{frame_id}"')
+            + r"\s*;\s*pub\s*\(\s*super\s*\)\s+"
+            + re.escape(name)
+            + r"\s*\{(?P<fields>[^{}]*)\}\s*\);"
+        )
+        declarations = list(re.finditer(pattern, source))
+        if len(declarations) != 1:
+            raise RuntimeError(f"{relative}: expected one framed declaration for {name}")
+        require_all(
+            relative, " ".join(declarations[0].group("fields").split()), fields
+        )
+
+
+def require_parliament_broker_dispatch(dispatch: str, consensus: str) -> None:
+    """Keep the authenticated router connected to the validating attestation owner."""
+    dispatch_path = (
+        "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
+    )
+    consensus_path = (
+        "crates/irohad/src/runtime_provider_broker/"
+        "protocol/platform/operation_dispatch/consensus.rs"
+    )
+    admission = section(
+        dispatch,
+        "fn dispatch_server_operation_with_session(",
+        "let result = match (request.binding.slot, request.operation) {",
+        dispatch_path,
+    )
+    require_all(
+        dispatch_path,
+        " ".join(admission.split()),
+        (
+            "let requalify = || qualify_server_binding(state, &request.binding, request.provider_metadata_digest); requalify()?;",
+        ),
+    )
+    require_all(
+        dispatch_path,
+        " ".join(dispatch.split()),
+        (
+            '#[path = "protocol/platform/operation_dispatch/consensus.rs"] mod consensus_operations;',
+            "let parliament_tle_partial_release_signer_slot = IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();",
+            "(slot, OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1) if slot == parliament_tle_partial_release_signer_slot => { consensus_operations::parliament_tle_capability_attest(state, request) }",
+        ),
+    )
+    handler = section(
+        consensus,
+        "pub(super) fn parliament_tle_capability_attest(",
+        "\n}",
+        consensus_path,
+    )
+    handler = " ".join(handler.split())
+    require_all(
+        consensus_path,
+        handler,
+        (
+            "let requalify = || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);",
+            "decode_parliament_tle_capability_attest_request(&request.payload, &state.network_id)?;",
+            "broker_backend!(state, parliament_tle_partial_release_signer)",
+            ".attest_partial_release_capability(&session, request.participant_index)",
+            "if !attestation.matches(&session, request.participant_index) { return Err(BrokerError::StaleOrRevoked); }",
+            "requalify()?;",
+            "&ParliamentTleCapabilityAttestResultWireV1 { key_session_id: attestation.key_session_id(), transcript_hash: attestation.transcript_hash(), participant_index: attestation.participant_index(), }, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,",
+        ),
+    )
+    positions = [
+        handler.find(marker)
+        for marker in (
+            "decode_parliament_tle_capability_attest_request(",
+            ".attest_partial_release_capability(",
+            "if !attestation.matches(",
+            "requalify()?;",
+            "encode_canonical(",
+        )
+    ]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise RuntimeError(
+            f"{consensus_path}: attestation must validate and requalify before encoding"
+        )
+
+
+def require_public_finding_endorsement_order(types: str) -> None:
+    """Bind strict supporter ordering to certificate validation, regardless of wrapping."""
+    path = "crates/iroha_data_model/src/governance/types.rs"
+    evidence = section(
+        types, "    fn validate_body_evidence(", "    fn validate_ballot_identity(", path
+    )
+    ordered_supporters = re.compile(
+        r"!\s*public_finding\s*\.\s*endorsing_assignments\s*"
+        r"\.\s*windows\s*\(\s*2\s*\)\s*"
+        r"\.\s*all\s*\(\s*\|\s*pair\s*\|\s*"
+        r"pair\s*\[\s*0\s*\]\s*<\s*pair\s*\[\s*1\s*\]\s*\)"
+    )
+    if ordered_supporters.search(evidence) is None:
+        raise RuntimeError(
+            f"{path}: certificate validation must reject supporters that are not strictly ordered"
+        )
+
+
+def require_sortition_registration_guards(world: str) -> None:
+    """Follow both registration transitions into their shared admission helper."""
+    path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    for start, end, snapshot, candidates in (
+        (
+            "gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {",
+            "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
+            "canonical_initial_parliament_sortition_v1(&attempt, state_transaction)?",
+            "candidates",
+        ),
+        (
+            "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
+            "canonical_parliament_candidate_snapshot_v1(",
+            "expected_candidates",
+        ),
+    ):
+        branch = section(world, start, end, path)
+        require_all(path, branch, (snapshot,))
+        admission = re.compile(
+            r"no_result_kind\s*=\s*apply_parliament_sortition_request_batch_v1\s*\(\s*"
+            r"&mut\s+attempt\s*,\s*payload\s*,\s*"
+            + re.escape(candidates)
+            + r"\s*,\s*state_transaction\s*,?\s*\)\s*\?"
+        )
+        if admission.search(branch) is None:
+            raise RuntimeError(
+                f"{path}: {start!r} must use shared sortition admission with its canonical candidates"
+            )
+    admission_helper = section(
+        world,
+        "    fn apply_parliament_sortition_request_batch_v1(",
+        "    fn ensure_parliament_logical_beacon_v1(",
+        path,
+    )
+    require_all(
+        path,
+        admission_helper,
+        (
+            "entry.request.request_height != current_height",
+            "ensure_parliament_logical_beacon_v1(",
+            "entry.request.target_seats != configured_target",
+            "ParliamentDecisionModeV1::HiddenBindingBallot",
+            ".record_hidden_sortition_capacity_failure_batch(",
+            "ParliamentNoResultKindV1::SortitionRetriesExhausted",
+            ".register_sortition_request_batch(",
+        ),
+    )
+    anonymity_guard = re.compile(
+        r"if\s+!crate::governance::parliament::"
+        r"hidden_ballot_population_meets_anonymity_floor_v1\s*\(\s*"
+        r"expected_candidates\.len\(\)\s*,?\s*\)\s*&&\s*hidden_body_requested"
+    )
+    if anonymity_guard.search(admission_helper) is None:
+        raise RuntimeError(
+            f"{path}: shared sortition admission must enforce the hidden-electorate anonymity floor"
+        )
+
 
 def main() -> int:
     ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
@@ -387,14 +597,13 @@ def main() -> int:
             "pub quorum: u32",
             "let endorsements = u32::try_from(public_finding.endorsing_assignments.len())",
             "public_finding.endorsements != quorum",
-            ".endorsing_assignments\n                        .windows(2)",
-            ".all(|pair| pair[0] < pair[1])",
             "ballot.commitment_closed_at_height <= ballot.survivor_freeze_height",
             "ballot.commitment_closed_at_height > ballot.commitment_close_height",
             ".saturating_sub(ballot.survivor_freeze_height)",
             "parliament_timed_ovn_required_chunk_blocks_v1(",
         ),
     )
+    require_public_finding_endorsement_order(types)
     if "AggregateOpeningFailed" in types:
         raise RuntimeError(
             f"{types_path}: unverifiable caller-triggered aggregate-opening failure remains"
@@ -1111,23 +1320,7 @@ def main() -> int:
     ):
         branch = section(world, branch_start, branch_end, world_path)
         require_all(world_path, branch, bindings)
-    register_sortition_branch = section(
-        world,
-        "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
-        "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
-        world_path,
-    )
-    require_all(
-        world_path,
-        register_sortition_branch,
-        (
-            "canonical_parliament_candidate_snapshot_v1(",
-            "hidden_ballot_population_meets_anonymity_floor_v1(\n                        expected_candidates.len(),",
-            ".record_hidden_sortition_capacity_failure_batch(",
-            "ParliamentNoResultKindV1::SortitionRetriesExhausted",
-            ".register_sortition_request_batch(",
-        ),
-    )
+    require_sortition_registration_guards(world)
     for forbidden in (
         "ParliamentLifecycleTransitionV1::ConstructCertificate",
         "ParliamentLifecycleTransitionV1::MarkEnacted",
@@ -2963,45 +3156,7 @@ def main() -> int:
         "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
     )
     broker_primitives = read(broker_primitives_path)
-    require_all(
-        broker_primitives_path,
-        broker_primitives,
-        (
-            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125",
-            "ParliamentTleCapabilityAttestRequestWireV1",
-            "ParliamentTleCapabilityAttestResultWireV1",
-            "assert!(!super::super::operation_is_known(126))",
-        ),
-    )
-    broker_attestation_request_wire = section(
-        broker_primitives,
-        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestRequestWireV1 {",
-        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {",
-        broker_primitives_path,
-    )
-    require_all(
-        broker_primitives_path,
-        broker_attestation_request_wire,
-        (
-            "pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1",
-            "pub(super) participant_index: u16",
-        ),
-    )
-    broker_attestation_result_wire = section(
-        broker_primitives,
-        "define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {",
-        "pub(super) fn governance_signing_purpose_from_wire(",
-        broker_primitives_path,
-    )
-    require_all(
-        broker_primitives_path,
-        broker_attestation_result_wire,
-        (
-            "pub(super) key_session_id: iroha_data_model::governance::types::TleKeySessionId",
-            "pub(super) transcript_hash: [u8; 32]",
-            "pub(super) participant_index: u16",
-        ),
-    )
+    require_parliament_broker_primitives(broker_primitives)
     broker_validation_path = (
         "crates/irohad/src/runtime_provider_broker/protocol_operation_validation.rs"
     )
@@ -3140,17 +3295,12 @@ def main() -> int:
         "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs"
     )
     broker_dispatch = read(broker_dispatch_path)
-    require_all(
-        broker_dispatch_path,
-        broker_dispatch,
-        (
-            "OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1",
-            "decode_parliament_tle_capability_attest_request(",
-            ".attest_partial_release_capability(&session, request.participant_index)",
-            "if !attestation.matches(&session, request.participant_index)",
-            "requalify()?;",
-            "ParliamentTleCapabilityAttestResultWireV1",
-        ),
+    broker_consensus_path = (
+        "crates/irohad/src/runtime_provider_broker/"
+        "protocol/platform/operation_dispatch/consensus.rs"
+    )
+    require_parliament_broker_dispatch(
+        broker_dispatch, read(broker_consensus_path)
     )
     broker_api_path = "crates/irohad/src/runtime_provider_broker/api.rs"
     broker_api = read(broker_api_path)
@@ -4007,6 +4157,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    argparse.ArgumentParser(description=__doc__).parse_args()
     try:
         raise SystemExit(main())
     except RuntimeError as error:

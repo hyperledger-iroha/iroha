@@ -13,11 +13,10 @@
 //!   canonical order before Fiat--Shamir evaluation points can be derived;
 //! * a transcript-bound cubic bitness sumcheck and logarithmic T256 IPA share
 //!   one commitment and reject proof splicing;
-//! * a sibling-private move-only owner binds all 43 native openings to one
-//!   canonical packed accumulator in exact family/chunk order after checking
-//!   each 38-limb plaintext lift and both state-owned RLWE equations; it
-//!   deliberately returns only unverified metadata and does not authenticate
-//!   any whole-proof wire response;
+//! * the collective streaming producer owns canonical packed chunks and native
+//!   RLWE source publication in the exact 43-record family/chunk order; this
+//!   kernel retains public geometry and the authenticated source prerequisite
+//!   without a duplicate packed-accumulator or topology-only opening API;
 //! * the exact integer and arbitrary-point form of
 //!   `A*R + p*E + M - C = (X^N + 1)*H (mod q)` is exercised by a tiny oracle,
 //!   including the radix carry equation that prevents modular wraparound from
@@ -28,25 +27,15 @@
 //! release-parameter KAT all exist.
 
 #![allow(dead_code)]
-#[cfg(test)]
-use super::collective::{
-    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-    ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
-};
-#[cfg(test)]
-use super::packing::ZkAmsT256PackingLayoutV1;
 use super::{
     ZkAmsMkheErrorV1,
     manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
-    packing::{
-        ZkAmsT256PackedPlaintextV1, decode_zk_ams_t256_packed_plaintext_v1,
-        packed_plaintext_rns_binding_digest_v1, zk_ams_t256_packing_layout_v1,
-    },
+    packing::{ZkAmsT256PackedPlaintextV1, zk_ams_t256_packing_layout_v1},
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
         ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
-        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
-        zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, zk_ams_phase23_release_map_manifest_v1,
+        zk_ams_phase23_release_map_set_digest_v1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
@@ -145,8 +134,6 @@ const IPA_RIGHT_LABEL_V1: &[u8] = b"rns-link-ipa-right";
 const IPA_CHALLENGE_LABEL_V1: &[u8] = b"rns-link-ipa-challenge";
 const NATIVE_GEOMETRY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.native-release-geometry";
-const NATIVE_PACKED_PREFLIGHT_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.rns-link.native-packed-preflight";
 const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     CONTEXT_DOMAIN_V1,
     COMMITMENT_DOMAIN_V1,
@@ -466,180 +453,6 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
         commitment_count,
         digest,
     })
-}
-/// Allocation-bounded, parent-private result of checking the exact native packed accumulator family
-/// geometry and recomputing every packed/RNS chunk binding.
-///
-/// This type intentionally carries `Unverified` in its name: ciphertext
-/// openings, radix/CRT carries, negacyclic quotients, and Hyrax equality are
-/// not inputs to this preflight. Consequently it cannot authorize challenge
-/// derivation, receipt minting, terminal materialization, or decryption.
-struct ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-    geometry_digest: [u8; 32],
-    ordered_native_chunk_root: [u8; 32],
-    chunk_count: u16,
-    digest: [u8; 32],
-}
-#[cfg(test)]
-std::thread_local! {
-    static NATIVE_PACKED_PREFLIGHT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
-        std::cell::Cell::new(0)
-    };
-}
-#[cfg(test)]
-fn native_packed_preflight_zeroized_drop_count_v1() -> usize {
-    NATIVE_PACKED_PREFLIGHT_ZEROIZED_DROPS_V1
-        .try_with(std::cell::Cell::get)
-        .unwrap_or(0)
-}
-impl Drop for ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-    fn drop(&mut self) {
-        let preflight = core::hint::black_box(self);
-        preflight.geometry_digest.fill(0);
-        preflight.ordered_native_chunk_root.fill(0);
-        preflight.chunk_count = 0;
-        preflight.digest.fill(0);
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        #[cfg(test)]
-        if preflight.geometry_digest == [0; 32]
-            && preflight.ordered_native_chunk_root == [0; 32]
-            && preflight.chunk_count == 0
-            && preflight.digest == [0; 32]
-        {
-            let _ = NATIVE_PACKED_PREFLIGHT_ZEROIZED_DROPS_V1
-                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
-        }
-        let _ = core::hint::black_box(&mut *preflight);
-    }
-}
-/// Zeroizing owner for the deterministic preflight hash frames. Deliberately
-/// neither `Clone` nor `Debug`.
-struct ZeroizingNativePackedPreflightFrameV1(Vec<u8>);
-impl ZeroizingNativePackedPreflightFrameV1 {
-    fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
-    }
-    fn push(&mut self, value: u8) {
-        self.0.push(value);
-    }
-    fn extend_from_slice(&mut self, values: &[u8]) {
-        self.0.extend_from_slice(values);
-    }
-    fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-impl Drop for ZeroizingNativePackedPreflightFrameV1 {
-    fn drop(&mut self) {
-        let frame = core::hint::black_box(&mut self.0);
-        frame.fill(0);
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut *frame);
-    }
-}
-/// Check the packed state against geometry derived from the canonical native
-/// relation. All digests in the returned object are recomputed from the exact
-/// borrowed chunks; this boundary accepts no caller-nominated digest shell.
-fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(
-    packed: &ZkAmsPhase23PackedAccumulatorSetV1,
-) -> Result<Box<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1>, ZkAmsMkheErrorV1> {
-    // Allocate while every field is still zero, then populate the result in
-    // place. Successful return and every error/unwind path move or destroy
-    // only the `Box` pointer, never a live preflight payload. Hash/helper and
-    // compiler temporaries remain outside this narrow RAII guarantee.
-    let mut preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-        geometry_digest: [0; 32],
-        ordered_native_chunk_root: [0; 32],
-        chunk_count: 0,
-        digest: [0; 32],
-    });
-    let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
-    let x = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::X)?;
-    let e = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::E)?;
-    let r_e = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::RE)?;
-    let w = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::W)?;
-    let r_w = geometry.family(ZkAmsPhase23RnsLinkFamilyV1::RW)?;
-    if packed.shape.x != x.semantic_value_count
-        || packed.shape.e != e.semantic_value_count
-        || packed.shape.r_e != r_e.semantic_value_count
-        || packed.shape.w != w.semantic_value_count
-        || packed.shape.r_w != r_w.semantic_value_count
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    let family_chunks = [
-        (ZkAmsPhase23RnsLinkFamilyV1::X, packed.x.as_slice()),
-        (ZkAmsPhase23RnsLinkFamilyV1::U, packed.u.as_slice()),
-        (ZkAmsPhase23RnsLinkFamilyV1::E, packed.e.as_slice()),
-        (ZkAmsPhase23RnsLinkFamilyV1::RE, packed.r_e.as_slice()),
-        (ZkAmsPhase23RnsLinkFamilyV1::W, packed.w.as_slice()),
-        (ZkAmsPhase23RnsLinkFamilyV1::RW, packed.r_w.as_slice()),
-    ];
-    let family_chunk_counts = family_chunks.map(|(family, chunks)| (family, chunks.len()));
-    validate_ordered_native_family_chunk_counts_v1(&geometry, &family_chunk_counts)?;
-    let mut root_frame = ZeroizingNativePackedPreflightFrameV1::with_capacity(
-        NATIVE_PACKED_PREFLIGHT_DOMAIN_V1.len() + 128 + RNS_LINK_RELEASE_COMMITMENTS_V1 * 112,
-    );
-    root_frame.extend_from_slice(NATIVE_PACKED_PREFLIGHT_DOMAIN_V1);
-    root_frame.push(RNS_LINK_VERSION_V1);
-    root_frame.extend_from_slice(&geometry.digest);
-    for (family, chunks) in family_chunks {
-        let expected = geometry.family(family)?;
-        let layout = zk_ams_t256_packing_layout_v1(expected.packed_value_count)?;
-        if layout.digest != expected.packing_layout_digest {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        if family == ZkAmsPhase23RnsLinkFamilyV1::U {
-            validate_replicated_u_chunk_coefficients_v1(chunks)?;
-        }
-        root_frame.push(family as u8);
-        root_frame.extend_from_slice(&expected.semantic_value_count.to_be_bytes());
-        root_frame.extend_from_slice(&expected.packed_value_count.to_be_bytes());
-        root_frame.extend_from_slice(&expected.chunk_count.to_be_bytes());
-        for (index, chunk) in chunks.iter().enumerate() {
-            if chunk.chunk_index
-                != u32::try_from(index).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-            {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
-            let decoded = ZeroizingNativeDecodedPlaintextV1(
-                decode_zk_ams_t256_packed_plaintext_v1(layout, chunk)?,
-            );
-            if decoded.0.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 {
-                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-            }
-            if family == ZkAmsPhase23RnsLinkFamilyV1::U {
-                validate_replicated_u_decoded_slots_v1(&decoded.0)?;
-            }
-            let rns_binding_digest = packed_plaintext_rns_binding_digest_v1(layout, chunk)?;
-            if rns_binding_digest == [0; 32] {
-                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-            }
-            root_frame.extend_from_slice(&chunk.chunk_index.to_be_bytes());
-            root_frame.extend_from_slice(&chunk.used_slots.to_be_bytes());
-            root_frame.extend_from_slice(&chunk.digest);
-            root_frame.extend_from_slice(&rns_binding_digest);
-        }
-    }
-    preflight.ordered_native_chunk_root = keccak256(root_frame.as_slice());
-    if preflight.ordered_native_chunk_root == [0; 32] {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    let mut digest_frame = ZeroizingNativePackedPreflightFrameV1::with_capacity(
-        NATIVE_PACKED_PREFLIGHT_DOMAIN_V1.len() + 70,
-    );
-    digest_frame.extend_from_slice(NATIVE_PACKED_PREFLIGHT_DOMAIN_V1);
-    digest_frame.push(RNS_LINK_VERSION_V1);
-    digest_frame.extend_from_slice(&geometry.digest);
-    digest_frame.extend_from_slice(&preflight.ordered_native_chunk_root);
-    digest_frame.extend_from_slice(&geometry.commitment_count.to_be_bytes());
-    preflight.digest = keccak256(digest_frame.as_slice());
-    if preflight.digest == [0; 32] {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    preflight.geometry_digest = geometry.digest;
-    preflight.chunk_count = geometry.commitment_count;
-    Ok(preflight)
 }
 #[derive(Clone)]
 struct RnsLinkImmutableAlgorithmManifestInputsV1 {
@@ -1145,21 +958,10 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
         })
     }
 }
-// TODO: Bind the first operational consumer's statement and replay context in
-// its consuming API before this local check can authorize any state change.
-/// Safe-Rust seal for the unit-only native opening-consumer boundary.
-///
-/// The private field is constructible only in this module and its descendants.
-/// This type deliberately implements neither cloning, default construction,
-/// decoding, nor serialization, and carries no evidence or authority.
-#[cfg(test)]
-pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
-// TODO: Reconnect the private external-source prototype after its confidential
-// spool dependency can enter the authorized workspace lock graph.
-#[cfg(any())]
+// Compile the private source owner against the canonical crypto spool API.
+// Its proof/release admission remains owned by the consuming verifier.
 #[path = "phase23_rns_link_external_source.rs"]
 mod external_source;
-#[cfg(any())]
 pub(in crate::vega::zk_ams::mkhe) use external_source::{
     ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
     ZkAmsPhase23RnsLinkSecretChunkV1,
@@ -1170,138 +972,6 @@ pub(in crate::vega::zk_ams::mkhe) use external_source::{
 )]
 #[path = "phase23_rns_link_cross_field_v2.rs"]
 mod cross_field_v2;
-#[allow(
-    dead_code,
-    reason = "the q-native PCS is a private Stage-A prototype and cannot authorize release until its hiding, FRI theorem, external-store residency, relation-adapter, and release KAT blockers are closed"
-)]
-#[path = "phase23_rns_link_q_pcs.rs"]
-mod q_pcs;
-#[cfg(test)]
-#[path = "phase23_rns_link_q_relation_adapter.rs"]
-mod q_relation_adapter;
-#[cfg(test)]
-pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;
-#[cfg(test)]
-#[path = "phase23_rns_link_state_owned.rs"]
-mod state_owned;
-#[cfg(test)]
-pub(super) use state_owned::{
-    StateOwnedRnsLinkAccumulatorOpeningsV1, ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
-    ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
-};
-/// RAII owner for canonical decoded slots. Deliberately neither `Clone` nor
-/// `Debug`; all named bytes are erased on success, error, and unwind.
-struct ZeroizingNativeDecodedPlaintextV1(Vec<[u8; 32]>);
-#[cfg(test)]
-std::thread_local! {
-    static NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
-        std::cell::Cell::new(0)
-    };
-}
-#[cfg(test)]
-fn native_decoded_plaintext_zeroized_drop_count_v1() -> usize {
-    NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1
-        .try_with(std::cell::Cell::get)
-        .unwrap_or(0)
-}
-impl Drop for ZeroizingNativeDecodedPlaintextV1 {
-    fn drop(&mut self) {
-        let values = core::hint::black_box(&mut self.0);
-        for value in values.iter_mut() {
-            value.fill(0);
-        }
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        #[cfg(test)]
-        if values.iter().all(|value| *value == [0; 32]) {
-            let _ = NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1
-                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
-        }
-        let _ = core::hint::black_box(&mut *values);
-    }
-}
-#[cfg(test)]
-fn validate_native_bgv_public_artifacts_v1(
-    key: &ZkAmsMkheCollectivePublicKeyV1,
-    layout: ZkAmsT256PackingLayoutV1,
-    plaintext: &ZkAmsT256PackedPlaintextV1,
-    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    let profile = release_profile_v1();
-    if profile.moduli.len() != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidProfile);
-    }
-    validate_compact_for_key(ciphertext, key, &profile)?;
-    if ciphertext.evaluation_key_digest() != Some(key.digest()) {
-        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-    }
-    let decoded = ZeroizingNativeDecodedPlaintextV1(decode_zk_ams_t256_packed_plaintext_v1(
-        layout, plaintext,
-    )?);
-    let used_slots = usize::try_from(plaintext.used_slots)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if decoded.0.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1
-        || used_slots > decoded.0.len()
-        || decoded.0[used_slots..]
-            .iter()
-            .any(|value| *value != [0; 32])
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-    }
-    let rns_binding_digest = packed_plaintext_rns_binding_digest_v1(layout, plaintext)?;
-    if rns_binding_digest == [0; 32] {
-        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-    }
-    Ok(rns_binding_digest)
-}
-/// Verify one real release-profile encryption opening and advance only the concrete, topology-only
-/// relation-prerequisite sink while the opening is live. No checked token, callback, witness
-/// reference, or transferable authority is returned.
-#[cfg(test)]
-fn verify_zk_ams_phase23_native_bgv_opening_v1(
-    key: &ZkAmsMkheCollectivePublicKeyV1,
-    layout: ZkAmsT256PackingLayoutV1,
-    plaintext: &ZkAmsT256PackedPlaintextV1,
-    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-    opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
-    relation_sink: &mut ZkAmsPhase23QNativeRelationAdapterSinkV1,
-) -> Result<(), ZkAmsMkheErrorV1> {
-    let rns_binding_digest =
-        validate_native_bgv_public_artifacts_v1(key, layout, plaintext, ciphertext)?;
-    // The owned opening and its derived secret scratch are single-use and
-    // zeroize when this unit-only call returns or unwinds. The sink receives
-    // only the unconstructible permit after both native equations have been
-    // checked; no artifact reference crosses into it.
-    opening.verify_and_consume_phase23_native_bgv_opening_v1(
-        ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(()),
-        relation_sink,
-        key,
-        layout,
-        plaintext,
-        ciphertext,
-        rns_binding_digest,
-    )
-}
-/// Unit-test bridge for the heavyweight release-size exercise. It exposes no
-/// checked value and is absent from production and sibling APIs.
-#[cfg(test)]
-pub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1<'a>(
-    key: &'a ZkAmsMkheCollectivePublicKeyV1,
-    layout: ZkAmsT256PackingLayoutV1,
-    plaintext: &'a ZkAmsT256PackedPlaintextV1,
-    ciphertext: &'a ZkAmsMkheCollectiveCiphertextV1,
-    opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
-) -> Result<(), ZkAmsMkheErrorV1> {
-    let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
-    let mut relation_sink = ZkAmsPhase23QNativeRelationAdapterSinkV1::new(geometry)?;
-    verify_zk_ams_phase23_native_bgv_opening_v1(
-        key,
-        layout,
-        plaintext,
-        ciphertext,
-        opening,
-        &mut relation_sink,
-    )
-}
 // The raw digest-only context fixture remains test-only. The production
 // challenge API guard still excludes mutable readiness and KAT evidence.
 #[cfg(test)]
@@ -2660,9 +2330,9 @@ mod tests {
     const CONTEXT_AUTHORITY_SOURCE_V1: &str =
         include_str!("phase23_rns_link_context_authority_v1.rs");
     const CONTEXT_AUTHORITY_SOURCE_KECCAK_V1: [u8; 32] = [
-        0xef, 0xf4, 0x20, 0xfb, 0xc8, 0xd1, 0x4b, 0x68, 0x24, 0x95, 0x23, 0x18, 0x60, 0xd9, 0xe4,
-        0xc2, 0xd9, 0xf9, 0xc1, 0x0a, 0x93, 0x46, 0x86, 0x24, 0xe6, 0x9a, 0xf8, 0x14, 0x40, 0xaa,
-        0xf6, 0xa0,
+        0x48, 0x2f, 0x06, 0xe1, 0x05, 0xfc, 0x20, 0xbc, 0x79, 0xf0, 0x8b, 0x13, 0xde, 0xce, 0x34,
+        0xb3, 0x7e, 0x7b, 0xa9, 0xce, 0x02, 0x2c, 0x32, 0x05, 0xf4, 0xc1, 0x2f, 0x2c, 0x05, 0x69,
+        0xf7, 0x4a,
     ];
     const _: fn() = || {
         trait AmbiguousIfCloneOrCopyV1<AdversarialImplV1> {
@@ -3531,68 +3201,27 @@ mod tests {
         );
     }
     #[test]
-    fn native_packed_preflight_is_heap_stable_and_zeroizes_on_success_error_and_unwind() {
-        let before = native_packed_preflight_zeroized_drop_count_v1();
-        let preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-            geometry_digest: [1; 32],
-            ordered_native_chunk_root: [2; 32],
-            chunk_count: 43,
-            digest: [3; 32],
-        });
-        let stable_address = preflight.as_ref() as *const _;
-        let moved = preflight;
-        assert_eq!(moved.as_ref() as *const _, stable_address);
-        drop(moved);
-        assert_eq!(native_packed_preflight_zeroized_drop_count_v1(), before + 1);
-        let before_error = native_packed_preflight_zeroized_drop_count_v1();
-        let error: Result<(), ZkAmsMkheErrorV1> = {
-            let _preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-                geometry_digest: [4; 32],
-                ordered_native_chunk_root: [5; 32],
-                chunk_count: 43,
-                digest: [6; 32],
-            });
-            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-        };
-        assert_eq!(error, Err(ZkAmsMkheErrorV1::InvalidPhase23Fold));
-        assert_eq!(
-            native_packed_preflight_zeroized_drop_count_v1(),
-            before_error + 1
-        );
-        let before_unwind = native_packed_preflight_zeroized_drop_count_v1();
-        let unwind = catch_unwind(AssertUnwindSafe(|| {
-            let _preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
-                geometry_digest: [7; 32],
-                ordered_native_chunk_root: [8; 32],
-                chunk_count: 43,
-                digest: [9; 32],
-            });
-            panic!("exercise boxed native-preflight drop during unwind");
-        }));
-        assert!(unwind.is_err());
-        assert_eq!(
-            native_packed_preflight_zeroized_drop_count_v1(),
-            before_unwind + 1
-        );
+    fn retired_bulk_accumulator_and_topology_only_opening_paths_are_absent() {
         let source = include_str!("phase23_rns_link.rs");
-        let constructor = source
-            .split("fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1")
-            .nth(1)
-            .expect("native packed preflight constructor")
-            .split("#[derive(Clone)]")
-            .next()
-            .expect("native packed preflight source slice");
-        assert!(
-            constructor
-                .contains("Result<Box<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1>")
-        );
-        assert!(constructor.contains(
-            "let mut preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1"
-        ));
-        assert!(constructor.contains("preflight.ordered_native_chunk_root = keccak256"));
-        assert!(constructor.contains("preflight.digest = keccak256"));
-        assert!(constructor.contains("Ok(preflight)"));
-        assert!(!constructor.contains("Ok(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1"));
+        let production = source.split("\n#[cfg(test)]\nmod tests {").next().unwrap();
+        for retired in [
+            "ZkAmsPhase23PackedAccumulatorSetV1",
+            "ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1",
+            "ZkAmsPhase23NativeBgvOpeningVerifierPermitV1",
+            "verify_and_consume_phase23_native_bgv_opening_v1",
+        ] {
+            assert!(!production.contains(retired), "retired owner: {retired}");
+        }
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/vega/zk_ams/mkhe");
+        for file in [
+            "phase23_rns_link_state_owned.rs",
+            "phase23_rns_link_q_relation_adapter.rs",
+        ] {
+            assert!(!directory.join(file).exists(), "retired source: {file}");
+        }
+        assert!(production.contains("mod external_source;"));
+        assert!(production.contains("mod cross_field_v2;"));
     }
     #[test]
     fn native_release_geometry_uses_public_x_and_replicated_u() {
@@ -3684,38 +3313,6 @@ mod tests {
             validate_ordered_native_family_chunk_counts_v1(&geometry, &excess),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-        let legacy_shell = ZkAmsPhase23PackedAccumulatorSetV1 {
-            shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
-                524_288, 1_048_576, 1_024, 524_288, 512,
-            )
-            .unwrap(),
-            x: Vec::new(),
-            u: Vec::new(),
-            e: Vec::new(),
-            r_e: Vec::new(),
-            w: Vec::new(),
-            r_w: Vec::new(),
-        };
-        assert!(matches!(
-            preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(&legacy_shell),
-            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-        ));
-        let missing_chunks = ZkAmsPhase23PackedAccumulatorSetV1 {
-            shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
-                89, 1_048_576, 1_024, 524_288, 512,
-            )
-            .unwrap(),
-            x: Vec::new(),
-            u: Vec::new(),
-            e: Vec::new(),
-            r_e: Vec::new(),
-            w: Vec::new(),
-            r_w: Vec::new(),
-        };
-        assert!(matches!(
-            preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(&missing_chunks),
-            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-        ));
     }
     #[test]
     fn native_replicated_u_preflight_rejects_cross_chunk_and_intra_chunk_changes() {
@@ -4202,38 +3799,6 @@ mod tests {
         assert_eq!(
             verify_tiny_relation(&absent_chunk, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-        );
-    }
-    #[test]
-    fn native_decoded_plaintext_owner_zeroizes_success_error_and_unwind() {
-        let owner = || ZeroizingNativeDecodedPlaintextV1(vec![[0x5a; 32]; 2]);
-        let before_success = native_decoded_plaintext_zeroized_drop_count_v1();
-        drop(owner());
-        assert_eq!(
-            native_decoded_plaintext_zeroized_drop_count_v1(),
-            before_success + 1
-        );
-        fn reject_owner(_owner: ZeroizingNativeDecodedPlaintextV1) -> Result<(), ZkAmsMkheErrorV1> {
-            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
-        }
-        let before_error = native_decoded_plaintext_zeroized_drop_count_v1();
-        assert_eq!(
-            reject_owner(owner()),
-            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
-        );
-        assert_eq!(
-            native_decoded_plaintext_zeroized_drop_count_v1(),
-            before_error + 1
-        );
-        let before_unwind = native_decoded_plaintext_zeroized_drop_count_v1();
-        let unwind = catch_unwind(AssertUnwindSafe(|| {
-            let _owner = owner();
-            panic!("intentional native decoded-plaintext erasure audit");
-        }));
-        assert!(unwind.is_err());
-        assert_eq!(
-            native_decoded_plaintext_zeroized_drop_count_v1(),
-            before_unwind + 1
         );
     }
     #[test]

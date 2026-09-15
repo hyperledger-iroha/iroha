@@ -17,6 +17,8 @@ mod artifact_dispatch;
 mod axt_binding;
 mod backend;
 mod batch;
+#[cfg(any(test, feature = "dev-tools"))]
+mod benchmark_geometry;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
 mod bn254;
 mod bn254_poseidon;
@@ -85,6 +87,9 @@ pub use backend::{
 pub use batch::{
     OperationKind, PublicInputs, StateTransition, TRANSITION_BATCH_SCHEMA_NAME, TransitionBatch,
 };
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub use benchmark_geometry::{BenchmarkGeometryV1, preflight_benchmark_geometry_v1};
 pub use bn254_poseidon::{
     Bn254PoseidonBatchSlice, PendingBn254PoseidonWordBatch, preflight_bn254_poseidon_word_batches,
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,

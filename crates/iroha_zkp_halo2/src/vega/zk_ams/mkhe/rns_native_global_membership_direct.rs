@@ -56,7 +56,13 @@
 
 use core::{fmt, marker::PhantomData};
 
-use super::super::super::rns_native_transcript::ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2;
+use super::super::super::{
+    rns_native_proof_hash::{
+        RnsNativeProofDigestV1, RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1,
+        RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+    },
+    rns_native_transcript::ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2,
+};
 
 use crate::{
     generalized_bulletproof::{
@@ -122,7 +128,10 @@ const BINDING_DOMAIN_V1: &[u8] =
 const VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.mkhe.rns-native-global-lookup.verified-core-root";
 const VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_VERSION_V2: u8 = 2;
-const VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2: usize = 800;
+// One native48 pre-global commitment, ten curve32 identities, one scalar32,
+// two compressed points and the exact labeled frame prefix. This is a local
+// public bridge preimage size; the proof transport caps remain unchanged.
+const VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2: usize = 816;
 const GEOMETRY_LANGUAGE_V1: &[u8] = b"active-U-planes=32408;U-coordinates=16384;U-sum=coordinatewise-sum-of-exact-active-plane-order;GBP-n=32768;U-sum-high-half=literal-zero;M-commitment=canonical-T256-G[0..32768)-plus-H-mask;M-index=y0..y14-little-endian;exclude-all-360-inverse-sumcheck-virtual-planes";
 const RELATION_LANGUAGE_V1: &[u8] = b"Q_z[y]=(z-y)^-1;z-notin-0..32767;Q_z-batch-inverts-all-32768-checked-nonzero-denominators-with-one-field-inversion;CG-only-constraint0=sum-v-U_sum[v]-sum-y-Q_z[y]*M[y]=0;CG-only-constraint1=sum-y-M[y]-530972672=0;zero-active-multiplication-gates;two-vector-commitments;no-scalar-commitments";
 const SOURCE_LANGUAGE_V1: &[u8] = b"move-only-source;inverse-core-handoff-owns-zeroizing-U-sum-values-and-mask;take-already-aggregated-U-sum-opening-exactly-once;take-M-opening-exactly-once;caller-zeroizing-destinations-exist-before-first-fallible-call;membership-token-is-move-only-and-owns-inverse-predecessor;no-per-plane-mask-replay;no-530972672-cell-materialization";
@@ -148,11 +157,11 @@ const _: () = {
     assert!(CORE_BYTES_V1 == 1_579);
     assert!(OWNED_WIRE_BYTES_V1 == 1_651);
     assert!(MIN_WIRE_BYTES_V1 == 1_652);
-    assert!(PARENT_RESIDUAL_CAP_BYTES_V1 == 110_115);
-    assert!(RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1 == 108_464);
+    assert!(PARENT_RESIDUAL_CAP_BYTES_V1 == 108_852);
+    assert!(RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1 == 107_201);
     assert!(GBP_CHALLENGES_V1 == 19);
     assert!(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_DOMAIN_V2.len() == 64);
-    assert!(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2 == 800);
+    assert!(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2 == 816);
     assert!(DIRECT_MEMBERSHIP_RELATION_VERIFIED_V1);
     assert!(!MULTIPLICITY_NONNEGATIVE_RANGE_VERIFIED_V1);
     assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
@@ -163,7 +172,7 @@ const _: () = {
 /// No inventory, final transcript, claimed root, residual, codec, successor,
 /// direct, or source-packing binding can enter this record.
 struct RnsNativeGlobalLookupCleanCoreV2 {
-    pre_global_capability_digest: [u8; DIGEST_BYTES_V1],
+    pre_global_capability_digest: RnsNativeProofDigestV1,
     pre_z_binding_digest: [u8; DIGEST_BYTES_V1],
     z: [u8; SCALAR_BYTES_V1],
     post_z_transcript_digest: [u8; DIGEST_BYTES_V1],
@@ -189,18 +198,18 @@ struct RnsNativeGlobalLookupCleanCoreV2 {
 )]
 #[must_use = "verified global clean-core root remains non-authorizing until transcript equality discharge"]
 pub(in super::super::super) struct RnsNativeGlobalLookupVerifiedCoreRootV2 {
-    root: [u8; DIGEST_BYTES_V1],
+    root: RnsNativeProofDigestV1,
     chronology_tag: ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2,
 }
 
 impl RnsNativeGlobalLookupVerifiedCoreRootV2 {
     pub(in super::super::super) fn matches_claimed_global_lookup_root_v2(
         self,
-        claimed_root: [u8; DIGEST_BYTES_V1],
-        expected_post_cross_field_binding_digest: [u8; DIGEST_BYTES_V1],
-        expected_pre_global_capability_digest: [u8; DIGEST_BYTES_V1],
+        claimed_root: RnsNativeProofDigestV1,
+        expected_post_cross_field_binding_digest: RnsNativeProofDigestV1,
+        expected_pre_global_capability_digest: RnsNativeProofDigestV1,
     ) -> bool {
-        claimed_root != [0; DIGEST_BYTES_V1]
+        claimed_root != RnsNativeProofDigestV1::ZERO
             && self.root == claimed_root
             && self.chronology_tag.matches_exact_chronology_v2(
                 expected_post_cross_field_binding_digest,
@@ -212,7 +221,7 @@ impl RnsNativeGlobalLookupVerifiedCoreRootV2 {
 #[cfg(test)]
 impl RnsNativeGlobalLookupVerifiedCoreRootV2 {
     pub(in super::super::super) fn test_fixture_v2(
-        root: [u8; DIGEST_BYTES_V1],
+        root: RnsNativeProofDigestV1,
         chronology_tag: ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2,
     ) -> Self {
         Self {
@@ -602,26 +611,6 @@ fn append_frame_v1(
     Ok(())
 }
 
-fn absorb_verified_global_lookup_frame_v2(
-    hash: &mut Keccak256,
-    absorbed: &mut usize,
-    label: &[u8],
-    value: &[u8],
-) -> Result<(), RnsNativeGlobalMembershipDirectErrorV1> {
-    let label_len = u16::try_from(label.len())
-        .map_err(|_| RnsNativeGlobalMembershipDirectErrorV1::ArithmeticOverflow)?;
-    let value_len = u32::try_from(value.len())
-        .map_err(|_| RnsNativeGlobalMembershipDirectErrorV1::ArithmeticOverflow)?;
-    hash.update(&label_len.to_be_bytes());
-    hash.update(label);
-    hash.update(&value_len.to_be_bytes());
-    hash.update(value);
-    *absorbed = absorbed
-        .checked_add(2 + label.len() + 4 + value.len())
-        .ok_or(RnsNativeGlobalMembershipDirectErrorV1::ArithmeticOverflow)?;
-    Ok(())
-}
-
 fn verified_global_lookup_core_root_v2(
     core: RnsNativeGlobalLookupCleanCoreV2,
 ) -> Result<RnsNativeGlobalLookupVerifiedCoreRootV2, RnsNativeGlobalMembershipDirectErrorV1> {
@@ -642,14 +631,18 @@ fn verified_global_lookup_core_root_v2(
         membership_transcript_digest,
         chronology_tag,
     } = core;
-    let mut hash = Keccak256::new();
-    hash.update(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_DOMAIN_V2);
-    hash.update(&[VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_VERSION_V2]);
-    let mut absorbed = VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_DOMAIN_V2.len() + 1;
+    // These are public outputs of the already verified curve kernels. The
+    // only native input is the opaque pre-global chronology commitment; its
+    // complete 48 bytes enter before the inner statements and proof transcript
+    // identities. The bridge binds verified curve results; raw curve proof
+    // bytes are consumed by their verifiers and are not rehashed here.
+    let mut encoded = Vec::with_capacity(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2);
+    encoded.extend_from_slice(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_DOMAIN_V2);
+    encoded.push(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_VERSION_V2);
     for (label, value) in [
         (
             b"pre-global-capability".as_slice(),
-            pre_global_capability_digest.as_slice(),
+            pre_global_capability_digest.as_bytes().as_slice(),
         ),
         (b"pre-z-binding".as_slice(), pre_z_binding_digest.as_slice()),
         (b"z".as_slice(), z.as_slice()),
@@ -689,13 +682,26 @@ fn verified_global_lookup_core_root_v2(
             membership_transcript_digest.as_slice(),
         ),
     ] {
-        absorb_verified_global_lookup_frame_v2(&mut hash, &mut absorbed, label, value)?;
+        append_frame_v1(&mut encoded, label, value)?;
     }
-    if absorbed != VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2 {
+    if encoded.len() != VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2 {
         return Err(RnsNativeGlobalMembershipDirectErrorV1::InvalidGeometry);
     }
-    let root = hash.finalize();
-    if root == [0; DIGEST_BYTES_V1] {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeGlobalMembershipDirectErrorV1::InvalidContext)?;
+    let root = context
+        .hash(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 2,
+                index: 0,
+                counter: 0,
+            },
+            &[&encoded],
+        )
+        .map_err(|_| RnsNativeGlobalMembershipDirectErrorV1::InvalidIntegrity)?;
+    if root == RnsNativeProofDigestV1::ZERO {
         return Err(RnsNativeGlobalMembershipDirectErrorV1::InvalidIntegrity);
     }
     Ok(RnsNativeGlobalLookupVerifiedCoreRootV2 {
@@ -1536,8 +1542,7 @@ pub(in super::super::super) fn derive_rns_native_verified_global_lookup_core_roo
     let z = post_z.z_challenge().to_le_bytes();
     let u_sum = encode_point_v1(membership.u_sum_commitment())?;
     let multiplicity = encode_point_v1(post_z.multiplicity())?;
-    let digests = [
-        pre_global_capability_digest,
+    let curve_digests = [
         post_z.pre_z_binding_digest(),
         post_z.post_z_transcript_digest(),
         post_z.existing_inverse_root(),
@@ -1550,7 +1555,8 @@ pub(in super::super::super) fn derive_rns_native_verified_global_lookup_core_roo
         membership.transcript_digest(),
     ];
     if z == [0; SCALAR_BYTES_V1]
-        || digests.contains(&[0; DIGEST_BYTES_V1])
+        || pre_global_capability_digest == RnsNativeProofDigestV1::ZERO
+        || curve_digests.contains(&[0; DIGEST_BYTES_V1])
         || membership.u_sum_commitment().is_identity()
         || post_z.multiplicity().is_identity()
     {

@@ -6,9 +6,7 @@
 //! `E16/rE/W8/rW` source records, maps their 1,536 rows and blindings to the
 //! retained Hyrax terminal commitments, and checks one transcript-derived
 //! random linear combination under the exact 1,025-point commitment basis.
-//! The detached 7,640-point zero-padding token remains only a redundant,
-//! non-authoritative compatibility input pending schema retirement. This stage
-//! also exact-decodes the post-RLWE residual anchor that freezes all five point,
+//! This stage also exact-decodes the post-RLWE residual anchor that freezes all five point,
 //! forty limb, and twenty-nine lookup-round identities of the cross-field
 //! section.
 //!
@@ -29,6 +27,11 @@ use super::{
         ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1,
         ZkAmsMkheRnsNativeFamilyV1,
     },
+    rns_native_proof_hash::{
+        RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+        RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
+        RnsNativeProofHashRoleV1, decode_proof_digest_v1,
+    },
     rns_native_rlwe_source_statement::{
         RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1, RnsNativeRlweSourceStatementStageV1,
     },
@@ -42,7 +45,6 @@ use super::{
     rns_native_transcript::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
     },
-    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 use crate::{
     generalized_bulletproof::{SecretMultiexpBuilder, multiexp, try_exact_capacity_vec_v1},
@@ -58,6 +60,8 @@ use crate::{
 
 const LINK_VERSION_V1: u8 = 1;
 const DIGEST_BYTES_V1: usize = 32;
+const PROOF_DIGEST_BYTES_V1: usize = 48;
+const ANCHOR_NATIVE_DIGESTS_V1: usize = 5;
 const POINT_BYTES_V1: usize = 33;
 const TERMINAL_ROWS_V1: usize = 1_536;
 const ERROR_ROWS_V1: usize = 1_024;
@@ -100,9 +104,10 @@ const CORE_CROSS_ROOT_V1: usize = 12;
 const CORE_GLOBAL_ROOT_V1: usize = 13;
 const CORE_CROSS_LINK_V1: usize = 14;
 const CORE_DOWNSTREAM_V1: usize = 15;
-const ANCHOR_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 3 + 1 + 2 + 2 + 1 + 1 + 4;
-const ANCHOR_FIXED_BYTES_V1: usize =
-    ANCHOR_HEADER_BYTES_V1 + ANCHOR_CORE_DIGESTS_V1 * DIGEST_BYTES_V1;
+const ANCHOR_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 3 + 1 + 2 + 2 + 4;
+const ANCHOR_FIXED_BYTES_V1: usize = ANCHOR_HEADER_BYTES_V1
+    + (ANCHOR_CORE_DIGESTS_V1 - ANCHOR_NATIVE_DIGESTS_V1) * DIGEST_BYTES_V1
+    + ANCHOR_NATIVE_DIGESTS_V1 * PROOF_DIGEST_BYTES_V1;
 const LINK_DOWNSTREAM_MAX_BYTES_V1: usize =
     RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1 - ANCHOR_FIXED_BYTES_V1;
 const MAX_BOUND_DIGESTS_V1: usize = 384;
@@ -121,8 +126,6 @@ const POINT_BUNDLE_DOMAIN_V1: &[u8] =
 const LIMB_BUNDLE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.cross-limbs";
 const ROUND_BUNDLE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.lookup-rounds";
-const ZERO_LIMB_BUNDLE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.zero-padding-limbs";
 const CROSS_PROOF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.cross-proof";
 const CROSS_LINK_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.cross-link";
 const DOWNSTREAM_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-terminal.downstream";
@@ -133,7 +136,7 @@ const AGGREGATE_POINT_DOMAIN_V1: &[u8] =
 const SOURCE_MAPPING_FORMULA_V1: &[u8] = b"E[i][s]->row=i*64+s/1024,col=s%1024;rE[s]->blind[row=s];W[i][s]->row=1024+i*64+s/1024,col=s%1024;rW[s]->blind[row=1024+s]";
 const SOURCE_PACKING_FORMULA_V1: &[u8] = b"canonical-131072-coefficient-T256-packed-polynomial;inverse-quadratic-factor-NTT;used-slots-only";
 const SOURCE_PADDING_FORMULA_V1: &[u8] =
-    b"X:used-slots=89;all-slots-from-89-through-65535-must-be-zero-on-live-source-snapshot";
+    b"X:used-slots=89;rE:used-slots=1024;rW:used-slots=512;each-record-all-slots-from-used-bound-through-65535-must-be-zero-on-live-source-snapshot;complete-padding-check-precedes-used-slot-callback";
 const BATCH_FORMULA_V1: &[u8] =
     b"sum_row eta^row*(sum_col value[row,col]*G[col]+blind[row]*H);eta!=0,1";
 const OPENING_SLICE_FORMULA_V1: &[u8] =
@@ -153,9 +156,12 @@ const _: () = {
     assert!(ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1 == 5);
     assert!(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 == 40);
     assert!(ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1 == 29);
-    assert!(ANCHOR_HEADER_BYTES_V1 == 20);
-    assert!(ANCHOR_FIXED_BYTES_V1 == 532);
-    assert!(LINK_DOWNSTREAM_MAX_BYTES_V1 == 3_251);
+    assert!(ANCHOR_HEADER_BYTES_V1 == 18);
+    assert!(ANCHOR_FIXED_BYTES_V1 == 610);
+    assert!(
+        LINK_DOWNSTREAM_MAX_BYTES_V1 + ANCHOR_FIXED_BYTES_V1
+            == RNS_NATIVE_RLWE_SOURCE_DOWNSTREAM_MAX_BYTES_V1
+    );
 };
 
 /// Failure while constructing the source/terminal/cross-field prerequisite.
@@ -195,7 +201,6 @@ pub(super) struct RnsNativeSourceTerminalCrossFieldPrerequisiteV1<
 > {
     source: RnsNativeRlweSourceStatementStageV1<'a, S>,
     terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
     downstream: &'a [u8],
     formula_digest: [u8; DIGEST_BYTES_V1],
     opening_bundle_digest: [u8; DIGEST_BYTES_V1],
@@ -203,7 +208,6 @@ pub(super) struct RnsNativeSourceTerminalCrossFieldPrerequisiteV1<
     point_bundle_digest: [u8; DIGEST_BYTES_V1],
     limb_bundle_digest: [u8; DIGEST_BYTES_V1],
     round_bundle_digest: [u8; DIGEST_BYTES_V1],
-    zero_limb_bundle_digest: [u8; DIGEST_BYTES_V1],
     cross_proof_digest: [u8; DIGEST_BYTES_V1],
     cross_link_digest: [u8; DIGEST_BYTES_V1],
     anchor_digest: [u8; DIGEST_BYTES_V1],
@@ -244,10 +248,6 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         self.round_bundle_digest
     }
 
-    pub(super) const fn zero_limb_bundle_digest(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.zero_limb_bundle_digest
-    }
-
     pub(super) const fn cross_proof_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.cross_proof_digest
     }
@@ -265,17 +265,13 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     }
 
     /// Purpose-bound mutable forwarding for the source-packing replay.  The
-    /// source statement, terminal kernel, and zero-padding owner remain joined.
+    /// source statement and terminal kernel remain joined.
     pub(super) fn source_packing_snapshot_mut_v2(&mut self) -> &mut S {
         self.source.snapshot_mut()
     }
 
     pub(super) const fn terminal(&self) -> &RnsNativeTerminalCrossBasisKernelPrerequisiteV1 {
         &self.terminal
-    }
-
-    pub(super) const fn zero_padding(&self) -> &RnsNativeZeroPaddingCommitmentPrerequisiteV1 {
-        &self.zero_padding
     }
 
     /// Re-authenticate the exact cross-field section retained only by digest.
@@ -302,7 +298,7 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResidualAnchorV1<'a> {
-    core: [[u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1],
+    core: [DigestIdentityV1; ANCHOR_CORE_DIGESTS_V1],
     downstream: &'a [u8],
 }
 
@@ -326,8 +322,6 @@ impl<'a> ResidualAnchorV1<'a> {
             || usize::from(decoder.u8()?) != ANCHOR_CORE_DIGESTS_V1
             || usize::from(decoder.u16()?) != TERMINAL_ROWS_V1
             || usize::from(decoder.u16()?) != TERMINAL_COLUMNS_V1
-            || decoder.u8()? != 4
-            || decoder.u8()? != 0
         {
             return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidAnchor);
         }
@@ -336,9 +330,15 @@ impl<'a> ResidualAnchorV1<'a> {
         if downstream_len == 0 || downstream_len > LINK_DOWNSTREAM_MAX_BYTES_V1 {
             return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidAnchor);
         }
-        let mut core = [[0_u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1];
-        for digest in &mut core {
-            *digest = decoder.array()?;
+        let mut core = [DigestIdentityV1::EMPTY; ANCHOR_CORE_DIGESTS_V1];
+        for (ordinal, digest) in core.iter_mut().enumerate() {
+            *digest = if anchor_native_position_v1(ordinal) {
+                decode_proof_digest_v1(decoder.take(PROOF_DIGEST_BYTES_V1)?)
+                    .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidAnchor)?
+                    .into()
+            } else {
+                DigestIdentityV1::Public32(decoder.array()?)
+            };
         }
         let downstream = decoder.take(downstream_len)?;
         decoder.finish()?;
@@ -346,11 +346,25 @@ impl<'a> ResidualAnchorV1<'a> {
         for digest in core {
             registry.insert(digest)?;
         }
-        if core[CORE_DOWNSTREAM_V1] != downstream_digest_v1(downstream) {
+        if core[CORE_DOWNSTREAM_V1] != downstream_digest_v1(downstream).into() {
             return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidAnchor);
         }
         Ok(Self { core, downstream })
     }
+}
+
+// The final V1 wire fixes each identity's role and width by position.
+// Public and curve statement identities remain 32 bytes; native bindings carry
+// every canonical lane. There is no width tag or retired 32-byte native form.
+const fn anchor_native_position_v1(ordinal: usize) -> bool {
+    matches!(
+        ordinal,
+        CORE_PRIOR_STATEMENT_V1
+            | CORE_MAPPING_ROOT_V1
+            | CORE_TERMINAL_HYRAX_ROOT_V1
+            | CORE_CROSS_ROOT_V1
+            | CORE_GLOBAL_ROOT_V1
+    )
 }
 
 struct DecoderV1<'a> {
@@ -409,23 +423,24 @@ impl<'a> DecoderV1<'a> {
 }
 
 struct DigestRegistryV1 {
-    values: [[u8; DIGEST_BYTES_V1]; MAX_BOUND_DIGESTS_V1],
+    values: [DigestIdentityV1; MAX_BOUND_DIGESTS_V1],
     len: usize,
 }
 
 impl DigestRegistryV1 {
     const fn new() -> Self {
         Self {
-            values: [[0; DIGEST_BYTES_V1]; MAX_BOUND_DIGESTS_V1],
+            values: [DigestIdentityV1::EMPTY; MAX_BOUND_DIGESTS_V1],
             len: 0,
         }
     }
 
     fn insert(
         &mut self,
-        digest: [u8; DIGEST_BYTES_V1],
+        digest: impl Into<DigestIdentityV1>,
     ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
-        if digest == [0; DIGEST_BYTES_V1] || self.values[..self.len].contains(&digest) {
+        let digest = digest.into();
+        if digest.is_zero() || self.values[..self.len].contains(&digest) {
             return Err(RnsNativeSourceTerminalCrossFieldErrorV1::AliasedDigest);
         }
         *self
@@ -474,7 +489,6 @@ pub(super) fn link_rns_native_source_terminal_cross_field_v1<'a, S>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     mut source: RnsNativeRlweSourceStatementStageV1<'a, S>,
     terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
     cross: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'_>,
 ) -> Result<
     RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'a, S>,
@@ -483,7 +497,7 @@ pub(super) fn link_rns_native_source_terminal_cross_field_v1<'a, S>(
 where
     S: ZkAmsMkheRnsNativeSourceSnapshotV1,
 {
-    validate_context_v1(transcript, &source, &terminal, &zero_padding)?;
+    validate_context_v1(transcript, &source, &terminal)?;
     let formula_digest = mapping_formula_digest_v1()?;
     let opening_bundle_digest =
         validate_opening_bindings_v1(transcript, &terminal, formula_digest)?;
@@ -511,23 +525,17 @@ where
         indexed_digest_bundle_v1(LIMB_BUNDLE_DOMAIN_V1, cross.limb_relation_digests())?;
     let round_bundle =
         indexed_digest_bundle_v1(ROUND_BUNDLE_DOMAIN_V1, cross.sumcheck_round_digests())?;
-    let zero_limb_bundle = indexed_digest_bundle_v1(
-        ZERO_LIMB_BUNDLE_DOMAIN_V1,
-        zero_padding.limb_padding_digests(),
-    )?;
     let cross_proof_digest = cross_proof_digest_v1(cross.proof())?;
     let cross_link_digest = cross_link_digest_v1(
         transcript,
         &source,
         &terminal,
-        &zero_padding,
         formula_digest,
         opening_bundle_digest,
         aggregate_point_digest,
         point_bundle,
         limb_bundle,
         round_bundle,
-        zero_limb_bundle,
         cross_proof_digest,
     )?;
     let global_alias_digests = GlobalAliasDigestsV1 {
@@ -541,18 +549,11 @@ where
             point_bundle,
             limb_bundle,
             round_bundle,
-            zero_limb_bundle,
             cross_proof_digest,
             cross_link_digest,
         ],
     };
-    validate_global_aliases_v1(
-        transcript,
-        &source,
-        &terminal,
-        &zero_padding,
-        global_alias_digests,
-    )?;
+    validate_global_aliases_v1(transcript, &source, &terminal, global_alias_digests)?;
 
     let anchor = ResidualAnchorV1::from_canonical_bytes_exact_v1(source.downstream())?;
     let expected_core = expected_anchor_core_v1(
@@ -577,7 +578,6 @@ where
     Ok(RnsNativeSourceTerminalCrossFieldPrerequisiteV1 {
         source,
         terminal,
-        zero_padding,
         downstream: anchor.downstream,
         formula_digest,
         opening_bundle_digest,
@@ -585,7 +585,6 @@ where
         point_bundle_digest: point_bundle,
         limb_bundle_digest: limb_bundle,
         round_bundle_digest: round_bundle,
-        zero_limb_bundle_digest: zero_limb_bundle,
         cross_proof_digest,
         cross_link_digest,
         anchor_digest,
@@ -594,7 +593,7 @@ where
 
 fn validate_anchor_core_v1(
     anchor: ResidualAnchorV1<'_>,
-    expected: [[u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1],
+    expected: [DigestIdentityV1; ANCHOR_CORE_DIGESTS_V1],
 ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
     if anchor.core == expected {
         Ok(())
@@ -607,7 +606,6 @@ fn validate_context_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     terminal: &RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: &RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
     let layout = source.snapshot().layout();
     if layout.profile_digest() != transcript.profile_digest()
@@ -625,9 +623,6 @@ fn validate_context_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidContext);
     }
     terminal
-        .validate_context_v1(transcript)
-        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidContext)?;
-    zero_padding
         .validate_context_v1(transcript)
         .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidContext)?;
     Ok(())
@@ -753,7 +748,7 @@ fn opening_hyrax_digest_v1(
 }
 
 fn derive_mapping_challenge_v1(
-    seed: [u8; DIGEST_BYTES_V1],
+    seed: ProofDigestV1,
     formula_digest: [u8; DIGEST_BYTES_V1],
     opening_bundle_digest: [u8; DIGEST_BYTES_V1],
     point_set_digest: [u8; DIGEST_BYTES_V1],
@@ -764,7 +759,7 @@ fn derive_mapping_challenge_v1(
             let mut hash = Keccak256::new();
             hash.update(CHALLENGE_DOMAIN_V1);
             hash.update(&[LINK_VERSION_V1, half as u8]);
-            hash.update(&seed);
+            hash.update(seed.as_bytes());
             hash.update(&formula_digest);
             hash.update(&opening_bundle_digest);
             hash.update(&point_set_digest);
@@ -821,6 +816,71 @@ fn aggregate_point_digest_v1(
     Ok(hash.finalize())
 }
 
+// These are actual native roots over curve statement identities,
+// not curve scalar/proof hashes. The shared context binds the current profile,
+// catalog and protocol in addition to every explicitly ordered input below.
+fn mapping_roots_v1(
+    public_context: &[[u8; DIGEST_BYTES_V1]; 9],
+    seed: ProofDigestV1,
+    curve_context: &[[u8; DIGEST_BYTES_V1]; 4],
+    challenge: Scalar,
+) -> Result<(ProofDigestV1, ProofDigestV1), RnsNativeSourceTerminalCrossFieldErrorV1> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidContext)?;
+    let version = [LINK_VERSION_V1];
+    let scalar = challenge.to_be_bytes();
+    let mapping_root = context
+        .hash(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 3,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                MAPPING_ROOT_DOMAIN_V1,
+                &version,
+                &public_context[0],
+                &public_context[1],
+                &public_context[2],
+                &public_context[3],
+                &public_context[4],
+                &public_context[5],
+                &public_context[6],
+                &public_context[7],
+                &public_context[8],
+                seed.as_bytes(),
+                &curve_context[0],
+                &curve_context[1],
+                &curve_context[2],
+                &curve_context[3],
+                &scalar,
+            ],
+        )
+        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidMapping)?;
+    let terminal_root = context
+        .hash(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 3,
+                index: 1,
+                counter: 0,
+            },
+            &[
+                TERMINAL_ROOT_DOMAIN_V1,
+                &version,
+                mapping_root.as_bytes(),
+                &curve_context[1],
+                &curve_context[2],
+                &curve_context[3],
+            ],
+        )
+        .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidMapping)?;
+    Ok((mapping_root, terminal_root))
+}
+
 fn validate_mapping_roots_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     formula_digest: [u8; DIGEST_BYTES_V1],
@@ -829,44 +889,28 @@ fn validate_mapping_roots_v1(
     challenge: Scalar,
     aggregate_point_digest: [u8; DIGEST_BYTES_V1],
 ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
-    let mut mapping = Keccak256::new();
-    mapping.update(MAPPING_ROOT_DOMAIN_V1);
-    mapping.update(&[LINK_VERSION_V1]);
-    for digest in [
-        transcript.profile_digest(),
-        transcript.topology_digest(),
-        transcript.release_candidate_digest(),
-        transcript.statement_digest(),
-        transcript.operational_context_digest(),
-        transcript.source_binding_digest(),
-        transcript.main_snapshot_digest(),
-        transcript.nonce_snapshot_digest(),
-        transcript.source_receipt_digest(),
+    let roots = mapping_roots_v1(
+        &[
+            transcript.profile_digest(),
+            transcript.topology_digest(),
+            transcript.release_candidate_digest(),
+            transcript.statement_digest(),
+            transcript.operational_context_digest(),
+            transcript.source_binding_digest(),
+            transcript.main_snapshot_digest(),
+            transcript.nonce_snapshot_digest(),
+            transcript.source_receipt_digest(),
+        ],
         transcript.mapping_challenge_seed(),
-        formula_digest,
-        opening_bundle_digest,
-        hyrax_digest,
-        aggregate_point_digest,
-    ] {
-        mapping.update(&digest);
-    }
-    mapping.update(&challenge.to_be_bytes());
-    let mapping_root = mapping.finalize();
-    if mapping_root != transcript.mapping_root() {
-        return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidMapping);
-    }
-    let mut terminal = Keccak256::new();
-    terminal.update(TERMINAL_ROOT_DOMAIN_V1);
-    terminal.update(&[LINK_VERSION_V1]);
-    for digest in [
-        mapping_root,
-        opening_bundle_digest,
-        hyrax_digest,
-        aggregate_point_digest,
-    ] {
-        terminal.update(&digest);
-    }
-    if terminal.finalize() != transcript.terminal_hyrax_root() {
+        &[
+            formula_digest,
+            opening_bundle_digest,
+            hyrax_digest,
+            aggregate_point_digest,
+        ],
+        challenge,
+    )?;
+    if roots != (transcript.mapping_root(), transcript.terminal_hyrax_root()) {
         return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidMapping);
     }
     Ok(())
@@ -1125,7 +1169,7 @@ fn verify_aggregate_commitment_for_key_v1(
 
 fn indexed_digest_bundle_v1(
     domain: &[u8],
-    digests: &[[u8; DIGEST_BYTES_V1]],
+    digests: &[ProofDigestV1],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourceTerminalCrossFieldErrorV1> {
     if digests.is_empty() || digests.len() > u8::MAX as usize {
         return Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidCrossFieldBinding);
@@ -1137,7 +1181,7 @@ fn indexed_digest_bundle_v1(
     for (index, digest) in digests.iter().enumerate() {
         registry.insert(*digest)?;
         hash.update(&[index as u8]);
-        hash.update(digest);
+        hash.update(digest.as_bytes());
     }
     Ok(hash.finalize())
 }
@@ -1161,14 +1205,12 @@ fn cross_link_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     terminal: &RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: &RnsNativeZeroPaddingCommitmentPrerequisiteV1,
     formula: [u8; DIGEST_BYTES_V1],
     opening_bundle: [u8; DIGEST_BYTES_V1],
     aggregate_point: [u8; DIGEST_BYTES_V1],
     point_bundle: [u8; DIGEST_BYTES_V1],
     limb_bundle: [u8; DIGEST_BYTES_V1],
     round_bundle: [u8; DIGEST_BYTES_V1],
-    zero_limb_bundle: [u8; DIGEST_BYTES_V1],
     cross_proof: [u8; DIGEST_BYTES_V1],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourceTerminalCrossFieldErrorV1> {
     let mut hash = Keccak256::new();
@@ -1176,45 +1218,40 @@ fn cross_link_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     hash.update(&[LINK_VERSION_V1]);
     hash.update(&source.epoch().to_be_bytes());
     for digest in [
-        transcript.transcript_digest(),
-        transcript.mapping_root(),
-        transcript.terminal_hyrax_root(),
-        transcript.cross_basis_bridge_root(),
-        transcript.cross_field_challenge_seed(),
-        transcript.global_lookup_challenge_seed(),
-        transcript.cross_field_root(),
-        transcript.global_lookup_root(),
-        source.statement_anchor_digest(),
-        source.mapping_digest(),
-        source.formula_digest(),
-        source.aggregation_schedule_digest(),
-        source.preflight_statement_digest(),
-        source.public_key_digest(),
-        source.public_bundle_digest(),
-        source.qpcs().parameter_digest(),
-        source.qpcs().query_seed(),
-        source.qpcs().section_binding_digest(),
-        source.qpcs().schedule_digest(),
-        source.qpcs().evaluation_binding_digest(),
-        source.qpcs().residual_digest(),
-        terminal.binding_digest(),
-        terminal.hyrax_digest(),
-        terminal.bp_digest(),
-        terminal.bridge_root(),
-        zero_padding.binding_digest(),
-        zero_padding.point_set_digest(),
-        zero_padding.root(),
-        zero_padding.proof_digest(),
-        zero_limb_bundle,
-        formula,
-        opening_bundle,
-        aggregate_point,
-        point_bundle,
-        limb_bundle,
-        round_bundle,
-        cross_proof,
+        DigestIdentityV1::from(transcript.transcript_digest()),
+        DigestIdentityV1::from(transcript.mapping_root()),
+        DigestIdentityV1::from(transcript.terminal_hyrax_root()),
+        DigestIdentityV1::from(transcript.cross_basis_bridge_root()),
+        DigestIdentityV1::from(transcript.cross_field_challenge_seed()),
+        DigestIdentityV1::from(transcript.global_lookup_challenge_seed()),
+        DigestIdentityV1::from(transcript.cross_field_root()),
+        DigestIdentityV1::from(transcript.global_lookup_root()),
+        DigestIdentityV1::from(source.statement_anchor_digest()),
+        DigestIdentityV1::from(source.mapping_digest()),
+        DigestIdentityV1::from(source.formula_digest()),
+        DigestIdentityV1::from(source.aggregation_schedule_digest()),
+        DigestIdentityV1::from(source.preflight_statement_digest()),
+        DigestIdentityV1::from(source.public_key_digest()),
+        DigestIdentityV1::from(source.public_bundle_digest()),
+        DigestIdentityV1::from(source.qpcs().parameter_digest()),
+        DigestIdentityV1::from(source.qpcs().query_seed()),
+        DigestIdentityV1::from(source.qpcs().section_binding_digest()),
+        DigestIdentityV1::from(source.qpcs().schedule_digest()),
+        DigestIdentityV1::from(source.qpcs().evaluation_binding_digest()),
+        DigestIdentityV1::from(source.qpcs().residual_digest()),
+        DigestIdentityV1::from(terminal.binding_digest()),
+        DigestIdentityV1::from(terminal.hyrax_digest()),
+        DigestIdentityV1::from(terminal.bp_digest()),
+        DigestIdentityV1::from(terminal.bridge_root()),
+        DigestIdentityV1::from(formula),
+        DigestIdentityV1::from(opening_bundle),
+        DigestIdentityV1::from(aggregate_point),
+        DigestIdentityV1::from(point_bundle),
+        DigestIdentityV1::from(limb_bundle),
+        DigestIdentityV1::from(round_bundle),
+        DigestIdentityV1::from(cross_proof),
     ] {
-        hash.update(&digest);
+        hash.update(digest.as_bytes());
     }
     let digest = hash.finalize();
     if digest == [0; DIGEST_BYTES_V1] {
@@ -1236,39 +1273,38 @@ fn expected_anchor_core_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     cross_proof: [u8; DIGEST_BYTES_V1],
     cross_link: [u8; DIGEST_BYTES_V1],
     downstream: &[u8],
-) -> [[u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1] {
-    let mut core = [[0_u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1];
-    core[CORE_PRIOR_STATEMENT_V1] = source.statement_anchor_digest();
-    core[CORE_PRIOR_RECORD_MAPPING_V1] = source.mapping_digest();
-    core[CORE_TERMINAL_MAPPING_FORMULA_V1] = formula;
-    core[CORE_HYRAX_POINTS_V1] = terminal.hyrax_digest();
-    core[CORE_BP_POINTS_V1] = terminal.bp_digest();
-    core[CORE_OPENING_HYRAX_BUNDLE_V1] = opening_bundle;
-    core[CORE_MAPPING_ROOT_V1] = transcript.mapping_root();
-    core[CORE_TERMINAL_HYRAX_ROOT_V1] = transcript.terminal_hyrax_root();
-    core[CORE_CROSS_POINT_BUNDLE_V1] = point_bundle;
-    core[CORE_CROSS_LIMB_BUNDLE_V1] = limb_bundle;
-    core[CORE_LOOKUP_ROUND_BUNDLE_V1] = round_bundle;
-    core[CORE_CROSS_PROOF_V1] = cross_proof;
-    core[CORE_CROSS_ROOT_V1] = transcript.cross_field_root();
-    core[CORE_GLOBAL_ROOT_V1] = transcript.global_lookup_root();
-    core[CORE_CROSS_LINK_V1] = cross_link;
-    core[CORE_DOWNSTREAM_V1] = downstream_digest_v1(downstream);
+) -> [DigestIdentityV1; ANCHOR_CORE_DIGESTS_V1] {
+    let mut core = [DigestIdentityV1::EMPTY; ANCHOR_CORE_DIGESTS_V1];
+    core[CORE_PRIOR_STATEMENT_V1] = source.statement_anchor_digest().into();
+    core[CORE_PRIOR_RECORD_MAPPING_V1] = source.mapping_digest().into();
+    core[CORE_TERMINAL_MAPPING_FORMULA_V1] = formula.into();
+    core[CORE_HYRAX_POINTS_V1] = terminal.hyrax_digest().into();
+    core[CORE_BP_POINTS_V1] = terminal.bp_digest().into();
+    core[CORE_OPENING_HYRAX_BUNDLE_V1] = opening_bundle.into();
+    core[CORE_MAPPING_ROOT_V1] = transcript.mapping_root().into();
+    core[CORE_TERMINAL_HYRAX_ROOT_V1] = transcript.terminal_hyrax_root().into();
+    core[CORE_CROSS_POINT_BUNDLE_V1] = point_bundle.into();
+    core[CORE_CROSS_LIMB_BUNDLE_V1] = limb_bundle.into();
+    core[CORE_LOOKUP_ROUND_BUNDLE_V1] = round_bundle.into();
+    core[CORE_CROSS_PROOF_V1] = cross_proof.into();
+    core[CORE_CROSS_ROOT_V1] = transcript.cross_field_root().into();
+    core[CORE_GLOBAL_ROOT_V1] = transcript.global_lookup_root().into();
+    core[CORE_CROSS_LINK_V1] = cross_link.into();
+    core[CORE_DOWNSTREAM_V1] = downstream_digest_v1(downstream).into();
     core
 }
 
 struct GlobalAliasDigestsV1<'a> {
-    point_digests: &'a [[u8; DIGEST_BYTES_V1]],
-    limb_digests: &'a [[u8; DIGEST_BYTES_V1]],
-    round_digests: &'a [[u8; DIGEST_BYTES_V1]],
-    derived: [[u8; DIGEST_BYTES_V1]; 9],
+    point_digests: &'a [ProofDigestV1],
+    limb_digests: &'a [ProofDigestV1],
+    round_digests: &'a [ProofDigestV1],
+    derived: [[u8; DIGEST_BYTES_V1]; 8],
 }
 
 fn validate_global_aliases_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     terminal: &RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: &RnsNativeZeroPaddingCommitmentPrerequisiteV1,
     digests: GlobalAliasDigestsV1<'_>,
 ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
     let GlobalAliasDigestsV1 {
@@ -1279,41 +1315,37 @@ fn validate_global_aliases_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     } = digests;
     let mut registry = DigestRegistryV1::new();
     for digest in [
-        transcript.profile_manifest_digest(),
-        transcript.profile_digest(),
-        transcript.topology_digest(),
-        transcript.release_candidate_digest(),
-        transcript.statement_digest(),
-        transcript.operational_context_digest(),
-        transcript.source_binding_digest(),
-        transcript.main_snapshot_digest(),
-        transcript.nonce_snapshot_digest(),
-        transcript.source_receipt_digest(),
-        transcript.governed_roster_digest(),
-        transcript.public_ciphertext_digest(),
-        transcript.mapping_root(),
-        transcript.terminal_hyrax_root(),
-        transcript.cross_basis_bridge_root(),
-        transcript.cross_field_root(),
-        transcript.global_lookup_root(),
-        transcript.zero_padding_root(),
-        source.statement_anchor_digest(),
-        source.mapping_digest(),
-        source.formula_digest(),
-        source.aggregation_schedule_digest(),
-        source.preflight_statement_digest(),
-        source.public_key_digest(),
-        source.qpcs().parameter_digest(),
-        source.qpcs().section_binding_digest(),
-        source.qpcs().schedule_digest(),
-        source.qpcs().evaluation_binding_digest(),
-        source.qpcs().residual_digest(),
-        terminal.binding_digest(),
-        terminal.hyrax_digest(),
-        terminal.bp_digest(),
-        zero_padding.binding_digest(),
-        zero_padding.point_set_digest(),
-        zero_padding.proof_digest(),
+        DigestIdentityV1::from(transcript.profile_manifest_digest()),
+        DigestIdentityV1::from(transcript.profile_digest()),
+        DigestIdentityV1::from(transcript.topology_digest()),
+        DigestIdentityV1::from(transcript.release_candidate_digest()),
+        DigestIdentityV1::from(transcript.statement_digest()),
+        DigestIdentityV1::from(transcript.operational_context_digest()),
+        DigestIdentityV1::from(transcript.source_binding_digest()),
+        DigestIdentityV1::from(transcript.main_snapshot_digest()),
+        DigestIdentityV1::from(transcript.nonce_snapshot_digest()),
+        DigestIdentityV1::from(transcript.source_receipt_digest()),
+        DigestIdentityV1::from(transcript.governed_roster_digest()),
+        DigestIdentityV1::from(transcript.public_ciphertext_digest()),
+        DigestIdentityV1::from(transcript.mapping_root()),
+        DigestIdentityV1::from(transcript.terminal_hyrax_root()),
+        DigestIdentityV1::from(transcript.cross_basis_bridge_root()),
+        DigestIdentityV1::from(transcript.cross_field_root()),
+        DigestIdentityV1::from(transcript.global_lookup_root()),
+        DigestIdentityV1::from(source.statement_anchor_digest()),
+        DigestIdentityV1::from(source.mapping_digest()),
+        DigestIdentityV1::from(source.formula_digest()),
+        DigestIdentityV1::from(source.aggregation_schedule_digest()),
+        DigestIdentityV1::from(source.preflight_statement_digest()),
+        DigestIdentityV1::from(source.public_key_digest()),
+        DigestIdentityV1::from(source.qpcs().parameter_digest()),
+        DigestIdentityV1::from(source.qpcs().section_binding_digest()),
+        DigestIdentityV1::from(source.qpcs().schedule_digest()),
+        DigestIdentityV1::from(source.qpcs().evaluation_binding_digest()),
+        DigestIdentityV1::from(source.qpcs().residual_digest()),
+        DigestIdentityV1::from(terminal.binding_digest()),
+        DigestIdentityV1::from(terminal.hyrax_digest()),
+        DigestIdentityV1::from(terminal.bp_digest()),
     ] {
         registry.insert(digest)?;
     }
@@ -1333,16 +1365,15 @@ fn validate_global_aliases_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         registry.insert(opening.source_commitment_digest())?;
         registry.insert(opening.hyrax_commitment_digest())?;
     }
-    for digest in zero_padding.limb_padding_digests() {
-        registry.insert(*digest)?;
-    }
     for digest in point_digests
         .iter()
         .chain(limb_digests)
         .chain(round_digests)
         .copied()
-        .chain(derived)
     {
+        registry.insert(digest)?;
+    }
+    for digest in derived {
         registry.insert(digest)?;
     }
     Ok(())
