@@ -35712,6 +35712,32 @@
         ],
         "type": "object"
       },
+      "SnsRegistrationNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Authoritative lookup result for an absent SNS registration. The discriminator and canonical suffix_id/label must match the requested selector. This response is not a cryptographic proof of ledger state.",
+        "properties": {
+          "code": {
+            "const": "sns.registration_not_found",
+            "type": "string"
+          },
+          "label": {
+            "description": "Exact canonical label of the requested registration.",
+            "type": "string"
+          },
+          "suffix_id": {
+            "description": "Fixed namespace identifier from the canonical requested selector.",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "suffix_id",
+          "label"
+        ],
+        "type": "object"
+      },
       "SoraAgentRuntimeStatusV1": {
         "oneOf": [
           {
@@ -84506,6 +84532,21 @@
               }
             },
             "description": "Successful response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnsRegistrationNotFoundV1"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Only application/json with code sns.registration_not_found and the exact requested suffix_id and canonical label denotes an absent registration. Other not-found errors are text/plain and must remain errors; HTTP 404 alone does not establish registration absence."
           }
         },
         "security": [

@@ -8,9 +8,7 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
 use eyre::Result;
-use iroha_torii_shared::sns::{
-    SNS_REGISTRATION_NOT_FOUND_MAX_BYTES, SnsRegistrationNotFoundV1,
-};
+use iroha_torii_shared::sns::{SNS_REGISTRATION_NOT_FOUND_MAX_BYTES, SnsRegistrationNotFoundV1};
 const APPLICATION_JSON: &str = "application/json";
 fn ensure_status(
     response: &Response<Vec<u8>>,
@@ -88,8 +86,12 @@ fn name_selector(namespace: SnsNamespacePath, literal: &str) -> Result<NameSelec
             })
         }
         SnsNamespacePath::Domain => {
-            let domain = crate::data_model::domain::DomainId::parse_fully_qualified(literal.trim())?;
-            Ok(NameSelectorV1::new(namespace.suffix_id(), domain.to_string())?)
+            let domain =
+                iroha_model_base::domain::DomainId::parse_fully_qualified(literal.trim())?;
+            Ok(NameSelectorV1::new(
+                namespace.suffix_id(),
+                domain.to_string(),
+            )?)
         }
         SnsNamespacePath::Dataspace => Ok(NameSelectorV1::new(namespace.suffix_id(), literal)?),
     }
@@ -149,21 +151,32 @@ impl<'a> SnsApi<'a> {
         selector: &NameSelectorV1,
     ) -> Result<Option<NameRecordV1>> {
         if response.status() == StatusCode::NOT_FOUND {
-            let content_type = response.headers().get("Content-Type")
+            let content_type = response
+                .headers()
+                .get("Content-Type")
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.split(';').next());
-            eyre::ensure!(content_type.is_some_and(|value| value.trim().eq_ignore_ascii_case(APPLICATION_JSON)),
-                "SNS absence requires the typed JSON registration response");
-            eyre::ensure!(response.body().len() <= SNS_REGISTRATION_NOT_FOUND_MAX_BYTES,
-                "SNS missing-registration response exceeds its bound");
+            eyre::ensure!(
+                content_type
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case(APPLICATION_JSON)),
+                "SNS absence requires the typed JSON registration response"
+            );
+            eyre::ensure!(
+                response.body().len() <= SNS_REGISTRATION_NOT_FOUND_MAX_BYTES,
+                "SNS missing-registration response exceeds its bound"
+            );
             let absence: SnsRegistrationNotFoundV1 = norito::json::from_slice(response.body())?;
-            eyre::ensure!(absence.matches_selector(selector),
-                "SNS missing-registration response differs from the requested selector");
+            eyre::ensure!(
+                absence.matches_selector(selector),
+                "SNS missing-registration response differs from the requested selector"
+            );
             return Ok(None);
         }
         let record = Self::decode_name_response(response)?;
-        eyre::ensure!(record.selector == *selector,
-            "SNS registration response differs from the requested selector");
+        eyre::ensure!(
+            record.selector == *selector,
+            "SNS registration response differs from the requested selector"
+        );
         Ok(Some(record))
     }
     fn get_name_response(
@@ -240,22 +253,50 @@ mod tests {
     fn optional_name_http_absence_requires_exact_typed_json() {
         let selector = name_selector(SnsNamespacePath::Dataspace, "dpn").expect("selector");
         let body = norito::json::to_vec(&SnsRegistrationNotFoundV1::new(
-            selector.suffix_id, selector.label.clone())).expect("absence");
-        let response = Response::builder().status(StatusCode::NOT_FOUND)
-            .header("Content-Type", APPLICATION_JSON).body(body.clone()).expect("response");
-        assert!(SnsApi::decode_optional_name_response(&response, &selector).expect("typed absence").is_none());
-        assert!(SnsApi::decode_name_response(&response).is_err(), "mandatory lookup must still fail");
+            selector.suffix_id,
+            selector.label.clone(),
+        ))
+        .expect("absence");
+        let response = Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body.clone())
+            .expect("response");
+        assert!(
+            SnsApi::decode_optional_name_response(&response, &selector)
+                .expect("typed absence")
+                .is_none()
+        );
+        assert!(
+            SnsApi::decode_name_response(&response).is_err(),
+            "mandatory lookup must still fail"
+        );
         for (status, media, bytes) in [
             (StatusCode::NOT_FOUND, "text/plain", body.clone()),
-            (StatusCode::NOT_FOUND, APPLICATION_JSON, b"registration `dpn` not found".to_vec()),
+            (
+                StatusCode::NOT_FOUND,
+                APPLICATION_JSON,
+                b"registration `dpn` not found".to_vec(),
+            ),
             (StatusCode::BAD_REQUEST, APPLICATION_JSON, body.clone()),
             (StatusCode::UNAUTHORIZED, APPLICATION_JSON, body.clone()),
             (StatusCode::FORBIDDEN, APPLICATION_JSON, body.clone()),
             (StatusCode::INTERNAL_SERVER_ERROR, APPLICATION_JSON, body),
-            (StatusCode::NOT_FOUND, APPLICATION_JSON, vec![b' '; SNS_REGISTRATION_NOT_FOUND_MAX_BYTES + 1]),
+            (
+                StatusCode::NOT_FOUND,
+                APPLICATION_JSON,
+                vec![b' '; SNS_REGISTRATION_NOT_FOUND_MAX_BYTES + 1],
+            ),
         ] {
-            let response = Response::builder().status(status).header("Content-Type", media).body(bytes).expect("response");
-            assert!(SnsApi::decode_optional_name_response(&response, &selector).is_err(), "{status} {media}");
+            let response = Response::builder()
+                .status(status)
+                .header("Content-Type", media)
+                .body(bytes)
+                .expect("response");
+            assert!(
+                SnsApi::decode_optional_name_response(&response, &selector).is_err(),
+                "{status} {media}"
+            );
         }
         for invalid in [
             r#"{"code":"other","suffix_id":4099,"label":"dpn"}"#,
@@ -265,9 +306,15 @@ mod tests {
             r#"{"code":"sns.registration_not_found","suffix_id":4099,"label":"dpn","extra":0}"#,
             r#"{"code":"sns.registration_not_found","suffix_id":4099,"label":"dpn","label":"dpn"}"#,
         ] {
-            let response = Response::builder().status(StatusCode::NOT_FOUND)
-                .header("Content-Type", APPLICATION_JSON).body(invalid.as_bytes().to_vec()).expect("response");
-            assert!(SnsApi::decode_optional_name_response(&response, &selector).is_err(), "{invalid}");
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("Content-Type", APPLICATION_JSON)
+                .body(invalid.as_bytes().to_vec())
+                .expect("response");
+            assert!(
+                SnsApi::decode_optional_name_response(&response, &selector).is_err(),
+                "{invalid}"
+            );
         }
     }
     #[test]
@@ -278,13 +325,30 @@ mod tests {
             (SnsNamespacePath::AccountAlias, "admin@dpn"),
         ] {
             let selector = name_selector(namespace, literal).expect("selector");
-            let record = NameRecordV1::new(selector.clone(), iroha_test_samples::ALICE_ID.clone(),
-                Vec::new(), 0, 0, 100, 200, 300, crate::data_model::metadata::Metadata::default());
-            let response = Response::builder().status(StatusCode::OK)
+            let record = NameRecordV1::new(
+                selector.clone(),
+                iroha_test_samples::ALICE_ID.clone(),
+                Vec::new(),
+                0,
+                0,
+                100,
+                200,
+                300,
+                iroha_model_base::metadata::Metadata::default(),
+            );
+            let response = Response::builder()
+                .status(StatusCode::OK)
                 .header("Content-Type", APPLICATION_JSON)
-                .body(norito::json::to_vec(&record).expect("record")).expect("response");
-            assert_eq!(SnsApi::decode_optional_name_response(&response, &selector).expect("record"), Some(record));
-            let changed = NameSelectorV1 { label: "other".to_owned(), ..selector };
+                .body(norito::json::to_vec(&record).expect("record"))
+                .expect("response");
+            assert_eq!(
+                SnsApi::decode_optional_name_response(&response, &selector).expect("record"),
+                Some(record)
+            );
+            let changed = NameSelectorV1 {
+                label: "other".to_owned(),
+                ..selector
+            };
             assert!(SnsApi::decode_optional_name_response(&response, &changed).is_err());
         }
     }

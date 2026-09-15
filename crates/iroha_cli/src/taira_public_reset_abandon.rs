@@ -19,7 +19,8 @@ fn validate_abandonment_source(state: &JournalV1) -> Result<()> {
     validate_resumable_journal(state, state)?;
     if state.status != "recovery_pending"
         || state.phase != ExecutionStep::Canary.label()
-        || EXECUTION_STEPS.get(usize::from(state.next_step)) != Some(&ExecutionStep::Canary)
+        || execution_steps(state.qualification_scope).get(usize::from(state.next_step))
+            != Some(&ExecutionStep::Canary)
         || state
             .touched_validators
             .iter()

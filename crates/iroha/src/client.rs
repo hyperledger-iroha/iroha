@@ -14009,6 +14009,7 @@ mod evidence_http_tests {
         }
     }
     include!("client/activation_evidence_tests.rs");
+    include!("client/activation_attestation_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }

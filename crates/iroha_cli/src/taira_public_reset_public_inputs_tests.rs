@@ -75,13 +75,25 @@ impl Fixture {
             consensus_metadata::handshake_meta_id(),
             iroha_primitives::json::Json::new(metadata),
         ));
-        let transaction = TransactionBuilder::new_genesis(
+        let mut instructions: Vec<iroha_data_model::isi::InstructionBox> =
+            vec![SetParameter::new(parameter).into()];
+        for seed in 110..114 {
+            let validator = key(seed, Algorithm::BlsNormal);
+            instructions.push(
+                iroha_data_model::isi::register::RegisterPeerWithPop::new(
+                    PeerId::new(validator.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(validator.private_key()).unwrap(),
+                )
+                .into(),
+            );
+        }
+        let mut builder = TransactionBuilder::new_genesis(
             AccountId::new(genesis.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([SetParameter::new(parameter)])
-        .try_sign(genesis.private_key())
-        .unwrap();
+        .with_instructions(instructions);
+        builder.set_creation_time(std::time::Duration::from_millis(42));
+        let transaction = builder.try_sign(genesis.private_key()).unwrap();
         let mut block =
             SignedBlock::try_genesis(vec![transaction], genesis.private_key(), None, None).unwrap();
         let entrypoints = block
@@ -147,6 +159,11 @@ impl Fixture {
             output_dir: root.join("public-inputs"),
         }
     }
+}
+
+pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
+    let fixture = Fixture::new();
+    (fixture.block, fixture.genesis)
 }
 
 #[test]

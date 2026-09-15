@@ -150,7 +150,7 @@ fn pending_abandonment_fixture() -> (tempfile::TempDir, AdmittedReset, DurableJo
     state.status = "recovery_pending".to_owned();
     state.phase = ExecutionStep::Canary.label().to_owned();
     state.next_step = u16::try_from(
-        EXECUTION_STEPS
+        execution_steps(state.qualification_scope)
             .iter()
             .position(|step| *step == ExecutionStep::Canary)
             .unwrap(),

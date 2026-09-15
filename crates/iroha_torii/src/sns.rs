@@ -407,21 +407,32 @@ mod tests {
         let error: SnsError = CoreSnsError::RegistrationNotFound {
             suffix_id: iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
             label: "dpn".to_owned(),
-        }.into();
+        }
+        .into();
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(response.headers()["content-type"], "application/json");
-        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.expect("body");
-        let body: SnsRegistrationNotFoundV1 = norito::json::from_slice(&bytes).expect("typed absence");
-        assert!(body.matches_selector(&NameSelectorV1::new(
-            iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID, "dpn").expect("selector")));
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let body: SnsRegistrationNotFoundV1 =
+            norito::json::from_slice(&bytes).expect("typed absence");
+        assert!(
+            body.matches_selector(
+                &NameSelectorV1::new(iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID, "dpn")
+                    .expect("selector")
+            )
+        );
         // Identical human-readable text from an unrelated NotFound must never
         // gain the machine discriminator merely because its status is 404.
-        let other: SnsError = CoreSnsError::NotFound("registration `dpn` not found".to_owned()).into();
+        let other: SnsError =
+            CoreSnsError::NotFound("registration `dpn` not found".to_owned()).into();
         let response = other.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_ne!(response.headers()["content-type"], "application/json");
-        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.expect("body");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
         assert!(norito::json::from_slice::<SnsRegistrationNotFoundV1>(&bytes).is_err());
     }
     #[test]

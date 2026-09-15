@@ -280,8 +280,8 @@ Derive the complete public identity bundle using the maintained CLI:
 
 The command uses native signed-genesis validation and the shared canary request
 constructor. It atomically writes `genesis.signed.nrt`, `genesis.hash`,
-`canary-onboarding-request.json` and `public-inputs.json` as0644 public artifacts
-inside an0700 directory. The hash file contains the native consensus genesis
+`canary-onboarding-request.json` and `public-inputs.json` as 0644 public artifacts
+inside a 0700 directory. The hash file contains the native consensus genesis
 hash, not a SHA256 of the wire file; the typed record names both values explicitly.
 Repeating an identical request verifies the retained bundle; conflicting output
 is never replaced. It reads only the public generator files and canary public key.

@@ -1,0 +1,184 @@
+# Native Taira dataspace deployment
+
+`iroha taira dataspace-deploy` plans and advances one physical dataspace, its
+immutable bootstrap grant, and one paid account alias. It uses the configured
+native account client, including the normal `--config-fd` and
+`--config-source-path` custody boundary. It requires the canonical Taira chain
+and account profile 369.
+
+The command is a first-release additive workflow. It does not overwrite an
+existing lane, move a dataspace, repair an existing namespace, submit empty
+transactions, or create blocks to advance time.
+
+## Commands
+
+Export the target profile from the assembled native reset inventory and the
+`prepare-public-inputs` bundle. No new trust JSON needs to be handwritten:
+
+```sh
+iroha taira public-reset export-deployment-profile \
+  --inventory ASSEMBLED_INVENTORY.json --public-inputs PUBLIC_INPUT_BUNDLE \
+  --output /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json
+```
+
+This local command verifies native genesis identity, the inventory's exact
+public genesis artifacts, and all four selected peer identities and
+fingerprints. It reads only the supplied public inventory and public bundle;
+it does not open any configuration, key, source, or host path referenced by
+the inventory. Its output is a locally selected target expectation. It does
+not prove authorization, release qualification, or live deployment. The output
+must be a new file under an existing owner-private directory.
+
+Generate a native manifest from that profile and current namespace policies:
+
+```sh
+iroha --config CLIENT.toml taira dataspace-deploy init \
+  --dataspace dpn --lane-id 6 --lane-profile restricted-full-replica \
+  --account-alias admin --lane-manifest LANE_MANIFEST.json --trust deployment-profile.json \
+  --payment-asset 6TEAJqbb8oEPmLncoNiMRbLEK6tw \
+  --alias-create-maximum 0.5 --transaction-fee-maximum TX_FEE_CAP \
+  --lease-years 1 --output-dir NEW_MANIFEST_BUNDLE
+```
+
+Owner and checked NetworkId come from the configured native client. The two
+policy versions and asset bindings come from native SNS policy reads. The
+explicit lane profile selects public or restricted visibility with FullReplica
+storage, four validators and fault tolerance1. The default quote lifetime is
+3600 seconds; `--quote-lifetime-secs` accepts1..86400. The generated account
+alias is additional, preserving any existing primary alias. `init` checks the
+native paid plan and writes `NEW_MANIFEST_BUNDLE/deployment.json` atomically;
+it submits nothing. The trust file contains the independently selected public
+genesis key, exact signed genesis wire and four public peer/fingerprint records.
+
+Create an owner-private journal parent, then run:
+
+```sh
+iroha --config CLIENT.toml taira dataspace-deploy plan \
+  --manifest deployment.json --journal-dir JOURNALS
+
+iroha --config CLIENT.toml taira dataspace-deploy apply \
+  --journal-dir JOURNALS --operation-id OPERATION_ID
+
+iroha --config CLIENT.toml taira dataspace-deploy status \
+  --journal-dir JOURNALS --operation-id OPERATION_ID
+```
+
+`plan` prints the operation ID and writes an immutable native plan below
+`JOURNALS/OPERATION_ID`. Repeating the same plan validates and reads that saved
+plan. A different intent cannot reuse the same operation ID. If `operation_id`
+is null, the ID derives from the canonical intent and checked NetworkId;
+reordering the two alias intents does not generate another identity.
+
+`apply` resumes from the saved plan. It can advance through already applied
+phases and submit the next phase. If that transaction is still pending, it
+returns the current observations. Run `apply` again with the same operation ID
+to observe it and, once applied, advance. There is no polling loop and no
+transport retry implemented by this controller.
+
+`status` makes only reads. It can inspect a saved operation after write
+permissions have been revoked. Capability, owner, network, native codec and
+retained transaction checks still apply.
+
+## Manifest
+
+The manifest has one closed versioned schema:
+
+| Field | Native type and meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `operation_id` | Explicit null or 1–96 ASCII letters/digits/`-`/`_` |
+| `network_id` | Checked native `NetworkId` |
+| `owner` | Native `AccountId`; must match the configured signer |
+| `dataspace` | `RuntimeDataSpaceAdditionV1` |
+| `lane` | `LaneConfig` |
+| `lane_manifest` | `RuntimeLaneManifestV1`, containing the native inline manifest |
+| `alias_request` | `AliasSetupPlanRequestV1` with exactly one dataspace intent and one account-alias intent |
+| `spending` | Object described below |
+| `finality` | Native trust profile: `genesis_public_key`, `genesis_signed_wire_hex`, and four `peers` with `torii_origin`, `peer_id`, `node_fingerprint`, `build_fingerprint`, `config_fingerprint` |
+
+`spending` contains `asset_definition_id`, `alias_create_maximum`, and
+`transaction_fee_maximum`. Both maxima use native `Quantity` JSON. The two
+alias quote guards must use that asset and must not authorize more than the
+per-resource acquisition maximum. For a deployment authorizing at most
+0.5 XOR for each resource, set both guards and `alias_create_maximum` to the
+native quantity `0.5`. Set an explicit transaction fee maximum separately.
+
+The account alias must target the existing owner directly in the new
+dataspace, with no domain segment. Existing primary aliases can be preserved
+by choosing the native `Additional` role. Native intent fields, policy
+versions, paid terms and deadlines retain their usual consensus semantics.
+
+The native bootstrap-grant constructor checks the canonical dataspace name,
+full SNS selector hash and derived numeric ID. The physical descriptor,
+lane, inline manifest and both namespace intents must agree on that identity.
+No string slicing or external identity codec is used.
+
+Planning captures the current native lane catalog, incarnation root and
+runtime overlay hash. The transaction uses all three as compare-and-set
+preconditions. Applying never silently rebases a changed catalog. Sparse
+lane IDs and the existing exclusive lane namespace bound are preserved.
+
+## Spending and phase order
+
+New-plan creation first verifies challenge-bound statements from all four
+selected nodes, their exact genesis/peer/build/configuration identities and the
+public finality and lane-status routes. Planning checks native capabilities, the exact existing owner, complete
+effective `CanSetParameters` and `CanReadAllLedgerData` permissions, and the
+owner's global balance of the selected asset. The initial balance must cover
+two acquisition maxima plus three transaction fee maxima. Before each
+unsubmitted phase it must cover the remaining maxima.
+
+The phases are:
+
+1. Submit one native additive catalog `SetParameter`.
+2. Require the exact physical readback, the absence of its bootstrap grant,
+   and a typed missing SNS registration; submit one native grant `SetParameter`.
+3. Require the exact committed grant, request a fresh native alias plan with
+   exactly two paid `Create` resources, and submit its exact native instructions.
+
+A native alias plan is obtained before the physical transition and again
+after the grant. Planning between those phases is deliberately not required:
+the catalogued namespace requires its bootstrap grant before it can be planned.
+
+Each phase requests the native fee quote for its exact unsigned payload,
+validates the authority payer, Nexus component, asset and cap, and signs that
+exact quoted payload. The signed transaction, native instruction vector, fee
+quote, and any alias plan are persisted before a durable dispatch claim.
+A finite transaction lifetime is checked before its first submission.
+
+## Recovery and verification
+
+The owner-private operation directory has a descriptor-bound exclusive lock.
+Signed preparation and dispatch records are immutable. A claimed phase is
+never submitted again, including after a timeout, crash, missing response,
+or an absent pipeline lookup. A transaction that expires before its first
+dispatch is not replaced automatically. Incomplete or changed retained files
+fail closed. Keep the same journal directory and do not delete claim records.
+
+Once-only dispatch is scoped to this durable journal; it is not a new ledger
+idempotency API. Operators integrating existing claim paths must preserve and
+bind them before activating this controller. Copying or abandoning a journal
+does not establish that its transaction was never submitted.
+
+Progress requires exact global and configured-peer local `StateApplied` at
+the same nonzero height, plus successful authenticated details containing the
+same native signed transaction bytes. These observations are labeled
+`applied_verification_pending`. `deployment_complete` remains false until the
+native completion layer validates independently anchored finality, the exact
+execution commitment/inclusion, and all four validators' state. A moving tip
+or unavailable proof keeps the phase observations and returns the actionable
+`verification_error` field; subsequent status/apply resumes verification.
+The bounded proof synchronization layer can return `verification_sync_pending`
+while retaining its verified cache, without submitting another transaction.
+A successful completion names its immutable `completion_receipt`; exact verified
+canonical carrier bytes are retained beside the proof cache and per-peer receipt.
+
+The typed `VerificationRequestV1` carries the original catalog/overlay
+baseline, expected additions and grant, paid alias intent, each retained wire
+SHA256/instruction vector/alias plan, pipeline observations, and committed
+transaction DTO. The native `verification_request` entry point obtains it
+without submitting anything. The integrated native completion layer verifies independently anchored
+finality, the exact native `ExecutionCommitment` and canonical inclusion,
+and all four validators' final state against the independently selected trust
+profile. Neither a single peer observation nor a caller-supplied commitment is
+itself that proof.

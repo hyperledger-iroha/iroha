@@ -363,6 +363,16 @@ def require_candidate_probe_inventory(inventory):
     """Reject obsolete or ambiguous public drafts before any retirement mutation."""
     require(inventory.get("qualification_scope") in ("core_testnet", "full_inrou"),
             "one explicit qualification scope is required")
+    require("inrou_canary" in inventory and "inrou_stage_tree_sha256" in inventory,
+            "explicit nullable Inrou scope fields are required")
+    canary, stage_hash = inventory["inrou_canary"], inventory["inrou_stage_tree_sha256"]
+    if inventory["qualification_scope"] == "core_testnet":
+        require(canary is None and stage_hash is None, "core_testnet forbids Inrou inputs")
+    else:
+        require(isinstance(canary, dict) and isinstance(stage_hash, str)
+                and re.fullmatch(r"[0-9a-f]{64}", stage_hash) is not None
+                and canary.get("stage_tree_sha256") == stage_hash,
+                "full_inrou requires its exact Inrou stage identity")
     operator_key = inventory.get("operator_public_key")
     # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
     # Native admission performs the cryptographic key/config/custody joins.
@@ -3793,15 +3803,15 @@ def capacity_module(source):
 
 
 def validate_full_capacity(module, plan, qualification_scope):
-    """Require the complete native cohost model, including four writable runtimes."""
+    """Require every allocation for the signed native scope."""
     qualification_steps(qualification_scope)
     rows = module["validate_plan"](plan)
     if qualification_scope == "core_testnet":
         expected = {"coordinator artifact snapshot", "per-role artifact uploads", "per-role installed artifacts", "guest filesystem headroom"}
         require(len(rows) == 4 and {row["label"] for row in rows} == expected,
-                "core capacity requires exactly3A plus headroom, without Inrou allocations")
+                "core capacity requires exactly 3A plus headroom, without Inrou allocations")
         require(all(row["bytes"] > 0 and row["inodes"] > 0 for row in rows), "core allocation bounds must be positive")
-        require(next(row for row in rows if row["label"] == "guest filesystem headroom")["bytes"] >= 2 * 1024**3, "core capacity requires explicit2GiB headroom")
+        require(next(row for row in rows if row["label"] == "guest filesystem headroom")["bytes"] >= 2 * 1024**3, "core capacity requires explicit 2 GiB headroom")
         return
     expected = {
         "coordinator artifact snapshot",
@@ -3914,6 +3924,7 @@ def call_phase(name, callback, attempt):
 
 def derive_runtime_paths(plan, binary, inventory, arguments):
     """Derive deployment-independent paths from the admitted previous assembly."""
+    qualification_steps(inventory.get("qualification_scope"))
     value = copy.deepcopy(plan)
     runtime = Path(value["runtime_root"])
     previous = Path(value["previous_inventory"])
@@ -3976,7 +3987,7 @@ def public_file_metadata(path):
 
 
 def measured_capacity_inputs(inventory, stage):
-    """Measure the retained public SF1 stage and artifact lengths without secret reads."""
+    """Measure native artifact metadata and, only for full_inrou, its public SF1 stage."""
     scope = inventory.get("qualification_scope")
     qualification_steps(scope)
     require((scope == "core_testnet" and stage is None) or (scope == "full_inrou" and stage is not None), "stage argument does not match signed capacity scope")

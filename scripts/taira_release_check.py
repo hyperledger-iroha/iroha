@@ -899,6 +899,10 @@ CORE_ADMISSION_STARTUP_STAGES += (("certified historical recovery and exact live
     "state::tests::historical_autonomous_merge_rejects_restored_registry_conflict",
 )),)
 
+CORE_ADMISSION_STARTUP_STAGES += (('typed native SNS registration absence', (
+    'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state',
+)), )
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1036,6 +1040,51 @@ TORII_LIFECYCLE_STAGES = (("lifecycle HTTP representation and access policy", (
     "nexus_lifecycle_endpoint::lifecycle_post_and_normalization_variants_are_unregistered_without_mutation",
 )),)
 
+STAGES += (('native core scope and durable dataspace deployment', (
+    'taira_public_reset::executor_model::tests::qualification_scope_requires_exact_nullable_inrou_closure',
+    'taira_public_reset::executor_model::tests::qualification_scope_reopens_exact_durable_execution_boundaries',
+    'taira_public_reset::inputs::tests::candidate_runtime_scope_requires_disabled_core_and_exact_full_owner',
+    'taira_dataspace_deploy::tests::manifest_binds_native_identity_and_spending_limits',
+    'taira_dataspace_deploy::tests::operation_id_is_stable_for_equivalent_intent',
+    'taira_dataspace_deploy::tests::catalog_transition_preserves_sparse_baseline_and_cas',
+    'taira_dataspace_deploy::tests::retained_phase_rejects_changed_wire_owner_fee_or_instructions',
+    'taira_dataspace_deploy::tests::namespace_plan_requires_two_bounded_paid_creates',
+    'taira_dataspace_deploy::tests::journal_dispatch_claim_is_durable_and_exclusive',
+    'taira_dataspace_deploy::tests::journal_rejects_links_replacement_and_incomplete_records',
+    'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied',
+    'taira_dataspace_deploy::tests::init_builds_native_restricted_intent_from_policy_and_profile',
+    'taira_dataspace_deploy::tests::init_rejects_policy_drift_and_parses_explicit_caps',
+    'taira_dataspace_deploy::finality::tests::deployment_trust_derives_exact_genesis_roster_and_network',
+    'taira_dataspace_deploy::finality::tests::deployment_trust_rejects_wrong_network_key_and_changed_genesis_wire',
+    'taira_dataspace_deploy::finality::tests::deployment_trust_requires_four_distinct_genesis_peers_and_public_endpoints',
+    'taira_public_reset::host::stopped_runtime::tests::stopped_owner_projection_ignores_unrelated_credentials_and_keeps_typed_defaults',
+)), )
+
+CLIENT_STAGES += (('typed authoritative SNS optional reads', (
+    'sns::tests::optional_name_http_absence_requires_exact_typed_json',
+    'sns::tests::optional_name_http_success_binds_canonical_namespace_and_record',
+)), )
+
+TORII_UNIT_STAGES += (('typed SNS absence HTTP contract', (
+    'sns::tests::registration_absence_http_response_is_typed_and_other_not_found_is_not',
+    'openapi::tests::sns_name_absence_openapi_is_typed_and_selector_bound',
+)), )
+
+TORII_SHARED_STAGES = (('strict native SNS missing-registration DTO', (
+    'sns::tests::missing_registration_response_requires_exact_fields_and_selector',
+)), )
+
+CLIENT_STAGES += (("challenge-bound public finality attestations", (
+    'client::evidence_http_tests::bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_body',
+    'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_wrong_bindings_and_invalid_http_body',
+)), )
+
+STAGES += (("native public deployment profile export", (
+    'taira_public_reset::deployment_profile::tests::deployment_profile_binds_native_genesis_and_ordered_inventory_peers',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_command_parses_without_private_or_runtime_arguments',
+)), )
+
 HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
@@ -1048,6 +1097,7 @@ HARNESS_TARGETS = {
     "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
     "p2p": ("native peer transport", "iroha_p2p", "lib", ["-p", "iroha_p2p", "--lib"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
+    "torii-shared": ("native Torii shared protocol", "iroha_torii_shared", "lib", ["-p", "iroha_torii_shared", "--lib"]),
     "torii-lifecycle": ("native Torii lifecycle endpoint", "torii_nexus_sorafs", "test", ["-p", "iroha_torii", "--test", "torii_nexus_sorafs"]),
     "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
@@ -1157,7 +1207,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
-        "torii-lifecycle": TORII_LIFECYCLE_STAGES,
+        "torii-shared": TORII_SHARED_STAGES, "torii-lifecycle": TORII_LIFECYCLE_STAGES,
         "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
     }
     if qualification_scope == "basic":

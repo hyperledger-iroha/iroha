@@ -84,6 +84,14 @@ pub(crate) use host::maintenance::StoppedOwnerMaintenance;
 mod inputs;
 #[path = "taira_public_reset_public_inputs.rs"]
 mod public_inputs;
+#[path = "taira_public_reset_deployment_profile.rs"]
+mod deployment_profile;
+
+#[cfg(test)]
+pub(crate) fn deployment_genesis_fixture()
+-> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
+    public_inputs::deployment_genesis_fixture()
+}
 #[path = "taira_public_reset_source.rs"]
 mod source;
 
@@ -109,6 +117,8 @@ enum PublicResetCommand {
     OperatorKeygen(config::OperatorKeygen),
     /// Derive and validate the complete public genesis and canary bundle without private keys.
     PreparePublicInputs(public_inputs::PreparePublicInputs),
+    /// Export a public deployment target profile from assembled inventory and native inputs.
+    ExportDeploymentProfile(deployment_profile::ExportDeploymentProfile),
     /// Assemble exact release inputs locally from an explicit inventory draft.
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
@@ -328,6 +338,10 @@ impl PublicReset {
             }
             PublicResetCommand::PreparePublicInputs(args) => {
                 public_inputs::prepare(args, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::ExportDeploymentProfile(args) => {
+                deployment_profile::export(args, &mut output)?;
                 return Ok(());
             }
             PublicResetCommand::Assemble(args) => {

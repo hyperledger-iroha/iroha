@@ -64,7 +64,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.source_lock = stack.enter_context((self.root / "source-lock").open("w"))
         self.events = []
         for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
-                      "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+                      "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
             stack.enter_context(patch.object(gate, group, ()))
         for group, selection in (("CORE_STAGES", "core"), ("STAGES", "cli"), ("NETWORK_STAGES", "network")):
             stack.enter_context(patch.object(gate, group, ((selection, (selection + "_first",)),)))

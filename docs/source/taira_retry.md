@@ -96,7 +96,9 @@ Each of the four ordered `validator_clients` requires an explicit public
 Torii ports on the approved cohosted validator machine. Native assembly joins
 each origin to its signed validator config; the retry producer rejects missing
 or ambiguous origins before retirement. Configs bind validator slots 1–4 to
-the dedicated Inrou UID/GID pairs 70000–70003. Old inventories and journals do
+the dedicated Inrou UID/GID pairs 70000–70003 only for `full_inrou`. Candidate
+`core_testnet` configs require Inrou disabled. Native stopped-owner recovery still
+admits and cleans any enabled prior runtime before replacing its state. Old inventories and journals do
 not gain a compatibility path: prepare the current first-release inventory and
 use a fresh attempt for the current execution plan.
 
@@ -112,7 +114,7 @@ missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
 Native apply qualifies four-peer convergence, prepared application mutations
-and one validator restart for signed `core_testnet` scope. The `inrou` scope
+and one validator restart for signed `core_testnet` scope. The `full_inrou` scope
 also requires Inrou runtime health and all four ordered restart waves through
 these direct endpoints before staging or switching the public edge. The same retained
 mutations and restart evidence flow into the release proof. After cutover,
@@ -120,29 +122,44 @@ mutations and restart evidence flow into the release proof. After cutover,
 remain before public cutover; a failed rollback remains resumable and must be
 verified complete before another attempt is admitted.
 
-Read-only admission measures current artifact lengths and the public stage tree.
-It reads the small public container/service manifests and bounded bundle archive
-metadata. It never reads peer config contents. The three tiny SoraFS manifest
-hashes must match the preceding native inventory, which already admitted their
-canonical SF1 profiles. Modified manifests cannot reuse the 64 KiB chunk bound.
-The shared `derive_capacity` implementation then produces both plans from actual
-build sizes and measured geometry: `3A + 2S + 4P + 4R`, plus 2 GiB guest headroom.
-Each config is charged at the native 1 MiB materialization limit.
+The preceding assembly's native local arguments must include
+`--public-inputs <prep>/public-inputs`. Create that verified native bundle with
+`iroha taira public-reset prepare-public-inputs` before assembly; retry retains the
+same bundle and passes it to assembly, while apply receives only its runtime
+inputs. `core_testnet` forbids `--inrou-stage-dir` and requires explicit `null` for
+both `inrou_canary` and `inrou_stage_tree_sha256`. `full_inrou` requires the stage
+argument and the complete matching native stage object and hash. The old `inrou`
+spelling is rejected.
 
-`R` includes each replica's guest hydration, writable root/data lease maxima,
-ephemeral storage and bundle cache/block/extraction publication copies. The
-physical backing plan charges the full additional guest allocation plus another
-2 GiB reserve. See [`taira_disk_capacity.md`](taira_disk_capacity.md) for the
-allocation definitions. Unknown stage layouts or additional service artifacts
-fail closed instead of silently omitting their capacity.
+The signed scope also selects the native journal sequence: core has 14 steps and
+no Preseed step; full has 15. The durable Seal cursor is 12 for core and 13 for
+full. Reopening and completed-receipt checks use the same immutable scope;
+indices from another scope cannot be reused as recovery authority.
+
+Read-only admission measures the 30 native artifact roles, including all four
+validator unit files. Core computes `3A + 2 GiB guest headroom` and does not open,
+walk or measure an Inrou stage, SF1 manifest, guest image or runtime directory.
+Each config is charged at the native 1 MiB materialization limit. Both scopes
+also charge the full additional guest allocation on the physical backing host,
+plus a separate 2 GiB reserve.
+
+Full additionally reads the small public container/service manifests and bounded
+bundle archive metadata, never peer config contents. Its three tiny SoraFS
+manifest hashes must match native SF1 admission before using the 64 KiB chunk
+bound. The shared `derive_capacity` calculates `3A + 2S + 4P + 4R`, plus guest
+headroom. `R` includes each replica's guest hydration, writable root/data lease
+maxima, ephemeral storage and bundle cache/block/extraction publication copies.
+Unknown layouts or additional service artifacts fail closed. See
+[`taira_disk_capacity.md`](taira_disk_capacity.md) for allocation definitions.
 
 Retirement first admits one dispatcher copy and up to 64 MiB of publication
 and cleanup records, plus the existing guest and backing reserves. After the
 native rolled-back terminal and retired custody are verified under their locks,
-it prunes disposable executable and guest-image copies, including the three
-public image payloads in the archived physical host's `inrou-stage-v1/<nonce>`,
-and chunks belonging to
-the three admitted public SoraFS manifests. Runtime keys and configs, unrelated
+it prunes the exact disposable executable copies. Only a `full_inrou` attempt
+also prunes guest-image copies, including the three public payloads in the
+archived physical host's `inrou-stage-v1/<nonce>`, and chunks of its three admitted
+public SoraFS manifests. Core neither reads nor deletes these unrelated Inrou
+paths. Runtime keys and configs, unrelated
 manifests, storage metadata and native history remain intact. Unadmitted partial
 ingestion data is preserved. An owner-only intent makes interrupted unlink and
 trim operations resumable.

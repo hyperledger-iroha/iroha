@@ -299,7 +299,7 @@ def derive_capacity(
     guest_headroom_path,
     backing_path,
 ):
-    """Pure 3A+2S+4P+4R calculation from metadata, retained SF1 preparation only.
+    """Pure scope-specific allocation calculation from native public metadata.
 
     Config contents are never inputs. Each freshly rebased config is charged at
     the native materializer's 1 MiB output limit, not its previous measured size.

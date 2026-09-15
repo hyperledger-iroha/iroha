@@ -14,6 +14,53 @@ use iroha_data_model::{
 const BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 impl Client {
+    /// Fetch a canonical challenge-bound statement for an exact durable tip.
+    ///
+    /// Verifies the reporting node signature and request bindings. Callers must
+    /// independently anchor and verify both embedded finality proofs before
+    /// treating this statement as chain finality.
+    ///
+    /// # Errors
+    /// Rejects transport/codec failures, zero challenges, wrong node/network/height,
+    /// and inconsistent or invalid node signatures.
+    pub fn get_bridge_finality_attestation(
+        &self,
+        height: NonZeroU64,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+    ) -> Result<iroha_data_model::bridge::BridgeFinalityAttestationV1> {
+        if challenge == [0; 32] {
+            return Err(eyre!("finality challenge must be nonzero"));
+        }
+        self.ensure_data_model_compatibility()?;
+        let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
+            .path()
+            .replace("{height}", &height.get().to_string());
+        let response = self.send_builder(
+            self.canonical_norito_get_request(&path, BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES)
+                .header("X-Iroha-Finality-Challenge", &hex::encode(challenge)),
+        )?;
+        let attestation: iroha_data_model::bridge::BridgeFinalityAttestationV1 =
+            Self::decode_canonical_norito_response(
+                &response,
+                BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
+                "Failed to get finality attestation",
+            )?;
+        attestation
+            .verify()
+            .map_err(|error| eyre!("invalid finality attestation: {error}"))?;
+        if attestation.body.challenge != challenge
+            || attestation.body.node_id != *expected_node
+            || attestation.body.network_id != self.network_id
+            || attestation.body.status.last_committed_height != height.get()
+        {
+            return Err(eyre!(
+                "finality attestation differs from exact request bindings"
+            ));
+        }
+        Ok(attestation)
+    }
+
     fn bounded_norito_response_body<'a>(
         response: &'a Response<Vec<u8>>,
         maximum: usize,
@@ -69,7 +116,9 @@ impl Client {
     fn canonical_norito_get_request(&self, path: &str, maximum: usize) -> DefaultRequestBuilder {
         let mut headers = self.headers.clone();
         headers.retain(|name, _| {
-            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("content-type")
+            !name.eq_ignore_ascii_case("accept")
+                && !name.eq_ignore_ascii_case("content-type")
+                && !name.eq_ignore_ascii_case("x-iroha-finality-challenge")
         });
         let mut builder =
             DefaultRequestBuilder::new(HttpMethod::GET, join_torii_url(&self.torii_url, path))

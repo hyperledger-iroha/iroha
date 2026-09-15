@@ -2075,8 +2075,15 @@ fn registration_absence_is_distinct_from_policy_and_malformed_state() {
             label: selector.label.clone(),
         }),
     );
-    assert!(matches!(policy_or_not_found(&world.view(), u16::MAX), Err(SnsError::NotFound(_))));
-    world.smart_contract_state_mut_for_testing()
+    assert!(matches!(
+        policy_or_not_found(&world.view(), u16::MAX),
+        Err(SnsError::NotFound(_))
+    ));
+    world
+        .smart_contract_state_mut_for_testing()
         .insert(record_storage_key(&selector), vec![0xff]);
-    assert!(matches!(get_name_record_by_selector(&world.view(), &selector, 0), Err(SnsError::Internal(_))));
+    assert!(matches!(
+        get_name_record_by_selector(&world.view(), &selector, 0),
+        Err(SnsError::Internal(_))
+    ));
 }

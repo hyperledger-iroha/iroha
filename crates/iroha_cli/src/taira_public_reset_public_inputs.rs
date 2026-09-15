@@ -327,3 +327,9 @@ pub(super) fn prepare(_args: &PreparePublicInputs, _output: &mut impl Write) -> 
 #[cfg(test)]
 #[path = "taira_public_reset_public_inputs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(super) fn deployment_genesis_fixture()
+-> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
+    tests::deployment_genesis_fixture()
+}

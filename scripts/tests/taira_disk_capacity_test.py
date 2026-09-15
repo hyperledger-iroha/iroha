@@ -183,5 +183,73 @@ class CapacityTests(unittest.TestCase):
                 capacity.read_plan(link)
 
 
+class CoreDerivationTests(unittest.TestCase):
+    def setUp(self):
+        self.inputs = {
+            "schema": "taira.public-capacity-inputs.v1", "qualification_scope": "core_testnet",
+            "secret_contents_read": False, "filesystem": {"fragment_bytes": 4096},
+            "artifacts": [
+                {"slug": f"taira-validator-{i}", "role": role, "bytes": 128}
+                for i in range(1, 5)
+                for role in ("iroha3d", "iroha_cli", "sorafs_node", "config", "genesis", "genesis_hash", "validator_unit")
+            ] + [{"slug": "taira-edge", "role": role, "bytes": 128} for role in ("iroha_cli", "edge_config")],
+            "stage_files": [], "stage_directories": [], "inventory_inrou_stage_bytes": None,
+            "native_sf1_manifest_bindings": None,
+        }
+        self.build = {"commit": "a" * 40, "source_unchanged": True, "toolchain_unchanged": True,
+                      "target": "aarch64-unknown-linux-gnu", "profile": "release", "jobs": 6,
+                      "deployed": False, "release_qualified": False,
+                      "artifacts": [{"name": name, "size": size} for name, size in (
+                          ("iroha", 101), ("iroha3d_taira", 103), ("sorafs-node", 107), ("kagami", 109))]}
+        self.kwargs = dict(expected_commit="a" * 40, coordinator_path="/coordinator", upload_path="/uploads", service_path="/services",
+                           store_paths=[], runtime_paths=[], guest_headroom_path="/runtime", backing_path="/backing")
+
+    def derive(self, runtime=None):
+        return capacity.derive_capacity(self.inputs, runtime, self.build, **self.kwargs)
+
+    def test_core_derivation_charges_all_thirty_roles_without_stage_or_runtime(self):
+        result = self.derive()
+        # Four daemon/SoraFS, five CLI, four config bounds, thirteen other public artifacts.
+        logical = 4 * 103 + 4 * 107 + 5 * 101 + 4 * 1024**2 + 13 * 128
+        artifact = logical + 30 * 4095 + 64 * 4096
+        expected = 3 * artifact + 2 * 1024**3
+        self.assertEqual(result["derivation"]["artifact_logical_bytes"], logical)
+        self.assertEqual(result["derivation"]["required_bytes"], expected)
+        self.assertEqual(len(result["derivation"]["artifact_role_sizes"]), 30)
+        self.assertEqual(len(result["guest_plan"]["allocations"]), 4)
+        self.assertEqual(sum(row["bytes"] for row in result["backing_plan"]["allocations"]), expected + 2 * 1024**3)
+        self.assertIsNone(result["derivation"]["per_replica_runtime"])
+        self.assertFalse(result["derivation"]["reservation_created"])
+        self.assertFalse(result["derivation"]["existing_inputs_credited"])
+        self.inputs["artifacts"][6]["bytes"] += 4096
+        self.assertEqual(self.derive()["derivation"]["required_bytes"] - expected, 3 * 4096)
+
+    def test_core_derivation_rejects_every_inrou_dependency_and_missing_unit(self):
+        for field, value in (("stage_files", [{"path": "/stage", "bytes": 1}]),
+                             ("stage_directories", ["/stage"]), ("inventory_inrou_stage_bytes", 1),
+                             ("native_sf1_manifest_bindings", {})):
+            original = self.inputs[field]
+            self.inputs[field] = value
+            with self.subTest(field=field), self.assertRaises(capacity.CapacityError):
+                self.derive()
+            self.inputs[field] = original
+        for field in ("store_paths", "runtime_paths"):
+            self.kwargs[field] = ["/unrelated"]
+            with self.subTest(field=field), self.assertRaises(capacity.CapacityError):
+                self.derive()
+            self.kwargs[field] = []
+        with self.assertRaises(capacity.CapacityError):
+            self.derive({})
+        self.inputs["artifacts"] = [row for row in self.inputs["artifacts"] if row["role"] != "validator_unit"]
+        with self.assertRaisesRegex(capacity.CapacityError, "role inventory"):
+            self.derive()
+
+    def test_explicit_scope_rejects_old_alias_and_incomplete_full_budget(self):
+        for scope in (None, "inrou", "full", "full_inrou"):
+            self.inputs["qualification_scope"] = scope
+            with self.subTest(scope=scope), self.assertRaises(capacity.CapacityError):
+                self.derive()
+
+
 if __name__ == '__main__':
     unittest.main()

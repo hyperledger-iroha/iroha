@@ -73,10 +73,7 @@ fn retained_owner_lock(slot: usize) -> Result<bool> {
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn prior_inrou_enabled(validator: &ValidatorV1) -> Result<bool> {
-    use iroha_config::{
-        base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
-        parameters::actual,
-    };
+    use iroha_config::base::toml::MAX_TOML_SOURCE_BYTES;
     if validator.is_vacant() {
         return Ok(false);
     }
@@ -102,17 +99,68 @@ fn prior_inrou_enabled(validator: &ValidatorV1) -> Result<bool> {
             "stopped prior validator config differs from the admitted bytes"
         ));
     }
+    prior_inrou_owner_from_config(&validator.slug, path, &bytes)
+}
+
+/// Read only the admitted owner's typed settings. Full Root parsing would reopen
+/// unrelated credential and identity files, including paths moved during recovery.
+/// The caller has already authenticated the complete config bytes and custody.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn prior_inrou_owner_from_config(slug: &str, path: &Path, bytes: &[u8]) -> Result<bool> {
+    use iroha_config::{
+        base::{read::ConfigReader, toml::TomlSource},
+        parameters::{actual, user},
+    };
     let text =
-        std::str::from_utf8(&bytes).map_err(|_| eyre!("prior validator config is not UTF-8"))?;
+        std::str::from_utf8(bytes).map_err(|_| eyre!("prior validator config is not UTF-8"))?;
     let table: toml::Table =
         toml::from_str(text).map_err(|_| eyre!("prior validator config is not TOML"))?;
-    let config = actual::Root::from_toml_source(TomlSource::new_sensitive(
+    let mut source = TomlSource::new_sensitive(
         path.to_path_buf(),
         table,
         crate::soracloud::zeroize_taira_toml_table,
-    ))
-    .map_err(|_| eyre!("prior validator config failed typed admission"))?;
-    prior_inrou_config_enabled(&validator.slug, &config.soracloud_runtime.inrou)
+    );
+    let root = source.table_mut();
+    if root.contains_key("extends") {
+        return Err(eyre!(
+            "prior validator owner requires a self-contained config"
+        ));
+    }
+    let inrou = match root.get("soracloud_runtime") {
+        None => toml::Table::new(),
+        Some(runtime) => {
+            let runtime = runtime
+                .as_table()
+                .ok_or_else(|| eyre!("prior soracloud_runtime is not a table"))?;
+            match runtime.get("inrou") {
+                None => toml::Table::new(),
+                Some(inrou) => inrou
+                    .as_table()
+                    .ok_or_else(|| eyre!("prior Inrou config is not a table"))?
+                    .clone(),
+            }
+        }
+    };
+    let parsed = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::new_sensitive(
+            path.to_path_buf(),
+            inrou,
+            crate::soracloud::zeroize_taira_toml_table,
+        ))
+        .read_and_complete::<user::SoracloudRuntimeInrou>()
+        .map_err(|_| eyre!("prior Inrou owner failed typed admission"))?;
+    // Only these fields decide stopped-owner authority; no guest resource or
+    // unrelated daemon credential is used by this projection.
+    prior_inrou_config_enabled(
+        slug,
+        &actual::SoracloudRuntimeInrou {
+            enabled: parsed.enabled,
+            portable_vm_uid: parsed.portable_vm_uid,
+            portable_vm_gid: parsed.portable_vm_gid,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -1150,6 +1198,54 @@ mod tests {
             assert!(!prior_inrou_config_enabled(slug, &config)?);
         }
         assert!(owner_slot("taira-validator-0").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn stopped_owner_projection_ignores_unrelated_credentials_and_keeps_typed_defaults()
+    -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let absent = directory.path().join("not-provisioned.key");
+        assert!(!absent.exists());
+        let source = format!(
+            "private_key_file = {0:?}\nsoranet_transport_private_key_file = {0:?}\n\
+             [genesis]\nexpected_hash_file = {0:?}\n\
+             [torii.account_onboarding]\nprivate_key_file = {0:?}\n\
+             [torii.faucet]\nprivate_key_file = {0:?}\n",
+            absent.to_string_lossy()
+        );
+        let path = directory.path().join("admitted.toml");
+        assert!(!iroha_config::parameters::defaults::soracloud_runtime::INROU_ENABLED);
+        assert!(!prior_inrou_owner_from_config(
+            "taira-validator-1",
+            &path,
+            source.as_bytes()
+        )?);
+        let enabled = format!(
+            "{source}\n[soracloud_runtime.inrou]\nenabled = true\nportable_vm_uid = 70000\nportable_vm_gid = 70000\n"
+        );
+        assert!(prior_inrou_owner_from_config(
+            "taira-validator-1",
+            &path,
+            enabled.as_bytes()
+        )?);
+        assert!(
+            prior_inrou_owner_from_config("taira-validator-2", &path, enabled.as_bytes()).is_err()
+        );
+        for malformed in [
+            "[soracloud_runtime.inrou]\nenabled = \"false\"\n",
+            "[soracloud_runtime.inrou]\nportable_vm_uid = 0\n",
+            "[soracloud_runtime.inrou]\nenabled = true\n",
+            "[soracloud_runtime]\ninrou = false\n",
+            "soracloud_runtime = false\n",
+            "extends = \"untrusted.toml\"\n",
+        ] {
+            assert!(
+                prior_inrou_owner_from_config("taira-validator-1", &path, malformed.as_bytes())
+                    .is_err()
+            );
+        }
+        assert!(!absent.exists());
         Ok(())
     }
 

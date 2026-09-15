@@ -5,7 +5,7 @@
 //! Applied observations are not a finality proof or a deployment-complete claim.
 
 use crate::{Run, RunContext, quote_and_sign_transaction};
-use eyre::{Result, WrapErr, eyre};
+use eyre::{Result, eyre};
 use iroha::{blocking::Client as BlockingClient, client::Client, sns::SnsNamespacePath};
 use iroha_data_model::{
     NetworkId,
@@ -41,18 +41,69 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[path = "taira_dataspace_deploy_finality.rs"]
+mod finality;
+
+pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
+
+pub(crate) fn validate_deployment_trust(
+    trust: &DeploymentTrustV1,
+    network: NetworkId,
+) -> Result<()> {
+    trust.validate(network)
+}
+
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const PHASES: [&str; 3] = ["catalog", "bootstrap", "aliases"];
 
 /// Plan, advance, or inspect a single durable dataspace deployment.
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum Command {
+    /// Generate native deployment intent from public files and current namespace policies.
+    Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
     /// Advance from the saved plan; uncertain submissions are only observed again.
     Apply(SavedArgs),
     /// Read the exact saved transactions and current observations without submitting.
     Status(SavedArgs),
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum LaneProfile {
+    RestrictedFullReplica,
+    PublicFullReplica,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct InitArgs {
+    #[arg(long)]
+    dataspace: String,
+    #[arg(long)]
+    lane_id: u32,
+    #[arg(long, value_enum)]
+    lane_profile: LaneProfile,
+    #[arg(long)]
+    account_alias: String,
+    #[arg(long)]
+    lane_manifest: PathBuf,
+    #[arg(long)]
+    trust: PathBuf,
+    #[arg(long)]
+    payment_asset: AssetDefinitionId,
+    #[arg(long)]
+    alias_create_maximum: Quantity,
+    #[arg(long)]
+    transaction_fee_maximum: Quantity,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..))]
+    lease_years: u8,
+    #[arg(long, default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    quote_lifetime_secs: u64,
+    #[arg(long)]
+    operation_id: Option<String>,
+    /// Fresh owner-private bundle; plan consumes its deployment.json file.
+    #[arg(long)]
+    output_dir: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -86,6 +137,7 @@ pub(crate) struct ManifestV1 {
     pub(crate) lane_manifest: RuntimeLaneManifestV1,
     pub(crate) alias_request: AliasSetupPlanRequestV1,
     pub(crate) spending: SpendingV1,
+    pub(crate) finality: finality::TrustV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -175,6 +227,10 @@ struct ReportV1 {
     operation_id: String,
     state: String,
     deployment_complete: bool,
+    #[norito(required)]
+    verification_error: Option<String>,
+    #[norito(required)]
+    completion_receipt: Option<String>,
     verification: VerificationRequestV1,
 }
 
@@ -206,6 +262,7 @@ impl ManifestV1 {
             self.schema_version == 1,
             "unsupported dataspace manifest version",
         )?;
+        self.finality.validate(self.network_id)?;
         if let Some(id) = &self.operation_id {
             operation_id(id)?;
         }
@@ -730,6 +787,7 @@ fn observe(
         peer_status: peer,
         committed: None,
     };
+    let mut failed = false;
     for (value, scope) in [
         (&result.global_status, "global"),
         (&result.peer_status, "local"),
@@ -740,10 +798,13 @@ fn observe(
                 "transaction observation changed its hash or scope",
             )?;
             if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
-                result.state = "failed".into();
-                return Ok(result);
+                failed = true;
             }
         }
+    }
+    if failed {
+        result.state = "failed".into();
+        return Ok(result);
     }
     if matching_applied_height(
         &prepared.transaction_hash,
@@ -823,6 +884,8 @@ fn phase_report(plan: &PlanV1, observations: Vec<PhaseObservationV1>) -> ReportV
         operation_id: plan.operation_id.clone(),
         state: state.into(),
         deployment_complete: false,
+        verification_error: None,
+        completion_receipt: None,
         verification: VerificationRequestV1 {
             schema_version: 1,
             operation_id: plan.operation_id.clone(),
@@ -853,11 +916,158 @@ impl Run for Command {
         )?;
         let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
         match self {
+            Self::Init(args) => initialize(context, args),
             Self::Plan(args) => plan(context, args),
             Self::Apply(args) => saved(context, args, true),
             Self::Status(args) => saved(context, args, false),
         }
     }
+}
+
+fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
+    use iroha_data_model::sns::{ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID};
+    let trust: finality::TrustV1 = json::from_slice(&read_public_input(&args.trust)?)?;
+    trust.validate(context.config().network_id)?;
+    let client = context.client_from_config()?;
+    let policies = [
+        client.sns().get_policy(DATASPACE_ALIAS_SUFFIX_ID)?,
+        client.sns().get_policy(ACCOUNT_ALIAS_SUFFIX_ID)?,
+    ];
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let deadline = now
+        .checked_add(
+            args.quote_lifetime_secs
+                .checked_mul(1000)
+                .ok_or_else(|| eyre!("quote lifetime overflow"))?,
+        )
+        .ok_or_else(|| eyre!("quote deadline overflow"))?;
+    let raw_manifest = String::from_utf8(read_public_input(&args.lane_manifest)?)?;
+    let inline_manifest = raw_manifest.parse::<iroha_primitives::json::Json>()?;
+    let manifest = init_manifest(
+        &args,
+        context.config().network_id,
+        context.config().account.clone(),
+        trust,
+        inline_manifest,
+        &policies,
+        deadline,
+    )?;
+    let configured = preflight(context, &manifest, true)?;
+    let plan = configured
+        .client()
+        .plan_alias_setup(&manifest.alias_request)?;
+    validate_alias_plan(&manifest, &plan, configured.client())?;
+    let journal = Journal::open(&args.output_dir, true)?;
+    journal.install_json("deployment.json", &manifest)?;
+    context.print_data(&manifest)
+}
+
+fn init_manifest(
+    args: &InitArgs,
+    network_id: NetworkId,
+    owner: AccountId,
+    trust: finality::TrustV1,
+    inline_manifest: iroha_primitives::json::Json,
+    policies: &[iroha_data_model::sns::SuffixPolicyV1; 2],
+    deadline: u64,
+) -> Result<ManifestV1> {
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasName, AccountAliasRoleV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+        nexus::{DataSpaceMetadata, LaneStorageProfile, LaneVisibility},
+        sns::{ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, SuffixPolicyV1, SuffixStatus},
+    };
+    use iroha_model_base::topology::LaneId;
+    require(
+        deadline > 0 && deadline < u64::MAX,
+        "generated plan guard requires a finite deadline",
+    )?;
+    let grant = AliasDataspaceBootstrapGrantV1::try_new(&args.dataspace, owner.clone())?;
+    let guard = |policy: &SuffixPolicyV1, expected_suffix| -> Result<AliasQuoteGuardV1> {
+        require(
+            policy.suffix_id == expected_suffix
+                && policy.status == SuffixStatus::Active
+                && policy.min_term_years <= args.lease_years
+                && args.lease_years <= policy.max_term_years,
+            "native namespace policy is inactive, mismatched, or excludes the requested lease term",
+        )?;
+        let asset = AssetDefinitionId::parse_address_literal(&policy.payment_asset_id)?;
+        require(
+            asset == args.payment_asset,
+            "native namespace policy uses another payment asset",
+        )?;
+        Ok(AliasQuoteGuardV1 {
+            expected_policy_version: policy.policy_version,
+            expected_payment_asset: asset,
+            max_amount: args.alias_create_maximum.clone(),
+            valid_until_ms: deadline,
+        })
+    };
+    let name = grant.dataspace.canonical_name.to_string();
+    let alias = AccountAliasName::try_new(&args.account_alias, None::<&str>, &name)?;
+    let intents = vec![
+        EnsureAlias::new(
+            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: grant.dataspace.clone(),
+                owner: owner.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(args.lease_years, None),
+            guard(&policies[0], DATASPACE_ALIAS_SUFFIX_ID)?,
+        ),
+        EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: ResolvedAccountAliasV1::new(alias, grant.dataspace.dataspace_id),
+                target_account: owner.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Additional,
+            }),
+            AliasLeaseAcquisitionV1::new(args.lease_years, None),
+            guard(&policies[1], ACCOUNT_ALIAS_SUFFIX_ID)?,
+        ),
+    ];
+    let lane_id = LaneId::new(args.lane_id);
+    let manifest = ManifestV1 {
+        schema_version: 1,
+        operation_id: args.operation_id.clone(),
+        network_id,
+        owner,
+        dataspace: RuntimeDataSpaceAdditionV1 {
+            descriptor: DataSpaceMetadata {
+                id: grant.dataspace.dataspace_id,
+                alias: name.clone(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            manifest_hash: grant.name_hash,
+        },
+        lane: LaneConfig {
+            id: lane_id,
+            dataspace_id: grant.dataspace.dataspace_id,
+            alias: name,
+            visibility: match args.lane_profile {
+                LaneProfile::RestrictedFullReplica => LaneVisibility::Restricted,
+                LaneProfile::PublicFullReplica => LaneVisibility::Public,
+            },
+            storage: LaneStorageProfile::FullReplica,
+            ..LaneConfig::default()
+        },
+        lane_manifest: RuntimeLaneManifestV1 {
+            lane_id,
+            manifest: inline_manifest,
+        },
+        alias_request: AliasSetupPlanRequestV1::new(intents),
+        spending: SpendingV1 {
+            asset_definition_id: args.payment_asset.clone(),
+            alias_create_maximum: args.alias_create_maximum.clone(),
+            transaction_fee_maximum: args.transaction_fee_maximum.clone(),
+        },
+        finality: trust,
+    };
+    manifest.validate()?;
+    Ok(manifest)
 }
 
 fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
@@ -877,6 +1087,7 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
         )?;
         return context.print_data(&existing);
     }
+    finality::preflight(context, &manifest)?;
     let baseline = client.client().get_lane_lifecycle_status()?;
     let baseline_overlay = overlay(&client.client().get_parameters()?, &baseline)?;
     let catalog_transition = transition(&manifest, &baseline)?;
@@ -1038,7 +1249,15 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
             break;
         }
     }
-    Ok(phase_report(&plan, observations))
+    let mut report = phase_report(&plan, observations);
+    if report.state == "applied_verification_pending" {
+        if let Err(error) = finality::complete(context, &plan, &journal, &mut report) {
+            report.state = "applied_verification_pending".into();
+            report.deployment_complete = false;
+            report.verification_error = Some(format!("{error:#}"));
+        }
+    }
+    Ok(report)
 }
 
 #[derive(JsonSerialize)]
@@ -1067,6 +1286,7 @@ struct Journal {
     path: PathBuf,
     directory: File,
     _lock: File,
+    lock_snapshot: fs::Metadata,
 }
 
 #[cfg(unix)]
@@ -1082,6 +1302,22 @@ fn private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
             },
         "journal must be a current-owner private directory with direct single-link files",
     )
+}
+
+#[cfg(unix)]
+fn same_file_snapshot(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.uid() == after.uid()
+        && before.gid() == after.gid()
+        && before.mode() == after.mode()
+        && before.nlink() == after.nlink()
+        && before.len() == after.len()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
 }
 
 impl Journal {
@@ -1132,6 +1368,7 @@ impl Journal {
         let value = Self {
             path: parent_path.join(name),
             directory,
+            lock_snapshot: lock.metadata()?,
             _lock: lock,
         };
         value.revalidate()?;
@@ -1152,6 +1389,26 @@ impl Journal {
         require(
             actual.dev() == pinned.dev() && actual.ino() == pinned.ino(),
             "operation journal directory was replaced",
+        )?;
+        self.revalidate_file("lock", &self._lock, &self.lock_snapshot)
+    }
+
+    #[cfg(unix)]
+    fn revalidate_file(&self, name: &str, file: &File, before: &fs::Metadata) -> Result<()> {
+        use rustix::fs::{Mode, OFlags};
+        let after = file.metadata()?;
+        private_metadata(&after, false)?;
+        let named = File::from(rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )?);
+        let named = named.metadata()?;
+        private_metadata(&named, false)?;
+        require(
+            same_file_snapshot(before, &after) && same_file_snapshot(&after, &named),
+            "journal file or held lock changed during custody",
         )
     }
 
@@ -1180,8 +1437,16 @@ impl Journal {
         self.install(name, &json::to_vec(value)?)
     }
 
-    #[cfg(unix)]
     fn read_optional(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        self.read_optional_bounded(name, MAX_BYTES)
+    }
+
+    fn install(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.install_bounded(name, bytes, MAX_BYTES)
+    }
+
+    #[cfg(unix)]
+    fn read_optional_bounded(&self, name: &str, maximum: usize) -> Result<Option<Vec<u8>>> {
         use rustix::fs::{Mode, OFlags};
         self.revalidate()?;
         let fd = match rustix::fs::openat(
@@ -1195,41 +1460,78 @@ impl Journal {
             Err(error) => return Err(error.into()),
         };
         let mut file = File::from(fd);
-        private_metadata(&file.metadata()?, false)?;
+        let before = file.metadata()?;
+        private_metadata(&before, false)?;
+        require(
+            before.len() <= u64::try_from(maximum)?,
+            "journal file exceeds bound",
+        )?;
         let mut bytes = Vec::new();
         std::io::Read::by_ref(&mut file)
-            .take((MAX_BYTES + 1) as u64)
+            .take(
+                u64::try_from(maximum)?
+                    .checked_add(1)
+                    .ok_or_else(|| eyre!("journal byte bound overflow"))?,
+            )
             .read_to_end(&mut bytes)?;
-        require(bytes.len() <= MAX_BYTES, "journal file exceeds bound")?;
-        private_metadata(&file.metadata()?, false)?;
+        require(bytes.len() <= maximum, "journal file exceeds bound")?;
+        self.revalidate_file(name, &file, &before)?;
         self.revalidate()?;
         Ok(Some(bytes))
     }
 
     #[cfg(unix)]
-    fn install(&self, name: &str, bytes: &[u8]) -> Result<()> {
-        use rustix::fs::{Mode, OFlags};
-        require(bytes.len() <= MAX_BYTES, "journal output exceeds bound")?;
+    fn install_bounded(&self, name: &str, bytes: &[u8], maximum: usize) -> Result<()> {
+        use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
+        require(bytes.len() <= maximum, "journal output exceeds bound")?;
+        require(
+            !name.is_empty() && !name.contains('/') && name != "." && name != "..",
+            "journal evidence name must be one direct filename",
+        )?;
         self.revalidate()?;
+        let temporary = format!(".staging-{}", hex::encode(rand::random::<[u8; 16]>()));
         let mut file = File::from(rustix::fs::openat(
             &self.directory,
-            name,
+            temporary.as_str(),
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             Mode::from_raw_mode(0o600),
         )?);
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        self.directory.sync_all()?;
-        private_metadata(&file.metadata()?, false)?;
-        self.revalidate()
+        let result: Result<()> = (|| {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            private_metadata(&file.metadata()?, false)?;
+            self.revalidate()?;
+            rustix::fs::renameat_with(
+                &self.directory,
+                temporary.as_str(),
+                &self.directory,
+                name,
+                RenameFlags::NOREPLACE,
+            )?;
+            self.directory.sync_all()?;
+            self.revalidate()?;
+            require(
+                self.read_optional_bounded(name, maximum)?.as_deref() == Some(bytes),
+                "published journal evidence changed",
+            )
+        })();
+        // A crash may leave this unreferenced private staging file. Readers ignore it;
+        // a subsequent attempt uses a distinct name and cannot replace final evidence.
+        match rustix::fs::unlinkat(&self.directory, temporary.as_str(), AtFlags::empty()) {
+            Ok(()) => self.directory.sync_all()?,
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(error) if result.is_ok() => return Err(error.into()),
+            Err(_) => {}
+        }
+        result
     }
 
     #[cfg(not(unix))]
-    fn read_optional(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    fn read_optional_bounded(&self, _: &str, _: usize) -> Result<Option<Vec<u8>>> {
         eyre::bail!("Unix required")
     }
     #[cfg(not(unix))]
-    fn install(&self, _: &str, _: &[u8]) -> Result<()> {
+    fn install_bounded(&self, _: &str, _: &[u8], _: usize) -> Result<()> {
         eyre::bail!("Unix required")
     }
 }
@@ -1262,7 +1564,7 @@ fn read_public_input(path: &Path) -> Result<Vec<u8>> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         alias_setup::{
             AccountAliasRoleV1, AliasAccountIntentV1, AliasAssetTotalV1, AliasDataSpaceIntentV1,
@@ -1322,11 +1624,10 @@ mod tests {
             guard,
         );
         ManifestV1 {
+            finality: finality::test_trust(),
             schema_version: 1,
             operation_id: None,
-            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                b"controller test genesis",
-            ))),
+            network_id: finality::test_network_id(),
             owner,
             dataspace: RuntimeDataSpaceAdditionV1 {
                 descriptor: DataSpaceMetadata {
@@ -1402,7 +1703,7 @@ mod tests {
             }],
             warnings: Vec::new(),
             blockers: Vec::new(),
-            valid_until_ms: u64::MAX,
+            valid_until_ms: 9_000_000_000_000,
         })
     }
     fn fixture_plan() -> PlanV1 {
@@ -1606,6 +1907,11 @@ mod tests {
     #[test]
     fn journal_dispatch_claim_is_durable_and_exclusive() {
         let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(
+            root.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
         let path = root.path().join("operation");
         let value = prepared(&fixture_plan());
         let journal = Journal::open(&path, true).unwrap();
@@ -1621,13 +1927,74 @@ mod tests {
         let mut other = value;
         other.transaction_hash.push('0');
         assert!(record_dispatch_claim(&journal, "catalog.submitted.json", &other).is_err());
+        fs::rename(path.join("lock"), path.join("retained-lock")).unwrap();
+        File::create(path.join("lock"))
+            .unwrap()
+            .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
+        assert!(journal.revalidate().is_err());
+        assert!(
+            journal
+                .install_json("after-lock-change.json", &"refused")
+                .is_err()
+        );
     }
     #[test]
     fn journal_rejects_links_replacement_and_incomplete_records() {
         use std::os::unix::fs::symlink;
         let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(
+            root.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
         let path = root.path().join("operation");
         let journal = Journal::open(&path, true).unwrap();
+        fs::write(
+            path.join(".staging-interrupted"),
+            b"partial bytes before publication",
+        )
+        .unwrap();
+        assert!(journal.read_optional("after-crash.json").unwrap().is_none());
+        journal
+            .install_json("after-crash.json", &"complete")
+            .unwrap();
+        assert_eq!(
+            journal.read_json::<String>("after-crash.json").unwrap(),
+            "complete"
+        );
+        assert!(
+            journal
+                .install_json("after-crash.json", &"replacement")
+                .is_err()
+        );
+        assert!(journal.install_bounded("carrier.nrt", b"wire", 3).is_err());
+        journal.install_bounded("carrier.nrt", b"wire", 4).unwrap();
+        assert!(journal.read_optional_bounded("carrier.nrt", 3).is_err());
+        assert_eq!(
+            journal
+                .read_optional_bounded("carrier.nrt", 4)
+                .unwrap()
+                .as_deref(),
+            Some(b"wire".as_slice())
+        );
+        journal.install("custody.nrt", b"before").unwrap();
+        let retained = File::open(path.join("custody.nrt")).unwrap();
+        let before = retained.metadata().unwrap();
+        fs::write(path.join("custody.nrt"), b"edited").unwrap();
+        assert!(
+            journal
+                .revalidate_file("custody.nrt", &retained, &before)
+                .is_err()
+        );
+        let before = retained.metadata().unwrap();
+        fs::rename(path.join("custody.nrt"), path.join("retained-custody.nrt")).unwrap();
+        fs::copy(path.join("retained-custody.nrt"), path.join("custody.nrt")).unwrap();
+        assert!(
+            journal
+                .revalidate_file("custody.nrt", &retained, &before)
+                .is_err()
+        );
         journal.install("broken.json", b"{ incomplete").unwrap();
         assert!(journal.optional_json::<ManifestV1>("broken.json").is_err());
         symlink(path.join("broken.json"), path.join("linked.json")).unwrap();
@@ -1678,5 +2045,170 @@ mod tests {
                 .verification
                 .authenticated_execution_commitment_required
         );
+    }
+    fn init_args() -> InitArgs {
+        InitArgs {
+            dataspace: "devex".into(),
+            lane_id: 6,
+            lane_profile: LaneProfile::RestrictedFullReplica,
+            account_alias: "admin".into(),
+            lane_manifest: PathBuf::from("public.json"),
+            trust: PathBuf::from("trust.json"),
+            payment_asset: manifest().spending.asset_definition_id,
+            alias_create_maximum: amount(5, 1),
+            transaction_fee_maximum: amount(1, 0),
+            lease_years: 1,
+            quote_lifetime_secs: 3600,
+            operation_id: None,
+            output_dir: PathBuf::from("fresh-output"),
+        }
+    }
+    fn init_policies(args: &InitArgs) -> [iroha_data_model::sns::SuffixPolicyV1; 2] {
+        use iroha_data_model::sns::{
+            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, fixtures::default_policy,
+        };
+        let mut first = default_policy();
+        first.suffix_id = DATASPACE_ALIAS_SUFFIX_ID;
+        first.policy_version = 7;
+        first.payment_asset_id = args.payment_asset.to_string();
+        let mut second = first.clone();
+        second.suffix_id = ACCOUNT_ALIAS_SUFFIX_ID;
+        second.policy_version = 9;
+        [first, second]
+    }
+    #[test]
+    fn init_builds_native_restricted_intent_from_policy_and_profile() {
+        use iroha_data_model::nexus::{LaneStorageProfile, LaneVisibility};
+        let args = init_args();
+        let policies = init_policies(&args);
+        let reference = manifest();
+        let value = init_manifest(
+            &args,
+            reference.network_id,
+            reference.owner.clone(),
+            finality::test_trust(),
+            reference.lane_manifest.manifest.clone(),
+            &policies,
+            9_000_000_000_000,
+        )
+        .unwrap();
+        assert_eq!(value.lane.visibility, LaneVisibility::Restricted);
+        assert_eq!(value.lane.storage, LaneStorageProfile::FullReplica);
+        assert_eq!(value.dataspace.descriptor.fault_tolerance, 1);
+        assert_eq!(value.dataspace, reference.dataspace);
+        assert_eq!(
+            value.alias_request.intents[0]
+                .quote_guard
+                .expected_policy_version,
+            7
+        );
+        assert_eq!(
+            value.alias_request.intents[1]
+                .quote_guard
+                .expected_policy_version,
+            9
+        );
+        assert_eq!(
+            value.alias_request.intents[1].quote_guard.max_amount,
+            amount(5, 1)
+        );
+        assert!(value.lane.metadata.is_empty());
+        let mut public = args;
+        public.lane_profile = LaneProfile::PublicFullReplica;
+        let value = init_manifest(
+            &public,
+            reference.network_id,
+            reference.owner,
+            finality::test_trust(),
+            reference.lane_manifest.manifest,
+            &policies,
+            9_000_000_000_000,
+        )
+        .unwrap();
+        assert_eq!(value.lane.visibility, LaneVisibility::Public);
+    }
+    #[test]
+    fn init_rejects_policy_drift_and_parses_explicit_caps() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(subcommand)]
+            command: Command,
+        }
+        let args = init_args();
+        let reference = manifest();
+        let mut policies = init_policies(&args);
+        policies[0].status = iroha_data_model::sns::SuffixStatus::Paused;
+        assert!(
+            init_manifest(
+                &args,
+                reference.network_id,
+                reference.owner.clone(),
+                finality::test_trust(),
+                reference.lane_manifest.manifest.clone(),
+                &policies,
+                9_000_000_000_000
+            )
+            .is_err()
+        );
+        policies = init_policies(&args);
+        policies[1].min_term_years = 2;
+        assert!(
+            init_manifest(
+                &args,
+                reference.network_id,
+                reference.owner.clone(),
+                finality::test_trust(),
+                reference.lane_manifest.manifest.clone(),
+                &policies,
+                9_000_000_000_000
+            )
+            .is_err()
+        );
+        policies = init_policies(&args);
+        policies[1].payment_asset_id = "invalid-asset".into();
+        assert!(
+            init_manifest(
+                &args,
+                reference.network_id,
+                reference.owner,
+                finality::test_trust(),
+                reference.lane_manifest.manifest,
+                &policies,
+                9_000_000_000_000
+            )
+            .is_err()
+        );
+        let argv = [
+            "test",
+            "init",
+            "--dataspace",
+            "devex",
+            "--lane-id",
+            "6",
+            "--lane-profile",
+            "restricted-full-replica",
+            "--account-alias",
+            "admin",
+            "--lane-manifest",
+            "public.json",
+            "--trust",
+            "trust.json",
+            "--payment-asset",
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "--alias-create-maximum",
+            "0.5",
+            "--transaction-fee-maximum",
+            "1",
+            "--output-dir",
+            "new",
+        ];
+        let parsed = Wrapper::try_parse_from(argv).unwrap();
+        let Command::Init(init) = parsed.command else {
+            panic!("init command expected");
+        };
+        assert_eq!(init.alias_create_maximum, amount(5, 1));
+        assert_eq!(init.transaction_fee_maximum, amount(1, 0));
+        assert!(Wrapper::try_parse_from(&argv[..argv.len() - 2]).is_err());
     }
 }
