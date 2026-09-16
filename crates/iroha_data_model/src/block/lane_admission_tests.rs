@@ -643,6 +643,107 @@ fn complete_lane_admission_model_requires_both_slots_and_rejects_duplicate_plan_
     assert!(norito::decode_canonical::<QueuePlanAdmissionCertificateV1>(&bytes).is_err());
 }
 
+fn complete_input_model_with_body(body_bytes: usize) -> LaneAdmittedInputV1 {
+    let mut input = complete_input_model_fixture();
+    let (network, _, _) = fixture();
+    let key = KeyPair::from_seed(vec![0x37; 32], Algorithm::Ed25519);
+    let mut builder = crate::transaction::TransactionBuilder::new(
+        network,
+        crate::account::AccountId::new(key.public_key().clone()),
+        crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(std::time::Duration::from_millis(73));
+    let signed = builder
+        .with_instructions([crate::isi::Log::new(
+            crate::Level::INFO,
+            "x".repeat(body_bytes),
+        )])
+        .with_admission_intent(crate::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(key.private_key());
+    input.certificate.binding.signed_transaction_hash = Some(signed.hash());
+    input.entrypoint = TransactionEntrypoint::External(signed);
+    input.certificate.binding.entrypoint_hash = input.entrypoint.hash();
+    input.certificate.binding.request_id =
+        queue_plan_synced_request_id(&network, input.entrypoint.hash());
+    // The certificate remains deliberately unauthenticated; this tests only decoding.
+    input
+}
+
+#[test]
+fn complete_lane_admission_decoder_accepts_exact_frame_cap_with_nested_body() {
+    let cap = super::super::MAX_QUEUE_PLAN_ADMISSION_BYTES;
+    let oversized = complete_input_model_with_body(cap);
+    let overhead = norito::encode_canonical(&oversized).unwrap().len() - cap;
+    let input = complete_input_model_with_body(cap - overhead);
+    let bytes = norito::encode_canonical(&input).unwrap();
+    assert_eq!(bytes.len(), cap);
+    assert_eq!(
+        LaneAdmittedInputV1::decode_canonical(&bytes).unwrap(),
+        input
+    );
+    assert!(
+        matches!(
+            norito::decode_canonical_with_limits::<LaneAdmittedInputV1>(
+                &bytes,
+                norito::DecodeLimits::new(cap, cap, cap, cap * 4, 64),
+            ),
+            Err(norito::Error::TotalAllocationExceeded { .. })
+        ),
+        "the former certificate allocation budget rejects a valid complete input"
+    );
+    let over_cap = complete_input_model_with_body(cap - overhead + 1);
+    let bytes = norito::encode_canonical(&over_cap).unwrap();
+    assert_eq!(bytes.len(), cap + 1);
+    assert!(LaneAdmittedInputV1::decode_canonical(&bytes).is_err());
+}
+
+#[test]
+fn complete_lane_admission_decoder_rejects_malformed_and_noncanonical_frames() {
+    let bytes = norito::encode_canonical(&complete_input_model_fixture()).unwrap();
+    assert!(LaneAdmittedInputV1::decode_canonical(&[]).is_err());
+    assert!(LaneAdmittedInputV1::decode_canonical(&bytes[..bytes.len() - 1]).is_err());
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(LaneAdmittedInputV1::decode_canonical(&trailing).is_err());
+    let mut compressed = bytes.clone();
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    // Mutate only the declared V1 header fields: magic, two version bytes,
+    // schema, then compression. Header::write is intentionally private.
+    let schema_start = header.magic.len() + 2;
+    let compression_offset = schema_start + header.schema.len();
+    compressed[compression_offset] = norito::Compression::Zstd as u8;
+    assert!(LaneAdmittedInputV1::decode_canonical(&compressed).is_err());
+    let mut unknown_schema = bytes.clone();
+    unknown_schema[schema_start..compression_offset].fill(0x5a);
+    assert_eq!(
+        norito::core::Header::read(unknown_schema.as_slice())
+            .unwrap()
+            .schema,
+        [0x5a; 16],
+    );
+    assert!(LaneAdmittedInputV1::decode_canonical(&unknown_schema).is_err());
+    assert!(LaneAdmittedInputV1::decode_canonical(&bytes).is_ok());
+}
+
+#[test]
+fn complete_lane_admission_decoder_preserves_stricter_outer_allocation_budget() {
+    let input = complete_input_model_with_body(160 * 1024);
+    let bytes = norito::encode_canonical(&input).unwrap();
+    let cap = super::super::MAX_QUEUE_PLAN_ADMISSION_BYTES;
+    let result =
+        norito::with_decode_limits(norito::DecodeLimits::new(cap, cap, cap, 1, 64), || {
+            LaneAdmittedInputV1::decode_canonical(&bytes)
+        });
+    assert!(
+        matches!(result, Err(norito::Error::TotalAllocationExceeded { .. })),
+        "a nested decoder cannot relax its caller's budget"
+    );
+    assert_eq!(
+        LaneAdmittedInputV1::decode_canonical(&bytes).unwrap(),
+        input
+    );
+}
+
 #[test]
 fn complete_lane_admission_schema_frame_vectors() {
     use norito::schema::identity::{NoritoSchema, frame_hash};

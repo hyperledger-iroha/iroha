@@ -530,6 +530,9 @@ pub(crate) mod v2_beacon;
 pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
 // TODO: native wire evidence becomes live only through the shared lane reducer driver.
+pub(crate) mod v2_lane_body_store;
+pub(crate) mod v2_lane_instance;
+pub(crate) mod v2_lane_payload;
 pub(crate) mod v2_lane_wal;
 pub(crate) mod v2_lane_wire;
 pub(crate) mod v2_lane_work;
@@ -6738,6 +6741,10 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
         .try_recv()
         .expect("test fair ingress returns its admitted owner")
 }
+mod admission_capacity;
+pub use admission_capacity::{
+    AdmissionCapacityUnavailableV1, AuthenticatedAdmissionCapacityV1, Rs16PayloadGeometryV1,
+};
 mod startup_recovery;
 pub use startup_recovery::StartupRecovery;
 use startup_recovery::StartupRecoveryPublisher;
@@ -6760,6 +6767,7 @@ pub struct SumeragiHandle {
     output_guard: Arc<ConsensusOutputGuard>,
     emergency_fast_disabled: bool,
     startup_recovery: StartupRecovery,
+    admission_capacity: Arc<std::sync::OnceLock<AuthenticatedAdmissionCapacityV1>>,
 }
 impl SumeragiHandle {
     fn new(
@@ -6780,6 +6788,7 @@ impl SumeragiHandle {
             output_guard,
             emergency_fast_disabled: false,
             startup_recovery,
+            admission_capacity: Arc::new(std::sync::OnceLock::new()),
         }
     }
     /// Construct a permanently closed consensus ingress without launching an
@@ -6824,6 +6833,25 @@ impl SumeragiHandle {
         !self.emergency_fast_disabled
             && self.ingress_ready.load(Ordering::Acquire)
             && !self.restart_required()
+    }
+    /// Observe the immutable signed RS16 layout after authenticated recovery.
+    ///
+    /// Pending recovery is an explicit retryable startup condition, never a
+    /// default layout. This is only capacity evidence: callers must separately
+    /// check live admission, State authority and the complete carrier envelope.
+    pub fn authenticated_admission_capacity(
+        &self,
+    ) -> std::result::Result<AuthenticatedAdmissionCapacityV1, AdmissionCapacityUnavailableV1> {
+        if self.emergency_fast_disabled {
+            return Err(AdmissionCapacityUnavailableV1::Disabled);
+        }
+        if self.output_guard.restart_required() {
+            return Err(AdmissionCapacityUnavailableV1::RestartRequired);
+        }
+        self.admission_capacity
+            .get()
+            .copied()
+            .ok_or(AdmissionCapacityUnavailableV1::Pending)
     }
     /// Wake the serialized v2 owner after a QueuePlan admission certificate
     /// has been durably published in Kura.
@@ -7386,6 +7414,7 @@ impl SumeragiStartArgs {
             startup_recovery,
         );
         let worker = SumeragiWorker {
+            admission_capacity: Arc::clone(&handle.admission_capacity),
             build_identity,
             config,
             common_config,
@@ -7605,6 +7634,7 @@ impl Drop for V2StartupReplayInventoryGuard {
     }
 }
 struct SumeragiWorker {
+    admission_capacity: Arc<std::sync::OnceLock<AuthenticatedAdmissionCapacityV1>>,
     build_identity: crate::release_identity::BuildIdentity,
     config: SumeragiConfig,
     common_config: CommonConfig,

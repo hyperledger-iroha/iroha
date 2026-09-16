@@ -951,6 +951,7 @@ fn run_inner(
     startup_recovery: &super::StartupRecoveryPublisher,
 ) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
+        admission_capacity,
         build_identity,
         config,
         common_config,
@@ -1034,6 +1035,11 @@ fn run_inner(
                     .into(),
                 );
             }
+            super::admission_capacity::publish_authenticated_capacity(
+                &admission_capacity,
+                terminal.verified_context(),
+            )
+            .map_err(V2RunnerError::Service)?;
             // Terminal recovery authorizes writers only after exact final validation.
             startup_recovery.ready();
             wait_for_terminal_shutdown(
@@ -1057,6 +1063,11 @@ fn run_inner(
         recovered_successor_activation,
         staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    super::admission_capacity::publish_authenticated_capacity(
+        &admission_capacity,
+        &verified_context,
+    )
+    .map_err(V2RunnerError::Service)?;
     let local_peer = common_config.peer.id().clone();
     // Height-local roster membership is read-only and must precede the first
     // lifecycle mutation. It controls global duty for this frozen height, not

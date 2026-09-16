@@ -40,11 +40,10 @@ fn retained_publication_message(
     Option<Arc<TransactionGossip>>,
 ) {
     let message = TransactionGossip {
-        txs: vec![GossipTransaction::with_encoded_and_queue_plan_certificate(
-            signed.clone(),
-            payload_for(signed),
-            certificate,
-        )],
+        txs: vec![
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(certificate))
+                .expect("structural complete input"),
+        ],
         routes: vec![GossipRoute {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -52,6 +51,11 @@ fn retained_publication_message(
         plans: vec![default_plan()],
         plane: GossipPlane::Public,
     };
+    assert_eq!(
+        message.txs[0].payload().as_slice(),
+        payload_for(signed).as_slice(),
+        "fixture's sole certified input retains exact original signed bytes"
+    );
     let message = Arc::new(decode_gossip_message(&message));
     let extra = shared.then(|| Arc::clone(&message));
     let (retained, count) = RetainedGossip::with_count_for_test(message);
@@ -363,27 +367,26 @@ fn larger_durable_skew_retires_body_without_weakening_exact_fence() {
 
 #[test]
 fn partial_batch_keeps_completed_and_rejected_entries_final_across_future_retry() {
-    let (_, first, _, first_certificate, _first_journal) =
+    let (_, _first, _, first_certificate, _first_journal) =
         exact_pending_queue_plan_gossip_fixture("first ready");
-    let (gossiper, future, _, future_certificate, _journal) =
+    let (gossiper, _future, _, future_certificate, _journal) =
         publication_queue_plan_gossip_fixture("second future", true);
+    let mut rejected = norito::decode_canonical::<
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    >(&future_certificate)
+    .unwrap();
+    rejected.certificate.attestations[0].signature =
+        iroha_crypto::Signature::try_new(BOB_KEYPAIR.private_key(), b"bad partial batch authority")
+            .unwrap();
+    let rejected = norito::encode_canonical(&rejected).unwrap();
     let message = TransactionGossip {
         txs: vec![
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                first.clone(),
-                payload_for(&first),
-                first_certificate,
-            ),
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                future.clone(),
-                payload_for(&future),
-                vec![0],
-            ),
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                future.clone(),
-                payload_for(&future),
-                future_certificate,
-            ),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(first_certificate))
+                .expect("structural complete input"),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(rejected))
+                .expect("structural complete input"),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(future_certificate))
+                .expect("structural complete input"),
         ],
         routes: vec![
             GossipRoute {

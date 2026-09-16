@@ -386,12 +386,25 @@ pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
 };
+mod lane_admitted_input;
+mod lane_decision_batch;
+mod lane_decision_execution;
+mod lane_decision_group;
+mod lane_input_body;
+pub(crate) use lane_decision_group::{LaneDecisionGroupPreparationV1, VerifiedLaneDecisionGroupV1};
+pub(crate) use lane_input_body::{
+    LaneInputBodyPreparationV1, LaneInputDependencyV1, VerifiedLaneInputBodyV1,
+};
 mod lane_authority;
 mod lane_consensus_authority;
 mod lane_consensus_commitment;
 mod lane_consensus_context;
 mod lane_consensus_state;
 mod lane_consensus_verified;
+pub(crate) use lane_admitted_input::{
+    AuthenticatedLaneAdmittedInputSourceV1, FirstLaneAdmittedInputReadV1,
+    VerifiedFirstLaneAdmittedInputV1,
+};
 pub(crate) use lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY;
 mod lane_consensus_witness;
 pub(crate) use lane_consensus_commitment::LaneConsensusContextsCommitmentV1;
@@ -3028,6 +3041,19 @@ pub enum MergeLedgerCommitError {
     /// Merge execution batch failed structural or cryptographic validation.
     #[error("merge execution batch is invalid: {0}")]
     ExecutionBatchInvalid(String),
+    /// Valid native inputs exceed the remaining carrier budget; choose a shorter
+    /// oldest prefix without terminating any input or publishing scratch writes.
+    #[error(
+        "native execution batch is full after {fitting_prefix} inputs (limit={gas_limit}, used={gas_used})"
+    )]
+    ExecutionBatchFull {
+        /// Number of leading groups that fit, including deterministic rejections.
+        fitting_prefix: usize,
+        /// Current governed whole-block limit (zero means unlimited).
+        gas_limit: u64,
+        /// Gas already owned by other canonical carrier work.
+        gas_used: u64,
+    },
     /// Certified merge entries must be ordered by a canonical global block.
     #[error("certified merge entries require a globally committed carrier block")]
     ExecutionRequiresGlobalBlock,
@@ -3784,6 +3810,18 @@ impl MergeBindingHistory {
         Ok(history)
     }
 }
+/// Economic fields required to drain one executor-owned settlement batch.
+/// Native group consensus evidence stays in its authenticated source; no old
+/// participant signature or proposal is manufactured for this projection.
+struct LaneExecutionSettlementInput<'a> {
+    route: crate::queue::RoutingDecision,
+    lane_incarnation: Hash,
+    lane_height: u64,
+    entrypoints: &'a [TransactionEntrypoint],
+    native_amx_receipts: &'a [Option<iroha_data_model::block::consensus::NativeAmxReceipt>],
+    atomic_group: bool,
+}
+
 /// Single authoritative snapshot for all merge-admission progression state.
 ///
 /// Query caches remain separate and bounded, but epoch, incarnation, relay-tip,
@@ -54289,6 +54327,26 @@ impl<'state> StateBlock<'state> {
         execution: &MergeLaneExecution,
     ) -> Result<LaneBlockCommitment, MergeLedgerCommitError> {
         let descriptor = &execution.proposal.descriptor;
+        self.drain_lane_execution_settlement(LaneExecutionSettlementInput {
+            route: crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id),
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_height: descriptor.lane_block_height,
+            entrypoints: &execution.entrypoints,
+            native_amx_receipts: &execution.native_amx_receipts,
+            atomic_group: false,
+        })
+    }
+    fn drain_lane_execution_settlement(
+        &mut self,
+        source: LaneExecutionSettlementInput<'_>,
+    ) -> Result<LaneBlockCommitment, MergeLedgerCommitError> {
+        if source.entrypoints.len() != source.native_amx_receipts.len()
+            || (source.atomic_group && source.entrypoints.len() != 1)
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane settlement source does not align its exact input evidence".into(),
+            ));
+        }
         let mut settlements = self.drain_settlement_records();
         let mut nexus_fees = self.drain_nexus_fee_records();
         let mut tx_count = 0u64;
@@ -54300,12 +54358,10 @@ impl<'state> StateBlock<'state> {
         let mut receipts = Vec::new();
         let mut nexus_fee_receipts = Vec::new();
         let mut native_amx_receipts = Vec::new();
-        for (entrypoint, native_amx_receipt) in execution
-            .entrypoints
-            .iter()
-            .zip(&execution.native_amx_receipts)
+        for (entrypoint, native_amx_receipt) in
+            source.entrypoints.iter().zip(source.native_amx_receipts)
         {
-            let mut counted = false;
+            let mut counted = source.atomic_group;
             let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(entrypoint);
             if let Some(record) = signed_transaction_hash
                 .as_ref()
@@ -54364,9 +54420,9 @@ impl<'state> StateBlock<'state> {
                 .and_then(|hash| nexus_fees.remove(hash))
             {
                 nexus_fee_receipts.push(record.into_lane_receipt(
-                    descriptor.lane_block_height,
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
+                    source.lane_height,
+                    source.route.lane_id,
+                    source.route.dataspace_id,
                 ));
                 counted = true;
             }
@@ -54384,10 +54440,10 @@ impl<'state> StateBlock<'state> {
             ));
         }
         Ok(LaneBlockCommitment {
-            block_height: descriptor.lane_block_height,
-            lane_id: descriptor.lane_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            dataspace_id: descriptor.dataspace_id,
+            block_height: source.lane_height,
+            lane_id: source.route.lane_id,
+            lane_incarnation: source.lane_incarnation,
+            dataspace_id: source.route.dataspace_id,
             tx_count,
             total_local_amount,
             total_xor_due,
@@ -54402,6 +54458,20 @@ impl<'state> StateBlock<'state> {
     fn stage_merge_execution_nexus_fee_settlement(
         &mut self,
         executions: &[MergeLaneExecution],
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.stage_lane_execution_nexus_fee_settlement(executions.iter().map(|execution| {
+            (
+                &execution.settlement_commitment,
+                execution.settlement_hash,
+                execution.proposal.descriptor.proposal_height,
+            )
+        }))
+    }
+    fn stage_lane_execution_nexus_fee_settlement<'e>(
+        &mut self,
+        executions: impl IntoIterator<
+            Item = (&'e LaneBlockCommitment, HashOf<LaneBlockCommitment>, u64),
+        >,
     ) -> Result<(), MergeLedgerCommitError> {
         if self.nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
             return Ok(());
@@ -54420,12 +54490,11 @@ impl<'state> StateBlock<'state> {
                     "invalid nexus fee asset id for merge execution".to_owned(),
                 )
             })?;
-        for execution in executions {
-            let commitment = &execution.settlement_commitment;
+        for (commitment, settlement_hash, authority_height) in executions {
             if commitment.nexus_fee_receipts.is_empty() {
                 continue;
             }
-            let settlement_root = *execution.settlement_hash;
+            let settlement_root = *settlement_hash;
             let settlement_key = State::nexus_fee_settlement_marker_key(
                 commitment.dataspace_id,
                 commitment.lane_id,
@@ -54475,7 +54544,7 @@ impl<'state> StateBlock<'state> {
                         let allocation = State::verified_fee_sponsor_allocation_for_receipt(
                             &self.world,
                             receipt,
-                            execution.proposal.descriptor.proposal_height,
+                            authority_height,
                         )?
                         .ok_or_else(|| {
                             MergeLedgerCommitError::InvalidNexusFeeReceipt(

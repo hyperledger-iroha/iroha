@@ -56,9 +56,18 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         },
     ])
     .expect("valid Native fixture dataspace catalog");
-    state
-        .set_nexus(nexus)
-        .expect("install Native fixture dataspace before genesis");
+    // This is process configuration installed before genesis, not a committed
+    // runtime catalog addition. Restore must retain the same source of authority.
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    // Follow the authenticated fresh-start order: establish the configured
+    // primary anchor, restore that replay floor, then publish Nexus settings.
+    // The helper rejects existing State or Kura history before changing either.
+    state.install_pre_genesis_nexus_for_testing(nexus);
+    assert_eq!(
+        state.nexus_snapshot().configured_dataspace_catalog,
+        state.nexus_snapshot().dataspace_catalog,
+        "startup must be able to reconstruct the exact configured dataspaces",
+    );
     let lane = LaneConfig {
         id: participant_lane,
         dataspace_id: participant_dataspace,

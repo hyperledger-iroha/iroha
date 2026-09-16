@@ -934,17 +934,26 @@ impl Kura {
                 } else if !plan.routes.is_empty()
                     && self.native_amx_publication_plan_is_durably_complete_under_prune_and_canonical_guards(carrier, &plan)? {
                     return Ok(false);
-                } else if target_indices.len() != evidence.artifacts.len() {
-                    // A partial repair must not reconstruct a subset of an indexed
-                    // carrier and silently forget its other publication obligations.
+                } else if target_indices.len() != evidence.artifacts.len()
+                    && Self::read_native_amx_publication_index_for_store(&self.store_root)?
+                        .records.get(&carrier).is_some_and(|record|
+                            record.origin == NativeAmxPublicationIndexOriginV1::CanonicalWrite)
+                {
+                    // An unfinished original write still needs its complete
+                    // carrier owner. Only separately authenticated completed
+                    // repair may prove every non-target already terminal.
                     return Err(Error::PruneIntentConflict(
                         "Native AMX targeted repair lacks the complete carrier reservation".to_owned(),
                     ));
                 }
                 let merge =
                     self.native_amx_capacity_merge_entry_under_prune_and_canonical_guards(block)?;
-                let publication =
-                    self.prepare_native_amx_publication_index(block, merge.as_ref(), None)?;
+                let publication = self.prepare_native_amx_repair_publication_index(
+                    block,
+                    merge.as_ref(),
+                    evidence,
+                    target_indices,
+                )?;
                 self.admit_native_amx_publication_capacity_plan(carrier, plan, None, publication)?
             }
             None => None,
@@ -1603,6 +1612,14 @@ impl Kura {
                     return Err(Error::PruneIntentConflict(
                         "Native recovery compact association changed its recorded hash".to_owned(),
                     ));
+                }
+                if pending_index.records.get(&expected).is_some_and(|record| {
+                    record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair
+                }) {
+                    self.authenticate_native_amx_completed_repair_on_startup(
+                        &block,
+                        merge.as_ref(),
+                    )?;
                 }
                 let (carrier, plan) = match self
                     .native_amx_publication_plan_for_storage_under_prune_and_canonical_guards(

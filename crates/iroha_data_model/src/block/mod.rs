@@ -54,6 +54,10 @@ pub mod header;
 pub mod lane_admission;
 /// Native lane consensus messages and immutable frozen authority values.
 pub mod lane_consensus;
+/// Global economic transcripts for independently decided lane inputs.
+pub mod lane_execution;
+/// Immutable complete admitted inputs and exact distinct route slots.
+pub mod lane_input;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 #[cfg(feature = "transparent_api")]

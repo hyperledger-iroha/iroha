@@ -2258,7 +2258,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread",
             "self.remaining().map_err(str::to_owned)?;",
             "let outcome = tokio::task::block_in_place(|| {",
-            "state.persist_classified_queue_plan_admission(\n                    certificate,\n                    QueuePlanAdmissionPersistenceScope::Admission,",
+            "state.persist_classified_queue_plan_admission(\n                    complete_input,\n                    QueuePlanAdmissionPersistenceScope::Admission,",
             "Ok(outcome) => return Ok(outcome)",
             "let Some(required_height) = publication_overlap_height(&error) else {",
             "return Err(error.to_string())",

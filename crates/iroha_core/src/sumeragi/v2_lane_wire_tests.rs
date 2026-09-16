@@ -540,3 +540,6 @@ fn native_manifest_substitution_cannot_reuse_prepare_commit_or_timeout_authority
         "highest Prepare cannot substitute an availability manifest"
     );
 }
+
+#[path = "v2_lane_wire_projection_tests.rs"]
+mod native_projection_tests;

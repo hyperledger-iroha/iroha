@@ -55,17 +55,7 @@ pub fn decode_and_validate_lane_admitted_input_v1(
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("complete lane admitted input is empty or oversized".to_owned());
     }
-    // Unlike the certificate-only decoder, the complete entrypoint may contain
-    // a byte payload larger than a public-key payload. Bound every sequence by
-    // the actual control cap, with the same four-times allocation/depth budget.
-    let limits = norito::DecodeLimits::new(
-        max_bytes,
-        max_bytes,
-        max_bytes,
-        max_bytes.saturating_mul(4),
-        64,
-    );
-    let input = norito::decode_canonical_with_limits::<LaneAdmittedInputV1>(bytes, limits)
+    let input = LaneAdmittedInputV1::decode_canonical(bytes)
         .map_err(|error| format!("complete lane admitted input cannot be decoded: {error}"))?;
     #[cfg(test)]
     QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
@@ -107,6 +97,17 @@ pub fn maximum_lane_admitted_input_encoded_len_v1(
     entrypoint: &TransactionEntrypoint,
     binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<usize, String> {
+    let sizing_only = maximum_lane_admitted_input_sizing_value_v1(entrypoint, binding)?;
+    norito::canonical_frame_len(&sizing_only)
+        .map_err(|error| format!("complete QueuePlan input size cannot be encoded: {error}"))
+}
+
+// The only constructor of worst-quorum placeholder bytes remains private. It
+// creates no authenticated token; public callers receive byte counts only.
+fn maximum_lane_admitted_input_sizing_value_v1(
+    entrypoint: &TransactionEntrypoint,
+    binding: &QueuePlanAdmissionBindingV1,
+) -> Result<LaneAdmittedInputV1, String> {
     binding.validate_structure()?;
     let plan = binding.routing_plan()?;
     validate_queue_plan_binding_for_transaction_and_plan(binding, entrypoint, &plan)?;
@@ -137,8 +138,8 @@ pub fn maximum_lane_admitted_input_encoded_len_v1(
     // Canonical V1 uses uncompressed frames, fixed scalar widths and monotone
     // sequence framing. Signature contents do not affect length. Selecting the
     // threshold largest payload lengths therefore bounds all signer subsets,
-    // including heterogeneous algorithms. These bytes are never evidence: only
-    // the counting serializer sees them, and neither bytes nor a token escape.
+    // including heterogeneous algorithms. These bytes are never evidence: the
+    // private sizing scope exposes neither placeholder bytes nor an authenticated token.
     let attestations = shapes
         .into_iter()
         .map(
@@ -157,6 +158,149 @@ pub fn maximum_lane_admitted_input_encoded_len_v1(
             attestations,
         },
     };
-    norito::canonical_frame_len(&sizing_only)
-        .map_err(|error| format!("complete QueuePlan input size cannot be encoded: {error}"))
+    Ok(sizing_only)
+}
+
+/// Largest encoded bodies and actual publication frames for one admitted input.
+///
+/// This is arithmetic only: no field grants route, transport, finality or voting
+/// authority, and no placeholder bytes escape the sizing implementation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaneAdmittedInputEnvelopeSizeBoundsV1 {
+    /// Canonical complete-input frame, bounded by the per-control protocol cap.
+    pub complete_input_bytes: usize,
+    /// Full canonical `LaneInputPayloadV1`, including all distinct route slots.
+    pub native_payload_bytes: usize,
+    /// Distinct routes, counting a coordinator/participant overlap once.
+    pub native_route_slots: usize,
+    /// Plaintext direct Relay/Data frame for Torii's publication NetworkMessage.
+    pub publication_plaintext_bytes: usize,
+    /// Encrypted publication plus stream prefix, charged by P2P's queue owner.
+    pub publication_queue_bytes: usize,
+    /// Plaintext direct Relay/Data frame for validator-to-leader republication.
+    pub republication_plaintext_bytes: usize,
+    /// Encrypted republication plus stream prefix, charged by P2P's queue owner.
+    pub republication_queue_bytes: usize,
+}
+
+/// Count actual native-input and P2P publication wrappers before a promise.
+///
+/// Reuses the same exact worst-quorum signature shapes as
+/// [`maximum_lane_admitted_input_encoded_len_v1`]. Native descriptor identities
+/// and heights have fixed canonical widths; their sizing-only values grant no
+/// authority. Slots derive from distinct binding routes, never local FIFO or
+/// current context guesses. The P2P owners count the real NetworkMessage variants,
+/// direct relay, signature, Data frame, encryption and stream prefix.
+///
+/// Callers must separately enforce signed global/native RS16 geometry, the
+/// **entire** global candidate, transport topic caps and outbound reservations.
+/// These lengths are not a complete admission-feasibility decision. This function
+/// intentionally does not change the existing Torii preacceptance guard.
+///
+/// # Errors
+/// Rejects inconsistent input/binding claims, an input above the complete-control
+/// cap, conflicting route incarnations, malformed bounded slots, codec errors or
+/// transport length overflow. No invalid evidence or authenticated token escapes.
+pub fn maximum_lane_admitted_input_envelope_sizes_v1(
+    entrypoint: &TransactionEntrypoint,
+    binding: &QueuePlanAdmissionBindingV1,
+) -> Result<LaneAdmittedInputEnvelopeSizeBoundsV1, String> {
+    use iroha_data_model::block::{
+        lane_consensus::QueuePlanAdmissionPriorityV1,
+        lane_input::{
+            LANE_INPUT_VERSION_V1, LaneInputDescriptorV1, LaneInputPayloadV1, LaneInputRouteSlotV1,
+        },
+    };
+    use std::{collections::BTreeMap, sync::Arc};
+
+    let sizing_only = maximum_lane_admitted_input_sizing_value_v1(entrypoint, binding)?;
+    let complete_input_bytes = norito::canonical_frame_len(&sizing_only)
+        .map_err(|error| format!("complete QueuePlan input size cannot be encoded: {error}"))?;
+    if complete_input_bytes > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES {
+        return Err(
+            "complete QueuePlan input exceeds its per-control cap before envelope sizing"
+                .to_owned(),
+        );
+    }
+    // Bound allocation before materializing the one canonical Vec<u8> field
+    // used by both actual publication variants. No second codec is introduced.
+    let control_bytes = norito::encode_canonical(&sizing_only)
+        .map_err(|error| format!("complete QueuePlan sizing frame cannot be encoded: {error}"))?;
+    let mut routes = BTreeMap::new();
+    for bound in &binding.admission_context.route_incarnations {
+        let route = bound.leg.route;
+        if let Some(previous) =
+            routes.insert((route.lane_id, route.dataspace_id), bound.lane_incarnation)
+            && previous != bound.lane_incarnation
+        {
+            return Err("QueuePlan sizing route has conflicting incarnations".to_owned());
+        }
+    }
+    let slots = routes
+        .into_iter()
+        .map(
+            |((lane_id, dataspace_id), lane_incarnation)| LaneInputRouteSlotV1 {
+                route: crate::queue::RoutingDecision::new(lane_id, dataspace_id),
+                lane_incarnation,
+                instance_id: Hash::new(b"non-authorizing native sizing instance"),
+                lane_height: 1,
+            },
+        )
+        .collect::<Vec<_>>();
+    let native_route_slots = slots.len();
+    let native_sizing_only = LaneInputPayloadV1 {
+        descriptor: LaneInputDescriptorV1 {
+            version: LANE_INPUT_VERSION_V1,
+            admission_priority: QueuePlanAdmissionPriorityV1::new(1, 0)
+                .map_err(|error| format!("native sizing position is invalid: {error}"))?,
+            admission_carrier_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"non-authorizing native sizing carrier",
+            )),
+            admitted_input_hash: Hash::new(&control_bytes),
+            slots,
+        },
+        input: sizing_only,
+    };
+    native_sizing_only.descriptor.validate_structure()?;
+    let native_payload_bytes = norito::canonical_frame_len(&native_sizing_only)
+        .map_err(|error| format!("native input size cannot be encoded: {error}"))?;
+
+    let publication = crate::NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
+        QueuePlanAdmissionPublicationV1 {
+            schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+            certificate: control_bytes.clone(),
+        },
+    ));
+    let republication =
+        crate::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(control_bytes));
+    let (publication_plaintext_bytes, publication_queue_bytes) =
+        queue_plan_direct_frame_sizes_v1(&publication)?;
+    let (republication_plaintext_bytes, republication_queue_bytes) =
+        queue_plan_direct_frame_sizes_v1(&republication)?;
+    Ok(LaneAdmittedInputEnvelopeSizeBoundsV1 {
+        complete_input_bytes,
+        native_payload_bytes,
+        native_route_slots,
+        publication_plaintext_bytes,
+        publication_queue_bytes,
+        republication_plaintext_bytes,
+        republication_queue_bytes,
+    })
+}
+
+// Serialize the real application payload, then use the transport owner's exact
+// direct-node framing. P2P's authenticated node identities are BLS-normal; the
+// helper owns those key/signature widths and rejects arithmetic overflow.
+fn queue_plan_direct_frame_sizes_v1(
+    message: &crate::NetworkMessage,
+) -> Result<(usize, usize), String> {
+    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let payload_bytes = norito::core::encoded_payload_len(message)
+        .map_err(|error| format!("QueuePlan NetworkMessage cannot be sized: {error}"))?;
+    let plaintext = iroha_p2p::network::direct_data_frame_wire_len_from_payload_len::<
+        crate::NetworkMessage,
+    >(payload_bytes);
+    let queued = iroha_p2p::frame_queue_charge(plaintext)
+        .ok_or_else(|| "QueuePlan transport frame size overflows".to_owned())?;
+    Ok((plaintext, queued))
 }

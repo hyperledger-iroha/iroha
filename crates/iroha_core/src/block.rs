@@ -3811,6 +3811,70 @@ mod chained {
             self.0.header.set_confidential_features(digest);
             self
         }
+        /// Count the exact canonical proposal wire with one signature, without signing.
+        ///
+        /// The caller must have finished the actual proposal metadata. Only the
+        /// fixed-length signature contents are replaced with private sizing bytes;
+        /// every transaction, control, policy, header and Norito prefix uses the
+        /// normal `NewBlock` to `SignedBlockWire` conversion. No block or bytes
+        /// escape this sizing operation.
+        pub(crate) fn canonical_proposal_wire_len(
+            &self,
+            signatory_idx: u64,
+            algorithm: iroha_crypto::Algorithm,
+        ) -> Result<usize, String> {
+            if self.0.da_proof_policies.is_none()
+                || (!self.0.transactions.is_empty() && self.0.execution_context.is_none())
+            {
+                return Err(
+                    "proposal sizing requires explicit proof policies and execution context"
+                        .to_owned(),
+                );
+            }
+            let signature =
+                BlockSignature::new(
+                    signatory_idx,
+                    SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(
+                        &vec![0xa5; algorithm.signature_payload_len()],
+                    )),
+                );
+            let sizing_only: SignedBlock = self.clone().into_new_block(signature).into();
+            sizing_only
+                .encode_wire()
+                .map(|wire| wire.len())
+                .map_err(|error| error.to_string())
+        }
+        /// Retain an exact canonical prefix of this proposal's admission controls.
+        /// Other controls and external execution metadata remain on this builder.
+        pub(crate) fn retain_queue_plan_admission_prefix(
+            mut self,
+            count: usize,
+        ) -> Result<Self, String> {
+            let Some(context) = self.0.execution_context.take() else {
+                return if count == 0 {
+                    Ok(self)
+                } else {
+                    Err("proposal has no admission controls".to_owned())
+                };
+            };
+            if count > context.queue_plan_admissions().len() {
+                return Err("admission prefix exceeds its actual control vector".to_owned());
+            }
+            let admissions = context.queue_plan_admissions()[..count].to_vec();
+            Ok(self.with_execution_context(Some(context.with_queue_plan_admissions(admissions))))
+        }
+        fn into_new_block(self, signature: BlockSignature) -> NewBlock {
+            NewBlock {
+                signature,
+                header: self.0.header,
+                transactions: self.0.transactions,
+                da_commitments: self.0.da_commitments,
+                da_proof_policies: self.0.da_proof_policies,
+                da_pin_intents: self.0.da_pin_intents,
+                npos_consensus_effects: self.0.npos_consensus_effects,
+                execution_context: self.0.execution_context,
+            }
+        }
         /// Fallibly sign this block and get [`NewBlock`] using the provided validator index.
         ///
         /// # Errors
@@ -3846,16 +3910,7 @@ mod chained {
                 signatory_idx,
                 SignatureOf::try_from_hash(private_key, builder.0.header.hash())?,
             );
-            Ok(WithEvents::new(NewBlock {
-                signature,
-                header: builder.0.header,
-                transactions: builder.0.transactions,
-                da_commitments: builder.0.da_commitments,
-                da_proof_policies: builder.0.da_proof_policies,
-                da_pin_intents: builder.0.da_pin_intents,
-                npos_consensus_effects: builder.0.npos_consensus_effects,
-                execution_context: builder.0.execution_context,
-            }))
+            Ok(WithEvents::new(builder.into_new_block(signature)))
         }
         /// Sign this block and get [`NewBlock`] using the provided validator index.
         pub fn sign_with_index(

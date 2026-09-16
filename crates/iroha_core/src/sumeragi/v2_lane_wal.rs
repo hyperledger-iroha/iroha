@@ -25,6 +25,30 @@ fn bad(error: impl ToString) -> LaneWalError {
     LaneWalError(error.to_string())
 }
 
+/// Complete authenticated replay and its exact native witnesses.
+///
+/// This is an immutable recovery result, not a second safety-state owner. Only
+/// the shared reducer interprets locks, votes and views. Native envelopes retain
+/// the manifest, immutable value and signing preimages required by its effects.
+/// No partial result escapes a failed physical/native/logical replay.
+pub(crate) struct RecoveredLaneWal {
+    reducer: reducer::Reducer,
+    native_records: Vec<LaneWalEnvelopeV1>,
+}
+
+impl RecoveredLaneWal {
+    /// Exact canonical records in increasing physical/persistence order.
+    pub(crate) fn native_records(&self) -> &[LaneWalEnvelopeV1] {
+        &self.native_records
+    }
+
+    /// Transfer the sole reducer and its witnesses to the process-lived driver.
+    /// Fresh current-instance gates and body custody remain separate obligations.
+    pub(crate) fn into_parts(self) -> (reducer::Reducer, Vec<LaneWalEnvelopeV1>) {
+        (self.reducer, self.native_records)
+    }
+}
+
 /// One immutable instance and frozen local key's actual safety WAL.
 pub(crate) struct LaneSafetyWal {
     storage: SafetyWal,
@@ -60,30 +84,65 @@ impl LaneSafetyWal {
         })
     }
 
+    /// Open the sole fixed native input store adjacent to this exact lane WAL.
+    /// This does not resume the reducer or authorize any body completion.
+    pub(crate) fn open_body_store(
+        &self,
+    ) -> Result<super::v2_lane_body_store::LaneBodyStore, LaneWalError> {
+        if self.append_failed {
+            return Err(bad("failed append requires a physical reopen"));
+        }
+        let authority = self
+            .storage
+            .mint_native_body_store_authority()
+            .map_err(bad)?;
+        super::v2_lane_body_store::LaneBodyStore::open(
+            authority,
+            self.verified.clone(),
+            self.signer,
+        )
+        .map_err(bad)
+    }
     /// Recover the sole shared reducer, still gated by `ResumeAfterReplay`.
     /// Physical checksums never replace native signatures or logical replay.
     pub(crate) fn recover(
         &self,
         generation: reducer::Generation,
     ) -> Result<reducer::Reducer, LaneWalError> {
+        self.recover_with_native(generation)
+            .map(|recovered| recovered.into_parts().0)
+    }
+
+    /// Authenticate one replay, retaining complete native witnesses for restart.
+    /// The returned reducer remains gated by `ResumeAfterReplay`; returning the
+    /// native records grants neither a signing lease nor body readiness.
+    pub(crate) fn recover_with_native(
+        &self,
+        generation: reducer::Generation,
+    ) -> Result<RecoveredLaneWal, LaneWalError> {
         if self.append_failed {
             return Err(bad("failed append requires a physical reopen"));
         }
         let auth = LaneAuthenticator::new(&self.verified);
-        let entries = self
-            .storage
-            .recovered_records()
-            .iter()
-            .map(|frame| auth.decode_storage_wal(frame).map_err(bad))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut native_records = Vec::with_capacity(self.storage.recovered_records().len());
+        let mut entries = Vec::with_capacity(self.storage.recovered_records().len());
+        for frame in self.storage.recovered_records() {
+            let (native, entry) = auth.decode_storage_wal_with_envelope(frame).map_err(bad)?;
+            native_records.push(native);
+            entries.push(entry);
+        }
         let context = self.verified.reducer_context();
-        reducer::Reducer::recover(
+        let reducer = reducer::Reducer::recover(
             context.clone(),
             Some(context.roster()[self.signer as usize].id()),
             generation,
             entries,
         )
-        .map_err(bad)
+        .map_err(bad)?;
+        Ok(RecoveredLaneWal {
+            reducer,
+            native_records,
+        })
     }
 
     /// Persist the exact effect retained by the caller and return its fsync ack.

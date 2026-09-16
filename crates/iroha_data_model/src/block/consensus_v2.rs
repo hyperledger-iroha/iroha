@@ -4528,7 +4528,12 @@ impl fmt::Display for ValidationError {
     }
 }
 impl std::error::Error for ValidationError {}
-fn payload_chunk_root(chunk_hashes: &[Hash]) -> Option<Hash> {
+/// Merkle commitment to the exact ordered RS16 chunk hashes.
+///
+/// Native and global adapters share this commitment owner. Callers must separately
+/// check signed layout, encoded chunk count and actual codeword contents. An empty
+/// sequence has no root; a root alone is not evidence of availability or authority.
+pub fn payload_chunk_root(chunk_hashes: &[Hash]) -> Option<Hash> {
     let leaves = chunk_hashes
         .iter()
         .map(|hash| *hash.as_ref())

@@ -1,3 +1,4 @@
+include!("v2_apply_completed_secondary_archival.rs");
 include!("v2_apply_unsealed_01c_second_autonomous_cycle.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MergeFrontierFixtureCase {

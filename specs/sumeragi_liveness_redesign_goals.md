@@ -136,13 +136,13 @@ application, bounded recovery, and mandatory signed RS16 remain requirements.
 Admission's existing `f + 1` durable-storage certificate is distinct from the
 exact `2f + 1` Prepare/Commit/Timeout quorum in an exact `3f + 1` committee.
 
-**Retain the input in its admission carrier.** The current
-`BlockExecutionContextBundle.queue_plan_admissions` carries only opaque
-certificate bytes, and the native handoff retains those certificates while the
-canonical marker lacks the body. Replace each control with one canonical typed
-source containing the entrypoint, routing plan and exact binding/certificate
-evidence. Before registry staging, verify entrypoint and signed identities,
-plan/context and the original journal-claim digest against those exact bytes.
+**Retain the input in its admission carrier.** Each
+`BlockExecutionContextBundle.queue_plan_admissions` control now contains one
+canonical `LaneAdmittedInputV1`: the exact entrypoint and its binding/certificate.
+The routing plan is reconstructed from that binding rather than duplicated.
+Before registry staging, the complete-input decoder verifies entrypoint and
+signed identities, plan/context and the original journal-claim digest against
+those exact bytes. Certificate-only responses cannot enter this boundary.
 The first-admission rank then locates the immutable input in its finalized
 carrier. A later lane committee uses existing authenticated global block and
 RS16 recovery; it does not require a new post-admission journal-body protocol or
@@ -156,7 +156,9 @@ feasibility against control, global DA and lane DA bounds before durable
 acceptance. The current one-MiB control/four-MiB aggregate limits were chosen
 for certificates; simply appending bodies without reconciling producer and
 receiver bounds can accept impossible work. Preserve bounded scheduling and
-typed rejection before acceptance. This migration is not implemented yet.
+typed rejection before acceptance. Complete-input custody and per-control sizing
+are implemented; complete global/native envelope feasibility before acceptance
+and the shared lane runtime remain open.
 
 #### Canonical admission priority and shared-slot AMX composition
 
@@ -737,3 +739,88 @@ to silence drift or infer readiness from test counts.
   This is a locator foundation, not frozen committee authority. The shared
   reducer constructor and this State change do not yet connect pre-payload
   lane timers to production.
+
+Complete-input carrier selection measures the actual unsigned proposal through
+the canonical SignedBlockWire projection, with all actual policy and control
+metadata. It retains a fitting admission prefix before private-key signing and
+leaves deferred inputs in durable custody. Certified transaction gossip owns one
+tagged canonical complete input; its authenticated entrypoint is derived from
+that input and is not serialized a second time. The default-size regressions
+are three approximately 800 KiB inputs under a 2 MiB carrier and a 160 KiB
+transaction under a 256 KiB gossip frame. These checks do not replace full
+preacceptance envelope feasibility or live fault qualification.
+
+Complete-input structural decoding has one model-owned size/resource policy for
+both authenticated admission and certified gossip. Nested transaction allocation
+uses Norito’s existing frame-derived budget while retaining the 1 MiB wire cap,
+field/element bounds, depth limit and stricter surrounding budgets. Structural
+decoding still grants no quorum, custody, State membership or signing authority.
+The exact-cap model and real 800 KiB/2 MiB carrier regressions pass, as do the
+160 KiB/256 KiB signed gossip delivery, catch-up, replay and retry controls. The
+combined Core/model/Torii test build passes. The wider source inventory remains open; completed-secondary cold archival now passes its scoped regression;
+none of L1–L6 is closed.
+
+Completed Native publication repair is a different durable operation from an
+append or tip replacement. Its explicit first-release locator origin retains
+the actual selected canonical marker and can never authorize an uncommitted
+rollback. Admission and restart must reauthenticate the exact executed wire,
+global finality, finalized WSV checkpoint/manifest join and retained receipt.
+A partial repair keeps one complete-carrier owner: every non-target route must
+have exact completed evidence or a fully authenticated later frontier with no
+unfinished cleanup. Repairing A1 after B2 must never republish or roll back B1.
+The combined Core/model/Torii test build and all 133 affected Core plus 61 Torii
+tests pass. All eight new interruption/adverse controls pass; the original real
+Apply regression now completes both economic cycles and replay checks. This
+closes that reproduced repair defect, not the overall lane-runtime goals. Live
+certified attempts must remain owned; successful archival must be tested only
+after real economic Apply and exact Queue terminal settlement.
+
+The first-carrier reader, all-route immutable input preparation, native RS16
+materialization and exact native WAL witness replay now pass their scoped
+boundary controls. They do not start a production timer or grant body Ready.
+The immediate cutover sequence is thin durable input custody, checked native
+effect projection, a process-lived shared-reducer owner with pre-payload clocks,
+instance-scoped ingress/output across global rollover, and native Decision
+consumption by global execution. Activate only with atomic removal of the old
+lane/NewView/Native signing authorities; no dual engine or compatibility toggle.
+The four-validator silent-author counterexample remains an open acceptance test.
+
+Thin descriptor-bound native body custody and reverse native effect projection
+pass their scoped controls. Publication or readback failure fences that store
+until verified reopen. An original signed proposal retains its exact native
+timeout evidence; rebuilding equivalent abstract evidence cannot reproduce its
+signing bytes. Neither boundary acknowledges reducer body readiness by itself.
+
+Before activating immutable per-instance body storage, prove that all affected
+route slots remain fixed while their admitted group is open. The current State
+finalizer independently reopens a route on frontier advancement, so one member
+can change another still-open member's input descriptor. The sole economic
+pipeline must advance affected frontiers and settle every obligation for that
+exact group atomically, with lifecycle drain preserving pending ownership.
+Retire ordinary economic bypasses and old Native writers in the same cutover;
+add a cross-route adverse test. Overwriting a locked body or treating unrelated
+global progress as cancellation is prohibited.
+
+The inactive process-lived instance owner now passes real State/Kura/four-key
+pre-payload timeout, fsync/restart, saturated-output, high-Prepare and unchanged
+global-rollover controls. Its checked deadlines retain custody on overflow;
+native projection contradictions fence the owner. The read-only Decision-group
+consumer verifies every distinct current route against the exact first input
+and its own frozen layout, permits independent voting views, and retains named
+missing/earlier dependencies. All nine new controls and 46 prior selected Core
+checks pass. Neither component activates a second production signer.
+
+Move-owned body jobs now pass all eight real threaded State/Kura controls,
+including silent-leader replacement through native Decision with Apply still
+held. The same reducer services Timeout/TC and CommitQC while body work waits;
+actual fsync/readback and all-route validation are required for body-dependent
+signing. The exact first-carrier recovery obligation survives missing local
+body, and foreign/closed completions return physical custody. The earlier
+timeout control now retains/retries explicit Busy backpressure and passes with
+its original saturation/restart assertions. Candidate 33 passes 82 Core and 29
+model checks, including the single-body portable economic transcript; all 22
+scoped formal bindings pass. Exact source import and pre-carrier batch preflight
+pass. Next are actual deterministic economic
+execution/results, one canonical transcript and historical replay boundary,
+then the sole production owner/transport cutover with old signers removed.
+These boundary passes do not close the four-validator counterexample or L1–L6.

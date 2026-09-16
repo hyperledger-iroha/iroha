@@ -25,6 +25,10 @@ use norito::{Decode, Encode};
 use super::v2_core as reducer;
 use crate::state::{FrozenLaneConsensusContextV1, VerifiedLaneContext};
 
+#[path = "v2_lane_wire_projection.rs"]
+mod native_projection;
+pub(crate) use native_projection::LaneNativeWitnesses;
+
 const FORMAT: u16 = LANE_MESSAGE_VERSION_V1;
 
 /// Failure before any reducer event or recovered entry is admitted.
@@ -452,6 +456,7 @@ impl<'a> LaneAuthenticator<'a> {
         frame: &reducer::RecoveredWalRecord,
     ) -> Result<reducer::WalEntry> {
         self.decode_recovered_payload(frame.sequence(), frame.payload())
+            .map(|(_, entry)| entry)
     }
 
     /// Decode only a frame already authenticated by the production physical
@@ -460,10 +465,24 @@ impl<'a> LaneAuthenticator<'a> {
         &self,
         frame: &super::safety_wal::RecoveredRecord,
     ) -> Result<reducer::WalEntry> {
+        self.decode_storage_wal_with_envelope(frame)
+            .map(|(_, entry)| entry)
+    }
+
+    /// Retain the exact native witness alongside its authenticated shared projection.
+    /// This accepts only an opaque physically recovered frame, never raw framing.
+    pub(crate) fn decode_storage_wal_with_envelope(
+        &self,
+        frame: &super::safety_wal::RecoveredRecord,
+    ) -> Result<(LaneWalEnvelopeV1, reducer::WalEntry)> {
         self.decode_recovered_payload(frame.sequence(), frame.payload())
     }
 
-    fn decode_recovered_payload(&self, sequence: u64, payload: &[u8]) -> Result<reducer::WalEntry> {
+    fn decode_recovered_payload(
+        &self,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<(LaneWalEnvelopeV1, reducer::WalEntry)> {
         if payload.len() > reducer::SAFETY_WAL_MAX_RECORD_BYTES {
             return Err(bad("native WAL payload exceeds common bound"));
         }
@@ -471,7 +490,8 @@ impl<'a> LaneAuthenticator<'a> {
         if sequence.checked_add(1) != Some(envelope.persistence_id) {
             return Err(bad("WAL frame/persistence identity mismatch"));
         }
-        self.wal_entry(&envelope)
+        let entry = self.wal_entry(&envelope)?;
+        Ok((envelope, entry))
     }
 
     /// Reuse shared physical WAL framing under immutable instance/lane/signer identity.

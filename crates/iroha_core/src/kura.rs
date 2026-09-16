@@ -43117,6 +43117,8 @@ include!("kura/autonomous_application_evidence.rs");
 include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/consensus_storage_reads.rs");
+#[path = "kura/lane_admission_source.rs"]
+mod lane_admission_source;
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
 impl BlockStore {

@@ -18,7 +18,7 @@ use super::{
     v2_chunks::{EncodedV2Payload, encode_payload},
 };
 use crate::{
-    block::BlockBuilder,
+    block::{BlockBuilder, Chained},
     queue::{
         GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan,
         reconcile_execution_routing_plan,
@@ -120,7 +120,7 @@ pub(crate) struct CandidateAttachments {
     /// Complete, locally validated sidecar selected for this exact carrier round.
     /// Only its compact certified reference is embedded in the block.
     pub(crate) certified_merge_entry: Option<MergeLedgerEntry>,
-    /// Authenticated QueuePlan admission certificates carried natively by this
+    /// Authenticated complete QueuePlan inputs carried natively by this
     /// Sumeragi proposal. They are globally ordered by the block QC and never
     /// pass through the independent merge committee.
     pub(crate) queue_plan_admissions: Vec<Vec<u8>>,
@@ -363,6 +363,8 @@ pub(crate) struct CandidateScanReport {
     pub(crate) unresolved: usize,
     /// Entries skipped by the transaction/body budget and left pending.
     pub(crate) payload_deferred: usize,
+    /// Complete admission controls left in durable custody for a later carrier.
+    pub(crate) admission_deferred: usize,
     /// Entries skipped because certified lane/AMX work was unavailable.
     pub(crate) work_deferred: usize,
     /// Ordinary FIFO entries excluded by an exact-empty certified execution carrier.
@@ -617,48 +619,127 @@ impl V2CandidateAssembler {
                 validate_request(&request)?;
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
             }
-            let signing = request
-                .output_guard
-                .begin_fail_stop_operation()
-                .ok_or(CandidateError::RestartRequired)?;
-            let (block, canonical_wire, events) = self.build_block(
+            let mut builder = self.prepare_block_builder(
                 request.context,
                 tag,
-                request.local_validator,
                 request.parent,
                 request.state,
-                request.key_pair,
                 &request.attachments,
                 &selected,
                 &prepared_work,
                 candidate_creation_time,
             )?;
+            let algorithm = request
+                .key_pair
+                .public_key()
+                .try_algorithm()
+                .map_err(|error| CandidateError::Signing(error.to_string()))?;
+            let mut encoded_bytes = builder
+                .canonical_proposal_wire_len(u64::from(request.local_validator), algorithm)
+                .map_err(CandidateError::CanonicalEncoding)?;
+            let mut chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
+            if encoded_bytes > exact_payload_limit
+                || chunk_count > request.context.da_layout.max_chunk_count as usize
+            {
+                if selected.pop().is_some() {
+                    report.payload_deferred = report.payload_deferred.saturating_add(1);
+                    // Keep a canonical FIFO prefix. No private-key operation has
+                    // occurred and every removed row retains queue ownership.
+                    continue;
+                }
+                let original_count = request.attachments.queue_plan_admissions.len();
+                let mut low = 0usize;
+                let mut high = original_count;
+                let mut first_admission_size = None;
+                // All mandatory fields are already on this exact builder. Only
+                // the admission prefix varies; canonical uncompressed framing is
+                // monotone, so a bounded binary search includes real overhead.
+                while low < high {
+                    let mid = low + (high - low).div_ceil(2);
+                    let trial = builder
+                        .clone()
+                        .retain_queue_plan_admission_prefix(mid)
+                        .map_err(CandidateError::CanonicalEncoding)?;
+                    let bytes = trial
+                        .canonical_proposal_wire_len(u64::from(request.local_validator), algorithm)
+                        .map_err(CandidateError::CanonicalEncoding)?;
+                    let chunks = encoded_chunk_count(request.context.da_layout, bytes)?;
+                    if mid == 1 {
+                        first_admission_size = Some((bytes, chunks));
+                    }
+                    if bytes <= exact_payload_limit
+                        && chunks <= request.context.da_layout.max_chunk_count as usize
+                    {
+                        low = mid;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                if low < original_count {
+                    builder = builder
+                        .retain_queue_plan_admission_prefix(low)
+                        .map_err(CandidateError::CanonicalEncoding)?;
+                    request.attachments.queue_plan_admissions.truncate(low);
+                    report.admission_deferred = original_count - low;
+                    encoded_bytes = builder
+                        .canonical_proposal_wire_len(u64::from(request.local_validator), algorithm)
+                        .map_err(CandidateError::CanonicalEncoding)?;
+                    chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
+                }
+                if encoded_bytes > exact_payload_limit
+                    || chunk_count > request.context.da_layout.max_chunk_count as usize
+                    || (!candidate_has_proposal_work(
+                        &selected,
+                        &request.attachments,
+                        &prepared_work,
+                    ) && request
+                        .state
+                        .deterministic_start_work_pending(&candidate_header)
+                        != Some(true))
+                {
+                    // If no admission fits, report the smallest non-empty
+                    // candidate rather than the stripped empty envelope.
+                    let (encoded_bytes, chunk_count) = if low == 0 {
+                        first_admission_size.unwrap_or((encoded_bytes, chunk_count))
+                    } else {
+                        (encoded_bytes, chunk_count)
+                    };
+                    return Err(CandidateError::ProposalFramingExceedsPayloadLimits {
+                        encoded_bytes,
+                        encoded_chunks: chunk_count,
+                        max_bytes: exact_payload_limit,
+                        max_chunks: request.context.da_layout.max_chunk_count,
+                    });
+                }
+            }
+            // Candidate signing begins only after the complete actual carrier
+            // fits. The sizing projection never signs or publishes placeholder bytes.
+            let signing = request
+                .output_guard
+                .begin_fail_stop_operation()
+                .ok_or(CandidateError::RestartRequired)?;
+            let (block, canonical_wire, events) = self.sign_prepared_block(
+                builder,
+                request.context,
+                tag,
+                request.local_validator,
+                request.parent,
+                request.key_pair,
+                &selected,
+                candidate_creation_time,
+            )?;
+            if canonical_wire.len() != encoded_bytes {
+                return Err(CandidateError::CanonicalEncoding(
+                    "signed carrier length differs from its exact unsigned sizing projection"
+                        .to_owned(),
+                ));
+            }
             if !candidate_block_has_proposal_work(
                 &block,
                 request.state,
                 request.attachments.time_trigger_clock_progress_required,
             ) {
                 return Err(CandidateError::BuiltWithoutProposalWork);
-            }
-            let chunk_count = encoded_chunk_count(request.context.da_layout, canonical_wire.len())?;
-            let within_size = canonical_wire.len() <= exact_payload_limit;
-            let within_chunks = chunk_count
-                <= usize::try_from(request.context.da_layout.max_chunk_count).unwrap_or(usize::MAX);
-            if !within_size || !within_chunks {
-                if selected.pop().is_some() {
-                    signing.complete();
-                    report.payload_deferred = report.payload_deferred.saturating_add(1);
-                    // Do not replace an exact-limit trim with later queue work:
-                    // retaining a canonical prefix guarantees progress and a
-                    // strict bound on signing/encoding attempts.
-                    continue;
-                }
-                return Err(CandidateError::ProposalFramingExceedsPayloadLimits {
-                    encoded_bytes: canonical_wire.len(),
-                    encoded_chunks: chunk_count,
-                    max_bytes: exact_payload_limit,
-                    max_chunks: request.context.da_layout.max_chunk_count,
-                });
             }
             let subject = wire::BlockSubject {
                 parent_block_hash: Some(request.parent.hash()),
@@ -860,19 +941,17 @@ impl V2CandidateAssembler {
         Ok(records)
     }
     #[allow(clippy::too_many_arguments)]
-    fn build_block(
+    fn prepare_block_builder(
         &self,
         context: &wire::HeightContext,
         tag: EventTag,
-        local_validator: wire::ValidatorIndex,
         parent: CandidateParent<'_>,
         state: &State,
-        key_pair: &KeyPair,
         attachments: &CandidateAttachments,
         selected: &[CandidateRecord],
         prepared_work: &PreparedCandidateWork,
         candidate_creation_time: Duration,
-    ) -> Result<(SignedBlock, Vec<u8>, Vec<PipelineEventBox>), CandidateError> {
+    ) -> Result<BlockBuilder<Chained>, CandidateError> {
         let transactions = selected
             .iter()
             .map(|candidate| candidate.transaction.clone())
@@ -967,6 +1046,20 @@ impl V2CandidateAssembler {
         }
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
+        Ok(builder)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn sign_prepared_block(
+        &self,
+        builder: BlockBuilder<Chained>,
+        context: &wire::HeightContext,
+        tag: EventTag,
+        local_validator: wire::ValidatorIndex,
+        parent: CandidateParent<'_>,
+        key_pair: &KeyPair,
+        selected: &[CandidateRecord],
+        candidate_creation_time: Duration,
+    ) -> Result<(SignedBlock, Vec<u8>, Vec<PipelineEventBox>), CandidateError> {
         let mut events = Vec::new();
         let new_block = builder
             .try_sign_with_index(key_pair.private_key(), u64::from(local_validator))
@@ -2024,22 +2117,493 @@ pub(super) mod tests {
             crate::sumeragi::v2_core::Generation::new(0),
         );
         let local_validator = context.leader(view);
-        let (block, _, _) = assembler
-            .build_block(
+        let builder = assembler
+            .prepare_block_builder(
                 &context,
                 tag,
-                local_validator,
                 parent,
                 &state,
-                &key,
                 &CandidateAttachments::default(),
                 &selected,
                 &PreparedCandidateWork::single_route_batch(1),
                 creation_time,
             )
-            .expect("build with frozen preflight time");
+            .expect("prepare with frozen preflight time");
+        let expected = builder
+            .canonical_proposal_wire_len(
+                u64::from(local_validator),
+                key.public_key().try_algorithm().unwrap(),
+            )
+            .unwrap();
+        let (block, bytes, _) = assembler
+            .sign_prepared_block(
+                builder,
+                &context,
+                tag,
+                local_validator,
+                parent,
+                &key,
+                &selected,
+                creation_time,
+            )
+            .expect("sign with frozen preflight time");
+        assert_eq!(bytes.len(), expected);
         assert_eq!(block.header().creation_time(), creation_time);
     }
+    fn complete_admission_for_carrier(
+        state: &State,
+        context: &wire::HeightContext,
+        anchor: &wire::SnapshotBootstrapAnchor,
+        seed: u8,
+        body_bytes: usize,
+    ) -> Vec<u8> {
+        use crate::governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        };
+        use crate::queue::{QueuePlanAdmissionContextV1, QueuePlanRouteIncarnationV1};
+        use crate::torii_proxy::{
+            QueuePlanAdmissionAttestationV1, QueuePlanAdmissionCertificateV1,
+            new_queue_plan_admission_binding, queue_plan_admission_attestation_signing_bytes_v1,
+        };
+        use iroha_data_model::{
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            nexus::{LaneStorageProfile, LaneVisibility},
+        };
+        // Global commit topology alone does not establish native route authority.
+        // Install the exact four live keys/PoPs and manifest bindings used below.
+        let keys = (0xA7_u8..=0xAA)
+            .map(|tag| KeyPair::try_from_seed(vec![tag; 32], Algorithm::BlsNormal).unwrap())
+            .collect::<Vec<_>>();
+        let mut world = state.world.block();
+        for (index, key) in keys.iter().enumerate() {
+            let id = ConsensusKeyId::new(
+                ConsensusKeyRole::Validator,
+                format!("carrier-budget-{index}"),
+            );
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world.consensus_keys.insert(id.clone(), record);
+            world
+                .consensus_keys_by_pk
+                .insert(key.public_key().to_string(), vec![id]);
+        }
+        {
+            let mut peers = world.peers_mut_for_testing().transaction();
+            for key in &keys {
+                let peer = PeerId::new(key.public_key().clone());
+                if !peers.iter().any(|existing| existing == &peer) {
+                    peers.push(peer);
+                }
+            }
+            peers.apply();
+        }
+        world.commit();
+        let validators = keys
+            .iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_bindings = validators
+            .iter()
+            .zip(&keys)
+            .map(|(validator, key)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: PeerId::new(key.public_key().clone()),
+                torii_url: None,
+            })
+            .collect();
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(
+                LaneId::SINGLE,
+                LaneManifestStatus {
+                    lane: LaneId::SINGLE,
+                    alias: "default".to_owned(),
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    visibility: LaneVisibility::Public,
+                    storage: LaneStorageProfile::FullReplica,
+                    governance: Some("default-lane-governance".to_owned()),
+                    manifest_path: Some(std::path::PathBuf::from(
+                        "/tmp/carrier-budget-manifest.json",
+                    )),
+                    governance_rules: Some(GovernanceRules {
+                        validators,
+                        validator_bindings,
+                        ..GovernanceRules::default()
+                    }),
+                    privacy_commitments: Vec::new(),
+                },
+            )]),
+        )));
+        let route = RoutingDecision::default();
+        let plan = RoutingPlan::single(route);
+        let validators = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+            &state.view(),
+            route,
+            context.height,
+        )
+        .unwrap();
+        assert_eq!(validators.len(), 4);
+        let admission_context = QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
+            authority_height: anchor.snapshot_height,
+            proposal_height: context.height,
+            predecessor_block_hash: Some(anchor.snapshot_block_hash),
+            routing_plan_digest: plan.digest(),
+            route_incarnations: vec![QueuePlanRouteIncarnationV1 {
+                leg: plan.legs()[0],
+                lane_incarnation: state
+                    .lane_incarnation_at_height(route.lane_id, context.height)
+                    .unwrap(),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validators),
+                validator_count: 4,
+                durability_threshold: 2,
+                validator_set: validators.clone(),
+            }],
+        };
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
+        let mut transaction = TransactionBuilder::new(
+            context.network_id,
+            AccountId::new(key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(Duration::from_millis(u64::from(seed)));
+        let entrypoint = TransactionEntrypoint::External(
+            transaction
+                .with_instructions([iroha_data_model::isi::Log::new(
+                    iroha_data_model::Level::INFO,
+                    "x".repeat(body_bytes),
+                )])
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+                .sign(key.private_key()),
+        );
+        let binding = new_queue_plan_admission_binding(
+            &context.network_id,
+            &entrypoint,
+            &plan,
+            admission_context,
+            u64::from(seed) + 100,
+        )
+        .unwrap();
+        let keys = (0xA7_u8..=0xAA)
+            .map(|tag| KeyPair::try_from_seed(vec![tag; 32], Algorithm::BlsNormal).unwrap())
+            .collect::<Vec<_>>();
+        let attestations = validators
+            .iter()
+            .take(2)
+            .enumerate()
+            .map(|(index, validator)| {
+                let key = keys
+                    .iter()
+                    .find(|key| key.public_key() == validator.public_key())
+                    .unwrap();
+                let index = u16::try_from(index).unwrap();
+                let preimage = queue_plan_admission_attestation_signing_bytes_v1(
+                    binding.canonical_hash(),
+                    index,
+                )
+                .unwrap();
+                QueuePlanAdmissionAttestationV1 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+                    validator_index: index,
+                    signature: iroha_crypto::Signature::try_new(key.private_key(), &preimage)
+                        .unwrap(),
+                }
+            })
+            .collect();
+        let input = iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+            entrypoint,
+            certificate: QueuePlanAdmissionCertificateV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                binding,
+                attestations,
+            },
+        };
+        let bytes = norito::encode_canonical(&input).unwrap();
+        crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(&context.network_id, &bytes)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn complete_admission_batch_fits_two_mib_carrier_and_preserves_deferred_custody() {
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        context.da_layout.max_payload_size_bytes = 2 * 1024 * 1024;
+        context.da_layout.chunk_size_bytes = 8192;
+        context.da_layout.max_chunk_count = 512;
+        context.validate().unwrap();
+        let mut inputs = (0x41..=0x43)
+            .map(|seed| complete_admission_for_carrier(&state, &context, &anchor, seed, 800 * 1024))
+            .collect::<Vec<_>>();
+        inputs.sort_by_cached_key(|input| {
+            crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                &context.network_id,
+                input,
+            )
+            .unwrap()
+            .certificate()
+            .registry_key
+            .clone()
+        });
+        assert!(inputs.iter().all(|input| input.len() <= iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES));
+        for input in &inputs {
+            state
+                .kura()
+                .persist_pending_queue_plan_admission_certificate(input)
+                .unwrap();
+        }
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(2 * 1024 * 1024), nonzero(8)).unwrap(),
+            time_source,
+        );
+        let guard = ConsensusOutputGuard::isolated();
+        let assemble = |admissions: Vec<Vec<u8>>, view| {
+            let tag = EventTag::new(
+                context.height,
+                view,
+                crate::sumeragi::v2_core::Generation::new(0),
+            );
+            let local = context.leader(view);
+            assert_eq!(
+                key.public_key(),
+                context.roster[local as usize].validator.public_key()
+            );
+            assembler
+                .assemble(CandidateRequest {
+                    context: &context,
+                    directive: LocalProposalDirective::for_test(tag, local, None, None, None),
+                    local_validator: local,
+                    parent: CandidateParent::Snapshot(&anchor),
+                    state: &state,
+                    queue: &queue,
+                    key_pair: &key,
+                    output_guard: &guard,
+                    attachments: CandidateAttachments {
+                        queue_plan_admissions: admissions,
+                        ..CandidateAttachments::default()
+                    },
+                    work_provider: SingleRouteWorkProvider,
+                })
+                .unwrap()
+        };
+        let CandidateAssemblyOutcome::Assembled(candidate) = assemble(inputs.clone(), 0) else {
+            panic!("complete inputs must make progress");
+        };
+        assert_eq!(
+            candidate
+                .block()
+                .execution_context()
+                .unwrap()
+                .queue_plan_admissions(),
+            &inputs[..2]
+        );
+        assert_eq!(candidate.scan_report().admission_deferred, 1);
+        assert!(candidate.canonical_wire.len() <= 2 * 1024 * 1024);
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+        assert!(!guard.restart_required());
+        for input in &inputs {
+            assert_eq!(
+                state
+                    .kura()
+                    .pending_queue_plan_admission_certificate(Hash::new(input))
+                    .unwrap()
+                    .as_deref(),
+                Some(input.as_slice()),
+                "selection alone cannot retire durable complete inputs"
+            );
+        }
+        drop(candidate);
+        let CandidateAssemblyOutcome::Assembled(next) =
+            assemble(vec![inputs[2].clone()], context.roster.len() as u64)
+        else {
+            panic!("deferred input must remain selectable");
+        };
+        assert_eq!(
+            next.block()
+                .execution_context()
+                .unwrap()
+                .queue_plan_admissions(),
+            &inputs[2..]
+        );
+        assert_eq!(next.scan_report().admission_deferred, 0);
+    }
+
+    #[test]
+    fn admission_carrier_limit_includes_framing_and_refuses_before_signing() {
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        let input = complete_admission_for_carrier(&state, &context, &anchor, 0x44, 12 * 1024);
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let guard = ConsensusOutputGuard::isolated();
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local = context.leader(0);
+        let attachments = CandidateAttachments {
+            queue_plan_admissions: vec![input.clone()],
+            ..CandidateAttachments::default()
+        };
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8)).unwrap(),
+            time_source,
+        );
+        let builder = assembler
+            .prepare_block_builder(
+                &context,
+                tag,
+                CandidateParent::Snapshot(&anchor),
+                &state,
+                &attachments,
+                &[],
+                &PreparedCandidateWork::single_route_batch(0),
+                Duration::from_millis(1000),
+            )
+            .unwrap();
+        let size = builder
+            .canonical_proposal_wire_len(u64::from(local), Algorithm::BlsNormal)
+            .unwrap();
+        assert!(
+            size > input.len(),
+            "the full carrier owns real metadata and framing"
+        );
+        context.da_layout.max_chunk_count = 128;
+        for limit in [size - 1, size] {
+            context.da_layout.max_payload_size_bytes = limit as u64;
+            context.validate().unwrap();
+            let result = assembler.assemble(CandidateRequest {
+                context: &context,
+                directive: LocalProposalDirective::for_test(tag, local, None, None, None),
+                local_validator: local,
+                parent: CandidateParent::Snapshot(&anchor),
+                state: &state,
+                queue: &queue,
+                key_pair: &key,
+                output_guard: &guard,
+                attachments: attachments.clone(),
+                work_provider: SingleRouteWorkProvider,
+            });
+            if limit < size {
+                assert!(matches!(
+                    result,
+                    Err(CandidateError::ProposalFramingExceedsPayloadLimits { encoded_bytes, max_bytes, .. })
+                        if encoded_bytes == size && max_bytes == size - 1
+                ));
+                assert!(
+                    !guard.restart_required(),
+                    "a sizing refusal must occur before fail-stop signing begins"
+                );
+            } else {
+                let CandidateAssemblyOutcome::Assembled(candidate) = result.unwrap() else {
+                    panic!("exact full carrier limit must fit");
+                };
+                assert_eq!(candidate.canonical_wire.len(), size);
+                assert_eq!(
+                    candidate
+                        .block()
+                        .execution_context()
+                        .unwrap()
+                        .queue_plan_admissions(),
+                    &[input.clone()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proposal_sizing_matches_real_signatures_and_prefix_preserves_metadata() {
+        let (state, context, anchor, _) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1000));
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8)).unwrap(),
+            time_source,
+        );
+        let selected = vec![record(0x48, "actual external", 0)];
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let attachments = CandidateAttachments {
+            queue_plan_admissions: vec![vec![1; 127], vec![2; 128]],
+            sccp_commitment_root: Some([0x99; 32]),
+            ..CandidateAttachments::default()
+        };
+        let builder = assembler
+            .prepare_block_builder(
+                &context,
+                tag,
+                CandidateParent::Snapshot(&anchor),
+                &state,
+                &attachments,
+                &selected,
+                &PreparedCandidateWork::single_route_batch(1),
+                Duration::from_millis(1000),
+            )
+            .unwrap();
+        assert!(
+            builder
+                .clone()
+                .retain_queue_plan_admission_prefix(3)
+                .is_err()
+        );
+        for algorithm in [
+            Algorithm::Ed25519,
+            Algorithm::Secp256k1,
+            Algorithm::BlsNormal,
+            Algorithm::BlsSmall,
+            Algorithm::MlDsa,
+        ] {
+            let key = KeyPair::try_from_seed(vec![0x46; 32], algorithm).unwrap();
+            for count in [0, 1, 2] {
+                let trial = builder
+                    .clone()
+                    .retain_queue_plan_admission_prefix(count)
+                    .unwrap();
+                let expected = trial.canonical_proposal_wire_len(257, algorithm).unwrap();
+                let block: SignedBlock = trial
+                    .try_sign_with_index(key.private_key(), 257)
+                    .unwrap()
+                    .unpack(|_| {})
+                    .into();
+                assert_eq!(block.encode_wire().unwrap().len(), expected);
+                assert_eq!(
+                    block.execution_context().unwrap().queue_plan_admissions(),
+                    &attachments.queue_plan_admissions[..count]
+                );
+                assert_eq!(block.external_entrypoints_cloned().count(), 1);
+                assert_eq!(block.header().sccp_commitment_root(), Some([0x99; 32]));
+                assert!(block.da_proof_policies().is_some());
+            }
+        }
+        let raw = BlockBuilder::new(Vec::new()).chain_with_parent_hash(
+            0,
+            anchor.snapshot_height,
+            anchor.snapshot_block_hash,
+        );
+        assert!(
+            raw.canonical_proposal_wire_len(0, Algorithm::BlsNormal)
+                .is_err()
+        );
+        assert!(raw.clone().retain_queue_plan_admission_prefix(0).is_ok());
+        assert!(raw.retain_queue_plan_admission_prefix(1).is_err());
+    }
+
     fn assemble_empty_snapshot_candidate(
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {

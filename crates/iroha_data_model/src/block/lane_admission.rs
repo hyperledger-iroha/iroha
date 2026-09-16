@@ -757,6 +757,29 @@ pub struct LaneAdmittedInputV1 {
     pub certificate: QueuePlanAdmissionCertificateV1,
 }
 impl LaneAdmittedInputV1 {
+    /// Decode one canonical complete input within the admission control limits.
+    ///
+    /// Nested owned transaction values charge cumulative allocation while being
+    /// reconstructed. Use Norito's frame-derived allocation budget, not a
+    /// certificate-only multiplier that rejects valid large transaction bodies.
+    /// Field, element, nesting and complete-frame limits remain independent.
+    /// This checks structure only and grants no admission or signing authority.
+    ///
+    /// # Errors
+    /// Rejects empty, oversized or noncanonical frames and excessive decoding
+    /// resources. A surrounding stricter decoding budget remains in force.
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, norito::Error> {
+        let max = super::MAX_QUEUE_PLAN_ADMISSION_BYTES;
+        if bytes.is_empty() || bytes.len() > max {
+            return Err(norito::Error::LengthMismatch);
+        }
+        let allocation = norito::canonical_decode_limits(bytes.len()).max_total_allocated_bytes();
+        norito::decode_canonical_with_limits(
+            bytes,
+            norito::DecodeLimits::new(max, max, max, allocation, 64),
+        )
+    }
+
     /// Reconstruct the sole canonical routing plan from the bound admission context.
     ///
     /// # Errors

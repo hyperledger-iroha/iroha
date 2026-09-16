@@ -314,7 +314,7 @@ pub(super) mod io_observer {
             const { std::cell::RefCell::new(None) };
     }
 
-    pub(super) fn notify() {
+    pub(in crate::state) fn notify() {
         let observer = OBSERVER.with(|current| current.borrow().clone());
         if let Some(observer) = observer {
             observer();

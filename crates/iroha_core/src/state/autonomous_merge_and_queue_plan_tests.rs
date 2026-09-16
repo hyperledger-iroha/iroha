@@ -4031,8 +4031,30 @@ fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
             );
             assert_eq!(
                 calls.get(),
+                0,
+                "malformed framing is rejected before cryptographic authentication"
+            );
+            let mut invalid = norito::decode_canonical::<
+                iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+            >(&certificate)
+            .expect("canonical complete fixture");
+            invalid.certificate.attestations[0].signature = iroha_crypto::Signature::try_new(
+                validator_keypairs[0].private_key(),
+                b"wrong admission attestation preimage",
+            )
+            .expect("canonical signature over a different claim");
+            assert!(
+                state
+                    .persist_classified_queue_plan_admission(
+                        &norito::encode_canonical(&invalid).expect("canonical invalid signature"),
+                        crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                calls.get(),
                 1,
-                "malformed input still passes through authentication"
+                "decodable invalid evidence authenticates once outside the publication fence"
             );
         },
     );

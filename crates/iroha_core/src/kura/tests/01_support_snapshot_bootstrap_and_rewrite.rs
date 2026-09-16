@@ -663,7 +663,21 @@ fn store_indexed_reservation_carrier(
 ) {
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next_with_results();
-    let raw_carrier = blocks.next_with_results();
+    // Certified merge execution owns the complete economic input. Its global
+    // carrier must not repeat DummyBlocks' unrelated ordinary transaction.
+    let mut raw_carrier: SignedBlock = BlockBuilder::new(Vec::new())
+        .chain(0, Some(genesis.as_ref()))
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+        .unpack(|_| {})
+        .into();
+    attach_ok_results_to_block(&mut raw_carrier);
+    let raw_carrier = Arc::new(raw_carrier);
+    assert_eq!(raw_carrier.external_entrypoints_cloned().count(), 0);
+    assert!(
+        raw_carrier
+            .execution_context()
+            .is_none_or(|context| context.external.is_empty())
+    );
     let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
@@ -769,8 +783,37 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
     block: &SignedBlock,
     parent: Option<&V2FinalityArtifact>,
     keypairs: &[KeyPair],
+    execution_commitment: ExecutionCommitment,
+    merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
+) -> V2FinalityArtifact {
+    v2_finality_artifact_for_block_with_keys_and_context_policy(
+        block,
+        parent,
+        keypairs,
+        execution_commitment,
+        merge_carrier,
+        test_network_id(b"kura-v2-finality-test"),
+        0,
+        DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn v2_finality_artifact_for_block_with_keys_and_context_policy(
+    block: &SignedBlock,
+    parent: Option<&V2FinalityArtifact>,
+    keypairs: &[KeyPair],
     mut execution_commitment: ExecutionCommitment,
     merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
+    network_id: NetworkId,
+    epoch: u64,
+    da_layout: DataAvailabilityLayout,
 ) -> V2FinalityArtifact {
     use crate::zk::kagemusha_v1_recursion::{
         KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
@@ -798,14 +841,13 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         height,
         "fixture finality artifacts must form a contiguous chain"
     );
-    let network_id = test_network_id(b"kura-v2-finality-test");
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, epoch, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
-        epoch: 0,
+        epoch,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -817,14 +859,7 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
+        da_layout,
         leader_seed: [0x42; 32],
     };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
@@ -1570,7 +1605,10 @@ fn kagemusha_borrowed_decode_fixture()
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"codec-only block identity")),
         ordinary_writes_root: commitment.ordinary_writes_root,
         post_state_root: commitment.post_state_root,
-        lane_consensus_contexts_witness: crate::state::LaneConsensusContextsWitnessV1::from_witness(&witness).unwrap().0,
+        lane_consensus_contexts_witness:
+            crate::state::LaneConsensusContextsWitnessV1::from_witness(&witness)
+                .unwrap()
+                .0,
         validation_fee_policy_witness,
         parliament_timed_ovn_casting_witness,
         parliament_timed_ovn_casting_bindings: bindings,
@@ -2449,36 +2487,62 @@ fn lane_context_finality_proof_survives_restart_and_rejects_carrier_substitution
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
     kura.establish_or_verify_configured_primary_geometry_anchor(
-        lane_config.primary(), Hash::prehashed([0xC8; Hash::LENGTH]),
+        lane_config.primary(),
+        Hash::prehashed([0xC8; Hash::LENGTH]),
         LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(kura.lane_consensus_contexts_finality(1).unwrap().is_none());
     let block = DummyBlocks::new().next();
     let (witness, mut commitment) = kagemusha_finality_witness(1, 1);
     commitment.executed_block_wire_len = block.encode_wire().unwrap().len() as u64;
     commitment.executed_block_wire_hash = block.executed_block_wire_hash().unwrap();
     let artifact = v2_finality_artifact_for_block_with_execution(&block, commitment);
-    kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, commitment, &[]).unwrap();
+    kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, commitment, &[])
+        .unwrap();
     kura.store_block(Arc::clone(&block)).unwrap();
     let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
-    assert!(kura.lane_consensus_contexts_finality(1).unwrap().is_none(),
-        "unpublished proof is not authority even when the finality artifact exists");
-    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
+    assert!(
+        kura.lane_consensus_contexts_finality(1).unwrap().is_none(),
+        "unpublished proof is not authority even when the finality artifact exists"
+    );
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .unwrap();
     let expected = kura.lane_consensus_contexts_finality(1).unwrap().unwrap();
     assert_eq!(expected.0, artifact);
-    assert!(expected.1.verify(artifact.height_context.network_id, 1, commitment.ordinary_writes_root));
+    assert!(expected.1.verify(
+        artifact.height_context.network_id,
+        1,
+        commitment.ordinary_writes_root
+    ));
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
-    assert_eq!(reopened.lane_consensus_contexts_finality(1).unwrap().unwrap(), expected);
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    assert_eq!(
+        reopened
+            .lane_consensus_contexts_finality(1)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
     let path = reopened.kagemusha_finality_sidecar_path(1);
-    let (mut sidecar, _) = reopened.decode_kagemusha_finality_sidecar(&path).unwrap().unwrap();
+    let (mut sidecar, _) = reopened
+        .decode_kagemusha_finality_sidecar(&path)
+        .unwrap()
+        .unwrap();
     let (other_witness, _) = kagemusha_finality_witness(2, 2);
-    sidecar.lane_consensus_contexts_witness = crate::state::LaneConsensusContextsWitnessV1::from_witness(&other_witness).unwrap().0;
+    sidecar.lane_consensus_contexts_witness =
+        crate::state::LaneConsensusContextsWitnessV1::from_witness(&other_witness)
+            .unwrap()
+            .0;
     std::fs::write(&path, sidecar.encode()).unwrap();
-    assert!(reopened.lane_consensus_contexts_finality(1).is_err(),
-        "a valid proof from another carrier must not authorize this State projection");
+    assert!(
+        reopened.lane_consensus_contexts_finality(1).is_err(),
+        "a valid proof from another carrier must not authorize this State projection"
+    );
 }
 #[test]
 fn immutable_sidecar_publication_never_clobbers_a_racing_destination() {

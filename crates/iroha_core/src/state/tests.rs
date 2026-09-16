@@ -9905,7 +9905,16 @@ include!("ordinary_lane_frontier_tests.rs");
 include!("applied_lane_frontier_anchor_tests.rs");
 include!("lane_consensus_state_tests.rs");
 include!("lane_consensus_verified_tests.rs");
+include!("lane_admitted_input_tests.rs");
+include!("lane_input_body_tests.rs");
+include!("lane_input_rs16_tests.rs");
 include!("lane_consensus_wal_tests.rs");
+include!("lane_body_store_tests.rs");
+include!("lane_decision_group_tests.rs");
+include!("lane_decision_economic_tests.rs");
+include!("lane_decision_batch_tests.rs");
+include!("lane_instance_tests.rs");
+include!("lane_instance_body_tests.rs");
 include!("lane_consensus_authority_tests.rs");
 include!("queue_plan_priority_tests.rs");
 fn lane_artifact_block_and_session_for_state_test(
