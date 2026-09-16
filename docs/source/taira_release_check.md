@@ -2,19 +2,54 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **483 native regressions on macOS**: startup
+`--native-check-scope basic` runs **786 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **664-case** native census,
+Use `--native-check-scope full` to execute the full **965-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Both scopes qualify production beacon capability against the exact public session
+and validator seat, consumed runtime credentials, genesis-bound bootstrap and
+readiness before network fixtures. An uninitialized signer fails readiness while
+bootstrap ingress remains available. Setup uses real committed transactions to
+advance DKG phases; it never creates empty blocks or invents committed heights.
+The shipping Taira bootstrap executable is a separately authenticated artifact.
+The real four-peer fixture uses fresh native DKG custody, reaches the mandatory
+beacon pulse, then runs the complete paid dataspace deployment and four-peer
+finality workflow. Its generated custody lives only in a validated owner-only
+runtime directory outside Git; the isolated shipping Kagami and Taira launcher
+are explicit inputs, and a separate message-control daemon exercises the exact
+Core-only seam. The full launcher’s Linux/Inrou requirements remain enforced.
+
+Finality readback honors HTTP 429 retry delays within the caller’s original
+absolute deadline. Invalid retry instructions and fixed response/proof failures
+remain errors; a failed or late read cannot advance the verification anchor or
+cause a transaction resubmission.
+
+Both scopes require canonical transaction reads to release their State snapshot
+before Kura and merge-proof authentication, then recheck the exact committed
+binding. They exercise bounded lane-recovery batches, preserve completion and
+yield handling, and reject corrupt or foreign durable evidence while avoiding
+duplicate validation of already authenticated reads. These use the existing
+Core and Torii unit harnesses.
+
+Both scopes require the blocking SDK to drive pooled HTTP connections and
+background tasks between calls, preserve clone ownership, and cancel tasks after
+the final runtime owner is dropped. These reuse the existing native SDK harness.
+
+Both scopes include seven public faucet policy checks: exact configuration,
+asset alias resolution, disabled 403, route-catalog policy, OpenAPI shape and
+read-only MCP visibility and dispatch. These reuse the existing Torii HTTP,
+Torii unit and shared-library harnesses. Public discovery never replaces an
+independently trusted faucet authority pin.
 
 Both scopes cover Proposal Fetch-to-Store handoff after Prepare or Commit
 authority refinement, including a completion queued before the upgrade. The

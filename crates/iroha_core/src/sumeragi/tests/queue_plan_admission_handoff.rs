@@ -56,14 +56,22 @@ fn queue_plan_admission_ingress_rejects_empty_and_oversized_bodies_before_enqueu
 ///
 /// The harness exposes only ordinary public ingress attempts and one exact
 /// dequeue operation; production queue internals remain private.
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 pub struct SumeragiIngressTestHarness {
     handle: SumeragiHandle,
     block: Arc<FairV2Ingress>,
     _lane_relay: mpsc::Receiver<LaneRelayMessage>,
 }
 
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 impl SumeragiIngressTestHarness {
     /// Construct an open bounded ingress with an empty validator roster.
     #[must_use]

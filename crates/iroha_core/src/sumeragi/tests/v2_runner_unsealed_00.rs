@@ -1,11 +1,14 @@
 #[test]
 fn decided_lane_recovery_batch_bounds_service_and_stops_on_empty_or_error() {
-    for (limit, expected) in [(0, 1), (1, 1), (3, 3), (usize::MAX, 16)] {
+    let (_directory, ingress, _gate, _global, _sender) = queued_leader_wire_ingress_fixture();
+    // One existing physical occurrence bounds every burst even when the
+    // configured service budget is larger; zero budget remains zero.
+    for (limit, expected) in [(0, 0), (1, 1), (3, 1), (usize::MAX, 1)] {
         let mut serviced = 0;
         assert_eq!(
-            service_decided_lane_recovery_ingress_batch(limit, || {
+            drain_open_preflight_recovery_batch(&ingress, limit, |_| {
                 serviced += 1;
-                Ok(true)
+                Ok::<_, V2RunnerError>(true)
             })
             .expect("bounded recovery service"),
             expected
@@ -14,19 +17,19 @@ fn decided_lane_recovery_batch_bounds_service_and_stops_on_empty_or_error() {
     }
     let mut attempted = 0;
     assert_eq!(
-        service_decided_lane_recovery_ingress_batch(16, || {
+        drain_open_preflight_recovery_batch(&ingress, 16, |_| {
             attempted += 1;
-            Ok(attempted <= 2)
+            Ok::<_, V2RunnerError>(false)
         })
         .expect("stop at the first empty checked dequeue"),
-        2
+        0
     );
-    assert_eq!(attempted, 3);
+    assert_eq!(attempted, 1);
     let mut attempted = 0;
     assert!(
-        service_decided_lane_recovery_ingress_batch(16, || {
+        drain_open_preflight_recovery_batch(&ingress, 16, |_| {
             attempted += 1;
-            if attempted == 2 {
+            if attempted == 1 {
                 Err(V2RunnerError::Service(
                     "incompatible recovery owner".to_owned(),
                 ))
@@ -37,7 +40,7 @@ fn decided_lane_recovery_batch_bounds_service_and_stops_on_empty_or_error() {
         .is_err()
     );
     assert_eq!(
-        attempted, 2,
+        attempted, 1,
         "an ownership failure cannot service later ingress"
     );
 }
@@ -669,7 +672,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
     let drain = open_preflight[incomplete..]
         .find("drain_decided_lane_recovery_ingress(")
         .map(|offset| incomplete + offset)
-        .expect("the bounded corridor independently checks every lane occurrence");
+        .expect("the bounded corridor consumes individually authenticated lane occurrences");
     let retransmit_cadence = open_preflight[incomplete..]
         .find("if now >= next_lane_retransmit")
         .map(|offset| incomplete + offset)
@@ -682,10 +685,22 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("next_lane_retransmit = deadline_after(now, retransmit_interval)")
         .map(|offset| incomplete + offset)
         .expect("finalized recovery advances its retransmit deadline");
-    let dispatch = open_preflight[incomplete..]
-        .rfind("dispatch_lane_work_effects(")
+    let dispatch = open_preflight[advance_retransmit_deadline..]
+        .find("dispatch_lane_work_effects(")
+        .map(|offset| advance_retransmit_deadline + offset)
+        .expect("the bounded corridor publishes preflight and retransmission effects");
+    let batch = open_preflight[incomplete..]
+        .find("drain_open_preflight_recovery_batch(")
         .map(|offset| incomplete + offset)
-        .expect("the bounded corridor publishes preflight and ingress effects");
+        .expect("incomplete preflight services a bounded physical prefix");
+    let completion = open_preflight[batch..]
+        .find("drain_lifecycle_v2_ingress(")
+        .map(|offset| batch + offset)
+        .expect("each occurrence retains terminal Completion priority");
+    assert!(batch < completion && completion < drain);
+    assert!(open_preflight[batch..drain].contains("shutdown_signal.is_sent()"));
+    assert!(open_preflight[batch..drain].contains("drain_disposition.requires_yield()"));
+    assert!(open_preflight[batch..drain].contains("executor.ready_to_finish()"));
     let retry = open_preflight[incomplete..]
         .find("continue;")
         .map(|offset| incomplete + offset)
@@ -771,6 +786,190 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("LifecycleRunnerRankTarget::Runtime =>")
         .expect("the ordinary driver retains its Runtime arm");
     assert!(completion_cut < runtime_turn);
+}
+
+#[test]
+fn open_preflight_batch_services_queued_prepare_and_commit_before_reaudit() {
+    use iroha_data_model::block::consensus::CertPhase;
+
+    let (_directory, ingress, _gate, _global, sender) = queued_leader_wire_ingress_fixture();
+    ingress
+        .try_recv()
+        .expect("remove the fixture's unrelated global owner");
+    for phase in [CertPhase::Prepare, CertPhase::Commit] {
+        let mut message =
+            super::super::v2_worker::tests::lane_commit_qc_block_message(sender.clone());
+        let BlockMessage::LaneBlockQc(qc) = &mut message else {
+            unreachable!()
+        };
+        qc.body.phase = phase;
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message,
+                sender.clone()
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+    // These are transport probes: the unchanged lane adapter still owns actual
+    // QC validation. This regression exercises the production batch, physical
+    // prefix and checked selector, rather than a second queue implementation.
+    let broad_audits = Cell::new(1);
+    let mut observed = Vec::new();
+    let mut batch_mode = None;
+    let drained = drain_open_preflight_recovery_batch(&ingress, 64, |mode| {
+        assert_eq!(broad_audits.get(), 1);
+        batch_mode = Some(mode);
+        let Some((inbound, authorization)) =
+            select_decided_lane_recovery_ingress(&ingress, 1, mode)?
+        else {
+            return Ok(false);
+        };
+        assert!(matches!(
+            authorization,
+            DecidedLaneRecoveryDrainAuthorization::LaneLocal
+        ));
+        assert!(
+            inbound
+                .ingress_ownership()
+                .expect("exact occurrence")
+                .validate_exact()
+        );
+        let BlockMessage::LaneBlockQc(qc) = inbound.message() else {
+            panic!("lane QC")
+        };
+        observed.push(qc.body.phase);
+        if observed.len() == 1 {
+            let mut later =
+                super::super::v2_worker::tests::lane_commit_qc_block_message(sender.clone());
+            let BlockMessage::LaneBlockQc(qc) = &mut later else {
+                unreachable!()
+            };
+            qc.body.proposal_hash = Hash::new(b"arrival after preflight prefix");
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                    later,
+                    sender.clone()
+                )),
+                Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+        Ok::<_, V2RunnerError>(true)
+    })
+    .expect("service the existing recovery prefix");
+    assert_eq!(drained, 2);
+    assert_eq!(observed, [CertPhase::Prepare, CertPhase::Commit]);
+    assert_eq!(ingress.len(), 1);
+    assert!(
+        select_decided_lane_recovery_ingress(&ingress, 1, batch_mode.unwrap())
+            .expect("post-cut arrival stays queued")
+            .is_none()
+    );
+    broad_audits.set(broad_audits.get() + 1);
+    assert_eq!(broad_audits.get(), 2);
+}
+
+#[test]
+fn open_preflight_batch_preserves_budget_completion_yield_and_errors() {
+    let (_directory, ingress, _gate, _global, sender) = queued_leader_wire_ingress_fixture();
+    ingress.try_recv().expect("remove fixture global owner");
+    for label in [b"first".as_slice(), b"second".as_slice()] {
+        let mut message =
+            super::super::v2_worker::tests::lane_commit_qc_block_message(sender.clone());
+        let BlockMessage::LaneBlockQc(qc) = &mut message else {
+            unreachable!()
+        };
+        qc.body.proposal_hash = Hash::new(label);
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message,
+                sender.clone()
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+    assert_eq!(
+        drain_open_preflight_recovery_batch(&ingress, 0, |_| -> Result<bool, V2RunnerError> {
+            panic!("zero budget cannot touch an occurrence")
+        })
+        .unwrap(),
+        0
+    );
+    let mut attempts = 0;
+    assert_eq!(
+        drain_open_preflight_recovery_batch(&ingress, 64, |_| {
+            attempts += 1;
+            Ok::<_, V2RunnerError>(false)
+        })
+        .unwrap(),
+        0,
+        "Completion/shutdown yield must stop before any dequeue"
+    );
+    assert_eq!(attempts, 1);
+    assert_eq!(ingress.len(), 2);
+    let mut attempts = 0;
+    let failed = drain_open_preflight_recovery_batch(&ingress, 64, |mode| {
+        attempts += 1;
+        if attempts == 2 {
+            return Err(V2RunnerError::Service("fixed recovery failure".to_owned()));
+        }
+        Ok(select_decided_lane_recovery_ingress(&ingress, 1, mode)?.is_some())
+    });
+    assert!(
+        matches!(failed, Err(V2RunnerError::Service(message)) if message == "fixed recovery failure")
+    );
+    assert_eq!(attempts, 2);
+    assert_eq!(
+        ingress.len(),
+        1,
+        "fixed failure leaves the next exact occurrence queued"
+    );
+    assert_eq!(
+        drain_open_preflight_recovery_batch(&ingress, 1, |mode| {
+            Ok::<_, V2RunnerError>(
+                select_decided_lane_recovery_ingress(&ingress, 1, mode)?.is_some(),
+            )
+        })
+        .unwrap(),
+        1
+    );
+    assert_eq!(ingress.len(), 0);
+}
+
+#[test]
+fn open_preflight_batch_does_not_admit_global_traffic_as_lane_recovery() {
+    let (_directory, ingress, _gate, _global, _sender) = queued_leader_wire_ingress_fixture();
+    let mut lane_admissions = 0;
+    let count = drain_open_preflight_recovery_batch(&ingress, 8, |mode| {
+        let Some((inbound, authorization)) =
+            select_decided_lane_recovery_ingress(&ingress, 1, mode)?
+        else {
+            return Ok(false);
+        };
+        assert!(!inbound.message().is_lane_local());
+        if matches!(
+            authorization,
+            DecidedLaneRecoveryDrainAuthorization::LaneLocal
+        ) {
+            lane_admissions += 1;
+        }
+        assert!(matches!(
+            authorization,
+            DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire
+        ));
+        assert!(
+            inbound
+                .ingress_ownership()
+                .expect("exact owner")
+                .leader_wire_runtime_receipt()
+                .is_some(),
+            "volatile retirement must retain the existing exact durable handoff receipt"
+        );
+        Ok::<_, V2RunnerError>(true)
+    })
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(lane_admissions, 0);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 """Create and verify private Sumeragi v2 release-binary bundles.
 
 The build directories are intentionally mutable Cargo caches.  This helper
-copies only the four final executables into a fresh, read-only invocation
+copies only the five final executables into a fresh, read-only invocation
 directory and publishes an exact, externally hash-anchored manifest.
 """
 
@@ -42,6 +42,7 @@ _BINARIES = (
     ),
     ("iroha", "release/iroha", "default"),
     ("kagami", "release/kagami", "default"),
+    ("irohad_taira", "release/iroha3d_taira", "default"),
 )
 
 _KEYS = (
@@ -70,6 +71,10 @@ _KEYS = (
     "kagami_sha256",
     "kagami_size_bytes",
     "kagami_mode_octal",
+    "irohad_taira_relative_path",
+    "irohad_taira_sha256",
+    "irohad_taira_size_bytes",
+    "irohad_taira_mode_octal",
 )
 
 

@@ -19,6 +19,8 @@ SCRIPT = REPO_ROOT / "scripts" / "cargo_fast.sh"
 CONTROLLED_ENV_VARS = (
     "CI",
     "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_FAST_TEST_CONFIG_WRAPPER",
     "CARGO_BUILD_TARGET",
     "CARGO_BUILD_TARGET_DIR",
     "CARGO_BUILD_BUILD_DIR",
@@ -96,7 +98,7 @@ def _run_wrapper(
         fake_bin / "cargo",
         r"""
         #!/usr/bin/env python3
-        import json, os, pathlib, sys
+        import json, os, pathlib, subprocess, sys
         args = sys.argv[1:]
         if "locate-project" in args:
             manifest = args[args.index("--manifest-path") + 1]
@@ -120,6 +122,16 @@ def _run_wrapper(
             build = str(pathlib.Path(build).absolute()) if build else target
             print(os.environ.get("CARGO_FAST_TEST_METADATA", json.dumps({"version": 1, "workspace_root": str(root), "target_directory": target, "build_directory": build})))
         else:
+            if os.environ.get("CARGO_FAST_TEST_CONFIG_WRAPPER"):
+                # The fixture has one JSON-quoted TOML string. Model Cargo's
+                # documented empty-environment override, then dispatch it.
+                config = pathlib.Path(os.environ["HOME"]) / ".cargo/config.toml"
+                configured = json.loads(config.read_text().split("=", 1)[1].strip())
+                wrapper = os.environ.get("RUSTC_WRAPPER", os.environ.get("CARGO_BUILD_RUSTC_WRAPPER", configured))
+                if wrapper:
+                    result = subprocess.run([wrapper, "rustc", "--version"], check=False)
+                    if result.returncode:
+                        sys.exit(result.returncode)
             with open(os.environ["CARGO_FAST_CAPTURE"], "w") as stream:
                 for name, value in os.environ.items():
                     print(name + "=" + value, file=stream)
@@ -757,16 +769,75 @@ def test_incremental_never_dispatches_sccache(tmp_path: Path, inherited: bool) -
     )
     assert result.returncode == 0, result.stderr
     assert environment["CARGO_INCREMENTAL"] == "1"
-    assert "RUSTC_WRAPPER" not in environment
+    assert environment["RUSTC_WRAPPER"] == ""
+    assert environment["CARGO_BUILD_RUSTC_WRAPPER"] == ""
     assert arguments == ["check", "-p", "iroha_core"]
 
 
-def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path) -> None:
+@pytest.mark.parametrize("variable", ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"))
+def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path, variable: str) -> None:
     result, environment, _ = _run_wrapper(
-        tmp_path, "--incremental", "--", "check", extra_env={"RUSTC_WRAPPER": "/fixed/instrument-rustc"},
+        tmp_path, "--incremental", "--", "check", extra_env={variable: "/fixed/instrument-rustc"},
     )
     assert result.returncode == 0, result.stderr
     assert environment["RUSTC_WRAPPER"] == "/fixed/instrument-rustc"
+
+
+@pytest.mark.parametrize("selection", ("file", "inherited", "config-env", "explicit-empty"))
+def test_incremental_suppresses_configured_sccache_fallback(tmp_path: Path, selection: str) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    cache = tmp_path / "bin/sccache"
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(cache)) + "\n")
+    extra = {"CARGO_FAST_TEST_CONFIG_WRAPPER": "1"}
+    if selection == "inherited":
+        extra.update({"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": str(cache)})
+    elif selection == "config-env":
+        extra["CARGO_BUILD_RUSTC_WRAPPER"] = str(cache)
+    elif selection == "explicit-empty":
+        extra.update({"RUSTC_WRAPPER": "", "CARGO_BUILD_RUSTC_WRAPPER": str(cache)})
+    before = config.read_bytes()
+    result, environment, arguments = _run_wrapper(
+        tmp_path, *(("--incremental",) if selection != "inherited" else ()), "--", "check",
+        extra_env=extra, binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == ""
+    assert environment["CARGO_BUILD_RUSTC_WRAPPER"] == ""
+    assert arguments == ["check"]
+    assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize("variable", ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"))
+def test_incremental_dispatches_explicit_instrumentation_over_file_cache(tmp_path: Path, variable: str) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(tmp_path / "bin/sccache")) + "\n")
+    log = tmp_path / "instrumentation.log"
+    extra = {"CARGO_FAST_TEST_CONFIG_WRAPPER": "1", variable: str(tmp_path / "bin/instrument-rustc"),
+             "INSTRUMENTATION_LOG": str(log)}
+    if variable == "RUSTC_WRAPPER":
+        extra["CARGO_BUILD_RUSTC_WRAPPER"] = str(tmp_path / "bin/sccache")
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--incremental", "--", "check", extra_env=extra,
+        binaries={"sccache": "#!/bin/sh\nexit 99\n",
+                  "instrument-rustc": '#!/bin/sh\nprintf "%s\\n" "$*" > "$INSTRUMENTATION_LOG"\n'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == str(tmp_path / "bin/instrument-rustc")
+    assert log.read_text() == "rustc --version\n"
+
+
+def test_nonincremental_keeps_explicit_file_wrapper_selection(tmp_path: Path) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(tmp_path / "bin/sccache")) + "\n")
+    result, _, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "check",
+        extra_env={"CARGO_FAST_TEST_CONFIG_WRAPPER": "1"},
+        binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 99
 
 
 def _lane_role(target: Path, role: str = "release", repo: Path | None = None) -> Path:

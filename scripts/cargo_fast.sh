@@ -35,7 +35,8 @@ Options:
   --preserve-build-limits Keep an inherited local single-worker build fingerprint
   --no-sccache            Do not auto-enable sccache
   --sccache-dir DIR       Set SCCACHE_DIR; otherwise use sccache's default
-  --incremental           Set CARGO_INCREMENTAL=1 for warm local edit loops
+  --incremental           Set CARGO_INCREMENTAL=1; suppress configured sccache
+                          Set RUSTC_WRAPPER explicitly to retain instrumentation
   --no-incremental        Set CARGO_INCREMENTAL=0 for sccache-heavy builds
   --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
                           Reject an inherited IROHA_GIT_COMMIT_HASH before Cargo
@@ -468,11 +469,18 @@ select_linker() {
 
 enabled_sccache="no"
 # Explicit incremental compilation and sccache cannot share one invocation.
-# Do not remove a caller's unrelated compiler instrumentation wrapper.
+# An empty RUSTC_WRAPPER overrides Cargo's file configuration; unsetting it
+# reactivates a configured sccache. Preserve explicit environment instrumentation
+# (including Cargo's config environment spelling), with RUSTC_WRAPPER precedence.
 if [[ "${CARGO_INCREMENTAL:-}" == 1 ]]; then
-	if [[ "${RUSTC_WRAPPER:-}" == sccache || "${RUSTC_WRAPPER:-}" == */sccache ]]; then
-		unset RUSTC_WRAPPER
-	fi
+	incremental_wrapper="${RUSTC_WRAPPER-${CARGO_BUILD_RUSTC_WRAPPER-}}"
+	case "${incremental_wrapper}" in
+	'' | sccache | */sccache)
+		export RUSTC_WRAPPER=""
+		export CARGO_BUILD_RUSTC_WRAPPER=""
+		;;
+	*) export RUSTC_WRAPPER="${incremental_wrapper}" ;;
+	esac
 	auto_sccache=false
 fi
 if [[ "${auto_sccache}" == true ]]; then

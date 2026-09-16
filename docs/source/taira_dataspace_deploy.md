@@ -12,8 +12,33 @@ transactions, or create blocks to advance time.
 
 ## Commands
 
-Export the target profile from the assembled native reset inventory and the
-`prepare-public-inputs` bundle. No new trust JSON needs to be handwritten:
+For an existing network, export the target profile from the retained public
+signed genesis, its independently selected public key, checked NetworkId and
+four public peer records:
+
+```sh
+iroha taira dataspace-deploy export-profile \
+  --network-id CHECKED_NETWORK_ID \
+  --genesis-signed /ABSOLUTE/PUBLIC/genesis.signed.nrt \
+  --genesis-public-key /ABSOLUTE/PUBLIC/genesis.public_key \
+  --peers /ABSOLUTE/PUBLIC/peers.json \
+  --output /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json
+```
+
+`peers.json` is an array of the existing profile's four peer records, each with
+`torii_origin`, `peer_id`, `node_fingerprint`, `build_fingerprint` and
+`config_fingerprint`. Select these public pins independently from approved
+validator deployment evidence. A historical build pin must not be reused after
+an upgrade, and untrusted HTTP discovery must not become the expected authority.
+The command verifies the native signed genesis, checked network, exact four-peer
+roster and node hashes, then publishes the native trust format without replacing
+an existing file. Its receipt hashes the exact public inputs and output. It loads
+no client configuration or credentials and makes no network request. Export does
+not establish authorization or deployment success; plan and apply still compare
+fresh signed attestations against every selected pin.
+
+When preparing a reset, the existing assembled inventory and complete
+`prepare-public-inputs` bundle can also export the target profile:
 
 ```sh
 iroha taira public-reset export-deployment-profile \

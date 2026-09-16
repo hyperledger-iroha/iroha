@@ -1003,6 +1003,28 @@ CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot 
 )),)
 CORE_STAGES += CORE_STARTUP_STAGES
 
+CORE_READ_BOUNDARY_STAGES = (("bounded lane recovery and strict durable evidence reads", (
+    'kura::tests::autonomous_latest_snapshot_reuses_validated_current_cursor',
+    'kura::tests::autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix',
+    'kura::tests::certified_lane_block_read_rejects_qc_signature_mismatch',
+    'kura::tests::certified_lane_block_read_rejects_qc_body_mismatch',
+    'sumeragi::v2_runner::tests::open_preflight_batch_services_queued_prepare_and_commit_before_reaudit',
+    'sumeragi::v2_runner::tests::open_preflight_batch_preserves_budget_completion_yield_and_errors',
+    'sumeragi::v2_runner::tests::open_preflight_batch_does_not_admit_global_traffic_as_lane_recovery',
+    'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity',
+    'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity',
+    'sumeragi::v2_lane_work::tests::finalized_carrier_nonmember_cache_invalid_commit_certificate_rolls_back_hydration',
+    'sumeragi::v2_lane_work::tests::global_validator_outside_lane_committee_uses_canonical_replica_for_rollover',
+    'kura::tests::certified_lane_block_rejects_foreign_active_dataspace',
+    'kura::tests::autonomous_completion_missing_view_state_keeps_full_payload_validation',
+    'kura::tests::autonomous_completion_selected_view_validates_artifact_once',
+)), )
+CORE_STAGES = CORE_READ_BOUNDARY_STAGES + CORE_STAGES
+# Keep the existing full-scope position while requiring this affected control early in basic.
+CORE_ADMISSION_STARTUP_STAGES = CORE_READ_BOUNDARY_STAGES + (("bounded open preflight and finite closed ingress", (
+    'sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain',
+)), ) + CORE_ADMISSION_STARTUP_STAGES
+
 PROOF_STAGES = (("canonical proof resource bounds", (
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
     "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
@@ -1082,14 +1104,18 @@ NETWORK_OBSERVATION_STAGES = (("inherited native deployment deadline", (
     "status_observation_tests::status_observation_retries_typed_busy_json_and_norito_with_remaining_budget",
     "status_observation_tests::status_observation_stops_at_original_deadline_during_retry_after",
     "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
+)), ("private production beacon fixture root admission", (
+    "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
 )),)
+BEACON_NETWORK_STAGES = (("fresh production beacon custody, mandatory pulse and paid deployment", (
+    "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
+)),)
+
 # Prove catalog admission and both recovery paths before spending another
 # four-peer fixture on narrower transaction sequences.
 BASIC_NETWORK_STAGES = NETWORK_OBSERVATION_STAGES + (("four-validator additive catalog with retained history and replay", (
     "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
-)), ("clean-client native paid dataspace deployment with four-peer finality", (
-    "dataspace_deploy_cli::clean_client_deploys_paid_dataspace_once_with_four_peer_finality",
-)), ("four-validator universal-route commit and signed snapshot restart", (
+)),) + BEACON_NETWORK_STAGES + (("four-validator universal-route commit and signed snapshot restart", (
     "four_peer_universal_public_transaction_sequence_reaches_applied",
 )),)
 NETWORK_STAGES = BASIC_NETWORK_STAGES + (("four-validator multi-route commit and signed snapshot restart", (
@@ -1232,6 +1258,47 @@ TORII_SHARED_STAGES += (("strict finality attestation tip progress details", (
     "bridge_finality::tests::tip_mismatch_requires_exact_selector_and_real_height_progress",
 )), )
 
+TORII_STAGES += (("public faucet policy discovery", (
+    "accounts_faucet::accounts_faucet_policy_exposes_exact_public_configuration",
+    "accounts_faucet::accounts_faucet_policy_resolves_configured_asset_alias",
+    "accounts_faucet::accounts_faucet_policy_preserves_disabled_forbidden_response",
+)), )
+
+TORII_UNIT_STAGES += (("public faucet policy discovery", (
+    "mcp::tests::faucet_policy_tool_is_read_only_and_runtime_gated",
+    "mcp::tests::faucet_policy_tool_dispatches_only_get_without_body",
+    "openapi::tests::faucet_policy_schema_is_exact_public_discovery",
+)), )
+
+TORII_SHARED_STAGES += (("public faucet policy discovery", (
+    "route_catalog::tests::account_faucet_policy_is_public_read_only_discovery",
+)), )
+
+STAGES += (("retained-network public deployment profile export", (
+    'taira_dataspace_deploy::profile::tests::retained_profile_export_uses_native_trust_and_exact_input_hashes',
+    'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_unbound_or_malformed_public_inputs',
+    'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_changed_linked_and_unsafe_files',
+    'taira_dataspace_deploy::profile::tests::retained_profile_export_dispatch_rejects_credential_and_transaction_globals',
+)), )
+
+CLIENT_STAGES += (("blocking SDK transport ownership between calls", (
+    'blocking::tests::borrowed_async_client_reuses_keepalive_connection_between_blocking_calls',
+    'blocking::tests::background_tasks_progress_with_a_clone_and_cancel_after_final_owner_drop',
+)), )
+
+TORII_UNIT_STAGES = (("released State snapshots and exact canonical outcome authority", (
+    'tests_runtime_handlers::canonical_outcome_releases_state_snapshot_before_kura_authentication',
+    'tests_runtime_handlers::canonical_outcome_preserves_exact_committed_rejection',
+    'tests_runtime_handlers::canonical_outcome_absent_membership_never_authenticates',
+    'tests_runtime_handlers::canonical_outcome_accepts_unrelated_state_append_after_authentication',
+    'tests_runtime_handlers::canonical_outcome_rejects_removed_membership_after_authentication',
+    'tests_runtime_handlers::canonical_outcome_rejects_rebound_membership_after_authentication',
+    'tests_runtime_handlers::canonical_outcome_rejects_replaced_journal_after_authentication',
+    'tests_runtime_handlers::canonical_outcome_rejects_missing_journal_after_authentication',
+    'tests_runtime_handlers::canonical_outcome_rejects_result_substitution_under_the_same_header_hash',
+    'tests_runtime_handlers::canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cache',
+)), ) + TORII_UNIT_STAGES
+
 HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
@@ -1267,6 +1334,84 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
 )),)
+
+
+# Production beacon setup must fail before unrelated tests and network fixtures.
+CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
+    'beacon::tests::runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing',
+    'beacon::readiness::tests::readiness_authenticates_exact_session_once_without_signing_on_http_checks',
+    'beacon::readiness::tests::readiness_reuses_only_exact_authenticated_transcripts_across_heights',
+    'beacon::readiness::tests::readiness_requires_pending_session_to_cover_the_mandatory_pulse',
+    'beacon::readiness::tests::readiness_requires_both_current_parliament_and_future_npos_pulses',
+    'beacon::readiness::tests::readiness_rejects_missing_foreign_and_corrupt_public_sessions',
+    'beacon::readiness::tests::readiness_rejects_absent_unavailable_and_wrong_seat_providers',
+    'beacon::readiness::tests::readiness_invalidates_old_height_roster_and_publication_owner',
+    'beacon::readiness::tests::readiness_does_not_require_local_custody_for_observers_or_unused_permissioned_beacons',
+    'sumeragi::emergency_fast_handle_tests::missing_beacon_readiness_preserves_bootstrap_ingress',
+)), )
+DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
+    'taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity',
+    'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_attestation_round_trips_over_authenticated_broker',
+    'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_typed_proxy_requalifies_before_and_after_lookup',
+    'runtime_provider_broker::protocol::platform::tests::correlated_wrong_beacon_session_id_is_rejected_by_typed_proxy',
+    'runtime_provider_broker::protocol::platform::tests::correlated_wrong_beacon_transcript_hash_is_rejected_by_typed_proxy',
+    'runtime_provider_broker::protocol::platform::tests::correlated_wrong_beacon_signer_index_is_rejected_by_typed_proxy',
+    'runtime_provider_broker::protocol::platform::tests::correlated_truncated_beacon_capability_is_rejected_by_typed_proxy',
+    'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_request_rejects_foreign_network_transcript_and_invalid_seat',
+    'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_server_rejects_a_qualified_backend_claiming_the_wrong_seat',
+    'runtime_provider_broker::protocol::primitives::operation_ordinal_tests::post_soracloud_operation_ids_are_exact_and_contiguous',
+    'taira_runtime_signer::tests::beacon_loader_consumes_exact_credential_and_verifies_native_signature',
+    'taira_runtime_signer::tests::beacon_loader_rejects_wrong_network_qualification_and_corruption',
+    'taira_runtime_signer::tests::beacon_loader_rejects_untrusted_descriptor_and_size',
+    'taira_runtime_signer::tests::registry_allows_bootstrap_without_beacon_and_rejects_extra_or_duplicate_slots',
+    'taira_runtime_signer::tests::registry_resolves_exact_configured_beacon_and_preserves_soracloud_binding',
+    'taira_runtime_signer::tests::offline_introspection_never_requires_the_runtime_signer',
+    'taira_runtime_signer::tests::mint_seed_loader_consumes_exact_private_record_and_preserves_restart_source',
+    'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
+    'beacon_bootstrap::tests::fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum',
+    'beacon_bootstrap::tests::bootstrap_rejects_foreign_genesis_rosters_transcripts_and_lifecycle_substitution',
+    'beacon_bootstrap::tests::bootstrap_phase_eof_and_deadline_abort_without_fabricated_height',
+    'beacon_bootstrap::tests::bootstrap_output_custody_is_exclusive_and_lifecycle_key_is_consumed',
+    'beacon_bootstrap::tests::bootstrap_config_descriptor_uses_only_exact_native_consensus_identity',
+)), )
+TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open', (
+    'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
+)), )
+CORE_STARTUP_STAGES = CORE_BEACON_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CORE_BEACON_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CORE_BEACON_STAGES + CORE_STAGES
+DAEMON_STARTUP_STAGES = DAEMON_BEACON_STAGES + DAEMON_STARTUP_STAGES
+DAEMON_STAGES = DAEMON_BEACON_STAGES + DAEMON_STAGES
+TORII_STARTUP_STAGES = TORII_BEACON_STAGES + TORII_STARTUP_STAGES
+TORII_UNIT_STAGES = TORII_BEACON_STAGES + TORII_UNIT_STAGES
+
+
+CLIENT_STAGES += (("bounded read-only finality backpressure and preserved verifier state", (
+    'client::evidence_http_tests::bridge_finality_reader_retries_only_backpressure_within_original_deadline',
+    'client::evidence_http_tests::bridge_finality_reader_rejects_unbounded_or_invalid_backpressure_without_advancing',
+    'client::evidence_http_tests::activation_evidence_backpressure_preserves_challenge_and_response_bounds',
+    'client::evidence_http_tests::bridge_finality_reader_expired_deadline_does_not_dispatch_or_advance',
+    'client::evidence_http_tests::bridge_finality_next_reader_rejects_height_mismatch_before_advancing',
+    'client::evidence_http_tests::bridge_finality_next_reader_response_contract_failures_do_not_advance',
+    'client::evidence_http_tests::bridge_finality_next_reader_verification_failure_does_not_advance',
+    'client::transaction_wait_tests::transaction_wait_backpressure_retries_only_reads_and_requires_state_applied',
+    'client::transaction_wait_tests::transaction_wait_backpressure_honors_retry_after_without_extending_deadline',
+    'client::transaction_wait_tests::transaction_wait_backpressure_without_retry_after_uses_poll_interval',
+    'client::transaction_wait_tests::transaction_wait_backpressure_is_still_an_error_for_one_shot_reads',
+    'client::transaction_wait_tests::transaction_wait_backpressure_does_not_retry_malformed_instructions_or_other_errors',
+    'client::transaction_wait_tests::transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding',
+)), )
+STAGES += (("genesis-rooted four-validator committed height observation", (
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_requires_prepared_genesis_roster_and_exact_peer_selection',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_verifies_contiguous_chain_and_fresh_four_peer_evidence',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_rejects_skips_signatures_and_changed_identity',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_progress_never_emits_a_mixed_or_racing_checkpoint',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_deadline_prevents_dispatch_and_late_completion',
+)), )
+
+TEST_NETWORK_STAGES += (("separate authenticated Taira bootstrap executable", (
+    "tests::release_prebuilt_taira_launcher_is_mandatory_and_separately_bound",
+)), )
 
 
 class CheckError(Exception):
@@ -2097,7 +2242,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -2107,7 +2252,8 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 raise CheckError("native artifact source and target must be direct owner-held directories")
         paths = {}
         for selection, record in records.items():
-            package = {"iroha3d": "irohad", "iroha": "iroha_cli"}.get(selection)
+            package = {"iroha3d": "irohad", "iroha": "iroha_cli",
+                       "iroha3d-message-control": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
             if record["manifest_path"] != str(root / "crates" / package / "Cargo.toml"):
@@ -2297,21 +2443,26 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
         raise SelectedRegressionFailures(failures)
 
 
-def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
-    """Build the shipping package graph plus the ordinary fixture launcher."""
-    expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli")}
-    for selection in shipping_harnesses(root):
-        _, name, _, arguments = HARNESS_TARGETS[selection]
-        expected[name] = ("iroha" if name == "iroha" else selection, arguments[1])
+def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
+                             *, message_control: bool = False) -> NativeArtifactCopies:
+    """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
+    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else {
+        "iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
+        "iroha3d_taira": ("taira-launcher", "irohad")}
+    if not message_control:
+        for selection in shipping_harnesses(root):
+            _, name, _, arguments = HARNESS_TARGETS[selection]
+            expected[name] = ("iroha" if name == "iroha" else selection, arguments[1])
     packages = tuple(dict.fromkeys(package for _, package in expected.values()))
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
+               *(["--features", "irohad/test-network-message-control"] if message_control else []),
                "--message-format=json-render-diagnostics"]
-    print("[taira-check] build native network binaries with the shipping feature graph; "
-          "test-only fixture features remain excluded", flush=True)
-    progress = CargoBuildProgress("shipping codegen", {("bin", name) for name in expected},
+    phase = "message-control fixture codegen" if message_control else "shipping codegen"
+    print(f"[taira-check] build native network binaries: {phase}", flush=True)
+    progress = CargoBuildProgress(phase, {("bin", name) for name in expected},
                                   test_profile=False)
     started = time.monotonic()
     artifacts: dict[str, str] = {}
@@ -2367,6 +2518,7 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
         network_env = env | {
             "TEST_NETWORK_BIN_IROHAD": binaries["iroha3d"],
+            "TEST_NETWORK_BIN_IROHAD_TAIRA": binaries["taira-launcher"],
             "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
             "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
             "TEST_NETWORK_TMP_DIR": str(directory),
@@ -2386,7 +2538,36 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
             run_stages(harness, fixture_root, network_env, observations, lock_fds)
         for stage in stages:
             if stage not in NETWORK_OBSERVATION_STAGES:
-                run_stages(harness, fixture_root, network_env, (stage,), lock_fds)
+                if stage in BEACON_NETWORK_STAGES:
+                    if "kagami" not in binaries:
+                        raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
+                    private_fixture_root = beacon_fixture_root()
+                    with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
+                        beacon_env = network_env | {
+                            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
+                            "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
+                            "KAGAMI_BIN": binaries["kagami"],
+                        }
+                        run_stages(harness, fixture_root, beacon_env, (stage,), lock_fds)
+                else:
+                    run_stages(harness, fixture_root, network_env, (stage,), lock_fds)
+
+
+def beacon_fixture_root() -> Path:
+    """Keep disposable generated signing material outside Git and public build artifacts."""
+    configured = os.environ.get("TAIRA_TESTNET_BEACON_FIXTURE_DIR")
+    root = Path(configured) if configured else Path.home() / ".taira-native-beacon-fixtures"
+    if not root.is_absolute() or root.resolve() != root:
+        raise CheckError("beacon fixture root must be an absolute direct path outside Git")
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise CheckError("beacon fixture root must be an owner-only 0700 directory")
+    result = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                            stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False)
+    if result.returncode == 0 or (result.returncode != 128 or "not a git repository" not in result.stderr):
+        raise CheckError("beacon fixture root must be outside a Git repository")
+    return root
 
 
 def require_network_fixture_capacity(directory: Path) -> None:

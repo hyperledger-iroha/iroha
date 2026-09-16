@@ -16,6 +16,9 @@ use std::{
     num::NonZeroU64,
 };
 
+#[path = "taira_authenticated_height.rs"]
+pub(crate) mod authenticated_height;
+
 const MAX_NEW_PROOFS: usize = 128;
 const VERIFICATION_PEERS: usize = 4;
 
@@ -141,28 +144,7 @@ impl TrustV1 {
             .into_iter()
             .map(|(key, pop)| (PeerId::new(key), pop))
             .collect();
-        let mut peers = BTreeSet::new();
-        let mut origins = BTreeSet::new();
-        for peer in &self.peers {
-            let origin: url::Url = peer.torii_origin.parse()?;
-            require(
-                matches!(origin.scheme(), "http" | "https")
-                    && origin.host_str().is_some()
-                    && origin.username().is_empty()
-                    && origin.password().is_none()
-                    && origin.query().is_none()
-                    && origin.fragment().is_none()
-                    && origin.as_str() == peer.torii_origin,
-                "validator endpoint must be a canonical credential-free Torii URL",
-            )?;
-            require(
-                origins.insert(origin.as_str().to_owned())
-                    && peers.insert(peer.peer_id.clone())
-                    && validators.contains_key(&peer.peer_id)
-                    && Hash::new(peer.peer_id.encode()) == peer.node_fingerprint,
-                "validator profile must bind four distinct genesis peers and endpoints",
-            )?;
-        }
+        validate_peer_selection(&self.peers, &validators)?;
         let (roster, pops) = validators
             .into_iter()
             .map(|(validator, pop)| {
@@ -182,6 +164,39 @@ impl TrustV1 {
             pops,
         })
     }
+}
+
+fn validate_peer_selection(
+    selected: &[PeerV1],
+    validators: &BTreeMap<PeerId, Vec<u8>>,
+) -> Result<()> {
+    require(
+        selected.len() == VERIFICATION_PEERS && validators.len() == VERIFICATION_PEERS,
+        "verification requires exactly four authenticated genesis peers",
+    )?;
+    let mut peers = BTreeSet::new();
+    let mut origins = BTreeSet::new();
+    for peer in selected {
+        let origin: url::Url = peer.torii_origin.parse()?;
+        require(
+            matches!(origin.scheme(), "http" | "https")
+                && origin.host_str().is_some()
+                && origin.username().is_empty()
+                && origin.password().is_none()
+                && origin.query().is_none()
+                && origin.fragment().is_none()
+                && origin.as_str() == peer.torii_origin,
+            "validator endpoint must be a canonical credential-free Torii URL",
+        )?;
+        require(
+            origins.insert(origin.as_str().to_owned())
+                && peers.insert(peer.peer_id.clone())
+                && validators.contains_key(&peer.peer_id)
+                && Hash::new(peer.peer_id.encode()) == peer.node_fingerprint,
+            "validator profile must bind four distinct genesis peers and endpoints",
+        )?;
+    }
+    Ok(())
 }
 
 impl Authority {

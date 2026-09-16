@@ -99,6 +99,10 @@ run_cargo() {{
       return 65
       ;;
   esac
+  if [[ " $* " == *" --bin iroha3d_taira "* ]]; then
+    printf '#!/bin/sh\\n# taira %s\\n' "$*" >"$CARGO_TARGET_DIR/release/iroha3d_taira"
+    chmod 0755 "$CARGO_TARGET_DIR/release/iroha3d_taira"
+  fi
   printf '#!/bin/sh\\n# %s\\n' "$*" >"$output"
   chmod 0755 "$output"
   printf '%s\\n' "$*" >>"$BUNDLE_TEST_BUILD_LOG"
@@ -144,13 +148,14 @@ printf '%s\\n' \
   "$TEST_NETWORK_BIN_IROHAD" \
   "$TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL" \
   "$TEST_NETWORK_BIN_IROHA" \
-  "$KAGAMI_BIN"
+  "$KAGAMI_BIN" \
+  "$TEST_NETWORK_BIN_IROHAD_TAIRA"
 """,
     )
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
-    assert len(lines) == 6
+    assert len(lines) == 7
     bundle = Path(lines[0])
     assert bundle != inherited_target
     assert bundle.parent == (
@@ -166,8 +171,11 @@ printf '%s\\n' \
         str(bundle / "message-control" / "release" / "iroha3d"),
         str(bundle / "release" / "iroha"),
         str(bundle / "release" / "kagami"),
+        str(bundle / "release" / "iroha3d_taira"),
     ]
     assert len(build_log.read_text(encoding="utf-8").splitlines()) == 4
+    assert "--bin iroha3d --bin iroha3d_taira" in build_log.read_text().splitlines()[0]
+    assert (bundle / "release/iroha3d_taira").read_bytes() != (bundle / "release/iroha3d").read_bytes()
 
 
 def test_inherited_anchor_is_reused_but_invalid_anchor_never_rebuilds(

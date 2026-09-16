@@ -122,6 +122,7 @@ fi
 export IROHA_TEST_REQUIRE_NETWORK=1
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
+unset TEST_NETWORK_BIN_IROHAD_TAIRA CARGO_BIN_EXE_iroha3d_taira
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 unset IROHA_TEST_SKIP_BUILD
 unset IROHA_TEST_TARGET_DIR IROHA_RELEASE_PREBUILT_MANIFEST_SHA256
@@ -4727,7 +4728,8 @@ verify_bpng_native_bootstrap_release_identity() {
       != "${IROHA_TEST_TARGET_DIR:-}/message-control/release/iroha3d" \
     || "${TEST_NETWORK_BIN_IROHA:-}" \
       != "${IROHA_TEST_TARGET_DIR:-}/release/iroha" \
-    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" ]]; then
+    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" \
+    || "${TEST_NETWORK_BIN_IROHAD_TAIRA:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/iroha3d_taira" ]]; then
     echo "native BPNG release binary exports changed at ${checkpoint}" >&2
     return 1
   fi

@@ -833,6 +833,7 @@ const TEMPDIR_IN_ENV: &str = "TEST_NETWORK_TMP_DIR";
 const TEMPDIR_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
+const PROGRAM_IROHAD_TAIRA_ENV: &str = "TEST_NETWORK_BIN_IROHAD_TAIRA";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
 const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
@@ -989,6 +990,8 @@ pub enum Program {
     /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
     #[doc(hidden)]
     IrohadParliamentSigners,
+    /// Shipping Taira launcher, including its offline production beacon bootstrap.
+    IrohadTaira,
     /// Iroha Client CLI
     Iroha,
 }
@@ -1034,6 +1037,7 @@ impl Program {
     const fn release_prebuilt_binary(self) -> ReleasePrebuiltBinary {
         match self {
             Self::Irohad => ReleasePrebuiltBinary::Irohad,
+            Self::IrohadTaira => ReleasePrebuiltBinary::IrohadTaira,
             Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
             // The test signer is explicitly rejected whenever a release-prebuilt
             // contract is active. This value is therefore an unreachable sentinel.
@@ -1096,6 +1100,16 @@ impl Program {
                 .collect(),
                 isolated_target_subdir: Some("parliament-signers"),
             },
+            Self::IrohadTaira => ProgramSpec {
+                name: "iroha3d_taira",
+                env: PROGRAM_IROHAD_TAIRA_ENV,
+                pkg: "irohad",
+                build_args: ["--bin", "iroha3d_taira"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                isolated_target_subdir: None,
+            },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
                 env: PROGRAM_IROHA_ENV,
@@ -1107,6 +1121,7 @@ impl Program {
     }
 }
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
+static IROHAD_TAIRA_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -1146,13 +1161,15 @@ pub enum ReleasePrebuiltBinary {
     IrohadMessageControl,
     Iroha,
     Kagami,
+    IrohadTaira,
 }
 impl ReleasePrebuiltBinary {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Irohad,
         Self::IrohadMessageControl,
         Self::Iroha,
         Self::Kagami,
+        Self::IrohadTaira,
     ];
     const fn manifest_prefix(self) -> &'static str {
         match self {
@@ -1160,6 +1177,7 @@ impl ReleasePrebuiltBinary {
             Self::IrohadMessageControl => "irohad_message_control",
             Self::Iroha => "iroha",
             Self::Kagami => "kagami",
+            Self::IrohadTaira => "irohad_taira",
         }
     }
     const fn relative_path(self) -> &'static str {
@@ -1168,6 +1186,7 @@ impl ReleasePrebuiltBinary {
             Self::IrohadMessageControl => "message-control/release/iroha3d",
             Self::Iroha => "release/iroha",
             Self::Kagami => "release/kagami",
+            Self::IrohadTaira => "release/iroha3d_taira",
         }
     }
 }
@@ -1181,7 +1200,7 @@ struct ReleaseBinaryAttestation {
 struct ReleaseProgramContract {
     configured_target_dir: PathBuf,
     canonical_target_dir: PathBuf,
-    binaries: [ReleaseBinaryAttestation; 4],
+    binaries: [ReleaseBinaryAttestation; 5],
 }
 impl ReleaseProgramContract {
     fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
@@ -1477,8 +1496,8 @@ fn parse_release_prebuilt_manifest(
     source_manifest_sha256: &str,
     configured_target: &Path,
     repo: &Path,
-) -> color_eyre::Result<[ReleaseBinaryAttestation; 4]> {
-    const KEYS: [&str; 25] = [
+) -> color_eyre::Result<[ReleaseBinaryAttestation; 5]> {
+    const KEYS: [&str; 29] = [
         "schema_version",
         "source_manifest_sha256",
         "cargo_lock_sha256",
@@ -1504,8 +1523,12 @@ fn parse_release_prebuilt_manifest(
         "kagami_sha256",
         "kagami_size_bytes",
         "kagami_mode_octal",
+        "irohad_taira_relative_path",
+        "irohad_taira_sha256",
+        "irohad_taira_size_bytes",
+        "irohad_taira_mode_octal",
     ];
-    const FIELD_COUNT: usize = 25;
+    const FIELD_COUNT: usize = 29;
     const BASE_FIELD_COUNT: usize = 9;
     let text = std::str::from_utf8(bytes)
         .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
@@ -1639,7 +1662,7 @@ fn parse_release_prebuilt_manifest(
         });
     }
     binaries.try_into().map_err(|_| {
-        eyre!("release prebuilt manifest must contain exactly four executable attestations")
+        eyre!("release prebuilt manifest must contain exactly five executable attestations")
     })
 }
 fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
@@ -2730,6 +2753,7 @@ impl Program {
         // Fast path via cache (only when no override is present)
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
+            Program::IrohadTaira => cached_binary_if_present(&IROHAD_TAIRA_BIN),
             Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
             Program::IrohadParliamentSigners => {
                 cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
@@ -2822,6 +2846,9 @@ impl Program {
                     Program::IrohadMessageControl => {
                         let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                     }
+                    Program::IrohadTaira => {
+                        let _ = IROHAD_TAIRA_BIN.set(found.clone());
+                    }
                     Program::IrohadParliamentSigners => {
                         let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
                     }
@@ -2866,6 +2893,9 @@ impl Program {
                 }
                 Program::IrohadMessageControl => {
                     let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                }
+                Program::IrohadTaira => {
+                    let _ = IROHAD_TAIRA_BIN.set(found.clone());
                 }
                 Program::IrohadParliamentSigners => {
                     let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());

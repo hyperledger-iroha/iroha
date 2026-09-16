@@ -1180,6 +1180,9 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         )
         .map(|()| std::process::ExitCode::SUCCESS);
     }
+    if let Some(result) = run_local_dataspace_profile(&args, io::stdout()) {
+        return result.map(|()| std::process::ExitCode::SUCCESS);
+    }
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
@@ -1312,6 +1315,21 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         context.transaction_metadata = Some(metadata);
     }
     map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
+}
+fn run_local_dataspace_profile(
+    args: &Args,
+    output: impl std::io::Write,
+) -> Option<ReportResult<(), MainError>> {
+    let Command::Taira(taira::Command::DataspaceDeploy(
+        taira_dataspace_deploy::Command::ExportProfile(command),
+    )) = &args.command
+    else {
+        return None;
+    };
+    Some((|| {
+        reject_irrelevant_local_tool_globals(args, "taira dataspace-deploy export-profile")?;
+        map_command_result(command.run_without_client_config(output))
+    })())
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.into_report().map_err(|report| {

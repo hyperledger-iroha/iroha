@@ -951,6 +951,7 @@ fn run_inner(
     startup_recovery: &super::StartupRecoveryPublisher,
 ) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
+        beacon_readiness,
         build_identity,
         config,
         common_config,
@@ -1149,6 +1150,7 @@ fn run_inner(
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            beacon_readiness,
             kagemusha_mint_finality_authority,
             network,
             block_rx,
@@ -1194,6 +1196,7 @@ fn run_inner(
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            beacon_readiness,
             kagemusha_mint_finality_authority,
             network,
             block_rx,

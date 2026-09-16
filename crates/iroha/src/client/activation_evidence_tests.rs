@@ -870,3 +870,194 @@ fn bridge_finality_next_reader_verification_failure_does_not_advance() {
     .expect("valid successor must verify after a rejected invalid signature");
     assert_eq!(actual, successor);
 }
+
+#[test]
+fn bridge_finality_reader_retries_only_backpressure_within_original_deadline() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    let expected = successor.clone();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observations = Arc::clone(&calls);
+    let started = std::time::Instant::now();
+    let deadline = started + Duration::from_secs(10);
+    let result = with_mock_http(
+        move |request| {
+            let mut observations = observations.lock().expect("observations");
+            observations.push((std::time::Instant::now(), request));
+            if observations.len() == 1 {
+                let mut response = empty_response(StatusCode::TOO_MANY_REQUESTS);
+                response
+                    .headers_mut()
+                    .insert("retry-after", "1".parse().unwrap());
+                Ok(response)
+            } else {
+                Ok(norito_response(StatusCode::OK, &expected))
+            }
+        },
+        |transport| {
+            let client = client_with_base_url(base_url())
+                .with_test_http_transport(transport)
+                .with_request_deadline(deadline);
+            mark_data_model_compatible(&client);
+            client.get_next_bridge_finality_proof(successor.block_header.height(), &mut verifier)
+        },
+    )
+    .expect("bounded retry accepts exact successor");
+    assert_eq!(result, successor);
+    let calls = calls.lock().expect("observations");
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].0.duration_since(calls[0].0) >= Duration::from_secs(1));
+    for (_, request) in calls.iter() {
+        assert_eq!(request.method, HttpMethod::GET);
+        assert_eq!(request.url.path(), "/v1/bridge/finality/2");
+        assert!(request.timeout.unwrap() <= deadline.duration_since(started));
+    }
+    assert!(calls[1].1.timeout.unwrap() < calls[0].1.timeout.unwrap());
+}
+
+#[test]
+fn bridge_finality_reader_rejects_unbounded_or_invalid_backpressure_without_advancing() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    let height = successor.block_header.height();
+    // A missing operation deadline, malformed/duplicate hints, an excessive delay,
+    // and non-429 errors must all make exactly one dispatch without changing trust.
+    for (status, hints, budget) in [
+        (StatusCode::TOO_MANY_REQUESTS, vec!["0"], None),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["-1"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["0", "1"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["18446744073709551615"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["1"],
+            Some(Duration::from_millis(500)),
+        ),
+        (
+            StatusCode::UNAUTHORIZED,
+            vec!["0"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            vec!["0"],
+            Some(Duration::from_secs(5)),
+        ),
+    ] {
+        let mut response = empty_response(status);
+        for hint in hints {
+            response
+                .headers_mut()
+                .append("retry-after", hint.parse().unwrap());
+        }
+        let (result, _) = capture_request(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            let client = budget.map_or_else(
+                || client.clone(),
+                |budget| client.with_request_deadline(std::time::Instant::now() + budget),
+            );
+            mark_data_model_compatible(&client);
+            client.get_next_bridge_finality_proof(height, &mut verifier)
+        });
+        assert!(result.is_err(), "{status} must fail");
+    }
+    let actual = capture_request(norito_response(StatusCode::OK, &successor), |transport| {
+        let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_next_bridge_finality_proof(height, &mut verifier)
+    })
+    .0
+    .expect("all failed reads retained the original chain anchor");
+    assert_eq!(actual, successor);
+}
+
+#[test]
+fn activation_evidence_backpressure_preserves_challenge_and_response_bounds() {
+    for hint in [None, Some("0")] {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let observations = Arc::clone(&calls);
+        let challenge = [0x73; 32];
+        with_mock_http(
+            move |request| {
+                let mut observations = observations.lock().unwrap();
+                observations.push(request);
+                if observations.len() == 1 {
+                    let mut response = empty_response(StatusCode::TOO_MANY_REQUESTS);
+                    if let Some(hint) = hint {
+                        response
+                            .headers_mut()
+                            .insert("retry-after", hint.parse().unwrap());
+                    }
+                    Ok(response)
+                } else {
+                    Ok(empty_response(StatusCode::CONFLICT))
+                }
+            },
+            |transport| {
+                let client = client_with_base_url(base_url())
+                    .with_test_http_transport(transport)
+                    .with_request_deadline(std::time::Instant::now() + Duration::from_secs(5));
+                let result = client
+                    .send_activation_evidence_read(
+                        "/v1/bridge/finality/2/attestation",
+                        2048,
+                        Some(challenge),
+                    )
+                    .expect("read-only retry");
+                assert_eq!(result.status(), StatusCode::CONFLICT);
+            },
+        );
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for request in calls.iter() {
+            assert_eq!(request.method, HttpMethod::GET);
+            assert_eq!(request.max_response_bytes, 2048);
+            let challenges: Vec<_> = request
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("x-iroha-finality-challenge"))
+                .collect();
+            assert_eq!(challenges.len(), 1);
+            assert_eq!(challenges[0].1, hex::encode(challenge));
+        }
+    }
+}
+
+#[test]
+fn bridge_finality_reader_expired_deadline_does_not_dispatch_or_advance() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    with_mock_http(
+        |_| panic!("expired deadline must not dispatch"),
+        |transport| {
+            let client = client_with_base_url(base_url())
+                .with_test_http_transport(transport)
+                .with_request_deadline(std::time::Instant::now());
+            mark_data_model_compatible(&client);
+            assert!(
+                client
+                    .get_next_bridge_finality_proof(successor.block_header.height(), &mut verifier)
+                    .is_err()
+            );
+            assert!(
+                client
+                    .verify_activation_evidence_successor(&successor, &mut verifier)
+                    .is_err()
+            );
+        },
+    );
+    verifier
+        .verify(&successor)
+        .expect("deadline retained original anchor");
+}

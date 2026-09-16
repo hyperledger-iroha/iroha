@@ -27,6 +27,9 @@ use tokio::time::{Instant, sleep, timeout_at};
 mod dataspace_deploy_cli;
 #[path = "support/multiroute.rs"]
 mod multiroute;
+#[cfg(unix)]
+#[path = "support/production_beacon_bootstrap.rs"]
+mod production_beacon_bootstrap;
 #[path = "support/runtime_catalog_transition.rs"]
 mod runtime_catalog_transition;
 

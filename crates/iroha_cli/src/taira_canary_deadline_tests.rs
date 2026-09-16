@@ -46,7 +46,20 @@ fn exercise_final_canary_deadline(applied: bool) {
             assert!(request.path.contains(&transaction.hash().to_string()));
             if observations.fetch_add(1, Ordering::SeqCst) == 0 {
                 thread::sleep(Duration::from_millis(100));
-                MockResponse::text(404, "absent")
+                let envelope = iroha_torii_shared::ErrorEnvelope::new(
+                    iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                    "Missing status.",
+                )
+                .with_details(iroha_torii_shared::ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
+                            &transaction.hash(),
+                            "global",
+                        ),
+                    ),
+                    ..iroha_torii_shared::ErrorDetails::default()
+                });
+                MockResponse::json(404, json::to_value(&envelope).unwrap())
             } else {
                 prepared_status_response(
                     &transaction,

@@ -932,6 +932,22 @@ fn certified_lane_block_read_rejects_qc_signature_mismatch() {
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.persist_committed_lane_block_session(&session, &signer_pops)
         .expect("persist certified lane block");
+    let (read_only, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_certified_lane_block_artifact_read_only(lane_id, lane_block_height)
+    });
+    assert_eq!(read_only.unwrap().unwrap().proposal, session.proposal);
+    assert_eq!(
+        validations, 1,
+        "strict retirement reads authenticate valid evidence"
+    );
+    let (completion, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_lane_completion_certificate(lane_id, lane_block_height)
+    });
+    assert_eq!(completion.unwrap().unwrap().proposal, session.proposal);
+    assert_eq!(
+        validations, 1,
+        "strict hydration reads authenticate valid evidence"
+    );
     let mut tampered = CertifiedLaneBlockArtifact::new(session, signer_pops);
     tampered.commit_qc.bls_aggregate_signature[0] ^= 0x01;
     let payload = tampered
@@ -955,6 +971,40 @@ fn certified_lane_block_read_rejects_qc_signature_mismatch() {
         kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "certified lane block reads must reject invalid QC aggregate signatures"
+    );
+    let retained = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
+    let (read_only, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_certified_lane_block_artifact_read_only(lane_id, lane_block_height)
+    });
+    assert!(
+        read_only.is_err(),
+        "strict retirement reader must reject invalid QC evidence"
+    );
+    assert_eq!(
+        validations, 1,
+        "the strict reader authenticates the occupied certificate"
+    );
+    let (completion, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_lane_completion_certificate(lane_id, lane_block_height)
+    });
+    assert!(
+        completion.is_err(),
+        "strict hydration reader must reject invalid QC evidence"
+    );
+    assert_eq!(
+        validations, 1,
+        "the strict reader authenticates the occupied certificate"
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        retained,
+        "strict readers must not repair occupied invalid evidence"
     );
 }
 #[test]
@@ -996,6 +1046,40 @@ fn certified_lane_block_read_rejects_qc_body_mismatch() {
         kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
         "certified lane block reads must reject QC bodies that drift from the proposal"
+    );
+    let retained = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
+    let (read_only, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_certified_lane_block_artifact_read_only(lane_id, lane_block_height)
+    });
+    assert!(
+        read_only.is_err(),
+        "strict retirement reader must reject invalid QC evidence"
+    );
+    assert_eq!(
+        validations, 1,
+        "the strict reader authenticates the occupied certificate"
+    );
+    let (completion, validations) = count_certified_artifact_validations_for_tests(|| {
+        kura.read_lane_completion_certificate(lane_id, lane_block_height)
+    });
+    assert!(
+        completion.is_err(),
+        "strict hydration reader must reject invalid QC evidence"
+    );
+    assert_eq!(
+        validations, 1,
+        "the strict reader authenticates the occupied certificate"
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        retained,
+        "strict readers must not repair occupied invalid evidence"
     );
 }
 #[test]

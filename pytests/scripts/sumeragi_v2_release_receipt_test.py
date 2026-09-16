@@ -650,7 +650,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "fe65c02642f1eba64e6ad356e12eaf4120c7ac42bb389d10cb7a14b609de2705"
+        "dcd28f4902a450d914140e008d3a4a99067064e91f3dfc80ea73f4351a7b9e9a"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -1399,6 +1399,7 @@ def make_prebuilt_binary_bundle(
         ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
+        ("irohad_taira", "release/iroha3d_taira"),
     )
     binaries: list[Path] = []
     fields = {
@@ -3044,6 +3045,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
                     f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
                     f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
+                    f"TEST_NETWORK_BIN_IROHAD_TAIRA={seed_program_target / 'release' / 'iroha3d_taira'} "
                     "CARGO_NET_OFFLINE=true "
                     "IROHA_TEST_REQUIRE_NETWORK=1 "
                     "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "

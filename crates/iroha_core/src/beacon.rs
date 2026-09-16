@@ -10,6 +10,9 @@
 //! The first-release module exposes only this threshold-beacon construction;
 //! retired per-validator VRF constructions are deliberately absent.
 
+/// Height-bound production readiness, separate from consensus admission.
+pub mod readiness;
+
 use iroha_crypto::{
     Hash,
     threshold_bls::{
@@ -1464,6 +1467,23 @@ impl ValidatedGlobalThresholdBeaconSessionV1 {
 /// consensus reducer, so an unavailable or faulty provider can stop progress
 /// but cannot inject unauthenticated randomness.
 pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
+    /// Attest live custody of the exact validated session and one-based signer seat.
+    ///
+    /// This performs no signing. Providers must query the same custody owner
+    /// used by `sign_partial`; public transcript membership alone is insufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed error for unavailable custody or a session/seat mismatch.
+    fn attest_partial_signing_capability(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalThresholdBeaconCapabilityErrorV1,
+    >;
+
     /// Sign the exact pulse payload for the supplied fully validated session.
     ///
     /// # Errors
@@ -1488,6 +1508,87 @@ pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
     fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
         false
     }
+}
+
+/// Non-secret exact-session custody result from an authenticated runtime owner.
+///
+/// This value does not prove ledger activation or authorize a pulse. It must be
+/// obtained through a live provider lookup and matched to the committed session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalThresholdBeaconPartialSigningCapabilityV1 {
+    session_id: [u8; 32],
+    transcript_hash: [u8; 32],
+    signer_index: u16,
+}
+
+impl GlobalThresholdBeaconPartialSigningCapabilityV1 {
+    /// Construct the public result after the provider has checked actual custody.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a seat absent from the completely validated transcript.
+    pub fn for_validated_session(
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        signer_index: u16,
+    ) -> Result<Self, GlobalThresholdBeaconCapabilityErrorV1> {
+        if !session
+            .record()
+            .public_shares
+            .iter()
+            .any(|share| share.index == signer_index)
+        {
+            return Err(GlobalThresholdBeaconCapabilityErrorV1::InvalidRequest);
+        }
+        Ok(Self {
+            session_id: session.record().session_id,
+            transcript_hash: session.record().transcript_hash,
+            signer_index,
+        })
+    }
+
+    /// Return the public key-session identity.
+    #[must_use]
+    pub const fn session_id(self) -> [u8; 32] {
+        self.session_id
+    }
+
+    /// Return the exact public transcript hash.
+    #[must_use]
+    pub const fn transcript_hash(self) -> [u8; 32] {
+        self.transcript_hash
+    }
+
+    /// Return the one-based signer seat.
+    #[must_use]
+    pub const fn signer_index(self) -> u16 {
+        self.signer_index
+    }
+
+    /// Match the live result to the exact requested session and signer seat.
+    #[must_use]
+    pub fn matches(
+        self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        signer_index: u16,
+    ) -> bool {
+        self.session_id == session.record().session_id
+            && self.transcript_hash == session.record().transcript_hash
+            && self.signer_index == signer_index
+    }
+}
+
+/// Closed errors for non-signing global-beacon custody lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum GlobalThresholdBeaconCapabilityErrorV1 {
+    /// The secure runtime or authenticated lookup is unavailable.
+    #[error("global beacon capability attestation is unavailable")]
+    Unavailable,
+    /// The exact session and signer seat are not owned by this provider.
+    #[error("global beacon capability is not owned")]
+    NotOwned,
+    /// The requested seat is absent from the validated public transcript.
+    #[error("global beacon capability request is invalid")]
+    InvalidRequest,
 }
 
 /// Process-local zeroizing software owner for one adaptive beacon signing share.
@@ -1563,6 +1664,25 @@ impl InMemoryGlobalThresholdBeaconPartialSignerV1 {
 }
 
 impl GlobalThresholdBeaconPartialSignerV1 for InMemoryGlobalThresholdBeaconPartialSignerV1 {
+    fn attest_partial_signing_capability(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        let expected = GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+            session,
+            expected_signer_index,
+        )?;
+        if session.record() != self.session.record() || expected_signer_index != self.signer_index()
+        {
+            return Err(GlobalThresholdBeaconCapabilityErrorV1::NotOwned);
+        }
+        Ok(expected)
+    }
+
     fn sign_partial(
         &self,
         session: &ValidatedGlobalThresholdBeaconSessionV1,
@@ -1732,6 +1852,28 @@ impl Default for RuntimeGlobalThresholdBeaconShareCustodyV1 {
 }
 
 impl GlobalThresholdBeaconPartialSignerV1 for RuntimeGlobalThresholdBeaconShareCustodyV1 {
+    fn attest_partial_signing_capability(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+            session,
+            expected_signer_index,
+        )?;
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| GlobalThresholdBeaconCapabilityErrorV1::Unavailable)?;
+        let signer = sessions
+            .get(&session.record().session_id)
+            .ok_or(GlobalThresholdBeaconCapabilityErrorV1::NotOwned)?;
+        signer.attest_partial_signing_capability(session, expected_signer_index)
+    }
+
     fn sign_partial(
         &self,
         session: &ValidatedGlobalThresholdBeaconSessionV1,
@@ -3021,6 +3163,18 @@ pub(crate) mod tests {
     }
 
     impl GlobalThresholdBeaconPartialSignerV1 for FailOnceBeaconSigner {
+        fn attest_partial_signing_capability(
+            &self,
+            session: &ValidatedGlobalThresholdBeaconSessionV1,
+            expected_signer_index: u16,
+        ) -> Result<
+            GlobalThresholdBeaconPartialSigningCapabilityV1,
+            GlobalThresholdBeaconCapabilityErrorV1,
+        > {
+            self.inner
+                .attest_partial_signing_capability(session, expected_signer_index)
+        }
+
         fn sign_partial(
             &self,
             session: &ValidatedGlobalThresholdBeaconSessionV1,
@@ -3040,6 +3194,18 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-network-parliament-signers")]
     impl GlobalThresholdBeaconPartialSignerV1 for InvalidOutboundTestBeaconSigner {
+        fn attest_partial_signing_capability(
+            &self,
+            session: &ValidatedGlobalThresholdBeaconSessionV1,
+            expected_signer_index: u16,
+        ) -> Result<
+            GlobalThresholdBeaconPartialSigningCapabilityV1,
+            GlobalThresholdBeaconCapabilityErrorV1,
+        > {
+            let _ = (session, expected_signer_index);
+            Err(GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+        }
+
         fn sign_partial(
             &self,
             session: &ValidatedGlobalThresholdBeaconSessionV1,
@@ -3051,6 +3217,58 @@ pub(crate) mod tests {
         fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing() {
+        let fixture = adaptive_beacon_fixture();
+        let custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
+        assert_eq!(
+            custody.attest_partial_signing_capability(&fixture.session, 1),
+            Err(GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+        );
+        for index in [0, 5] {
+            assert_eq!(
+                custody.attest_partial_signing_capability(&fixture.session, index),
+                Err(GlobalThresholdBeaconCapabilityErrorV1::InvalidRequest)
+            );
+        }
+        custody
+            .insert_validated_share(live_fixture_in_memory_signer(&fixture, 1))
+            .expect("own seat one");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FailOnceBeaconSigner {
+            inner: Arc::new(custody),
+            attempts: Arc::clone(&attempts),
+        };
+        let capability = provider
+            .attest_partial_signing_capability(&fixture.session, 1)
+            .expect("exact live custody");
+        assert!(capability.matches(&fixture.session, 1));
+        assert_eq!(capability.session_id(), fixture.session.record().session_id);
+        assert_eq!(
+            capability.transcript_hash(),
+            fixture.session.record().transcript_hash
+        );
+        assert_eq!(capability.signer_index(), 1);
+        assert!(!capability.matches(&fixture.session, 2));
+        assert_eq!(
+            provider.attest_partial_signing_capability(&fixture.session, 2),
+            Err(GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+        );
+        let mut other = adaptive_dkg_session_fixture();
+        other.session_id = [0xC7; 32];
+        let other = adaptive_beacon_fixture_for_session(other);
+        assert_eq!(
+            provider.attest_partial_signing_capability(&other.session, 1),
+            Err(GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+        );
+        assert!(!capability.matches(&other.session, 1));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            0,
+            "capability must never call sign_partial"
+        );
     }
 
     #[test]
@@ -3184,7 +3402,7 @@ pub(crate) mod tests {
         (governance_attempt_id, request_ids, attempt)
     }
 
-    fn live_producer_context(
+    pub(super) fn live_producer_context(
         keys: &[KeyPair],
         network_id: NetworkId,
         parent_hash: HashOf<BlockHeader>,

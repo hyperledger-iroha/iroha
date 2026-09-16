@@ -187,6 +187,30 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
     );
 }
 #[tokio::test]
+async fn readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress() {
+    let ingress = iroha_core::sumeragi::SumeragiIngressTestHarness::new(4);
+    let handle = ingress.handle();
+    assert!(handle.admission_ready());
+    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+        .unwrap_or_else(|_| panic!("unique readiness app"));
+    app.sumeragi = Some(handle.clone());
+    let response = handler_readyz(State(Arc::new(app))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .expect("readiness body");
+    assert_eq!(
+        body.as_ref(),
+        b"Global beacon readiness is not initialized for the active height"
+    );
+    assert!(
+        handle.admission_ready(),
+        "readiness must not close setup ingress"
+    );
+    assert!(handle.notify_pending_queue_plan_admission());
+}
+
+#[tokio::test]
 async fn readiness_rejects_closed_consensus_ingress() {
     let mut app = Arc::try_unwrap(mk_app_state_for_tests())
         .unwrap_or_else(|_| panic!("unique readiness app"));

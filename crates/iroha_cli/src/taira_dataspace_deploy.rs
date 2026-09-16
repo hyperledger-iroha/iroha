@@ -43,8 +43,13 @@ use std::{
 
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
+#[path = "taira_dataspace_deploy_profile.rs"]
+mod profile;
 
 pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
+pub(crate) use finality::authenticated_height::{
+    AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
+};
 
 pub(crate) fn validate_deployment_trust(
     trust: &DeploymentTrustV1,
@@ -60,6 +65,8 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 /// Plan, advance, or inspect a single durable dataspace deployment.
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum Command {
+    /// Export retained-network expectations from independently selected public inputs.
+    ExportProfile(profile::ExportProfile),
     /// Generate native deployment intent from public files and current namespace policies.
     Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
@@ -1016,6 +1023,9 @@ impl Run for Command {
         )?;
         let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
         match self {
+            Self::ExportProfile(_) => eyre::bail!(
+                "`taira dataspace-deploy export-profile` must run before client configuration is loaded"
+            ),
             Self::Init(args) => initialize(context, args),
             Self::Plan(args) => plan(context, args),
             Self::Apply(args) => saved(context, args, true),

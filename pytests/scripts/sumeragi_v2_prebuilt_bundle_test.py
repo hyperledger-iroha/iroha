@@ -27,6 +27,7 @@ RELATIVE_BINARIES = (
     ),
     ("iroha", "release/iroha", "default"),
     ("kagami", "release/kagami", "default"),
+    ("irohad_taira", "release/iroha3d_taira", "default"),
 )
 
 
@@ -132,7 +133,7 @@ def test_create_publishes_exact_v2_manifest_and_read_only_single_link_bundle(
     assert isinstance(manifest_sha256, str)
 
     fields = _manifest_fields(bundle)
-    assert len(fields) == 25
+    assert len(fields) == 29
     values = dict(fields)
     assert fields[:9] == [
         ("schema_version", "2"),
@@ -223,16 +224,18 @@ def test_validate_rejects_forged_external_manifest_anchor(tmp_path: Path) -> Non
         )
 
 
+@pytest.mark.parametrize("binary_name", ("iroha3d", "iroha3d_taira"))
 @pytest.mark.parametrize("mutation", ("binary", "symlink", "hardlink", "manifest"))
 def test_validate_rejects_mutated_or_non_private_artifacts(
     tmp_path: Path,
     mutation: str,
+    binary_name: str,
 ) -> None:
     fixture = _fixture(tmp_path)
     repo = Path(fixture["repo"])
     bundle = Path(fixture["bundle"])
     manifest_sha256 = str(fixture["manifest_sha256"])
-    binary = bundle / "release" / "iroha3d"
+    binary = bundle / "release" / binary_name
     release_dir = binary.parent
     original_binary = binary.read_bytes()
     original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
@@ -603,3 +606,23 @@ def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
         output.unlink()
         output.write_bytes(original_output)
         output.chmod(original_output_mode)
+
+
+@pytest.mark.parametrize("mutation", ("missing-binary", "old-four-entry-manifest"))
+def test_production_launcher_is_mandatory_even_with_reanchored_manifest(tmp_path: Path, mutation: str) -> None:
+    fixture = _fixture(tmp_path)
+    bundle = Path(fixture["bundle"])
+    manifest_sha256 = str(fixture["manifest_sha256"])
+    if mutation == "missing-binary":
+        (bundle / "release").chmod(0o700)
+        (bundle / "release/iroha3d_taira").unlink()
+        (bundle / "release").chmod(0o500)
+    else:
+        fields = [(key, value) for key, value in _manifest_fields(bundle)
+                  if not key.startswith("irohad_taira_")]
+        assert len(fields) == 25
+        manifest_sha256 = _replace_manifest(bundle, _encode_fields(fields))
+    with pytest.raises(PrebuiltBundleError):
+        validate_bundle(Path(fixture["repo"]), SOURCE_MANIFEST,
+                        Path(fixture["cargo_target"]), Path(fixture["artifact_root"]),
+                        bundle, manifest_sha256)

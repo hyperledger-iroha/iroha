@@ -14245,7 +14245,8 @@ async fn handler_health(
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Admission remains unavailable until Queue startup reconciliation finishes.
+/// probe. Queue startup and consensus admission must be available. Beacon setup
+/// additionally gates this production probe while leaving installation ingress open.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
@@ -14272,6 +14273,11 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
             "Consensus admission is unavailable",
         )
             .into_response();
+    }
+    if let Some(sumeragi) = &app.sumeragi
+        && let Err(reason) = sumeragi.global_beacon_readiness(app.state.as_ref())
+    {
+        return (StatusCode::SERVICE_UNAVAILABLE, reason.to_string()).into_response();
     }
     let replay_archive_required = app
         .state

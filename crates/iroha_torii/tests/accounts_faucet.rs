@@ -1042,7 +1042,7 @@ async fn accounts_faucet_policy_exposes_exact_public_configuration() {
     assert_eq!(resp.headers()[http::header::CACHE_CONTROL], "no-store");
     assert_eq!(
         resp.headers()[http::header::CONTENT_TYPE],
-        "application/json"
+        "application/json; charset=utf-8"
     );
     let body = to_bytes(resp.into_body(), 4096).await.expect("policy body");
     let payload: norito::json::Value = norito::json::from_slice(&body).expect("policy JSON");

@@ -3,6 +3,9 @@
 compile_error!(
     "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
 );
+/// Native fresh global-beacon provisioning under centralized deployment custody.
+#[cfg(unix)]
+pub mod beacon_bootstrap;
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -904,6 +907,10 @@ pub struct Args {
         hide = true
     )]
     test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
+    /// Use real consumed Taira custody in the explicit Core-only native fixture.
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    #[arg(long = "test-network-production-beacon-custody", hide = true)]
+    test_network_production_beacon_custody: bool,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -13681,6 +13688,10 @@ fn configure_reports(args: &Args) {
 /// runtime-provider bindings.
 pub fn main_entry() {
     soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    if taira_runtime_signer::dispatch_production_beacon_fixture_if_requested() {
+        return;
+    }
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
@@ -14028,6 +14039,11 @@ fn run_main_with_config_guard(
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    if args.test_network_production_beacon_custody && launcher_config_guard.is_none() {
+        return Err(Report::new(MainError::Config)
+            .attach("production beacon fixture requires its explicit launcher registry boundary"));
+    }
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
     configure_reports(&args);
@@ -19657,6 +19673,8 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
+                #[cfg(all(unix, feature = "test-network-message-control"))]
+                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,
@@ -19722,6 +19740,8 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
+                #[cfg(all(unix, feature = "test-network-message-control"))]
+                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,
