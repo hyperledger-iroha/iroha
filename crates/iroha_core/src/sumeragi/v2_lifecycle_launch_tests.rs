@@ -2230,10 +2230,19 @@ fn live_terminal_height_authenticates_after_closed_drain_without_a_successor() {
             "drain_finalized_lane_relay_prefix(",
             "ensure_closed_drained_cut()",
             "if context.height == u64::MAX",
+        ],
+    );
+    let terminal_height = source_region(
+        terminal,
+        "if context.height == u64::MAX",
+        "return Ok(HeightRunOutcome::Terminal);",
+    );
+    assert_source_tokens_in_order(
+        terminal_height,
+        &[
             "executor.durable_finality()",
             "authenticate_terminal_complete_tip(",
             "activated.into_clean_shutdown(&mut active_runner)?",
-            "return Ok(HeightRunOutcome::Terminal);",
         ],
     );
     assert_forbidden_source_tokens(

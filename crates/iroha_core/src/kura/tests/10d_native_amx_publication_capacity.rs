@@ -652,7 +652,7 @@ fn native_amx_initial_store_rejects_one_byte_below_complete_publication_peak() {
         let _canonical = fixture.kura.canonical_chain_lock.lock();
         fixture
             .kura
-            .prepare_native_amx_publication_index(&fixture.block, None, None)
+            .prepare_native_amx_publication_index(&fixture.block, None, None, false)
             .expect("prepare the exact durable carrier locator without publishing it")
     };
     assert!(

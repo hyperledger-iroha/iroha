@@ -56,8 +56,12 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         },
     ])
     .expect("valid Native fixture dataspace catalog");
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
     state
-        .set_nexus(nexus)
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .expect("authenticate the Native fixture primary before publishing startup policy");
+    state
+        .set_nexus_from_config(nexus)
         .expect("install Native fixture dataspace before genesis");
     let lane = LaneConfig {
         id: participant_lane,

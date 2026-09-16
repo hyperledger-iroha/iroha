@@ -770,9 +770,39 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         committed_lane_block_session_for_kura_proposal(&recreated_b.origin_proposal, &signer);
     let (kura, _) = open_historical_recovery_fixture(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_b);
-    let recreate_lane_storage = |stage: &str| {
+    let recreate_lane_storage = |stage: &str,
+                                 previous_incarnation: Hash,
+                                 previous_activation_height: u64,
+                                 incarnation: Hash,
+                                 activation_height: u64| {
+        // The prior synthetic custody is retained outside Kura for delayed-replica
+        // injection. Recreate its empty binding before the real geometry owner
+        // publishes the next incarnation and its restart journal together.
         kura.reconcile_lane_segments_for_testing(&[], &[], &[(lane, lane)])
-            .unwrap_or_else(|error| panic!("provision {stage} lane storage: {error:?}"));
+            .unwrap_or_else(|error| panic!("provision {stage} prior binding: {error:?}"));
+        kura.install_lane_incarnation_marker_for_test(
+            lane, previous_incarnation, previous_activation_height,
+        ).expect("restore the prior empty binding for the geometry transition");
+        let mut incarnations = BTreeMap::new();
+        let mut activations = BTreeMap::new();
+        for entry in lane_config.entries() {
+            let (incarnation, activation) = kura.active_lane_incarnation_marker(entry)
+                .expect("read the admitted fixture generation");
+            incarnations.insert(entry.lane_id, incarnation);
+            activations.insert(entry.lane_id, activation);
+        }
+        let mut updated_incarnations = incarnations.clone();
+        updated_incarnations.insert(lane.lane_id, incarnation);
+        let mut updated_activations = activations.clone();
+        updated_activations.insert(lane.lane_id, activation_height);
+        kura.apply_lane_geometry_transition(
+            &lane_config, &lane_config, &incarnations, &updated_incarnations,
+            &activations, &updated_activations, &BTreeSet::from([lane.lane_id]),
+        ).unwrap_or_else(|error| panic!("provision {stage} lane storage: {error:?}"));
+        kura.mark_lane_geometry_catalog_published(
+            &lane_config, &updated_incarnations, &updated_activations, None,
+        ).expect("publish the exact replacement generation for restart");
+        kura.replace_lane_storage_entries_for_test(&lane_config);
         let blocks = lane.blocks_dir(temp_dir.path());
         for file_name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
             assert!(
@@ -828,10 +858,10 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .to_path_buf();
     let first_b_archive = archive_dir.path().join("incarnation-b-first");
     fs::rename(lane.blocks_dir(temp_dir.path()), &first_b_archive)
-        .expect("archive first incarnation B");
+        .expect("archive first incarnation B outside the active store");
     let archived_first_b_record = first_b_archive.join(first_b_record_relative);
     assert!(archived_first_b_record.is_file());
-    recreate_lane_storage("incarnation-A");
+    recreate_lane_storage("incarnation-A", incarnation_b, 0, incarnation_a, 60);
     assert!(
         !Kura::historical_autonomous_recovery_path_for_entry(
             lane,
@@ -841,8 +871,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .exists(),
         "incarnation-A storage must not inherit first-B recovery bytes",
     );
-    kura.install_lane_incarnation_marker_for_test(lane, incarnation_a, 60)
-        .expect("activate intermediate incarnation A");
     assert_eq!(
         kura.active_lane_incarnation_marker(lane)
             .expect("read incarnation-A marker"),
@@ -867,10 +895,10 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .to_path_buf();
     let incarnation_a_archive = archive_dir.path().join("incarnation-a");
     fs::rename(lane.blocks_dir(temp_dir.path()), &incarnation_a_archive)
-        .expect("archive intermediate incarnation A");
+        .expect("archive intermediate incarnation A outside the active store");
     let archived_incarnation_a_record = incarnation_a_archive.join(incarnation_a_record_relative);
     assert!(archived_incarnation_a_record.is_file());
-    recreate_lane_storage("recreated-B");
+    recreate_lane_storage("recreated-B", incarnation_a, 60, incarnation_b, 100);
     assert!(
         !Kura::historical_autonomous_recovery_path_for_entry(
             lane,
@@ -880,8 +908,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .exists(),
         "recreated-B storage must not inherit earlier B/A recovery bytes",
     );
-    kura.install_lane_incarnation_marker_for_test(lane, incarnation_b, 100)
-        .expect("activate recreated incarnation B with a fresh activation fence");
     assert_eq!(
         kura.active_lane_incarnation_marker(lane)
             .expect("read recreated-B marker"),

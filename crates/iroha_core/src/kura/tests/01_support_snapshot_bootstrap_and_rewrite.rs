@@ -663,7 +663,7 @@ fn store_indexed_reservation_carrier(
 ) {
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next_with_results();
-    let raw_carrier = blocks.next_with_results();
+    let raw_carrier = blocks.next_empty_with_results();
     let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
@@ -687,18 +687,17 @@ fn store_indexed_reservation_carrier(
         &RuntimeLaneConfig::default(),
         &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
     );
-    let mut executed_carrier = raw_carrier.as_ref().clone();
-    attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut entry);
+    let carrier = bind_merge_entry_to_carrier(raw_carrier, &mut entry);
     assert!(
         carrier.has_results(),
         "a canonical reservation carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
         carrier.external_entrypoints_cloned().count(),
-        "the reservation carrier must contain one result per ordinary entrypoint"
+        0,
+        "the reservation carrier must keep certified external execution in its sidecar"
     );
+    assert_eq!(carrier.results().count(), 0);
     assert_eq!(
         entry
             .execution_batch

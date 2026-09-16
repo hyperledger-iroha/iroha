@@ -55,6 +55,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
     nexus.configured_lane_catalog = nexus.lane_catalog.clone();
     nexus.lane_config = lane_geometry;
     nexus.dataspace_catalog = (*dataspace_catalog).clone();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();

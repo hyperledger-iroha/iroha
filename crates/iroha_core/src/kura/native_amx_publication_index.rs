@@ -43,6 +43,8 @@ struct NativeAmxPublicationIndexRecord {
     merge_entry_hash: Option<HashOf<MergeLedgerEntry>>,
     before_marker: BlockStoreCommitMarker,
     replaced: Option<NativeAmxPublicationCarrier>,
+    /// Reopened publication of an authenticated, already committed carrier.
+    committed_repair: bool,
 }
 
 /// Fixed-field wire envelope. Neither block bodies nor unbounded collections
@@ -58,6 +60,7 @@ struct NativeAmxPublicationIndexRecordV1 {
     merge_entry_hash: Option<HashOf<MergeLedgerEntry>>,
     before_marker: BlockStoreCommitMarker,
     replaced: Option<(u64, HashOf<BlockHeader>, Hash)>,
+    committed_repair: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +83,17 @@ impl NativeAmxPublicationIndexRecord {
         {
             return Err("invalid Native publication index height or pre-admission marker");
         }
+        if self.committed_repair {
+            return if self.replaced.is_none()
+                && self.carrier.height <= before.count
+                && (self.carrier.height != before.count
+                    || Some(self.carrier.block_hash) == before.tip_hash)
+            {
+                Ok(())
+            } else {
+                Err("Native publication repair is outside its authenticated committed frontier")
+            };
+        }
         match self.replaced {
             None if before.count.checked_add(1) == Some(self.carrier.height) => {}
             Some(old) if old.height == self.carrier.height
@@ -100,6 +114,7 @@ impl NativeAmxPublicationIndexRecord {
             merge_entry_hash: self.merge_entry_hash,
             before_marker: self.before_marker.clone(),
             replaced: self.replaced.map(|old| (old.height, old.block_hash, old.executed_wire_hash)),
+            committed_repair: self.committed_repair,
         }
     }
 
@@ -131,6 +146,7 @@ impl NativeAmxPublicationIndexRecord {
             },
             merge_entry_hash: wire.merge_entry_hash,
             before_marker: wire.before_marker,
+            committed_repair: wire.committed_repair,
             replaced: wire.replaced.map(|(height, block_hash, executed_wire_hash)|
                 NativeAmxPublicationCarrier { height, block_hash, executed_wire_hash }),
         };
@@ -165,7 +181,7 @@ impl NativeAmxPublicationIndexRecord {
         if selected_carrier == Some(self.carrier) {
             return Ok(NativeAmxPublicationIndexResolution::Committed);
         }
-        if selected_marker == &self.before_marker {
+        if !self.committed_repair && selected_marker == &self.before_marker {
             match self.replaced {
                 None if selected_carrier.is_none() =>
                     return Ok(NativeAmxPublicationIndexResolution::ProvenUncommitted),
@@ -369,11 +385,14 @@ impl Kura {
     /// Caller holds prune then canonical ownership. This captures the already
     /// resolved durable frontier before taking the lower-order sidecar lock.
     /// Exact retries reuse the original record, not the now-advanced marker.
+    /// Repair admission additionally verifies the already committed complete carrier;
+    /// its frontier can never authorize uncommitted-publication retirement.
     fn prepare_native_amx_publication_index(
         &self,
         block: &SignedBlock,
         merge_entry: Option<&MergeLedgerEntry>,
         replaced: Option<&SignedBlock>,
+        committed_repair: bool,
     ) -> Result<NativeAmxPublicationIndexPublication> {
         let carrier = Self::native_amx_publication_carrier(block)?;
         let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, merge_entry)
@@ -404,6 +423,27 @@ impl Kura {
         } else {
             false
         };
+        if committed_repair {
+            let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {
+                Error::PruneIntentConflict("Native repair carrier height is zero".to_owned())
+            })?;
+            let selected = self
+                .get_block_without_merge_sidecar(height)
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native repair lacks its selected complete carrier".to_owned(),
+                    )
+                })?;
+            if replaced.is_some()
+                || carrier.height > before_marker.count
+                || Self::native_amx_publication_carrier(&selected)? != carrier
+                || self.durable_hash_ignoring_poison(carrier.height)? != Some(carrier.block_hash)
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native repair differs from its selected complete committed carrier".to_owned(),
+                ));
+            }
+        }
         let _sidecar = self.sidecar_lock.lock();
         let inventory = Self::read_native_amx_publication_index_for_store(&self.store_root)?;
         if manifest.count() == 0 && !inventory.permits_ordinary_replacement(carrier, replaced_carrier) {
@@ -424,9 +464,11 @@ impl Kura {
             let record = NativeAmxPublicationIndexRecord {
                 carrier, merge_entry_hash, before_marker,
                 replaced: replaced_carrier,
+                committed_repair,
             };
             record.validate().map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
-            if record.replaced.is_none() && block.header().prev_block_hash() != record.before_marker.tip_hash {
+            if !record.committed_repair && record.replaced.is_none()
+                && block.header().prev_block_hash() != record.before_marker.tip_hash {
                 return Err(Error::PruneIntentConflict("Native publication append does not extend its exact pre-admission marker".to_owned()));
             }
             record
@@ -715,6 +757,7 @@ mod native_amx_publication_index_tests {
             merge_entry_hash: None,
             before_marker: BlockStoreCommitMarker::new(0, None),
             replaced: None,
+            committed_repair: false,
         }
     }
 
@@ -755,6 +798,77 @@ mod native_amx_publication_index_tests {
         assert!(record.validate().is_ok());
         record.replaced = Some(record.carrier);
         assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn committed_repair_roundtrip_preserves_earlier_carrier_below_ordinary_tip() {
+        let native = carrier(1, 11, 12);
+        let later = carrier(2, 31, 32);
+        let marker = BlockStoreCommitMarker::new(2, Some(later.block_hash));
+        let record = NativeAmxPublicationIndexRecord {
+            before_marker: marker.clone(),
+            committed_repair: true,
+            ..initial()
+        };
+        let bytes = record
+            .encoded()
+            .expect("committed repair has an exact bounded frame");
+        assert_eq!(
+            NativeAmxPublicationIndexRecord::decode(&bytes).unwrap(),
+            record
+        );
+        let selected = inventory(vec![record.clone()])
+            .selection_for_resolved_marker(&marker, |height| {
+                Ok(match height {
+                    1 => Some(native.block_hash),
+                    2 => Some(later.block_hash),
+                    _ => None,
+                })
+            })
+            .expect("ordinary successor preserves committed repair ownership");
+        assert_eq!(selected.pins, BTreeMap::from([(1, native.block_hash)]));
+        assert_eq!(selected.selected_candidates, BTreeSet::from([native]));
+        assert_eq!(
+            record
+                .classify_resolved_carrier(&marker, Some(native))
+                .unwrap(),
+            NativeAmxPublicationIndexResolution::Committed
+        );
+        for selected in [None, Some(carrier(1, 11, 99)), Some(carrier(1, 71, 72))] {
+            assert_eq!(
+                record.classify_resolved_carrier(&marker, selected).unwrap(),
+                NativeAmxPublicationIndexResolution::RequiresRetirementProof,
+                "a repair's pre-admission frontier cannot prove it uncommitted"
+            );
+        }
+        assert_eq!(
+            record
+                .classify_resolved_carrier(&BlockStoreCommitMarker::new(0, None), None)
+                .unwrap(),
+            NativeAmxPublicationIndexResolution::RequiresRetirementProof
+        );
+    }
+
+    #[test]
+    fn committed_repair_rejects_future_height_tip_mismatch_and_replacement() {
+        let mut record = NativeAmxPublicationIndexRecord {
+            committed_repair: true,
+            ..initial()
+        };
+        assert!(
+            record.validate().is_err(),
+            "an uncommitted carrier is not a repair"
+        );
+        record.before_marker = BlockStoreCommitMarker::new(1, Some(record.carrier.block_hash));
+        assert!(record.validate().is_ok());
+        record.before_marker.tip_hash = Some(carrier(1, 71, 72).block_hash);
+        assert!(record.validate().is_err(), "tip identity must be exact");
+        record.before_marker.tip_hash = Some(record.carrier.block_hash);
+        record.replaced = Some(carrier(1, 11, 99));
+        assert!(
+            record.validate().is_err(),
+            "repair never grants replacement authority"
+        );
     }
 
     #[test]

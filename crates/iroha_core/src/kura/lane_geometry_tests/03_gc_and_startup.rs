@@ -8,7 +8,7 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
     ] {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join(format!("kura-stage-{stage}"));
-        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let kura = open_anchored_geometry_kura(&root, &initial_and_extended_configs().0, initial_geometry().0[&LaneId::SINGLE]);
         let fixture = prepare_retired_geometry_archive(&kura, &root);
         let transition_roots = kura
             .read_lane_geometry_journal()

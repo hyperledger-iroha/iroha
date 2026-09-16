@@ -23953,11 +23953,11 @@ pub(crate) mod valid {
                 result.expect("rejection-only block should not be treated as empty");
             assert_eq!(valid_block.as_ref().external_transactions().count(), 1);
             assert!(valid_block.as_ref().error(0).is_some());
-            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(1));
+            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(0));
             assert_eq!(
                 state_block.committed_fragment_count(),
-                1,
-                "accepted blocks still commit the deterministic pipeline-event fragment"
+                0,
+                "rejected transactions and unmatched pipeline events commit no fragments"
             );
         }
         #[test]
@@ -24014,16 +24014,26 @@ pub(crate) mod valid {
             assert!(matches!(
                 err.as_ref(),
                 BlockValidationError::CommittedFragmentCountMismatch {
-                    expected: 1,
+                    expected: 0,
                     actual: 99,
                 }
             ));
         }
         #[test]
         fn advertised_zero_committed_fragment_count_is_rejected() {
+            use iroha_data_model::IntoKeyValue;
+
             setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             let prev_committed = state.view().latest_block().expect("fixture parent");
             let (authority, signer) = gen_account_in("wonderland");
+            // This transaction must succeed so an advertised zero contradicts
+            // a real applied fragment, rather than an unmatched pipeline event.
+            let (account_id, account_value) = Account::new(authority.clone())
+                .build(&authority)
+                .into_key_value();
+            let mut accounts = state.world.accounts.block();
+            accounts.insert(account_id, account_value);
+            accounts.commit();
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let tx = TransactionBuilder::new_with_time_source(
                 state.network_id,

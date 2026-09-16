@@ -2480,6 +2480,13 @@ pub(crate) mod tests {
         mut entry: MergeLedgerEntry,
     ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
         let mut block = empty_query_block(Some(previous));
+        let batch = entry
+            .execution_batch
+            .as_mut()
+            .expect("certified query carrier has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&block.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
         entry.merge_qc.view = block.header().view_change_index();
         entry.merge_qc.carrier_height = block.header().height().get();
         entry.merge_qc.carrier_parent_hash = block

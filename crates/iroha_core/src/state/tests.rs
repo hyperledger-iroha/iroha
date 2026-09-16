@@ -10860,6 +10860,9 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
 }
 state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    state
+        .prepare_configured_primary_geometry_anchor(&LaneCatalog::default())
+        .expect("admit the configured primary before testing physical geometry rollback");
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
@@ -19216,6 +19219,7 @@ fn invalid_startup_catalog_retains_authenticated_baseline_and_corrected_retry_su
             lane_catalog: configured.clone(),
             configured_lane_catalog: configured.clone(),
             dataspace_catalog: dataspace_catalog_with_extra(dataspace_id),
+            configured_dataspace_catalog: dataspace_catalog_with_extra(dataspace_id),
             ..Default::default()
         })
         .expect("corrected startup topology should publish the exact baseline");
@@ -20697,9 +20701,19 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
         Some(2)
     );
 
-    state
+    let error = state
         .set_nexus(dataspace_retirement_nexus!(retained retained))
-        .expect("remove dataspace route");
+        .expect_err("physical dataspace retirement requires an on-chain catalog transition");
+    assert!(matches!(error, LaneLifecycleError::RuntimeCatalog(_)));
+    assert!(state.world.axt_policies.view().get(&dataspace).is_some());
+    assert_eq!(
+        state.world.axt_handle_counters.view().get(&dataspace).map(AxtHandleCounterRecord::next),
+        Some(2),
+        "rejected configuration changes must preserve the permanent ratchet"
+    );
+    // Physical dataspaces remain part of the committed catalog. Revoke their
+    // authorization explicitly before testing policy recreation across restart.
+    state.remove_axt_policy(&dataspace);
     assert!(state.world.axt_policies.view().get(&dataspace).is_none());
     assert_eq!(
         state
@@ -20708,18 +20722,18 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
             .view()
             .get(&dataspace)
             .map(AxtHandleCounterRecord::next),
-        Some(2),
-        "dataspace removal must not delete the permanent high-water mark"
+        Some(3),
+        "policy removal must advance the permanent high-water mark"
     );
 
     seed_committed_height_for_state_test(&state, 1);
     seed_autoscale_sample_history_for_snapshot_test(&state);
-    let snapshot = norito::json::to_value(&state).expect("serialize removed dataspace state");
+    let snapshot = norito::json::to_value(&state).expect("serialize revoked dataspace policy state");
     let mut restarted =
         deserialize_state_snapshot_value_with_kura(snapshot, Arc::clone(&state.kura)).expect("restart from canonical snapshot");
     restarted
         .set_nexus(initial_nexus)
-        .expect("rebind the same dataspace route");
+        .expect("retain the same committed dataspace route after restart");
     restarted.set_axt_policy(
         dataspace,
         AxtPolicyEntry {
@@ -20737,7 +20751,7 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
             .view()
             .get(&dataspace)
             .map(|policy| policy.next_handle_counter),
-        Some(3),
+        Some(4),
         "policy recreation must project the transition-revoked permanent counter instead of resetting to one"
     );
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);

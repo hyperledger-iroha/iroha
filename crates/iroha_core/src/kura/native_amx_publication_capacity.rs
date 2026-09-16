@@ -762,7 +762,7 @@ impl Kura {
             return Ok(None);
         }
         let publication =
-            self.prepare_native_amx_publication_index(block, merge_entry, replaced)?;
+            self.prepare_native_amx_publication_index(block, merge_entry, replaced, false)?;
         let replaced = replaced
             .map(Self::native_amx_publication_carrier)
             .transpose()?;
@@ -944,7 +944,7 @@ impl Kura {
                 let merge =
                     self.native_amx_capacity_merge_entry_under_prune_and_canonical_guards(block)?;
                 let publication =
-                    self.prepare_native_amx_publication_index(block, merge.as_ref(), None)?;
+                    self.prepare_native_amx_publication_index(block, merge.as_ref(), None, true)?;
                 self.admit_native_amx_publication_capacity_plan(carrier, plan, None, publication)?
             }
             None => None,
@@ -1255,9 +1255,10 @@ impl Kura {
                 NativeAmxPublicationCarrier,
                 NativeAmxPublicationCapacityReservation,
             >::new();
-            // Every unfinished publication has an index persisted before its canonical
-            // carrier. A completed tip has no remaining publication obligation; deriving
-            // one from its body would resurrect retired routes during geometry replay.
+            // Initial publication persists its index before the canonical carrier;
+            // authenticated later repairs persist a new index before any repair write.
+            // A completed tip has no remaining publication obligation; deriving one
+            // from its body would resurrect retired routes during geometry replay.
             // Durable locators include unfinished carriers below an ordinary tip.
             // Classify every record against the independently resolved canonical marker;
             // an omitted body pin or a different hash never authorizes retirement.

@@ -1387,8 +1387,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             deterministic_snapshot,
         )
         .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation commits one deterministic pipeline-event fragment.
-    base_block.set_committed_fragment_count(1);
+    // Empty live validation has no transaction or matched trigger fragments.
+    base_block.set_committed_fragment_count(0);
     let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
     let mut committed = valid_block.commit_unchecked().unpack(|_| {});
     let mut replay_snapshot = committed
@@ -1422,6 +1422,10 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         )
         .expect("replay fixture should retain its AXT envelope");
     committed.as_mut().set_committed_fragment_count(1);
+    // The synthetic historical result has different autoscale inputs from the
+    // empty live validation above. Replay starts with its own pristine block.
+    drop(state_block);
+    let mut state_block = state.block(committed.as_ref().header());
     let peer_id = PeerId::new(signer.public_key().clone());
     let _ = state_block.apply_without_execution(&committed, vec![peer_id.clone()]);
     state_block
@@ -2367,8 +2371,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             deterministic_snapshot,
         )
         .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation commits one deterministic pipeline-event fragment.
-    base_block.set_committed_fragment_count(1);
+    // Empty live validation has no transaction or matched trigger fragments.
+    base_block.set_committed_fragment_count(0);
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
     let mut committed = valid.commit_unchecked().unpack(|_| {});
@@ -2400,6 +2404,10 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         )
         .expect("empty committed test block should attach AXT envelope results");
     committed.as_mut().set_committed_fragment_count(1);
+    // Replay the restored historical result independently of the empty live
+    // validation and its already evaluated autoscale sample.
+    drop(state_block);
+    let mut state_block = state.block(committed.as_ref().header());
     assert_eq!(
         committed
             .as_ref()

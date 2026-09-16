@@ -892,7 +892,7 @@ fn recovery_distinguishes_repeated_catalogs_by_retained_lineage_root() {
     let lineage_first_retired = Hash::new(b"lineage:first:retired");
     let lineage_second_active = Hash::new(b"lineage:second:active");
     let lineage_second_retired = Hash::new(b"lineage:second:retired");
-    let kura = open_kura(&root, &initial);
+    let kura = open_anchored_geometry_kura(&root, &initial, initial_incarnations[&LaneId::SINGLE]);
     kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
         &initial,
         &extended,
@@ -1118,7 +1118,7 @@ fn primary_relabel_files_applied_restart_recovers_exact_chain() {
     let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
     let (incarnations, activations) = initial_geometry();
-    let kura = open_kura(&root, &initial);
+    let kura = open_anchored_geometry_kura(&root, &initial, incarnations[&LaneId::SINGLE]);
     let _ = durable_geometry_snapshot_identity(&kura, 3);
     let expected_hashes = (1..=3)
         .map(|height| {
@@ -1199,7 +1199,7 @@ fn two_lane_relabel_files_applied_restart_recovers_exact_chain() {
         (LaneId::new(1), Hash::prehashed([0x32; Hash::LENGTH])),
     ]);
     let activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-    let kura = open_kura(&root, &initial);
+    let kura = open_anchored_geometry_kura(&root, &initial, incarnations[&LaneId::SINGLE]);
     install_retirement_test_lane_markers(&kura, &initial, &incarnations, &activations);
     let _ = durable_geometry_snapshot_identity(&kura, 3);
     let exact_chain = |kura: &Kura| {
@@ -1700,7 +1700,7 @@ fn transition_rejects_symlink_lane_target() {
 fn snapshot_checkpoint_compacts_only_proven_history_and_preserves_latest_recovery() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
-    let kura = open_kura(&root, &initial_and_extended_configs().0);
+    let kura = open_anchored_geometry_kura(&root, &initial_and_extended_configs().0, initial_geometry().0[&LaneId::SINGLE]);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     // Before checkpoint publication, both the old and current authoritative catalogs remain
     // recoverable from the retained transition chain.

@@ -9881,22 +9881,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        if let Some(consumer) = &pending.consumer {
-            let consumer_tag = match consumer {
-                StoreConsumer::Reducer { tag, .. } | StoreConsumer::LocalProposal { tag, .. } => {
-                    *tag
-                }
-            };
-            if !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest)) {
-                return Err(self.close(
-                    EffectExecutorError::Contract(
-                        "body-store completion consumer differs from its immutable pipeline owner"
-                            .to_owned(),
-                    ),
-                    services,
-                ));
-            }
-        }
         let stored_bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
             self.close(
                 EffectExecutorError::Contract(
@@ -10013,15 +9997,36 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         let coalesces_published_store_terminal =
             published_store_completion_plan.coalesces_terminal();
+        if let Some(consumer) = &pending.consumer {
+            let consumer_tag = match consumer {
+                StoreConsumer::Reducer { tag, .. } | StoreConsumer::LocalProposal { tag, .. } => {
+                    *tag
+                }
+            };
+            // Publishing the authenticated lifecycle marker retires its pipeline
+            // owner. The exact marker projection above can settle an older worker
+            // after that transfer, but cannot excuse a conflicting retained owner.
+            let transferred_to_published_marker =
+                coalesces_published_store_terminal && !self.body_pipeline_owners.contains_key(&key);
+            if !transferred_to_published_marker
+                && !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest))
+            {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "body-store completion consumer differs from its immutable pipeline owner"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+        }
         let coalesced_pipeline_owner = if coalesces_published_store_terminal {
             match (
                 &pending.consumer,
                 self.body_pipeline_owners.get(&key).copied(),
             ) {
                 (Some(_), Some(owner)) => Some(owner),
-                (Some(_), None) => unreachable!(
-                    "an attached Store completion preflighted its exact pipeline owner"
-                ),
+                (Some(_), None) => None,
                 (None, Some(owner))
                     if owner.manifest_hash == Some(HashOf::new(&manifest))
                         && (owner.tag == pending.task.tag()

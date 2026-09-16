@@ -2956,6 +2956,7 @@ state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_
     let mut dataspace = prospective.dataspace_catalog.by_id(DataSpaceId::UNIVERSAL).unwrap().clone();
     dataspace.fault_tolerance = 42;
     prospective.dataspace_catalog = DataSpaceCatalog::new(vec![dataspace]).unwrap();
+    prospective.configured_dataspace_catalog = prospective.dataspace_catalog.clone();
     let additions = (1..191_u32).map(|index| iroha_data_model::nexus::LaneConfig {
         id: LaneId::new(index), alias: format!("geometry-{index}"),
         ..iroha_data_model::nexus::LaneConfig::default()
@@ -3007,8 +3008,8 @@ state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_
     invalid_dataspaces[0].fault_tolerance = 43;
     invalid_policy.dataspace_catalog = DataSpaceCatalog::new(invalid_dataspaces).unwrap();
     let error = state.set_nexus(invalid_policy)
-        .expect_err("same-catalog runtime policy changes must pass aggregate geometry admission");
-    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+        .expect_err("runtime configuration cannot replace committed dataspace policy");
+    assert!(matches!(error, LaneLifecycleError::RuntimeCatalog(_)), "runtime policy: {error:?}");
     assert_eq!(state.nexus_snapshot().lane_catalog, before.lane_catalog);
     assert_eq!(state.state_view_generation(), generation);
 }

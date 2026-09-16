@@ -1309,7 +1309,7 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
         let _prune = native_kura.prune_lock.lock();
         let _canonical = native_kura.canonical_chain_lock.lock();
         let publication = native_kura
-            .prepare_native_amx_publication_index(&fixture.block, None, None)
+            .prepare_native_amx_publication_index(&fixture.block, None, None, false)
             .expect("exact pending carrier discovery allocation");
         assert!(publication.additional_bytes > 0);
         publication.additional_bytes

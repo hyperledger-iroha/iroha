@@ -565,6 +565,15 @@ that decide an unchanged body in different reproposal rounds derive one
 successor context, while body- or execution-distinct parent decisions cannot
 alias.
 
+## Kura Native AMX publication locator
+
+`NativeAmxPublicationIndexRecordV1` ends with a required `committed_repair: bool`
+field in its sole first-release canonical layout. False admits an exact append
+or tip replacement; true binds repair of the complete already committed carrier
+within `before_marker` and forbids `replaced`. Repair records never infer that a
+missing or different carrier was uncommitted. Frames remain bounded at 4,096
+bytes and require exact canonical decoding.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

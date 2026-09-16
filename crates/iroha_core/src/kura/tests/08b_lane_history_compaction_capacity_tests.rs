@@ -55,7 +55,7 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         .expect("install merge receipt lane marker");
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
+    let raw_carrier = blocks.next_empty_with_results();
     let batch = merge_entry
         .execution_batch
         .as_mut()
@@ -63,18 +63,17 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     batch.application_block_header =
         crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
     batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-    let mut executed_carrier = raw_carrier.as_ref().clone();
-    attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+    let carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
     assert!(
         carrier.has_results(),
         "a canonical merge receipt carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
         carrier.external_entrypoints_cloned().count(),
-        "the merge receipt carrier must contain one result per ordinary entrypoint"
+        0,
+        "the merge receipt carrier must keep certified external execution in its sidecar"
     );
+    assert_eq!(carrier.results().count(), 0);
     assert_eq!(
         merge_entry
             .execution_batch

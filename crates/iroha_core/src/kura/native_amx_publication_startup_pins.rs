@@ -215,6 +215,7 @@ mod native_amx_publication_startup_pin_tests {
             before_marker: before,
             replaced,
             merge_entry_hash: None,
+            committed_repair: false,
         }
     }
     fn write_record(root: &Path, record: &NativeAmxPublicationIndexRecord) {

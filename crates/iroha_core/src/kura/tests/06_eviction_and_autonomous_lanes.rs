@@ -1423,6 +1423,18 @@ impl DummyBlocks {
             .expect("the generated block is retained") = Arc::clone(&block);
         block
     }
+    /// Build a merge carrier whose external execution lives only in its certified sidecar.
+    fn next_empty_with_results(&mut self) -> Arc<SignedBlock> {
+        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, self.blocks.last().map(AsRef::as_ref))
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        attach_ok_results_to_block(&mut block);
+        let block = Arc::new(block);
+        self.blocks.push(Arc::clone(&block));
+        block
+    }
     fn get(&self, i: usize) -> Option<Arc<SignedBlock>> {
         self.blocks.get(i).cloned()
     }
