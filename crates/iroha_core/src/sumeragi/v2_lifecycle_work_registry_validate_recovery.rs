@@ -621,7 +621,7 @@ pub(in crate::sumeragi) struct LiveValidateApplyRegistryReservation<'registry> {
     parent_address: ConcreteWorkAddress,
     child_address: ConcreteWorkAddress,
     child_digest: LifecycleDigest,
-    work: ConcreteLifecycleWork,
+    work: Box<ConcreteLifecycleWork>,
 }
 /// Exclusive vacant-child reservation for a standalone released-Validate Apply.
 #[must_use = "a released-Validate Apply reservation has not crossed LedgerV1 publication"]
@@ -629,7 +629,7 @@ pub(super) struct LiveReleasedValidateApplyRegistryReservation<'registry> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     child_address: ConcreteWorkAddress,
     child_digest: LifecycleDigest,
-    work: ConcreteLifecycleWork,
+    work: Box<ConcreteLifecycleWork>,
     reconciliation: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
 }
 /// Pre-fsync Apply publication retaining the reservation and staged adapter.
@@ -877,7 +877,7 @@ pub(in crate::sumeragi) struct LiveValidateReportRegistryReservation<'registry> 
     parent_address: ConcreteWorkAddress,
     child_address: ConcreteWorkAddress,
     child_digest: LifecycleDigest,
-    _detached_parent: ConcreteLifecycleWork,
+    _detached_parent: Box<ConcreteLifecycleWork>,
 }
 /// Pre-fsync report publication retaining both exclusive registry coordinates
 /// and the adapter's already-bound child work.
@@ -1383,7 +1383,7 @@ impl LiveValidateReportRegistryReservation<'_> {
             parent_address,
             child_address,
             child_digest,
-            _detached_parent: _,
+            _detached_parent: mut installed,
         } = self;
         debug_assert_ne!(parent_address, child_address);
         debug_assert!(!registry.entries.contains_key(&parent_address));
@@ -1402,7 +1402,8 @@ impl LiveValidateReportRegistryReservation<'_> {
         else {
             unreachable!("exclusive report reservation kept its child address vacant")
         };
-        entry.insert(work);
+        *installed = work;
+        entry.insert(installed);
     }
 }
 impl PreparedReadyDurableValidateApplyPreAdmission<'_, '_> {
@@ -1593,27 +1594,30 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 _reason: LiveValidateApplyRegistryPublicationFailureReason::MissingRegistryWork,
             });
         };
-        let work =
-            match prepared_work.into_typed_concrete(detached_parent, child_address, child_digest) {
-                Ok(work) => work,
-                Err((prepared_work, detached_parent)) => {
-                    assert!(
-                        registry
-                            .registry
-                            .entries
-                            .insert(parent_address, detached_parent)
-                            .is_none(),
-                        "failed typed Apply join restores the sole Validate parent"
-                    );
-                    adapter.restore_registry_work(prepared_work);
-                    return Err(LiveValidateApplyRegistryPublicationError {
-                        _registry: registry,
-                        _adapter: adapter,
-                        _reason:
-                            LiveValidateApplyRegistryPublicationFailureReason::TypedCarrierMismatch,
-                    });
-                }
-            };
+        let work = match prepared_work.into_typed_concrete(
+            *detached_parent,
+            child_address,
+            child_digest,
+        ) {
+            Ok(work) => work,
+            Err((prepared_work, detached_parent)) => {
+                assert!(
+                    registry
+                        .registry
+                        .entries
+                        .insert(parent_address, Box::new(detached_parent))
+                        .is_none(),
+                    "failed typed Apply join restores the sole Validate parent"
+                );
+                adapter.restore_registry_work(prepared_work);
+                return Err(LiveValidateApplyRegistryPublicationError {
+                    _registry: registry,
+                    _adapter: adapter,
+                    _reason:
+                        LiveValidateApplyRegistryPublicationFailureReason::TypedCarrierMismatch,
+                });
+            }
+        };
         let PreparedReadyDurableValidateExecution {
             registry,
             address: _,
@@ -1627,7 +1631,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 parent_address,
                 child_address,
                 child_digest,
-                work,
+                work: Box::new(work),
             },
             adapter,
         })
@@ -1703,7 +1707,7 @@ impl ConcreteLifecycleWorkRegistry {
             registry: self,
             child_address: address,
             child_digest: digest,
-            work,
+            work: Box::new(work),
             reconciliation,
         })
     }
@@ -2325,7 +2329,7 @@ pub(super) struct StagedDurableValidateCompletion<'a> {
 }
 /// Rollback-only ownership for an installed Validate carrier.
 struct ArmedDurableValidateRollback<'a> {
-    entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: &'a mut BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
     address: ConcreteWorkAddress,
     request: Option<DetachedDurableValidateExecution>,
     wake: Option<DurableValidateWakeAuthority>,
@@ -2451,6 +2455,7 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'regis
 #[must_use = "bound combined recovered Sign successor has not been published"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter> {
+    next_sign_storage: Box<std::mem::MaybeUninit<ConcreteLifecycleWork>>,
     broadcast_storage: Box<std::mem::MaybeUninit<DurableRecoveredLifecycleSignedBroadcastWork>>,
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     sign_address: ConcreteWorkAddress,
@@ -2586,11 +2591,13 @@ pub(super) struct PreparedDurableCertifiedFetchCompletion<'a> {
     ready_projection: DurableCertifiedFetchReplayProjectionV1,
 }
 /// Failure from the registry-before-ledger publication boundary.
+/// Returned work keeps its allocation across publication and rollback so
+/// nested admission results never retain inline copies of large carriers.
 pub(super) enum RegistryPublicationError<E> {
     /// Exact-address installation failed before publication was attempted.
-    Install(RegistryError, ConcreteLifecycleWork),
+    Install(RegistryError, Box<ConcreteLifecycleWork>),
     /// Durable publication failed and the just-installed work was removed.
-    Publication(E, ConcreteLifecycleWork),
+    Publication(E, Box<ConcreteLifecycleWork>),
 }
 /// Failure from the mandatory replay-bound registry publication boundary.
 pub(super) enum BoundAdapterRegistryPublicationErrorV1<E> {
@@ -2623,7 +2630,7 @@ pub(super) enum RegistryReplacementError<E> {
 }
 /// Unwind-safe staging guard for one new registry installation.
 struct StagedRegistryInstall<'a> {
-    entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: &'a mut BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
     address: ConcreteWorkAddress,
     armed: bool,
 }
@@ -2631,7 +2638,7 @@ impl StagedRegistryInstall<'_> {
     fn commit(mut self) {
         self.armed = false;
     }
-    fn rollback(mut self) -> ConcreteLifecycleWork {
+    fn rollback(mut self) -> Box<ConcreteLifecycleWork> {
         self.armed = false;
         self.entries
             .remove(&self.address)
@@ -2651,13 +2658,14 @@ impl Drop for StagedRegistryInstall<'_> {
 }
 /// Unwind-safe staging guard for one exact registry replacement.
 struct StagedRegistryReplacement<'a> {
-    entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: &'a mut BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
     address: ConcreteWorkAddress,
-    incumbent: Option<ConcreteLifecycleWork>,
+    incumbent: Option<Box<ConcreteLifecycleWork>>,
 }
 impl StagedRegistryReplacement<'_> {
     fn commit(mut self) -> ConcreteLifecycleWork {
-        self.incumbent
+        *self
+            .incumbent
             .take()
             .expect("staged replacement retains its incumbent until commit")
     }
@@ -2666,7 +2674,8 @@ impl StagedRegistryReplacement<'_> {
             .incumbent
             .take()
             .expect("staged replacement retains its incumbent until rollback");
-        self.entries
+        *self
+            .entries
             .insert(self.address, incumbent)
             .expect("staged replacement remains installed at its exact address")
     }
@@ -2720,10 +2729,13 @@ pub(in crate::sumeragi) enum RegistryError {
 ///
 /// This registry is deliberately not a scheduler. It owns no readiness,
 /// ordinal allocation, rank, retry, wait, generation, capacity, or lease state.
+/// Each move-only row is heap-owned so BTree insertion and splitting move only
+/// pointers, regardless of the retained carrier lineage. Live admissions allocate
+/// before durable publication; successor commits reuse or preallocate storage.
 #[derive(Debug)]
 pub(in crate::sumeragi) struct ConcreteLifecycleWorkRegistry {
     identity: std::sync::Arc<ConcreteLifecycleWorkRegistryInstanceIdentityMarker>,
-    entries: BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
 }
 /// Exclusive optional WAL-owned registry slot at startup.
 #[derive(Clone, Copy)]
@@ -3001,11 +3013,11 @@ impl<'adapter> PreparedCertifiedFetchStoreSuccessor<'_, 'adapter> {
         } = self;
         assert_eq!(store_digest, child_digest);
         assert_eq!(adapter.store_effect(), &store_effect);
-        let parent = registry
+        let mut parent = registry
             .entries
             .remove(&completion_address)
             .expect("published Store retains its exact Fetch parent");
-        let ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) = parent.kind else {
+        let ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) = &parent.kind else {
             panic!("published Store cannot replace another carrier class")
         };
         assert!(completion.validates(parent.digest));
@@ -3026,8 +3038,8 @@ impl<'adapter> PreparedCertifiedFetchStoreSuccessor<'_, 'adapter> {
             kind: ConcreteLifecycleWorkKind::DurableStoreBody(store),
         };
         assert!(child.validates_at(child_address));
-        assert!(registry.entries.insert(child_address, child).is_none());
-        drop(completion);
+        *parent = child;
+        assert!(registry.entries.insert(child_address, parent).is_none());
         adapter
     }
 }
@@ -3130,28 +3142,26 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
         } = self;
         assert_eq!(validate_digest, child_digest);
         assert_eq!(adapter.validate_effect(), &validate_effect);
-        let parent_work = registry
+        let mut parent_work = registry
             .entries
             .remove(&store_address)
             .expect("published Validate retains its exact Store parent");
         let ConcreteLifecycleWork {
             digest: parent_digest,
             kind: parent_kind,
-        } = parent_work;
+        } = &*parent_work;
         match (parent_origin, parent_kind) {
             (
                 DurableStoreValidateParentV1::Certified,
                 ConcreteLifecycleWorkKind::DurableStoreBody(store),
             ) => {
-                assert!(store.validates(parent_digest));
-                drop(store);
+                assert!(store.validates(*parent_digest));
             }
             (
                 DurableStoreValidateParentV1::RecoveredDecision,
                 ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store),
             ) => {
-                assert!(store.validates_at(store_address, parent_digest));
-                drop(store);
+                assert!(store.validates_at(store_address, *parent_digest));
             }
             _ => panic!("published Validate cannot replace another carrier class"),
         }
@@ -3172,7 +3182,13 @@ impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
             kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
         };
         assert!(child.validates_at(child_address));
-        assert!(registry.entries.insert(child_address, child).is_none());
+        *parent_work = child;
+        assert!(
+            registry
+                .entries
+                .insert(child_address, parent_work)
+                .is_none()
+        );
         adapter
     }
 }
@@ -3496,6 +3512,7 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
         let parent_address = self.address;
         Some(Box::new(LiveValidateSignRegistryReservation {
             reservation: RecoveredWalValidateRegistryReservation {
+                child_storage: Box::new_uninit(),
                 registry,
                 parent_address,
                 child: None,
@@ -3568,14 +3585,14 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
                 }),
             });
         }
-        let work = self
+        let mut work = self
             .work
             .take()
             .expect("validated recovered WAL cut retains its detached carrier");
         let ConcreteLifecycleWork {
             digest: installed_digest,
             kind: ConcreteLifecycleWorkKind::DurableValidateCompletion(completion),
-        } = work
+        } = *work
         else {
             unreachable!("recovered WAL cut validated one completion carrier")
         };
@@ -3606,7 +3623,8 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
         let successor = match pending.project_recovered_wal_vote_successor(&effect, recovered) {
             Ok(successor) => successor,
             Err((pending, recovered)) => {
-                self.work = Some(completion.restore(effect, pending));
+                *work = completion.restore(effect, pending);
+                self.work = Some(work);
                 return Err(RecoveredWalValidateRegistryJoinError {
                     failure: Box::new(RecoveredWalValidateRegistryJoinFailure::Projection {
                         _cut: self,
@@ -3662,6 +3680,7 @@ impl<'registry> PreparedRecoveredWalValidateRegistryJoin<'registry> {
                     repair,
                     validation: completion,
                     reservation: RecoveredWalValidateRegistryReservation {
+                        child_storage: Box::new_uninit(),
                         registry,
                         parent_address: cut.address,
                         child: None,

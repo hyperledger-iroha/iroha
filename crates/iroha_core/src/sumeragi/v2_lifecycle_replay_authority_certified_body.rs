@@ -969,7 +969,7 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn authenticate_recovered_dura
     payload: DurablePayloadReference,
     authority: &LifecycleReplayAuthorityV1,
     authenticate_body: F,
-) -> Result<Option<AuthenticatedRecoveredDurableCertifiedFetchV1>, DurableBodyFrameRecoveryError>
+) -> Result<Option<Box<AuthenticatedRecoveredDurableCertifiedFetchV1>>, DurableBodyFrameRecoveryError>
 where
     F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
 {
@@ -1032,11 +1032,11 @@ where
     ) else {
         return Ok(None);
     };
-    let recovered = AuthenticatedRecoveredDurableCertifiedFetchV1 {
+    let recovered = Box::new(AuthenticatedRecoveredDurableCertifiedFetchV1 {
         completion,
         candidate,
         origin_replay,
-    };
+    });
     Ok(recovered.is_exact().then_some(recovered))
 }
 /// Consume the sole opened-ledger/body-store join for one standalone local or
@@ -1055,7 +1055,10 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn authenticate_recovered_dura
     payload: DurablePayloadReference,
     authority: &LifecycleReplayAuthorityV1,
     authenticate_body: F,
-) -> Result<Option<AuthenticatedRecoveredDurableStandaloneValidateV1>, DurableBodyFrameRecoveryError>
+) -> Result<
+    Option<Box<AuthenticatedRecoveredDurableStandaloneValidateV1>>,
+    DurableBodyFrameRecoveryError,
+>
 where
     F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
 {
@@ -1188,11 +1191,11 @@ where
         return Ok(None);
     };
     replay_steps.push(step);
-    let recovered = AuthenticatedRecoveredDurableStandaloneValidateV1 {
+    let recovered = Box::new(AuthenticatedRecoveredDurableStandaloneValidateV1 {
         candidate,
         carrier,
         replay_steps,
-    };
+    });
     Ok(recovered.is_exact().then_some(recovered))
 }
 impl CertifiedStoreReplayEvidenceV1 {

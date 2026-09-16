@@ -193,7 +193,7 @@ fn durable_validate_dispatch_rejects_stale_foreign_and_wrong_kind_without_mutati
             fixture
                 .registry
                 .entries
-                .insert(fixture.address, pending)
+                .insert(fixture.address, Box::new(pending))
                 .is_none()
         );
         let mut holder = take_dispatch_registry(&mut fixture);

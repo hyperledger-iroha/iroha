@@ -2312,7 +2312,7 @@ impl PreparedLifecycleIngressSelector {
             .ok_or_else(|| "exact Fetch incumbent location was invalid".to_owned())?;
         let mut registry = ConcreteLifecycleWorkRegistry::default();
         registry
-            .install(address, incumbent_digest, incumbent)
+            .install(address, incumbent_digest, Box::new(incumbent))
             .map_err(|(error, _)| format!("exact Fetch registry install rejected: {error:?}"))?;
         let prepared = self
             .prepare_selected_certified_fetch_completion(&mut registry, location)

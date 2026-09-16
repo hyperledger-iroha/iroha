@@ -4602,7 +4602,8 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
         .kura
         .persist_pending_certified_merge_entry(&entry)
         .expect("retain the certified merge entry before the proposal");
-    let block = merge_sidecar_carrier_block(&adapter, &keys, &entry);
+    let block =
+        merge_sidecar_carrier_block(&adapter, &keys, &entry).canonical_resultless_proposal();
     let wire_bytes = block.encode_wire().expect("immutable resultless body");
     assert!(block.is_resultless_proposal());
     assert_eq!(block.header().view_change_index(), 0);
@@ -4690,6 +4691,64 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
     )
     .payload()
     .to_vec();
+    // Actor capacity is per semantic queue: Proposal uses Safety and chunks
+    // use Progress. Each capacity-one queue accepts its first exact occurrence.
+    let proposal_target = context
+        .roster
+        .iter()
+        .find(|entry| entry.validator != adapter.local_peer)
+        .expect("remote Proposal target")
+        .validator
+        .clone();
+    let committee = crate::sumeragi::v2_core::Committee::project_indices(
+        context.height,
+        round_zero.view,
+        context.roster.len(),
+        local,
+    )
+    .expect("canonical first-send committee");
+    let chunk_target = committee
+        .set_a()
+        .iter()
+        .map(|index| &context.roster[*index as usize].validator)
+        .find(|peer| **peer != adapter.local_peer)
+        .expect("remote Set A chunk target")
+        .clone();
+    let (expected_manifest, expected_chunks) = payload.clone().into_parts();
+    let validated = wire::ValidatedPayloadManifest::new(&context, expected_manifest)
+        .expect("exact canonical manifest");
+    let mut expected_chunk = wire::PayloadChunk {
+        manifest_hash: validated.manifest_hash(),
+        index: 0,
+        bytes: expected_chunks
+            .first()
+            .expect("first canonical chunk")
+            .clone(),
+        sender: local,
+        signature: Vec::new(),
+    };
+    let preimage = validated
+        .committed_chunk_signature_payload(0, local)
+        .expect("first chunk signing payload")
+        .signature_preimage();
+    expected_chunk.signature = Signature::try_new(keys[local as usize].private_key(), &preimage)
+        .expect("exact producer chunk signature")
+        .payload()
+        .to_vec();
+    let expected_actor_posts = [
+        (
+            proposal_target,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            )),
+        ),
+        (
+            chunk_target,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                expected_chunk,
+            )),
+        ),
+    ];
     services
         .register_outbound_payload(tag, payload)
         .expect("retain exact signed proposal chunks");
@@ -4750,21 +4809,24 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
     let mut delivered = Vec::new();
     assert_eq!(
         actor.drain_posts(|post| delivered.push(post.clone())),
-        1,
-        "the saturated actor owns exactly one previously admitted post"
+        2,
+        "Safety and Progress each retain exactly one previously admitted post"
     );
-    let crate::NetworkMessage::SumeragiBlock(envelope) = &delivered[0].data else {
-        panic!("first actor output must be global proposal control")
-    };
-    assert!(matches!(envelope.as_message(), BlockMessage::V2(message)
-        if message.payload == wire::ConsensusMessageV2Payload::Proposal(proposal)));
-    assert!(
-        context
-            .roster
-            .iter()
-            .any(|entry| entry.validator == delivered[0].peer_id)
-    );
-    assert_ne!(delivered[0].peer_id, adapter.local_peer);
+    // The receiver drains Safety before Progress; this is receiver order, not
+    // a claim about socket delivery. Compare the full signed messages and targets.
+    for (post, (expected_peer, expected_message)) in
+        delivered.iter().zip(expected_actor_posts.iter())
+    {
+        assert_eq!(&post.peer_id, expected_peer);
+        assert_ne!(post.peer_id, adapter.local_peer);
+        let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("actor output must remain the exact global Proposal or payload chunk")
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            panic!("actor output changed protocol message kind")
+        };
+        assert_eq!(message, expected_message);
+    }
     assert_eq!(adapter.kura.blocks_count(), 1);
     assert_eq!(adapter.state.committed_height(), 1);
     assert_eq!(

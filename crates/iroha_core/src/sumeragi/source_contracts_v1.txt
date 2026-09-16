@@ -1520,10 +1520,18 @@ required|marker_prepare|observed.as_ref() != Some(expected)|Store marker retirem
 forbidden|marker_prepare|.remove(|marker retirement preflight must not mutate executor ownership
 required|marker_commit|cancelled: crate::sumeragi::v2_lifecycle_coordinator::CancelledCertifiedBodyWorkV1|executor marker retirement must require the sealed published-cancellation witness
 order|marker_commit|6|cancelled.into_marker()|prepared.material.store_publication()|.get(&key)|Some(expected),|.remove(&key)|assert_eq!(removed.publication_census_entry().as_ref(), Some(expected))|marker retirement must consume the published witness and compare the exact immutable marker before removing it
-count|marker_commit|.remove(|1|cancellation may remove only its exact Store retry marker
+count|marker_commit|.remove(|2|cancellation may remove only the exact obsolete body owner and exact Store retry marker
+required|marker_prepare|owner.tag == material.tag()|body retirement must bind the exact old generation
+required|marker_prepare|owner.manifest_hash == Some(receipt.manifest_hash())|body retirement must bind the exact old manifest
+required|marker_prepare|owner.tag.strictly_advances(material.tag())|body retirement must distinguish a newer body owner
+required|marker_prepare|owner.manifest_hash.is_none_or(\phash\p hash == receipt.manifest_hash()) => None|a compatible newer body owner must not enter the retirement cut
+required|marker_prepare|obsolete body retirement changed its exact body guard|unrelated body guards must fail retirement preflight
+order|marker_commit|6|cancelled.into_marker()|if let Some(owner) = prepared.body_owner|prepared.material.durable_receipt()|self.body_pipeline_owners.get(&key), Some(&owner)|self.body_pipeline_owners.remove(&key), Some(owner)|prepared.material.store_publication()|cancellation must consume its published cut and remove only the exact preflighted body owner before its Store marker
+count|marker_commit|self.body_pipeline_owners.remove(&key)|1|body retirement must remove exactly its one preflighted owner
+count|marker_commit|.published_lifecycle_store_retry_markers\n                .remove(&key)|1|Store retirement must remove exactly its one preflighted retry marker
 forbidden|marker_commit|durable_bodies|cancellation must preserve the fsynced body catalog for ordinary protected-lock reseeding
 forbidden|marker_commit|recovered_bodies|cancellation must preserve the recoverable body manifest and receipt
-forbidden|marker_commit|body_pipeline_owners|cancellation must preserve unrelated or current pipeline owners
+forbidden|marker_commit|body_pipeline_owners.clear(|cancellation must preserve unrelated or current pipeline owners
 forbidden|marker_commit|published_lifecycle_validate_retry_markers|Store cancellation must preserve every published Validate owner
 forbidden|marker_commit|self.runtime|cancellation must not bypass ordinary reducer or retransmission authority
 order|fetch_dispatch|5|.prepare_published_lifecycle_store_retry_marker(|prepare_lifecycle_body_marker_retirement(|prepare_certified_fetch_store_adapter(|CertifiedFetchStoreAdapterPreparationV1::Superseded(|let retry_marker = match retry_marker|Fetch must compute both inert cuts and consume fresh-successor preflight only after adapter classification
@@ -2098,6 +2106,8 @@ region|permit|registry|after|pub(in crate::sumeragi) struct InstalledBodyCandida
 region|fixture|registry|after|fn install_remote_proposal_validate_completion_for_test|before|pub(crate) fn recovered_wal_validate_registry_cut_for_test
 region|replay|replay_authority|begin|-|end|-
 region|sealed_projection|registry|after|fn sealed_successor_parent|before|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
+region|fetch_commit|registry|at|/// Replace the exact Fetch carrier with the already-staged Store child.|before|impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter>
+region|store_commit|registry|at|/// Replace the exact Store carrier with the already-staged Validate child.|before|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
 required|permit|_linearity: InstalledBodyCandidateProjectionLinearity|projection permit omitted {required}
 required|permit|impl Drop for InstalledBodyCandidateProjectionLinearity|projection permit omitted {required}
 required|permit|struct SealedBodySuccessorProjectionPermit|projection permit omitted {required}
@@ -2145,7 +2155,10 @@ count|sealed_projection|pub(super) fn project_for_body_transition(|2|sealed body
 forbidden|sealed_projection|projection::admission_request(|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|candidate.payload =|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|fn commit(|sealed body successor projection acquired {forbidden}
-required|sealed_projection|registry.entries.insert(child_address, child)|sealed body successor publication omitted {required}
+order|fetch_commit|3|.remove(&completion_address)|*parent = child|registry.entries.insert(child_address, parent)|Fetch successor publication must reuse its exact parent allocation for Store
+order|store_commit|3|.remove(&store_address)|*parent_work = child|.insert(child_address, parent_work)|Store successor publication must reuse its exact parent allocation for Validate
+forbidden|fetch_commit|Box::new|Fetch successor publication must not allocate new carrier storage after fsync
+forbidden|store_commit|Box::new|Store successor publication must not allocate new carrier storage after fsync
 required|sealed_projection|.remove(&completion_address)|sealed Fetch successor publication omitted {required}
 required|sealed_projection|.remove(&store_address)|sealed Store successor publication omitted {required}
 required|sealed_projection|pub(super) fn commit_after_publication(|sealed body successor publication omitted {required}
@@ -2288,9 +2301,10 @@ required|live_sign_carrier|BTreeMap::from([(parent_address.slot, predecessor.dig
 required|live_sign_work|reservation.install_live_sign(self)|opaque live Sign work omitted its consuming registry reservation
 required|live_sign_install|PreparedLifecycleAdmissionOwnerV1::LiveWal(live)|live Validate Sign install omitted its exact live-WAL admission owner
 required|live_sign_install|DurableLiveWalSignOriginV1::Validate {|live Validate Sign install omitted its detached Validate predecessor
-required|live_sign_install|parent: Box::new(parent)|live Validate Sign install omitted the move-only predecessor carrier
+required|live_sign_install|DurableLiveWalSignOriginV1::Validate {\n                    parent_address,\n                    parent,|live Validate Sign install omitted the move-only predecessor carrier
+forbidden|live_sign_install|Box::new(parent)|live Validate Sign install must reuse the predecessor allocation after fsync
 required|live_sign_install|.into_live_sign_work(|live Validate Sign install bypassed the typed durable Sign carrier
-required|live_sign_install|entry.insert(work)|live Validate Sign install omitted the exact post-fsync registry publication
+required|live_sign_install|entry.insert(Box::write(child_storage, work))|live Validate Sign install omitted the exact post-fsync registry publication
 forbidden|live_sign_work|pub admission:|opaque live Sign work exposes forbidden surface {forbidden}
 forbidden|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work retained the bypassed concrete carrier
 forbidden|live_sign_work|derive(Clone|opaque live Sign work exposes forbidden surface {forbidden}
@@ -3693,7 +3707,8 @@ forbidden|registry_prepare|fn candidate(|combined registry preparation exposed f
 forbidden|registry_prepare|into_parts|combined registry preparation exposed into_parts
 forbidden|registry_prepare|.entries.insert(|combined registry preparation exposed .entries.insert(
 forbidden|registry_prepare|.entries.remove(|combined registry preparation exposed .entries.remove(
-order|commit|4|.remove(&sign_address)|successor.into_registry_children(|.insert(broadcast_address, broadcast_work)|.insert(next_sign_address, next_sign_work)|combined successor commit must remove the parent, split after publication, and install both children in order
+order|commit|5|.remove(&sign_address)|successor.into_registry_children(|*sign_work = broadcast_work|.insert(broadcast_address, sign_work)|.insert(\n                    next_sign_address,\n                    Box::write(next_sign_storage, next_sign_work)|combined successor commit must remove the parent, split after publication, reuse its allocation for Broadcast, and install the preallocated next Sign in order
+forbidden|commit|Box::new|combined successor commit must not allocate new carrier storage after fsync
 required|commit|RecoveredLifecycleBroadcastAndSignRegistryCommitPermitV1::new()|combined commit omitted RecoveredLifecycleBroadcastAndSignRegistryCommitPermitV1::new()
 required|commit|DurableRecoveredLifecycleSignedBroadcastWork|combined commit omitted DurableRecoveredLifecycleSignedBroadcastWork
 required|commit|DurableRecoveredLifecycleNextWalVoteSignWork|combined commit omitted DurableRecoveredLifecycleNextWalVoteSignWork
@@ -3883,7 +3898,10 @@ required|timeout_body_retirement|.ordinary_body_is_superseded_by_timeout(frontie
 required|timeout_body_retirement|!original.contains_live_ordinal(self.records[index].ordinal())|timeout retirement must reject leaves outside the authenticated original body census
 order|timeout_body_retirement|7|adapter_startup.recovered_lifecycle_output_frontier(verified)?|!original.contains_live_ordinal(self.records[index].ordinal())|Self::cancelled_record(&self.records[index])|.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)|.authenticate_durable_certified_body_pipeline_startup(verified, store)|.persist_exact_successor(self, &reconciled)|ledger_store.load().is_ok_and(\ploaded\p loaded == reconciled)|timeout retirement must authenticate the exact source and remaining census before its sole CAS and exact readback
 count|timeout_body_retirement|.persist_exact_successor(|1|timeout body retirement must publish one authenticated successor
-count|ledger_production|.persist_exact_successor(|11|only reviewed staged transactions and authenticated startup retirement may publish exact ledger successors
+region|complete_tip_repair|ledger|at|pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(|before|impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
+order|complete_tip_repair|7|complete_tip.authorizes_predecessor_storage_inputs(|ledger_store.authenticate_present_frame(&opened_ledger)?|stage_complete_tip_terminal_apply_recovery(&complete_tip, present_frame)?|if repaired_live_apply|ledger_store.persist_exact_successor(&opened_ledger, &ledger)?|ledger_store.load()? != ledger|ledger.into_complete_tip_terminal_apply_store_join(|CompleteTip repair must authenticate predecessor inputs and the present frame, stage the terminal Apply repair, and publish/read back its exact successor before exposing ownership
+count|complete_tip_repair|.persist_exact_successor(|1|CompleteTip terminal Apply recovery must retain its one authenticated exact publication
+count|ledger_production|.persist_exact_successor(|12|only reviewed staged transactions, authenticated CompleteTip repair, and startup retirement may publish exact ledger successors
 end
 case|production_scheduler_factory_has_no_raw_rank_mint
 region|scheduler|scheduler_inputs|begin|-|end|-
@@ -4558,7 +4576,7 @@ region|live_publication|registry|after|impl<'registry, 'adapter>\n    PreparedRe
 region|recovered_join|registry|after|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN|before|// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_END
 region|recovered_fsync|registry|after|// RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_BEGIN|before|// RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_END
 region|recovered_install|registry|after|// RECOVERED_WAL_SIGN_REGISTRY_INSTALL_BEGIN|before|// RECOVERED_WAL_SIGN_REGISTRY_INSTALL_END
-region|after_insert|registry|after|entry.insert(work);|before|    }
+region|after_insert|registry|after|entry.insert(Box::write(child_storage, work));|before|    }
 region|carrier_inventory|registry|after|struct DurableRecoveredWalSignWork|before|/// Closed concrete carrier for one exact standalone recovered control Sign.
 region|carrier_inventory|registry|after|impl DurableRecoveredWalSignWork {|before|/// Whether one concrete registry row is still an executable adapter effect or
 region|work_kind_inventory|registry|after|enum ConcreteLifecycleWorkKind|before|/// One move-only concrete effect
@@ -4718,7 +4736,7 @@ required|recovered_install|.all(\paddress\p address.owner != child.owner)|recove
 required|recovered_install|store.revalidates_durable_authenticated_wal_vote_repair(|recovered WAL Sign install omitted {required}
 required|recovered_install|ConcreteLifecycleWorkKind::DurableRecoveredWalSign(|recovered WAL Sign install omitted {required}
 required|recovered_install|std::collections::btree_map::Entry::Vacant(entry)|recovered WAL Sign install omitted {required}
-required|recovered_install|entry.insert(work);|recovered WAL Sign install omitted {required}
+required|recovered_install|entry.insert(Box::write(child_storage, work));|recovered WAL Sign install omitted {required}
 required|recovered_install|pub(crate) struct InstalledRecoveredWalSignRegistryCut<'registry>|recovered WAL Sign install omitted {required}
 required|recovered_install|pub(crate) struct RecoveredWalSignInstallError<'registry>|recovered WAL Sign install omitted {required}
 required|recovered_install|fn installed_entry_is_exact(|recovered WAL Sign install omitted {required}

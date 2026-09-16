@@ -1253,7 +1253,10 @@ impl LifecycleLedgerRecordV1 {
         &self,
         verified: &VerifiedHeightContext,
         authenticate_body: F,
-    ) -> Result<Option<AuthenticatedRecoveredDurableCertifiedFetchV1>, DurableBodyFrameRecoveryError>
+    ) -> Result<
+        Option<Box<AuthenticatedRecoveredDurableCertifiedFetchV1>>,
+        DurableBodyFrameRecoveryError,
+    >
     where
         F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
     {
@@ -1291,7 +1294,7 @@ impl LifecycleLedgerRecordV1 {
         verified: &VerifiedHeightContext,
         authenticate_body: F,
     ) -> Result<
-        Option<AuthenticatedRecoveredDurableStandaloneValidateV1>,
+        Option<Box<AuthenticatedRecoveredDurableStandaloneValidateV1>>,
         DurableBodyFrameRecoveryError,
     >
     where
