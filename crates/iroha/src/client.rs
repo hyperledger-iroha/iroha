@@ -17370,7 +17370,11 @@ impl Client {
                 );
                 return Ok(None);
             }
-            Err(error @ (QueryError::Validation(_) | QueryError::ResponseShape(_))) => {
+            Err(
+                error @ (QueryError::Http { .. }
+                | QueryError::Validation(_)
+                | QueryError::ResponseShape(_)),
+            ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
             Err(QueryError::Other(error)) => return Err(error),

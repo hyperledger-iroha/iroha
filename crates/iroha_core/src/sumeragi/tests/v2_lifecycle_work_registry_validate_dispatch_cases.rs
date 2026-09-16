@@ -1775,6 +1775,57 @@ fn ready_durable_validate_fixture(
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn ready_validate_successor_fence_preserves_monotonic_source_bound_ownership() {
+    let source = WaitSource::External(LifecycleDigest::new([0xB4; 32]));
+    let incumbent = WaitToken::new(source, 4);
+    for outcome in [
+        ReadyDurableValidateFixtureOutcome::Validated,
+        ReadyDurableValidateFixtureOutcome::Rejected,
+    ] {
+        for (next, accepted) in [
+            (WaitToken::new(source, 4), true),
+            (WaitToken::new(source, 5), true),
+            (WaitToken::new(source, 3), false),
+            (
+                WaitToken::new(WaitSource::External(LifecycleDigest::new([0xB5; 32])), 5),
+                false,
+            ),
+        ] {
+            let OwnedReadyDurableValidateFixture {
+                ready,
+                coordinator,
+                successor,
+                ..
+            } = owned_ready_durable_validate_fixture_from_waiting(
+                waiting_durable_validate_fixture_at_view(0xB6, 2),
+                outcome,
+            );
+            let ordinal = successor.lifecycle_ordinal();
+            let original_record = coordinator.records[&ordinal].clone();
+            let original_digest = ready.holder.registry_for_test().entries[&ready.fixture.address]
+                .digest;
+            assert!(successor.reducer_fence_wait().is_none());
+            let retained = successor
+                .retain_on_reducer_fence(incumbent)
+                .expect("published successor binds its first exact reducer fence")
+                .retain_on_reducer_fence(next);
+            assert_eq!(retained.is_some(), accepted);
+            if let Some(retained) = retained {
+                assert_eq!(retained.lifecycle_ordinal(), ordinal);
+                assert_eq!(retained.reducer_fence_wait(), Some(next));
+            }
+            assert_eq!(coordinator.records[&ordinal], original_record);
+            assert_eq!(
+                ready.holder.registry_for_test().entries[&ready.fixture.address].digest,
+                original_digest,
+                "fence retention cannot rewrite its published Validate carrier"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "bls")]
 fn ready_local_durable_validate_fixture_at_view(
     marker: u8,
     view: wire::View,

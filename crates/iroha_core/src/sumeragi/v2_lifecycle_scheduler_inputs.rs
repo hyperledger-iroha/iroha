@@ -1742,6 +1742,14 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
+        let persistence_readiness = match executor.decision_persistence_readiness(services) {
+            Ok(readiness) => readiness,
+            Err(error) => {
+                drop(execution);
+                self.rollback_ready_validate_publication(&lease);
+                return Err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation(error));
+            }
+        };
         let preview = match executor
             .prepare_ready_durable_validate_adapter_preview(execution, physical_completion)
         {
@@ -1909,6 +1917,24 @@ impl ProductionLifecycleOwnerV1 {
                 })
             }
             Kind::ValidatedApply => {
+                if !persistence_readiness.is_ready() {
+                    drop(preview);
+                    self.rollback_ready_validate_publication(&lease);
+                    // Production admission is exclusive: both Validate I/O and
+                    // certified persistence retain an unleased worker-index row
+                    // until acknowledgement, which blocks new Ready dispatch
+                    // and Ingress. Validate installs its Ready token before ack;
+                    // that token preserves both exclusions. This guard diagnoses
+                    // a violated owner invariant before any WAL/child mutation.
+                    return Err(
+                        ProductionCompletionDispatchErrorV1::LiveApplyReconciliation(
+                            crate::sumeragi::v2_effects::EffectExecutorError::Contract(
+                                "Ready Validate Apply overlaps admitted certified-body persistence"
+                                    .to_owned(),
+                            ),
+                        ),
+                    );
+                }
                 let publication = match preview.seal_live_wal_validate_apply() {
                     Ok(publication) => publication,
                     Err(error) => {

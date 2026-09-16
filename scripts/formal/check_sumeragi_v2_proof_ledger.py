@@ -27034,7 +27034,7 @@ let ownership = RuntimeDeferredLifecycleOwnership::new(
     _require_rust_token_sequence(
         runtime_path,
         minimum_active,
-        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+        "self.minimum_active_lifecycle_ordinal_excluding(&[], external)",
         "the complete runtime predecessor cut excludes no active owner",
         errors,
     )
@@ -27121,7 +27121,7 @@ if let Some(ownership) = &self.pending_effect_ownership {
         runtime_path,
         arbitration,
         """
-let _ = self.minimum_active_lifecycle_ordinal()?;
+let _ = self.minimum_active_lifecycle_ordinal(external)?;
 let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
 let mut fifo_ready = fifo_minimum.is_some();
 let (mut completion_ready, mut progress_ready, mut normal_ready) = if fifo_ready {
@@ -39891,7 +39891,7 @@ same_token_pre_runtime.runtime_physical_cut = None;
 same_token_pre_runtime.leader_wire_runtime_receipt = None;
 assert!(same_token_pre_runtime.validate_exact());
 runtime
-    .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+    .enqueue_network_with_ingress_ownership(message.clone(), first_ownership, &RuntimeExternalLifecycleCensus::empty_for_test(),)
     .expect("first leader-wire carrier enters the runtime");
 """,
         "pre-runtime regression must retain an exact receipt-free retry before "
@@ -40050,7 +40050,7 @@ assert_eq!(
         (
             """
 assert!(matches!(
-    runtime.enqueue_network_with_ingress_ownership(message.clone(), fresh_runtime),
+    runtime.enqueue_network_with_ingress_ownership(message.clone(), fresh_runtime, &RuntimeExternalLifecycleCensus::empty_for_test()),
     Err(NetworkIngressError::Backpressure(EnqueueError::Full))
 ));
 """,
@@ -42791,7 +42791,7 @@ let authenticated_deferred_owner = self
 self.reconcile_deferred_ingress_ownership(Some((
     admission_ordinal,
     ingress_ownership
-)))
+)), external)
 """,
                 """
 if self
@@ -44017,13 +44017,13 @@ self.fence_retry_blocked_fifo_owners.push(owner);
             (
                 "self.reconcile_fence_retry_blocked_fifo_owners()",
                 "self.driver.pacemaker_escape_is_parked()",
-                "self.freeze_due_clock_owners(now)",
-                "self.scheduler_arbitration_inputs(now)",
+                "self.freeze_due_clock_owners(now, external)",
+                "self.scheduler_arbitration_inputs(now, external)",
                 "if timeout_due",
-                "return self.step(now).map(Some)",
-                "self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS))?",
-                "self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))?",
-                "self.dispatch_one_pacemaker_progress(now, None)",
+                "return self.step(now, external).map(Some)",
+                "self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS), external)?",
+                "self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS), external)?",
+                "self.dispatch_one_pacemaker_progress(now, None, external)",
             ),
             "typed pacemaker escape must preserve replay/persistence parking, "
             "prefer the absolute timeout, and otherwise admit only an exact "
@@ -44061,7 +44061,7 @@ self.fence_retry_blocked_fifo_owners.push(owner);
                 "driver.certified_progress_bypasses_signature_fence(command)",
                 "RuntimeQueueSelectionKind::PacemakerCertifiedProgress",
                 "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
-                "self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?",
+                "self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress, external)?",
                 "if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress)",
                 "if retry_unadmitted",
                 "self.ingress.restore_selected_command(retry_command, &candidate)",
@@ -44122,7 +44122,7 @@ self.retain_scheduler_ownership(
         _require_rust_token_sequence(
             runtime_path,
             observed_runtime_items.get("minimum_active_lifecycle_ordinal"),
-            "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+            "self.minimum_active_lifecycle_ordinal_excluding(&[], external)",
             "the complete production lifecycle minimum excludes no owner",
             errors,
         )
@@ -44374,7 +44374,7 @@ let owner = self.mint_fresh_lifecycle_owner(
             observed_runtime_items.get("scheduler_arbitration_inputs"),
             (
                 "self.validate_clock_owner_physical_cuts()?;",
-                "let _ = self.minimum_active_lifecycle_ordinal()?;",
+                "let _ = self.minimum_active_lifecycle_ordinal(external)?;",
                 "let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;",
                 "self.ingress.class_readiness()",
                 "self.timeout_owner_physical_cut",
@@ -44419,12 +44419,12 @@ let owner = self.mint_fresh_lifecycle_owner(
             observed_runtime_items.get("step"),
             (
                 "self.reconcile_fence_retry_blocked_fifo_owners()",
-                "self.freeze_due_clock_owners(now)",
-                "let timeout_preempts = self.scheduler_arbitration_inputs(now)",
+                "self.freeze_due_clock_owners(now, external)",
+                "let timeout_preempts = self.scheduler_arbitration_inputs(now, external)",
                 "if !timeout_preempts && let Some(step) = "
-                "self.dispatch_one_fence_dependency(now, None)?",
+                "self.dispatch_one_fence_dependency(now, None, external)?",
                 "if !timeout_preempts && let Some(step) = "
-                "self.dispatch_one_adapter_deferred(now, None)?",
+                "self.dispatch_one_adapter_deferred(now, None, external)?",
                 "let selected_round_tag = self.round_tag;",
             ),
             "live scheduling must reconcile exact retry markers, freeze clock "
@@ -44447,7 +44447,7 @@ let (work, next_schedule) = self.schedule.select(
 if let Some(authorization) = authorization
     && let Some(step) = self.dispatch_one_pacemaker_progress(
         now,
-        Some((arbitration.clone(), authorization)),
+        Some((arbitration.clone(), authorization)), external,
     )?
 {
     return Ok(step);
@@ -44516,7 +44516,7 @@ self.accept_driver_dispatch(
     dispatch,
     &owner,
     parent_statement,
-    RuntimeDispatchIngress::LocalOrCausal,
+    RuntimeDispatchIngress::LocalOrCausal, external,
 )?
 """,
                 "if retry_unadmitted { self.latch_fail_closed("
@@ -44605,7 +44605,7 @@ self.accept_driver_dispatch(
                 "let merged_lifecycle = existing.earliest_lifecycle_ordinal()?;",
                 """
 if self
-    .active_lifecycle_uses_ordinal(merged_lifecycle)
+    .active_lifecycle_uses_ordinal(merged_lifecycle, external)
     .map_err(|_| RuntimeIngressMergeError::Conflict)?
 """,
                 """
@@ -44755,7 +44755,7 @@ if retry_unadmitted
         require_runtime_item_order(
             accept_dispatch,
             (
-                "self.reconcile_deferred_ingress_ownership(deferred_ingress)",
+                "self.reconcile_deferred_ingress_ownership(deferred_ingress, external)",
                 "let active = self.driver.all_deferred_admission_ordinals();",
                 "let retained_ingress = self.deferred_ingress_ownership.get(&ordinal);",
                 """
@@ -44889,7 +44889,7 @@ self.complete_driver_dispatch_leader_wire_owners(
                 continue
             item_tokens = rust_code_tokens(item.source)
             dispatch_tokens = rust_code_tokens(
-                "self.dispatch_one_adapter_deferred(now, None)?"
+                "self.dispatch_one_adapter_deferred(now, None, external)?"
             )
             later_tokens = rust_code_tokens(later_contract)
             dispatch_positions = [
@@ -53988,18 +53988,18 @@ if self.pending_runner_decision_cleanup.is_some() {
             effects_path,
             step_pacemaker,
             """
-let step = match self.runtime.step_pacemaker_effects(now) {
+let step = match runtime.step_pacemaker_effects(now, &external) {
     Ok(step) => step,
     Err(reason) => {
         drop(wal_step);
-        return Err(self.close(EffectExecutorError::Runtime(reason), services));
+        return Err(EffectExecutorError::Runtime(reason));
     }
 };
 if step.is_some()
-    && let Err(reason) = self.runtime.take_scheduler_ownership()
+    && let Err(reason) = runtime.take_scheduler_ownership()
 {
     drop(wal_step);
-    return Err(self.close(EffectExecutorError::Runtime(reason), services));
+    return Err(EffectExecutorError::Runtime(reason));
 }
 wal_step.complete();
 """,
@@ -54026,12 +54026,11 @@ Some(RuntimeStep::Advanced(effects)) => {
             effects_path,
             step_pacemaker,
             """
-let decision_before_step = self
-    .runtime
+let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+let decision_before_step = runtime
     .decided_body()
-    .map_err(EffectExecutorError::Runtime)
-    .map_err(|error| self.close(error, services))?;
-let wal_step = self
+    .map_err(EffectExecutorError::Runtime)?;
+let wal_step = output_guard
 """,
             "pacemaker execution must snapshot Decision state before its runtime step",
             errors,
@@ -54295,12 +54294,11 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
             effects_path,
             step,
             """
-let decision_before_step = self
-    .runtime
+let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+let decision_before_step = runtime
     .decided_body()
-    .map_err(EffectExecutorError::Runtime)
-    .map_err(|error| self.close(error, services))?;
-let wal_step = self
+    .map_err(EffectExecutorError::Runtime)?;
+let wal_step = output_guard
 """,
             "ordinary execution must snapshot Decision state before its runtime step",
             errors,
@@ -54352,7 +54350,7 @@ let count = self.consume_effects_with_runner_decision_cleanup(
             drain_tokens = rust_code_tokens(
                 "self.drain_retained_effect_batch(services, true)"
             )
-            runtime_tokens = rust_code_tokens("self.runtime.step_effects(now)")
+            runtime_tokens = rust_code_tokens("runtime.step_effects(now, &external)")
             drain_positions = [
                 index
                 for index in range(len(step_tokens) - len(drain_tokens) + 1)
@@ -54374,9 +54372,9 @@ let count = self.consume_effects_with_runner_decision_cleanup(
                 )
 
         for item_name, runtime_call in (
-            ("step_pacemaker_once", "self.runtime.step_pacemaker_effects(now)"),
-            ("step", "self.runtime.step_effects(now)"),
-            ("step_pending_tip_recovery", "self.runtime.step_recovery_effects(now)"),
+            ("step_pacemaker_once", "runtime.step_pacemaker_effects(now, &external)"),
+            ("step", "runtime.step_effects(now, &external)"),
+            ("step_pending_tip_recovery", "runtime.step_recovery_effects(now, &external)"),
         ):
             item = executor_items[item_name]
             if item is None:
@@ -54385,9 +54383,11 @@ let count = self.consume_effects_with_runner_decision_cleanup(
             ordered_fragments = tuple(
                 rust_code_tokens(fragment)
                 for fragment in (
+                    "self.runtime_and_external_lifecycle_census()?",
                     runtime_call,
-                    "self.runtime.take_scheduler_ownership()",
+                    "runtime.take_scheduler_ownership()",
                     "wal_step.complete()",
+                    "runtime_result.map_err(|error| self.close(error, services))?",
                     "self.finish_runtime_step_reconciliation(services)",
                 )
             )
@@ -54400,7 +54400,7 @@ let count = self.consume_effects_with_runner_decision_cleanup(
                 ]
                 if len(observed) == 1:
                     positions.append(observed[0])
-            if len(positions) != 4 or positions != sorted(positions):
+            if len(positions) != len(ordered_fragments) or positions != sorted(positions):
                 errors.append(
                     f"{effects_path}:{item.line}: {item_name} must consume the "
                     "exact scheduler owner immediately after the runtime step "
@@ -56556,6 +56556,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     """Bind QueuePlanSynced semantic identity to every production reconstruction seam."""
 
     binding_path = repo_root / "crates" / "iroha_core" / "src" / "torii_proxy.rs"
+    model_path = repo_root / "crates" / "iroha_data_model" / "src" / "block" / "lane_admission.rs"
     queue_path = repo_root / "crates" / "iroha_core" / "src" / "queue.rs"
     journal_path = (
         repo_root / "crates" / "iroha_core" / "src" / "queue" / "journal.rs"
@@ -56564,7 +56565,8 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     errors: list[str] = []
     sources: dict[Path, str] = {}
     for path, description in (
-        (binding_path, "shared QueuePlan semantic-request kernel"),
+        (binding_path, "Core QueuePlan admission policy owner"),
+        (model_path, "shared pure QueuePlan semantic-request kernel"),
         (queue_path, "core strict QueuePlan admission call site"),
         (journal_path, "durable QueuePlan reconstruction call site"),
         (torii_path, "Torii QueuePlan ingress call site"),
@@ -56576,18 +56578,19 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
             sources[path] = path.read_text(encoding="utf-8")
 
     binding_source = sources[binding_path]
+    model_source = sources[model_path]
     queue_source = sources[queue_path]
     journal_source = sources[journal_path]
     torii_source = sources[torii_path]
 
     durable_kernel = _require_rust_item(
-        binding_path,
-        binding_source,
+        model_path,
+        model_source,
         "queue_plan_synced_request_id_from_network_digest",
         errors,
     )
     _require_rust_item_context(
-        binding_path,
+        model_path,
         durable_kernel,
         (),
         "the durable QueuePlan semantic-request kernel",
@@ -56595,7 +56598,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
         expected_attributes=("#[must_use]",),
     )
     _require_exact_rust_tokens(
-        binding_path,
+        model_path,
         durable_kernel,
         """
 pub fn queue_plan_synced_request_id_from_network_digest(
@@ -56617,13 +56620,13 @@ pub fn queue_plan_synced_request_id_from_network_digest(
     )
 
     network_wrapper = _require_rust_item(
-        binding_path,
-        binding_source,
+        model_path,
+        model_source,
         "queue_plan_synced_request_id",
         errors,
     )
     _require_rust_item_context(
-        binding_path,
+        model_path,
         network_wrapper,
         (),
         "the exact-network QueuePlan semantic-request wrapper",
@@ -56631,7 +56634,7 @@ pub fn queue_plan_synced_request_id_from_network_digest(
         expected_attributes=("#[must_use]",),
     )
     _require_exact_rust_tokens(
-        binding_path,
+        model_path,
         network_wrapper,
         """
 pub fn queue_plan_synced_request_id(
@@ -56650,37 +56653,35 @@ pub fn queue_plan_synced_request_id(
 
     binding_items: dict[str, RustItem | None] = {}
     for item_name in (
-        "new",
-        "try_from_durable_admission",
-        "validate_structure",
-        "validate_for_request",
+        "new_queue_plan_admission_binding",
+        "queue_plan_binding_from_durable_admission",
+        "validate_queue_plan_binding_for_request",
     ):
-        binding_items[item_name] = _require_qualified_rust_item(
-            binding_path,
-            binding_source,
-            "QueuePlanAdmissionBindingV1",
-            item_name,
-            errors,
-            f"QueuePlanAdmissionBindingV1::{item_name}",
+        binding_items[item_name] = _require_rust_item(
+            binding_path, binding_source, item_name, errors
         )
+    binding_items["validate_structure"] = _require_qualified_rust_item(
+        model_path, model_source, "QueuePlanAdmissionBindingV1",
+        "validate_structure", errors, "QueuePlanAdmissionBindingV1::validate_structure",
+    )
     _require_rust_token_sequence(
         binding_path,
-        binding_items["new"],
+        binding_items["new_queue_plan_admission_binding"],
         """
-pub fn new(
+pub fn new_queue_plan_admission_binding(
     network_id: &NetworkId,
     transaction: &TransactionEntrypoint,
     routing_plan: &crate::queue::RoutingPlan,
     admission_context: crate::queue::QueuePlanAdmissionContextV1,
     enqueue_timestamp_ms: u64,
-) -> Result<Self, String>
+) -> Result<QueuePlanAdmissionBindingV1, String>
 """,
         "the QueuePlan binding constructor must not accept a caller-selected request identity",
         errors,
     )
     _require_rust_token_sequence(
         binding_path,
-        binding_items["new"],
+        binding_items["new_queue_plan_admission_binding"],
         """
 let network_id_digest = queue_plan_admission_network_id_digest(network_id);
 let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
@@ -56697,7 +56698,7 @@ let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1
     )
     _require_rust_token_sequence(
         binding_path,
-        binding_items["try_from_durable_admission"],
+        binding_items["queue_plan_binding_from_durable_admission"],
         """
 binding.validate_structure()?;
 """,
@@ -56705,7 +56706,7 @@ binding.validate_structure()?;
         errors,
     )
     _require_rust_token_sequence(
-        binding_path,
+        model_path,
         binding_items["validate_structure"],
         """
 if self.request_id
@@ -56725,9 +56726,9 @@ if self.request_id
     )
     _require_rust_token_sequence(
         binding_path,
-        binding_items["validate_for_request"],
+        binding_items["validate_queue_plan_binding_for_request"],
         """
-if self.request_id
+if binding.request_id
     != queue_plan_synced_request_id(network_id, transaction.hash())
 {
     return Err(
@@ -56735,7 +56736,7 @@ if self.request_id
             .to_owned(),
     );
 }
-self.validate_for_transaction_and_plan(transaction, routing_plan)
+validate_queue_plan_binding_for_transaction_and_plan(binding, transaction, routing_plan)
 """,
         "request-bound QueuePlan validation must recompute the shared semantic identity before transaction validation",
         errors,
@@ -56769,7 +56770,7 @@ certificate.binding.validate_structure()?;
         """
 if let Some(binding) = expected_admission_binding
     && let Err(reason) =
-        binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)
+        crate::torii_proxy::validate_queue_plan_binding_for_request(&binding, state.network_id_ref(), tx.entrypoint(), &routing_plan,)
 {
     return Err(Failure {
         tx: tx.into(),
@@ -56793,10 +56794,9 @@ if let Some(binding) = expected_admission_binding
         journal_path,
         journal_reconstruction,
         """
-let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
+let binding = crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable_admission)
     .map_err(invalid_data)?;
-binding
-    .validate_for_transaction_and_plan(&self.record.entrypoint, &self.record.routing_plan)
+crate::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(&binding, &self.record.entrypoint, &self.record.routing_plan,)
     .map_err(invalid_data)?;
 """,
         "journal replay must pass its durable identity through the shared binding validator",
@@ -56851,7 +56851,7 @@ let request_id =
         torii_path,
         torii_execute,
         """
-match QueuePlanAdmissionBindingV1::new(
+match iroha_core::torii_proxy::new_queue_plan_admission_binding(
     app.state.network_id_ref(),
     &transaction,
     &routing_plan,
@@ -56867,7 +56867,7 @@ match QueuePlanAdmissionBindingV1::new(
         torii_execute,
         """
 if let Err(error) =
-    binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)
+    iroha_core::torii_proxy::validate_queue_plan_binding_for_request(&binding, app.state.network_id_ref(), &transaction, &routing_plan,)
 """,
         "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         errors,
@@ -65361,7 +65361,7 @@ fanout.rollover_claim = rollover_claim;
     for item, expected, description in (
         (worker_ack_items.get("QueuePlanBatchSources::resolve"), """if !self.inventory.contains(&hash) { return Ok(None); } if !self.bodies.contains_key(&hash) { let Some(bytes) = kura.pending_queue_plan_admission_certificate(hash).map_err(|error| error.to_string())? else { return Ok(None); }; self.bodies.insert(hash, bytes); } Ok(self.bodies.get(&hash).map(Vec::as_slice))""", "QueuePlan source resolution must reject inventory misses and cache only exact Kura reads"),
         (worker_ack_items.get("QueuePlanBatchSources::contains_exact"), "self.resolve(kura, Hash::new(bytes)).map(|source| source == Some(bytes))", "QueuePlan source authentication must compare exact bytes returned through the frozen inventory"),
-        (worker_ack_items.get("QueuePlanBatchSources::validate"), """let hash = Hash :: new ( bytes ) ; if ! self . validated . contains ( & hash ) { crate :: torii_proxy :: decode_and_validate_queue_plan_admission_certificate_v1 ( network_id , bytes , ) . map_err ( | error | format ! ( ) ) ? ; # [ cfg ( test ) ] _kura . pending_queue_plan_admission_batch_validations . fetch_add ( 1 , AtomicOrdering :: Relaxed ) ; self . validated . insert ( hash ) ; } Ok ( hash )""", "QueuePlan source validation must decode exact bytes before caching their hash"),
+        (worker_ack_items.get("QueuePlanBatchSources::validate"), """let hash = Hash :: new ( bytes ) ; if ! self . validated . contains ( & hash ) { crate :: torii_proxy :: decode_and_validate_lane_admitted_input_v1 ( network_id , bytes ) . map_err ( | error | format ! ( ) ) ? ; # [ cfg ( test ) ] _kura . pending_queue_plan_admission_batch_validations . fetch_add ( 1 , AtomicOrdering :: Relaxed ) ; self . validated . insert ( hash ) ; } Ok ( hash )""", "QueuePlan source validation must authenticate the complete original input before caching its exact bytes hash"),
         (worker_ack_items.get("ProductionV2Services::queue_plan_admission_batch_sources"), """self.kura.pending_queue_plan_admission_hash_inventory().map(|inventory| QueuePlanBatchSources { inventory, bodies: HashMap::new(), validated: HashSet::new(), }).map_err(|error| error.to_string())""", "QueuePlan batching must freeze one exact Kura hash inventory with empty read and validation caches"),
         (worker_ack_items.get("ProductionV2Services::queue_plan_effect_parts"), """let expected_leader = self . context . roster . get ( usize :: try_from ( self . context . leader ( view ) ) . unwrap_or ( usize :: MAX ) ) . map ( | entry | & entry . validator ) . ok_or_else ( || . to_owned ( ) ) ? ; if peer != expected_leader { return Err ( . to_owned ( ) , ) ; } let certificate_hash = kura_sources . validate ( & self . kura , & self . context . network_id , certificate ) ? ; if ! kura_sources . contains_exact ( & self . kura , certificate ) ? { return Err ( . to_owned ( ) ) ; } Ok ( ( vec ! [ NetworkMessage :: QueuePlanAdmissionCertificate ( Arc :: clone ( certificate , ) ) ] , vec ! [ peer . clone ( ) ] , vec ! [ ExactTargetRoute :: Topology ] , None , None , ExactOutputRolloverClaim :: QueuePlanAdmission { scope : self . exact_output_scope ( ) , target : peer . clone ( ) , view , certificate_hash , } , ) )""", "QueuePlan dispatch must bind the frozen leader, validated exact Kura bytes, topology route, and typed rollover claim"),
         (worker_ack_items.get("ProductionV2Services::post_queue_plan_admission_certificate"), """let output_guard = Arc :: clone ( & self . output_guard ) ; let Some ( operation ) = output_guard . begin_fail_stop_operation ( ) else { return ; } ; let Ok ( ( messages , peers , _ , _ , _ , rollover_claim ) ) = self . queue_plan_effect_parts ( & peer , view , & certificate , kura_sources ) else { iroha_logger :: error ! ( % peer , view , ) ; return ; } ; match self . enqueue_exact_fanout_while_guarded ( messages , peers , rollover_claim , operation . permit ( ) , ) { Ok ( ExactFanoutOwnership :: Owned ) => operation . complete ( ) , Ok ( ExactFanoutOwnership :: SourceRetained ) => iroha_logger :: error ! ( ) , Err ( error ) => iroha_logger :: error ! ( % error , ) , }""", "QueuePlan publication must complete its fail-stop owner only after exact-fanout ownership transfers"),

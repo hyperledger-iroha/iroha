@@ -77,10 +77,10 @@ _APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256 = {
         "2f1bd74df1dd29f195bccd664d8b8a0b96155264cd787f9c924eeb5a9fc5f821"
     ),
     "applied_phase_test": (
-        "ee0545b0d25db2ac8abcaeed803e11181b99c54fe8c6073a773477674ed8ba48"
+        "38e3adf01a549d8d6469cea5a4d0cd4adcd32f1fedac5e60e3197d0840f06fa4"
     ),
     "busy_owner_test": (
-        "1952e16907dcd43b199cb74f2c3775ffc7a58fb4d94a069b8f941cb4c35306a2"
+        "4a4a292431b828271dcc01b1031d6ddd2dab2e790b20b9cb47da5c7c2de583f2"
     ),
 }
 

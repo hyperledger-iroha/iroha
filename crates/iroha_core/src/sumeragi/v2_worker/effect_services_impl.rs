@@ -446,6 +446,9 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
+    fn certified_fetch_persistence_work(&self) -> BTreeSet<EffectWorkId> {
+        self.certified_fetch_persistence_work_snapshot()
+    }
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard

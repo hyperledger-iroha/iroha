@@ -5464,6 +5464,90 @@ fn published_validate_marker_absorbs_stale_inflight_store_completion() {
     assert!(services.closed.is_empty());
 }
 
+#[test]
+fn store_completion_requires_exact_pipeline_or_published_successor_authority() {
+    // A published successor may replace an absent pipeline token, but cannot
+    // excuse either unexplained ownership loss or an extant foreign token.
+    for (publish_marker, foreign_tag, foreign_manifest) in [
+        (false, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let key = (fixture.manifest.round, fixture.manifest.subject);
+        let store_id = install_inflight_remote_proposal_store(
+            &mut executor,
+            &mut services,
+            &fixture,
+            tag(0),
+            9_043,
+        );
+        let completion = services.execute_store(store_id);
+        let durable = completion.receipt().clone();
+        if publish_marker {
+            executor.recovered_bodies.insert(key, (fixture.manifest.clone(), durable.clone()));
+            executor.durable_bodies.insert(key, durable.clone());
+            let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+            let fetch = AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: prepare.proposal_round,
+                subject: prepare.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare),
+            };
+            let store = AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            };
+            let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_044)
+                .rebind_as_inherited_adapter_effect(&store)
+                .expect("bind the exact published Store successor");
+            let pending = ownership.exact_pending_adapter_effect_binding(&store)
+                .expect("seal the exact Store successor");
+            let prepared = executor.prepare_published_lifecycle_store_retry_marker(&durable)
+                .expect("preflight the exact Store successor")
+                .bind_store_successor(&store, &pending)
+                .expect("bind the exact Store marker");
+            executor.commit_published_lifecycle_store_retry_marker(prepared);
+            assert!(!executor.body_pipeline_owners.contains_key(&key));
+        } else {
+            assert!(executor.body_pipeline_owners.remove(&key).is_some());
+        }
+        if foreign_tag || foreign_manifest {
+            executor.body_pipeline_owners.insert(key, BodyPipelineOwner {
+                tag: if foreign_tag { tag(1) } else { tag(0) },
+                manifest_hash: Some(if foreign_manifest {
+                    HashOf::from_untyped_unchecked(Hash::new(b"foreign Store pipeline manifest"))
+                } else {
+                    HashOf::new(&fixture.manifest)
+                }),
+            });
+        }
+        let pending_task = executor.pending_stores[&store_id].task.clone();
+        let pending_bytes = executor.pending_store_bytes;
+        let pipeline_before = executor.body_pipeline_owners.get(&key).copied();
+        let marker_before = executor.published_lifecycle_store_retry_markers.get(&key).cloned();
+        assert!(matches!(
+            executor.complete_body_store(completion, &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("consumer differs from its immutable pipeline owner")
+        ));
+        assert_eq!(executor.pending_stores[&store_id].task, pending_task);
+        assert_eq!(executor.pending_store_bytes, pending_bytes);
+        assert_eq!(executor.body_pipeline_owners.get(&key).copied(), pipeline_before);
+        assert_eq!(executor.published_lifecycle_store_retry_markers.get(&key).cloned(), marker_before);
+        assert!(matches!(executor.remote_proposal_replay.get(&key),
+            Some(RemoteProposalReplayStageV1::Store { work_id, .. }) if *work_id == store_id));
+        assert!(executor.runtime.completions.is_empty());
+        assert!(executor.output_guard.restart_required());
+        assert!(!services.closed.is_empty());
+    }
+}
+
 fn assert_published_marker_absorbs_detached_store_completion(publish_validate: bool) {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());

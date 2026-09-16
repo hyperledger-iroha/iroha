@@ -821,6 +821,8 @@ pub struct KagemushaFinalitySidecarV1 {
     pub post_state_root: Hash,
     /// Hash of the exact durable finality artifact.
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Fixed-key proof of the exact frozen lane context set at this carrier.
+    pub(crate) lane_consensus_contexts_witness: crate::state::LaneConsensusContextsWitnessV1,
     /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
     pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
     /// Fixed-key sparse-SMT proof and exact encoded Parliament casting commitment.
@@ -843,6 +845,7 @@ struct StagedKagemushaFinalitySidecarV1 {
     block_hash: HashOf<BlockHeader>,
     ordinary_writes_root: Hash,
     post_state_root: Hash,
+    lane_consensus_contexts_witness: crate::state::LaneConsensusContextsWitnessV1,
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
     parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
     parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,

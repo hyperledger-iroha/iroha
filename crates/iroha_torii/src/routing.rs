@@ -6279,7 +6279,13 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
                 Ok(attestation) => attestation,
                 Err(err) => {
                     return bridge_finality_attestation_error_response(
-                        err, height, status_height, challenge, node_id, network_id, format,
+                        err,
+                        height,
+                        status_height,
+                        challenge,
+                        node_id,
+                        network_id,
+                        format,
                     );
                 }
             };
@@ -50129,15 +50135,14 @@ mod validation_fee_torii_ingress_tests {
         );
         metadata
     }
-    fn signed_transfer(
+    fn transfer_builder(
         state: &Arc<State>,
         user: &AccountId,
-        user_key_pair: &KeyPair,
         recipient: &AccountId,
         fee_asset: &AssetDefinitionId,
         policy: &ValidationFeePolicyV1,
         include_fee: bool,
-    ) -> SignedTransaction {
+    ) -> TransactionBuilder {
         let principal = Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
             1_u32,
@@ -50166,7 +50171,18 @@ mod validation_fee_torii_ingress_tests {
         )
         .with_instructions(instructions)
         .with_metadata(metadata)
-        .sign(user_key_pair.private_key())
+    }
+    fn signed_transfer(
+        state: &Arc<State>,
+        user: &AccountId,
+        user_key_pair: &KeyPair,
+        recipient: &AccountId,
+        fee_asset: &AssetDefinitionId,
+        policy: &ValidationFeePolicyV1,
+        include_fee: bool,
+    ) -> SignedTransaction {
+        transfer_builder(state, user, recipient, fee_asset, policy, include_fee)
+            .sign(user_key_pair.private_key())
     }
     async fn submit_via_public_transaction_handler(
         app: crate::SharedAppState,
@@ -50438,19 +50454,22 @@ mod validation_fee_torii_ingress_tests {
     }
     routing_test! { async public_transaction_handler_requires_authoritative_queue_plan_transport
         let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
-        let exact_fee_tx = signed_transfer(
+        let exact_fee_tx = transfer_builder(
             &app.state,
             &user,
-            &user_key_pair,
             &recipient,
             &validation_fee_policy_asset(&policy),
             &policy,
             true,
-        );
+        ).with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        ).sign(user_key_pair.private_key());
         let response = submit_via_public_transaction_handler(Arc::clone(&app), exact_fee_tx).await;
         assert_eq!(
             response.status(),
-            axum::http::StatusCode::SERVICE_UNAVAILABLE
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "a correctly signed admission intent must reach the unavailable transport: {:?}",
+            response.headers(),
         );
         assert_eq!(
             app.queue.active_len(),

@@ -214,8 +214,11 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 before_prepare,
                 "preparing exact queued claims must not modify canonical State",
             );
-            let admissions =
-                cold_fixture_queue_plan_certificates(&fixture, &prepared.admission_bindings);
+            let admissions = cold_fixture_queue_plan_certificates(
+                &fixture,
+                &prepared.admission_bindings,
+                &prepared.entrypoints,
+            );
             let mut admission_carrier = build_apply_fixture_at_context_with_queue_plan_admissions(
                 &fixture,
                 context.clone(),
@@ -231,6 +234,37 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 )
                 .expect("commit real signed QueuePlan admissions before lane reservation");
             assert_eq!(fixture.state.committed_height(), 2);
+            let retained_admission_carrier = fixture
+                .state
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(2).unwrap())
+                .expect("the applied admission carrier retains its complete canonical wire");
+            assert_eq!(retained_admission_carrier.external_entrypoint_count(), 0);
+            let retained_controls = retained_admission_carrier
+                .execution_context()
+                .expect("admission-only carrier retains its execution context")
+                .queue_plan_admissions();
+            assert_eq!(retained_controls.len(), prepared.entrypoints.len());
+            let mut retained_inputs = std::collections::BTreeMap::new();
+            for bytes in retained_controls {
+                let input = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                    fixture.state.network_id_ref(),
+                    bytes,
+                )
+                .expect("complete input survives the production apply/Kura carrier path");
+                assert!(
+                    retained_inputs
+                        .insert(input.entrypoint().hash(), input.into_input())
+                        .is_none()
+                );
+            }
+            for entrypoint in &prepared.entrypoints {
+                assert_eq!(
+                    &retained_inputs[&entrypoint.hash()].entrypoint,
+                    entrypoint,
+                    "the carrier retains exact executable input without ordinary execution entries"
+                );
+            }
             for binding in &prepared.admission_bindings {
                 assert_eq!(
                     fixture
@@ -2045,6 +2079,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
 fn cold_fixture_queue_plan_certificates(
     fixture: &ApplyFixture,
     bindings: &[crate::torii_proxy::QueuePlanAdmissionBindingV1],
+    entrypoints: &[TransactionEntrypoint],
 ) -> Vec<Vec<u8>> {
     let mut ordered = bindings.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|binding| binding.registry_key());
@@ -2081,21 +2116,31 @@ fn cold_fixture_queue_plan_certificates(
                     }
                 })
                 .collect();
-            let bytes =
-                norito::encode_canonical(&crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
-                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                    binding: binding.clone(),
-                    attestations,
-                })
-                .expect("encode the canonical signed QueuePlan certificate");
-            let validated =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                    fixture.state.network_id_ref(),
-                    &bytes,
-                )
-                .expect("the production decoder authenticates the exact admission quorum");
-            assert_eq!(&validated.certificate.binding, binding);
-            assert_eq!(validated.binding_hash, binding.canonical_hash());
+            let bytes = norito::encode_canonical(
+                &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+                    entrypoint: entrypoints
+                        .iter()
+                        .find(|input| input.hash() == binding.entrypoint_hash)
+                        .expect("retain every exact queued input")
+                        .clone(),
+                    certificate: crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+                        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                        binding: binding.clone(),
+                        attestations,
+                    },
+                },
+            )
+            .expect("encode the canonical signed QueuePlan certificate");
+            let validated = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                fixture.state.network_id_ref(),
+                &bytes,
+            )
+            .expect("the production decoder authenticates the exact admission quorum");
+            assert_eq!(&validated.certificate().certificate.binding, binding);
+            assert_eq!(
+                validated.certificate().binding_hash,
+                binding.canonical_hash()
+            );
             bytes
         })
         .collect()
@@ -2315,9 +2360,15 @@ fn assert_cold_merge_registry_replay_boundary(
                             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
                             binding_hash: Hash::new(b"different immutable admission owner"),
                         };
+                        let priority = State::decode_exact_queue_plan_admission_registry_record(
+                            &key,
+                            world.smart_contract_state.get(&key).unwrap(),
+                        )
+                        .expect("decode original ranked owner")
+                        .priority;
                         world.smart_contract_state.insert(
                             key,
-                            norito::to_bytes(&value)
+                            State::queue_plan_admission_registry_marker_payload(&value, priority)
                                 .expect("encode a well-formed conflicting owner"),
                         );
                     }

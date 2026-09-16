@@ -198,8 +198,6 @@ struct FakeRuntime {
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_queries: Vec<RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
-    external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
-    external_lifecycle_owner_capacity: Option<usize>,
     live_clocks_armed: bool,
     active_view_producer_retained: bool,
     completed_proposal_fanouts: Vec<(wire::ConsensusRound, RuntimeEffectOwnership)>,
@@ -387,7 +385,11 @@ impl EffectRuntime for FakeRuntime {
         )
     }
 
-    fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
+    fn step_effects(
+        &mut self,
+        _now: Instant,
+        _external: &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
         assert!(!self.panic_step, "model safety-WAL step panic");
         if self.scheduler_ownership_ready {
             return Err("fake runtime scheduler owner was not consumed".to_owned());
@@ -406,12 +408,14 @@ impl EffectRuntime for FakeRuntime {
     fn step_recovery_effects(
         &mut self,
         now: Instant,
+        external: &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_effects(now)
+        self.step_effects(now, external)
     }
     fn step_pacemaker_effects(
         &mut self,
         _now: Instant,
+        _external: &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
         assert!(!self.panic_step, "model safety-WAL pacemaker step panic");
         if self.scheduler_ownership_ready {
@@ -492,33 +496,7 @@ impl EffectRuntime for FakeRuntime {
             .pop_front()
             .unwrap_or_default())
     }
-    fn set_external_lifecycle_owners(
-        &mut self,
-        owners: Vec<RuntimeLifecycleOwner>,
-    ) -> Result<(), String> {
-        if self
-            .external_lifecycle_owner_capacity
-            .is_some_and(|capacity| owners.len() > capacity)
-        {
-            return Err("fake external lifecycle-owner capacity exceeded".to_owned());
-        }
-        self.external_lifecycle_owners = owners;
-        Ok(())
-    }
-    fn configure_external_lifecycle_owner_capacity(
-        &mut self,
-        max_pending_work: usize,
-    ) -> Result<(), String> {
-        let retained_capacity = MAX_EFFECTS_PER_STEP
-            .checked_mul(2)
-            .ok_or_else(|| "fake external lifecycle-owner capacity overflowed".to_owned())?;
-        self.external_lifecycle_owner_capacity = Some(
-            max_pending_work
-                .checked_add(retained_capacity)
-                .ok_or_else(|| "fake external lifecycle-owner capacity overflowed".to_owned())?,
-        );
-        Ok(())
-    }
+
     fn reconcile_active_view_producer(
         &mut self,
         _tag: EventTag,
@@ -1287,6 +1265,9 @@ impl V2EffectServices for FakeServices {
         *owned = rebound;
         self.chunk_validation_sessions.remove(&previous.id());
         Ok(())
+    }
+    fn certified_fetch_persistence_work(&self) -> BTreeSet<EffectWorkId> {
+        BTreeSet::new()
     }
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         self.check("cancel-fetch")?;

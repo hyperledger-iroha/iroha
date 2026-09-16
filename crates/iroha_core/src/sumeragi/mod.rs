@@ -529,6 +529,9 @@ pub use v2_core::{
 pub(crate) mod v2_beacon;
 pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
+// TODO: native wire evidence becomes live only through the shared lane reducer driver.
+pub(crate) mod v2_lane_wal;
+pub(crate) mod v2_lane_wire;
 pub(crate) mod v2_lane_work;
 pub(crate) mod v2_lifecycle_coordinator;
 pub(crate) mod v2_lifecycle_recovery;

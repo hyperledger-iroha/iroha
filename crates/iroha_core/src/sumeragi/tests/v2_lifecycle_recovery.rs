@@ -756,7 +756,7 @@ fn reserve_lifecycle_replica_retirement_payload(
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture lifecycle replica retirement admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
@@ -896,7 +896,7 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture lifecycle FIFO admission context");
-        let admission = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let admission = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,

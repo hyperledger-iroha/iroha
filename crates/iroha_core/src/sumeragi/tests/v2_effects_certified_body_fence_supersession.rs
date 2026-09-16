@@ -78,7 +78,14 @@ mod certified_body_fence_supersession {
         services
     }
 
-    fn ready_body_fixture() -> ReadyBodyFixture {
+    struct PendingBodyFixture {
+        ready: ReadyBodyFixture,
+        ingress: crate::sumeragi::FairV2Ingress,
+        _ingress_directory: TempDir,
+        source: crate::sumeragi::v2_lifecycle_coordinator::WaitSource,
+    }
+
+    fn pending_body_fixture() -> PendingBodyFixture {
         // A fixed roster index can be a dormant Set-B validator. The current
         // leader is always eligible to fetch a certified candidate body.
         let mut transport = Box::new(
@@ -89,6 +96,10 @@ mod certified_body_fence_supersession {
         );
         let leader = transport.context.leader(0);
         assert_eq!(transport.executor.local_validator, Some(leader));
+        // Production signs transport requests and consensus with the same
+        // local key. Keep that identity before either Fetch is admitted.
+        transport.requester_key =
+            transport.validator_keys[usize::try_from(leader).expect("leader index fits")].clone();
         let proofs = transport
             .validator_keys
             .iter()
@@ -203,7 +214,7 @@ mod certified_body_fence_supersession {
         // The production ingress admission obtains the missing manifest from
         // the authenticated response while retaining the original Fetch shape.
         let mut services = ready_body_services();
-        let mut planner_io = Box::new(owner.bind_body_store_to_planner_io_for_test(
+        let planner_io = Box::new(owner.bind_body_store_to_planner_io_for_test(
             services.as_mut(),
             leader,
             Arc::clone(&transport.executor.output_guard),
@@ -212,6 +223,15 @@ mod certified_body_fence_supersession {
         crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
             services.as_mut(),
             &transport.validator_keys[usize::try_from(leader).expect("local validator index")],
+        );
+        crate::sumeragi::v2_worker::tests::install_completion_runtime_wal_authority_for_test(
+            services.as_mut(),
+            transport
+                .executor
+                .runtime
+                .leader_wire_recovery_authority()
+                .expect("read the actual runtime WAL authority")
+                .expect("the actual runtime retains its WAL authority"),
         );
         planner_io.install_output_guard_for_test(
             services.as_mut(),
@@ -240,40 +260,260 @@ mod certified_body_fence_supersession {
             ),
         };
         let ordinal = queued.ordinal();
-        planner_io.execute_one_certified_fetch(Arc::clone(&transport.executor.output_guard));
-        let completion = match services
+        PendingBodyFixture {
+            ready: ReadyBodyFixture {
+                transport,
+                owner,
+                services,
+                planner_io,
+                _owner_directory: owner_directory,
+                certificate,
+                ordinal,
+            },
+            ingress,
+            _ingress_directory,
+            source,
+        }
+    }
+
+    fn finish_pending_body_fixture(mut pending: PendingBodyFixture) -> ReadyBodyFixture {
+        pending
+            .ready
+            .planner_io
+            .execute_one_certified_fetch(Arc::clone(
+                &pending.ready.transport.executor.output_guard,
+            ));
+        let completion = match pending
+            .ready
+            .services
             .take_next_lifecycle_completion()
             .expect("fsynced body completion")
         {
             LifecycleCompletionTakeV1::CertifiedFetch(completion) => completion,
             _ => panic!("the worker must return the exact certified body carrier"),
         };
-        assert!(
-            owner
-                .complete_certified_fetch_for_test(
-                    &mut transport.executor,
-                    services.as_mut(),
-                    &ingress,
-                    completion,
-                )
-                .is_ok(),
-            "the real Phase B must publish a durable Ready Fetch"
-        );
+        settle_pending_body_fixture(pending, completion)
+    }
+
+    fn settle_pending_body_fixture(
+        pending: PendingBodyFixture,
+        completion: crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion,
+    ) -> ReadyBodyFixture {
+        let PendingBodyFixture {
+            ready: mut fixture,
+            ingress,
+            _ingress_directory,
+            source,
+        } = pending;
+        if let Err(error) = fixture.owner.complete_certified_fetch_for_test(
+            &mut fixture.transport.executor,
+            fixture.services.as_mut(),
+            &ingress,
+            completion,
+        ) {
+            fixture.planner_io.detach(fixture.services.as_mut());
+            match error {
+                crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(error) => {
+                    panic!("admitted persistence cannot lose settlement authority: {}: {}", error.reason(), error.detail());
+                }
+                _ => panic!("admitted persistence must settle without requiring restart"),
+            }
+        }
         assert!(matches!(
-            owner.fetch_wait_projection_for_test(ordinal, source),
+            fixture
+                .owner
+                .fetch_wait_projection_for_test(fixture.ordinal, source),
             (Some(LifecycleState::Ready), Some(2), None, false)
         ));
-        assert!(transport.executor.pending_fetches.is_empty());
-        assert!(transport.executor.certified_work.is_empty());
-        assert!(transport.executor.outstanding_requests.is_empty());
-        ReadyBodyFixture {
-            transport,
-            owner,
-            services,
-            planner_io,
-            _owner_directory: owner_directory,
-            certificate,
-            ordinal,
+        assert_eq!(
+            fixture.services.has_unleased_lifecycle_completion_work(),
+            Some(false)
+        );
+        fixture
+    }
+
+    fn ready_body_fixture() -> ReadyBodyFixture {
+        let fixture = finish_pending_body_fixture(pending_body_fixture());
+        assert!(fixture.transport.executor.pending_fetches.is_empty());
+        assert!(fixture.transport.executor.certified_work.is_empty());
+        assert!(fixture.transport.executor.outstanding_requests.is_empty());
+        fixture
+    }
+
+    #[test]
+    fn admitted_certified_persistence_survives_current_view_transition() {
+        let result = crate::sumeragi::sumeragi_thread_builder(
+            "admitted_certified_persistence_survives_current_view_transition",
+        )
+        .spawn(assert_admitted_persistence_survives_current_view_transition)
+        .expect("spawn on the production consensus stack")
+        .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn assert_admitted_persistence_survives_current_view_transition() {
+        for protect_body in [false, true] {
+            let mut pending = pending_body_fixture();
+            let transition = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let fixture = &mut pending.ready;
+                let timeout = signed_timeout_certificate(fixture, protect_body);
+                let now = Instant::now();
+                let executor = &mut fixture.transport.executor;
+                executor
+                    .arm_live_clocks(
+                        ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                        now,
+                    )
+                    .expect("arm the actual serialized runtime");
+                executor
+                    .enqueue_network(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+                    ))
+                    .expect("admit an authenticated timeout quorum");
+                for _ in 0..32 {
+                    executor
+                        .step(now, fixture.services.as_mut())
+                        .expect("service the current runtime owner while persistence is retained");
+                    if executor.current_tag().view() == 1 {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    executor.current_tag().view(),
+                    1,
+                    "the certified view transition must run"
+                );
+                assert_eq!(
+                    fixture.services.has_unleased_lifecycle_completion_work(),
+                    Some(true)
+                );
+            }));
+            if let Err(payload) = transition {
+                pending
+                    .ready
+                    .planner_io
+                    .detach(pending.ready.services.as_mut());
+                std::panic::resume_unwind(payload);
+            }
+            let mut ready = finish_pending_body_fixture(pending);
+            assert!(!ready.transport.executor.output_guard.restart_required());
+            ready.planner_io.detach(ready.services.as_mut());
+        }
+    }
+
+    #[test]
+    fn admitted_certified_persistence_releases_capacity_only_after_exact_acknowledgement() {
+        let result = crate::sumeragi::sumeragi_thread_builder(
+            "admitted_certified_persistence_releases_capacity_only_after_exact_acknowledgement",
+        )
+        .spawn(|| {
+            let mut pending = pending_body_fixture();
+            let fixture = &mut pending.ready;
+            fixture.transport.executor.config.max_pending_work = 1;
+            let expected = fixture.transport.executor.pending_fetches.clone();
+            let assert_retained = |fixture: &mut ReadyBodyFixture| {
+                assert!(matches!(
+                    fixture
+                        .transport
+                        .executor
+                        .ensure_signature_slot(fixture.services.as_mut()),
+                    Err(EffectExecutorError::PendingWorkCapacity { capacity: 1 })
+                ));
+                assert_eq!(fixture.transport.executor.pending_fetches, expected);
+                assert_eq!(fixture.services.certified_fetch_persistence_work().len(), 1);
+                assert!(!fixture.transport.executor.output_guard.restart_required());
+            };
+            assert_retained(fixture);
+            let ReadyBodyFixture {
+                planner_io,
+                services,
+                transport,
+                ..
+            } = fixture;
+            planner_io.execute_one_certified_fetch_with_active_observer(
+                Arc::clone(&transport.executor.output_guard),
+                || {
+                    assert!(matches!(
+                        transport.executor.ensure_signature_slot(services.as_mut()),
+                        Err(EffectExecutorError::PendingWorkCapacity { capacity: 1 })
+                    ));
+                    assert_eq!(transport.executor.pending_fetches, expected);
+                    assert_eq!(services.certified_fetch_persistence_work().len(), 1);
+                },
+            );
+            assert_retained(fixture);
+            let completion = match fixture
+                .services
+                .take_next_lifecycle_completion()
+                .expect("take retained physical completion")
+            {
+                LifecycleCompletionTakeV1::CertifiedFetch(completion) => completion,
+                _ => panic!("the exact persistence result must remain next"),
+            };
+            assert_retained(fixture);
+            let mut settled = settle_pending_body_fixture(pending, completion);
+            settled
+                .transport
+                .executor
+                .ensure_signature_slot(settled.services.as_mut())
+                .expect("Phase B acknowledgement releases the slot");
+            assert!(
+                settled
+                    .services
+                    .certified_fetch_persistence_work()
+                    .is_empty()
+            );
+            settled.planner_io.detach(settled.services.as_mut());
+        })
+        .expect("spawn on production consensus stack")
+        .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn admitted_certified_persistence_keeps_request_authority_when_reconstruction_finishes() {
+        let result = crate::sumeragi::sumeragi_thread_builder(
+            "admitted_certified_persistence_keeps_request_authority_when_reconstruction_finishes",
+        )
+        .spawn(|| {
+            let mut pending = pending_body_fixture();
+            let fixture = &mut pending.ready;
+            let task = fixture
+                .transport
+                .executor
+                .pending_fetches
+                .values()
+                .next()
+                .expect("the actual pending Fetch")
+                .task
+                .clone();
+            let before = fixture.transport.executor.pending_fetches.clone();
+            assert!(matches!(
+                fixture.transport.executor.complete_body_reconstruction(
+                    &task,
+                    fixture.transport.manifest.clone(),
+                    fixture.transport.body.clone(),
+                    fixture.services.as_mut(),
+                ),
+                Err(EffectTransportError::Backpressure)
+            ));
+            assert_eq!(fixture.transport.executor.pending_fetches, before);
+            assert_eq!(fixture.transport.executor.certified_work.len(), 1);
+            assert!(fixture.transport.executor.ready_bodies.is_empty());
+            assert_eq!(fixture.services.certified_fetch_persistence_work().len(), 1);
+            let mut settled = finish_pending_body_fixture(pending);
+            assert!(settled.transport.executor.pending_fetches.is_empty());
+            assert!(settled.transport.executor.certified_work.is_empty());
+            settled.planner_io.detach(settled.services.as_mut());
+        })
+        .expect("spawn on production consensus stack")
+        .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
         }
     }
 
@@ -291,9 +531,9 @@ mod certified_body_fence_supersession {
             .retransmit_elapsed(tag)
             .expect("the real reducer still has a missing certified body")
             .into_effects();
-        let mut fetches = effects.into_iter().filter(|effect| {
-            matches!(effect, AdapterEffect::FetchBody { .. })
-        });
+        let mut fetches = effects
+            .into_iter()
+            .filter(|effect| matches!(effect, AdapterEffect::FetchBody { .. }));
         let fetch = fetches.next().expect("Missing rediscovery emits one Fetch");
         assert!(fetches.next().is_none());
         assert!(matches!(&fetch,
@@ -301,7 +541,10 @@ mod certified_body_fence_supersession {
                 if *observed == tag && *round == fixture.transport.round
                     && *subject == fixture.transport.subject && certificate == &fixture.certificate
         ));
-        fixture.transport.executor.runtime
+        fixture
+            .transport
+            .executor
+            .runtime
             .retain_retransmit_effect_ownership_for_test(core::slice::from_ref(&fetch))
             .expect("retain the exact reducer-emitted retry owner");
         fetch
@@ -312,7 +555,10 @@ mod certified_body_fence_supersession {
         let tag = fixture.transport.executor.current_tag();
         let guard = fixture.transport.executor.body_pipeline_owners[&key];
         assert_eq!(guard.tag, tag);
-        assert_eq!(guard.manifest_hash, Some(HashOf::new(&fixture.transport.manifest)));
+        assert_eq!(
+            guard.manifest_hash,
+            Some(HashOf::new(&fixture.transport.manifest))
+        );
         let registry = fixture.owner.fetch_registry_snapshot_for_test();
         let before_commands = fixture.transport.executor.runtime.queued_commands();
         let before_receipt = fixture.transport.executor.durable_bodies[&key].clone();
@@ -322,28 +568,66 @@ mod certified_body_fence_supersession {
         };
         for _ in 0..3 {
             let retry = rediscover_ready_fetch(&mut fixture);
-            fixture.transport.executor.consume_effects(vec![retry], &mut retries)
+            fixture
+                .transport
+                .executor
+                .consume_effects(vec![retry], &mut retries)
                 .expect("the exact Fetch rediscovery retains coordinator custody");
-            assert_eq!(fixture.transport.executor.runtime.queued_commands(), before_commands,
-                "a durable Ready Fetch must not enqueue a competing BodyAvailable");
-            assert!(retries.fetch_tasks.is_empty(), "the response is already durable");
+            assert_eq!(
+                fixture.transport.executor.runtime.queued_commands(),
+                before_commands,
+                "a durable Ready Fetch must not enqueue a competing BodyAvailable"
+            );
+            assert!(
+                retries.fetch_tasks.is_empty(),
+                "the response is already durable"
+            );
             assert!(fixture.transport.executor.pending_fetches.is_empty());
             assert_eq!(fixture.transport.executor.body_pipeline_owners[&key], guard);
-            assert_eq!(fixture.transport.executor.durable_bodies[&key], before_receipt);
+            assert_eq!(
+                fixture.transport.executor.durable_bodies[&key],
+                before_receipt
+            );
             assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
         }
-        let advanced = fixture.owner.dispatch_completion_for_test(
-            fixture.services.as_mut(), &mut fixture.transport.executor, 0,
-        ).expect("the original Ready Fetch still owns the only BodyAvailable transition");
+        let advanced = fixture
+            .owner
+            .dispatch_completion_for_test(
+                fixture.services.as_mut(),
+                &mut fixture.transport.executor,
+                0,
+            )
+            .expect("the original Ready Fetch still owns the only BodyAvailable transition");
         let ProductionCompletionDispatchV1::BodyStageAdvanced {
-            parent_ordinal, child_ordinal, child: LifecycleWorkClass::Store,
-        } = advanced else { panic!("the original Fetch must publish exactly one Store") };
+            parent_ordinal,
+            child_ordinal,
+            child: LifecycleWorkClass::Store,
+        } = advanced
+        else {
+            panic!("the original Fetch must publish exactly one Store")
+        };
         assert_eq!(parent_ordinal, fixture.ordinal);
         assert_ne!(child_ordinal, parent_ordinal);
-        assert_eq!(fixture.transport.executor.published_lifecycle_store_retry_markers.len(), 1);
-        assert!(!fixture.transport.executor.body_pipeline_owners.contains_key(&key),
-            "durable Store publication transfers the Fetch guard to its exact retry marker");
-        assert_eq!(fixture.transport.executor.runtime.queued_commands(), before_commands);
+        assert_eq!(
+            fixture
+                .transport
+                .executor
+                .published_lifecycle_store_retry_markers
+                .len(),
+            1
+        );
+        assert!(
+            !fixture
+                .transport
+                .executor
+                .body_pipeline_owners
+                .contains_key(&key),
+            "durable Store publication transfers the Fetch guard to its exact retry marker"
+        );
+        assert_eq!(
+            fixture.transport.executor.runtime.queued_commands(),
+            before_commands
+        );
         assert!(!fixture.transport.executor.output_guard.restart_required());
         assert!(!fixture.transport.executor.status().fail_closed);
         fixture.planner_io.detach(fixture.services.as_mut());
@@ -356,28 +640,46 @@ mod certified_body_fence_supersession {
         assert_ready_fetch_coalesces_then_advances_once(ready_body_fixture());
     }
 
-    fn reopen_ready_fetch_fixture(fixture: ReadyBodyFixture) -> (
+    fn reopen_ready_fetch_fixture(
+        fixture: ReadyBodyFixture,
+    ) -> (
         ReadyBodyFixture,
         Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
     ) {
         let ReadyBodyFixture {
-            mut transport, owner, planner_io, mut services,
-            _owner_directory: directory, certificate, ordinal,
+            mut transport,
+            owner,
+            planner_io,
+            mut services,
+            _owner_directory: directory,
+            certificate,
+            ordinal,
         } = fixture;
         let validator = transport.context.leader(0);
         let verified = VerifiedHeightContext::genesis(
             transport.context.clone(),
-            transport.validator_keys.iter().map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("frozen PoP")
-            }).collect(),
-        ).expect("reauthenticate the unchanged restart context");
-        let wal_path = transport._directory.path().join("transport-regression-safety.wal");
+            transport
+                .validator_keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("frozen PoP")
+                })
+                .collect(),
+        )
+        .expect("reauthenticate the unchanged restart context");
+        let wal_path = transport
+            ._directory
+            .path()
+            .join("transport-regression-safety.wal");
         planner_io.detach(services.as_mut());
         drop(services);
         drop(owner);
         drop(transport.executor);
         let mut owner = Box::new(SumeragiV2Adapter::reopen_body_owner_for_test(
-            &wal_path, directory.path(), verified, validator,
+            &wal_path,
+            directory.path(),
+            verified,
+            validator,
             &transport.validator_keys[usize::try_from(validator).unwrap()],
             AdapterFingerprints {
                 node: Hash::new(b"production transport node"),
@@ -391,20 +693,33 @@ mod certified_body_fence_supersession {
         let mut services = ready_body_services();
         let (executor, planner_io, leader_wire_gate, ordinals) = owner
             .bind_recovered_cancelled_body_executor_for_test(
-                &wal_path, services.as_mut(), ConsensusOutputGuard::isolated(), validator,
+                &wal_path,
+                services.as_mut(),
+                ConsensusOutputGuard::isolated(),
+                validator,
             );
         crate::sumeragi::v2_worker::tests::install_active_tag_for_test(
-            services.as_mut(), executor.current_tag(),
+            services.as_mut(),
+            executor.current_tag(),
         );
         crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
-            services.as_mut(), &transport.validator_keys[usize::try_from(validator).unwrap()],
+            services.as_mut(),
+            &transport.validator_keys[usize::try_from(validator).unwrap()],
         );
         transport.executor = executor;
         transport._lifecycle_ordinals = ordinals;
-        (ReadyBodyFixture {
-            transport, owner, planner_io: Box::new(planner_io), services,
-            _owner_directory: directory, certificate, ordinal,
-        }, leader_wire_gate)
+        (
+            ReadyBodyFixture {
+                transport,
+                owner,
+                planner_io: Box::new(planner_io),
+                services,
+                _owner_directory: directory,
+                certificate,
+                ordinal,
+            },
+            leader_wire_gate,
+        )
     }
 
     #[test]
@@ -420,16 +735,31 @@ mod certified_body_fence_supersession {
             let key = (fixture.transport.round, fixture.transport.subject);
             let registry = fixture.owner.fetch_registry_snapshot_for_test();
             let retry = rediscover_ready_fetch(&mut fixture);
-            let guard = fixture.transport.executor.body_pipeline_owners.get_mut(&key).unwrap();
+            let guard = fixture
+                .transport
+                .executor
+                .body_pipeline_owners
+                .get_mut(&key)
+                .unwrap();
             if wrong_tag {
-                guard.tag = EventTag::new(guard.tag.height(), guard.tag.view() + 1, guard.tag.generation());
+                guard.tag = EventTag::new(
+                    guard.tag.height(),
+                    guard.tag.view() + 1,
+                    guard.tag.generation(),
+                );
             } else {
                 let mut foreign = fixture.transport.manifest.clone();
                 foreign.payload_size_bytes += 1;
                 guard.manifest_hash = Some(HashOf::new(&foreign));
             }
             let mut services = FakeServices::default();
-            assert!(fixture.transport.executor.consume_effects(vec![retry], &mut services).is_err());
+            assert!(
+                fixture
+                    .transport
+                    .executor
+                    .consume_effects(vec![retry], &mut services)
+                    .is_err()
+            );
             assert!(fixture.transport.executor.status().fail_closed);
             assert!(services.fetch_tasks.is_empty());
             assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), registry);
@@ -447,42 +777,101 @@ mod certified_body_fence_supersession {
         let guards = fixture.transport.executor.body_pipeline_owners.clone();
         let mut foreign = manifest.clone();
         foreign.payload_size_bytes += 1;
-        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
-            tag, &foreign, &receipt,
-        ).is_err());
+        assert!(
+            fixture
+                .transport
+                .executor
+                .install_recovered_certified_fetch_body_owner(tag, &foreign, &receipt,)
+                .is_err()
+        );
         let future = EventTag::new(tag.height(), tag.view() + 1, tag.generation());
-        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
-            future, &manifest, &receipt,
-        ).is_err());
-        assert!(fixture.transport.executor.install_recovered_certified_fetch_body_owner(
-            tag, &manifest, &receipt,
-        ).is_err(), "a duplicate cold owner must not overwrite the first guard");
+        assert!(
+            fixture
+                .transport
+                .executor
+                .install_recovered_certified_fetch_body_owner(future, &manifest, &receipt,)
+                .is_err()
+        );
+        assert!(
+            fixture
+                .transport
+                .executor
+                .install_recovered_certified_fetch_body_owner(tag, &manifest, &receipt,)
+                .is_err(),
+            "a duplicate cold owner must not overwrite the first guard"
+        );
         let fetch = AdapterEffect::FetchBody {
-            tag, round: manifest.round, subject: manifest.subject,
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
             manifest: Some(manifest.clone()),
-            certified_sources: fixture.transport.context.roster.iter()
-                .map(|entry| entry.validator.clone()).collect(),
+            certified_sources: fixture
+                .transport
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
             certificate: Some(fixture.certificate.clone()),
         };
-        let store = AdapterEffect::StoreBody { tag, round: manifest.round, subject: manifest.subject };
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
         let store_owner = bound_test_effect_ownership(&fetch, tag, 90_027)
-            .rebind_as_inherited_adapter_effect(&store).expect("exact inherited Store owner");
-        let pending = store_owner.exact_pending_adapter_effect_binding(&store)
+            .rebind_as_inherited_adapter_effect(&store)
+            .expect("exact inherited Store owner");
+        let pending = store_owner
+            .exact_pending_adapter_effect_binding(&store)
             .expect("seal the complete Store binding");
         assert!(pending.exactly_binds_adapter_effect(&store));
-        let error = fixture.transport.executor.install_recovered_published_lifecycle_store_retry_marker(
-            &store, &pending, &receipt,
-        ).expect_err("a distinct cold Store cannot absorb the Ready Fetch guard");
-        assert!(error.to_string().contains("recovered Store overlaps an authenticated Ready Fetch guard"));
-        let validate = AdapterEffect::ValidateBody { tag, round: manifest.round, subject: manifest.subject };
-        let validate_pending = pending.project_store_validate_successor(&store, &validate)
+        let error = fixture
+            .transport
+            .executor
+            .install_recovered_published_lifecycle_store_retry_marker(&store, &pending, &receipt)
+            .expect_err("a distinct cold Store cannot absorb the Ready Fetch guard");
+        assert!(
+            error
+                .to_string()
+                .contains("recovered Store overlaps an authenticated Ready Fetch guard")
+        );
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let validate_pending = pending
+            .project_store_validate_successor(&store, &validate)
             .expect("derive the exact Validate successor binding");
         assert!(validate_pending.exactly_binds_adapter_effect(&validate));
-        assert!(fixture.transport.executor.install_recovered_published_lifecycle_validate_retry_marker(
-            &validate, &validate_pending, &receipt, 90_028,
-        ).is_err(), "a distinct cold Validate cannot absorb the Ready Fetch guard");
-        assert!(fixture.transport.executor.published_lifecycle_store_retry_markers.is_empty());
-        assert!(fixture.transport.executor.published_lifecycle_validate_retry_markers.is_empty());
+        assert!(
+            fixture
+                .transport
+                .executor
+                .install_recovered_published_lifecycle_validate_retry_marker(
+                    &validate,
+                    &validate_pending,
+                    &receipt,
+                    90_028,
+                )
+                .is_err(),
+            "a distinct cold Validate cannot absorb the Ready Fetch guard"
+        );
+        assert!(
+            fixture
+                .transport
+                .executor
+                .published_lifecycle_store_retry_markers
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .transport
+                .executor
+                .published_lifecycle_validate_retry_markers
+                .is_empty()
+        );
         assert_eq!(fixture.transport.executor.body_pipeline_owners, guards);
         assert!(!fixture.transport.executor.output_guard.restart_required());
         fixture.planner_io.detach(fixture.services.as_mut());
@@ -492,7 +881,9 @@ mod certified_body_fence_supersession {
     fn ready_fetch_cold_census_rejects_bad_carrier_without_omission() {
         let mut fixture = ready_body_fixture();
         let before = fixture.owner.fetch_registry_snapshot_for_test();
-        fixture.owner.assert_cold_ready_fetch_bad_carrier_rejected_for_test();
+        fixture
+            .owner
+            .assert_cold_ready_fetch_bad_carrier_rejected_for_test();
         assert_eq!(fixture.owner.fetch_registry_snapshot_for_test(), before);
         fixture.planner_io.detach(fixture.services.as_mut());
     }
@@ -613,29 +1004,28 @@ mod certified_body_fence_supersession {
                     .expect("consume the preceding runtime occurrence after its effects");
                 continue;
             }
-            executor
-                .publish_external_lifecycle_owners()
-                .expect("publish the exact runtime owner census");
-            assert!(
-                executor
-                    .runtime
-                    .decided_body()
-                    .expect("read the decision frontier")
-                    .is_none()
-            );
-            let wal_step = executor
-                .output_guard
-                .begin_fail_stop_operation()
-                .expect("the ordinary runtime WAL boundary is open");
-            let step = executor
-                .runtime
-                .step_effects(now)
-                .expect("service the actual scheduler owner before the queued TC");
-            executor
-                .runtime
-                .take_scheduler_ownership()
-                .expect("consume the real scheduler proof");
-            wal_step.complete();
+            let step = {
+                let (runtime, output_guard, external) = executor
+                    .runtime_and_external_lifecycle_census()
+                    .expect("borrow the exact current runtime owners");
+                assert!(
+                    runtime
+                        .decided_body()
+                        .expect("read the decision frontier")
+                        .is_none()
+                );
+                let wal_step = output_guard
+                    .begin_fail_stop_operation()
+                    .expect("the ordinary runtime WAL boundary is open");
+                let step = runtime
+                    .step_effects(now, &external)
+                    .expect("service the actual scheduler owner before the queued TC");
+                runtime
+                    .take_scheduler_ownership()
+                    .expect("consume the real scheduler proof");
+                wal_step.complete();
+                step
+            };
             executor
                 .finish_runtime_step_reconciliation(services)
                 .expect("retain the runtime's actual completion terminals");
@@ -1031,7 +1421,11 @@ mod certified_body_fence_supersession {
             .lifecycle_reducer_fence_observation();
         let blocked = fixture
             .owner
-            .dispatch_completion_for_test(fixture.services.as_mut(), &mut fixture.transport.executor, 0)
+            .dispatch_completion_for_test(
+                fixture.services.as_mut(),
+                &mut fixture.transport.executor,
+                0,
+            )
             .expect("an active signer must park the exact body carrier without a fault");
         let ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait } = blocked else {
             panic!("the body carrier must wait on the reducer fence");
@@ -1225,9 +1619,17 @@ mod certified_body_fence_supersession {
         assert_eq!(fixture.transport.executor.durable_bodies, bodies);
         assert_eq!(fixture.transport.executor.recovered_bodies, recovered);
         let mut expected_owners = current_owners.clone();
-        if expected_owners.get(&key).is_some_and(|owner| owner.tag == old_tag) {
-            let removed = expected_owners.remove(&key).expect("the exact old Fetch guard exists");
-            assert_eq!(removed.manifest_hash, Some(HashOf::new(&fixture.transport.manifest)));
+        if expected_owners
+            .get(&key)
+            .is_some_and(|owner| owner.tag == old_tag)
+        {
+            let removed = expected_owners
+                .remove(&key)
+                .expect("the exact old Fetch guard exists");
+            assert_eq!(
+                removed.manifest_hash,
+                Some(HashOf::new(&fixture.transport.manifest))
+            );
         }
         assert_eq!(
             fixture.transport.executor.body_pipeline_owners, expected_owners,
@@ -1416,4 +1818,5 @@ mod certified_body_fence_supersession {
     );
     include!("v2_effects_resolved_validate_owner_cases.rs");
     include!("v2_effects_terminal_sign_cold_owner_cases.rs");
+    include!("v2_effects_certified_body_decision_supersession.rs");
 }

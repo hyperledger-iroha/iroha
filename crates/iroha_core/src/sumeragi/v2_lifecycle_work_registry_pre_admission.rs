@@ -80,8 +80,8 @@ impl PendingLifecycleOutputAdmissionV1 {
     }
 
     /// Project only the immutable runtime lifecycle owner for rank census.
-    pub(in crate::sumeragi) fn lifecycle_owner(&self) -> RuntimeLifecycleOwner {
-        self.ownership.owner().clone()
+    pub(in crate::sumeragi) fn lifecycle_owner(&self) -> &RuntimeLifecycleOwner {
+        self.ownership.owner()
     }
 
     /// Identify an exact single-effect periodic Broadcast without an Apply suffix.

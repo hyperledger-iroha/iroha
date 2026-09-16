@@ -461,24 +461,12 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     })
 }
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
-    let mut world = state.world.block();
-    world.smart_contract_state.insert(
-        State::queue_plan_admission_registry_marker_key(&admission.registry_key)
-            .expect("fixture registry key"),
-        State::queue_plan_admission_registry_marker_payload(&admission.registry_value)
-            .expect("fixture registry value"),
-    );
-    State::stage_queue_plan_pending_obligation_in_storage(
-        &mut world.smart_contract_state,
-        &admission,
-    )
-    .expect("fixture pending QueuePlan obligation");
-    world.commit();
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
+    state
+        .install_queue_plan_pending_binding_for_test(&admission.certificate.binding)
+        .expect("fixture exact ranked QueuePlan admission and pending obligation");
 }
 fn seed_pending_queue_plan_binding_state_for_test(
     state: &State,
@@ -517,11 +505,9 @@ fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
 ) -> QueuePlanPendingObligationV1 {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
     State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture pending QueuePlan obligation")
 }

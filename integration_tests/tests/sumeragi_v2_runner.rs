@@ -8,10 +8,10 @@ use iroha::{
     client::QueryError,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
-        Identifiable, Level, NetworkId, ValidationFail,
+        Identifiable, Level, NetworkId,
         account::{Account, AccountId},
         block::{
-            BlockHeader,
+            BlockHeader, SignedBlock,
             consensus_v2::{
                 BlockSubject, ConsensusMode, DualQuorum, ExecutionCommitment, GlobalPhase,
                 HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
@@ -20,16 +20,13 @@ use iroha::{
                 SumeragiV2OutboundIntentStage, SumeragiV2Status, SumeragiV2VoteQuorumStatus,
                 TimeoutCertificateRef, ValidatorIndex,
             },
+            decode_framed_signed_block,
+            proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
         },
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
         prelude::FindAccountById,
-        query::{
-            block::prelude::FindBlocks,
-            error::{FindError, QueryExecutionFail},
-            prelude::QueryBuilderExt,
-        },
         transaction::Executable,
     },
 };
@@ -1195,34 +1192,108 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
 /// the restarted validator, and keep finalizing with the full roster restored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
+    run_validator_restart_scenario(
+        stringify!(authoritative_v2_finalizes_through_validator_restart),
+        VALIDATOR_COUNT,
+        &[VALIDATOR_COUNT - 1],
+        false,
+    )
+    .await
+}
+/// An exact seven-voter committee must retain finality with two validators
+/// offline, recover both identities, and apply the finite final transaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn authoritative_v2_finalizes_through_two_validator_restarts() -> Result<()> {
+    run_validator_restart_scenario(
+        stringify!(authoritative_v2_finalizes_through_two_validator_restarts),
+        7,
+        &[6, 5],
+        false,
+    )
+    .await
+}
+/// Explicit long qualification: 32 deterministic seeds for each exact
+/// (committee, outage) pair, with no successful sandbox skips.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "96 real-network restart scenarios; run explicitly for liveness qualification"]
+async fn authoritative_v2_validator_restart_qualification_32_seeds() -> Result<()> {
+    ensure!(
+        std::env::var_os("IROHA_TEST_NETWORK_BASE_SEED").is_none_or(|value| value.is_empty()),
+        "unset IROHA_TEST_NETWORK_BASE_SEED so the 32 qualification seeds cannot collapse into one network"
+    );
+    let mut completed = 0;
+    for seed in 0..32_usize {
+        for (validator_count, outage_count) in [(4, 1), (7, 1), (7, 2)] {
+            let restart_indices = (0..outage_count)
+                .map(|offset| (seed + validator_count - 1 - offset) % validator_count)
+                .collect::<Vec<_>>();
+            let context = format!(
+                "authoritative_v2_validator_restart_qualification_32_seeds/seed-{seed:02}/validators-{validator_count}/outages-{outage_count}"
+            );
+            eprintln!("{context}: starting with restarted peers {restart_indices:?}");
+            run_validator_restart_scenario(&context, validator_count, &restart_indices, true)
+                .await?;
+            completed += 1;
+            eprintln!("{context}: completed exact finality and applied-state checks");
+        }
+    }
+    ensure!(
+        completed == 96,
+        "the complete 32-seed restart matrix must execute"
+    );
+    Ok(())
+}
+async fn run_validator_restart_scenario(
+    context: &str,
+    validator_count: usize,
+    restart_indices: &[usize],
+    require_network: bool,
+) -> Result<()> {
+    ensure!(
+        matches!(validator_count, 4 | 7)
+            && !restart_indices.is_empty()
+            && restart_indices.len() <= (validator_count - 1) / 3
+            && restart_indices.iter().all(|&index| index < validator_count)
+            && restart_indices
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == restart_indices.len(),
+        "restart scenario requires an exact 3f+1 committee and at most f distinct offline validators"
+    );
     init_instruction_registry();
     let builder = NetworkBuilder::new()
-        .with_peers(VALIDATOR_COUNT)
+        .with_peers(validator_count)
+        .with_base_seed(context)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(RESTART_BLOCK_CADENCE)
         .with_sync_timeout(Duration::from_secs(180));
-    let context = stringify!(authoritative_v2_finalizes_through_validator_restart);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        ensure!(
+            !require_network,
+            "{context}: qualification requires a real network; sandbox skip is not evidence"
+        );
         return Ok(());
     };
-    let result = async {
+    let result: Result<()> = async {
         ensure!(
-            network.peers().len() == VALIDATOR_COUNT,
-            "test requires exactly {VALIDATOR_COUNT} voting validators, got {}",
+            network.peers().len() == validator_count,
+            "test requires exactly {validator_count} voting validators, got {}",
             network.peers().len()
         );
         ensure!(
-            network.topology_entries().len() == VALIDATOR_COUNT
+            network.topology_entries().len() == validator_count
                 && network
                     .peers()
                     .iter()
                     .all(|peer| peer.genesis_pop().is_some()),
-            "all four validators must have BLS proof-of-possession entries in fresh genesis"
+            "all {validator_count} validators must have BLS proof-of-possession entries in fresh genesis"
         );
         ensure!(
             network.peers().iter().all(NetworkPeer::is_running),
-            "all four voting validators must be running after fresh genesis"
+            "all {validator_count} voting validators must be running after fresh genesis"
         );
         let all_peers = network.peers().to_vec();
         let initial_statuses =
@@ -1237,9 +1308,9 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .min()
             .unwrap_or_default();
         let initial_v2 =
-            wait_for_common_awaiting_v2_round(&all_peers, initial_committed_floor, STATUS_TIMEOUT)
+            wait_for_common_awaiting_v2_round_for_committee(&all_peers, initial_committed_floor, STATUS_TIMEOUT, validator_count)
                 .await?;
-        validate_v2_status_set(&initial_v2, VALIDATOR_COUNT)?;
+        validate_v2_status_set(&initial_v2, validator_count)?;
         let before_restart_account = fixture_account(0xA1)?;
         let during_outage_account = fixture_account(0xA2)?;
         let after_restart_account = fixture_account(0xA3)?;
@@ -1262,7 +1333,7 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         network
             .ensure_blocks_with(|height| height.non_empty >= first_target_non_empty)
             .await
-            .wrap_err("all four v2 validators did not finalize the pre-restart transaction")?;
+            .wrap_err("all voting validators did not finalize the pre-restart transaction")?;
         wait_for_accounts_visible(
             &all_peers,
             &[before_restart_account.clone()],
@@ -1285,19 +1356,33 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             "the pre-restart transaction must advance committed height (initial={initial_committed_floor}, current={pre_restart_floor})"
         );
         let pre_restart_v2 =
-            wait_for_common_awaiting_v2_round(&all_peers, pre_restart_floor, STATUS_TIMEOUT)
+            wait_for_common_awaiting_v2_round_for_committee(&all_peers, pre_restart_floor, STATUS_TIMEOUT, validator_count)
                 .await?;
-        validate_v2_status_set(&pre_restart_v2, VALIDATOR_COUNT)?;
+        validate_v2_status_set(&pre_restart_v2, validator_count)?;
         for snapshot in &pre_restart_v2 {
             validate_applied_successor_witness(snapshot, pre_restart_floor)?;
         }
+        assert_restart_finality(
+            &all_peers,
+            &all_peers,
+            &network.network_id(),
+            pre_restart_floor,
+        )
+        .await?;
         let config_layers = network
             .config_layers()
             .collect::<Vec<_>>();
-        let restart_index = VALIDATOR_COUNT - 1;
-        let restart_peer = network.peers()[restart_index].clone();
-        let restart_node_fingerprint = pre_restart_v2[restart_index].node_fingerprint.clone();
-        restart_peer.shutdown().await;
+        let restarted_peers = restart_indices
+            .iter()
+            .map(|&index| (index, network.peers()[index].clone()))
+            .collect::<Vec<_>>();
+        for (_, peer) in &restarted_peers {
+            peer.shutdown().await;
+        }
+        ensure!(
+            restarted_peers.iter().all(|(_, peer)| !peer.is_running()),
+            "every selected validator must be offline before the outage transaction"
+        );
         let remaining_peers = network
             .peers()
             .iter()
@@ -1305,8 +1390,9 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .cloned()
             .collect::<Vec<_>>();
         ensure!(
-            remaining_peers.len() == VALIDATOR_COUNT - 1,
-            "exactly three voting validators must remain after one-peer shutdown, got {}",
+            remaining_peers.len() == validator_count - restart_indices.len(),
+            "the selected outage must leave exactly {} voting validators, got {}",
+            validator_count - restart_indices.len(),
             remaining_peers.len()
         );
         let outage_baseline = normal_statuses(&remaining_peers).await?;
@@ -1316,11 +1402,11 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .max()
             .unwrap_or_default()
             .saturating_add(1);
-        submit_account(network.client(), during_outage_account.clone()).await?;
+        submit_account(remaining_peers[0].client(), during_outage_account.clone()).await?;
         network
             .ensure_blocks_with(|height| height.non_empty >= outage_target_non_empty)
             .await
-            .wrap_err("the three-voter quorum did not finalize while one validator was offline")?;
+            .wrap_err("the surviving exact quorum did not finalize during the validator outage")?;
         wait_for_accounts_visible(
             &remaining_peers,
             &[before_restart_account.clone(), during_outage_account.clone()],
@@ -1342,21 +1428,30 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             outage_floor > pre_restart_floor,
             "the online quorum must advance height during the outage (before={pre_restart_floor}, during={outage_floor})"
         );
-        let outage_v2 = wait_for_common_awaiting_v2_round(
+        let outage_v2 = wait_for_common_awaiting_v2_round_for_committee(
             &remaining_peers,
             outage_floor,
             STATUS_TIMEOUT,
+            validator_count,
         )
         .await?;
-        validate_v2_status_set(&outage_v2, VALIDATOR_COUNT)?;
+        validate_v2_status_set(&outage_v2, validator_count)?;
         for snapshot in &outage_v2 {
             validate_applied_successor_witness(snapshot, outage_floor)?;
         }
-        restart_peer
-            .start_checked(config_layers.iter().cloned(), None)
-            .await
-            .wrap_err_with(|| format!("restart v2 validator {}", restart_peer.mnemonic()))?;
-        ensure!(restart_peer.is_running(), "restarted validator must be running");
+        assert_restart_finality(
+            &remaining_peers,
+            &all_peers,
+            &network.network_id(),
+            outage_floor,
+        )
+        .await?;
+        for (_, peer) in &restarted_peers {
+            peer.start_checked(config_layers.iter().cloned(), None)
+                .await
+                .wrap_err_with(|| format!("restart v2 validator {}", peer.mnemonic()))?;
+            ensure!(peer.is_running(), "restarted validator must be running");
+        }
         network
             .ensure_blocks_with(|height| {
                 height.total >= outage_floor && height.non_empty >= outage_target_non_empty
@@ -1377,26 +1472,38 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             .min()
             .unwrap_or_default();
         let recovered_v2 =
-            wait_for_common_awaiting_v2_round(&all_peers, recovered_floor, STATUS_TIMEOUT).await?;
-        validate_v2_status_set(&recovered_v2, VALIDATOR_COUNT)?;
+            wait_for_common_awaiting_v2_round_for_committee(&all_peers, recovered_floor, STATUS_TIMEOUT, validator_count).await?;
+        validate_v2_status_set(&recovered_v2, validator_count)?;
         for snapshot in &recovered_v2 {
             validate_applied_successor_witness(snapshot, recovered_floor)?;
         }
-        ensure!(
-            recovered_v2[restart_index].node_fingerprint == restart_node_fingerprint,
-            "a restarted validator must retain its v2 node identity"
-        );
+        assert_restart_finality(
+            &all_peers,
+            &all_peers,
+            &network.network_id(),
+            recovered_floor,
+        )
+        .await?;
+        for &(index, ref peer) in &restarted_peers {
+            ensure!(
+                recovered_v2[index].node_fingerprint == pre_restart_v2[index].node_fingerprint,
+                "restarted validator {} must retain its v2 node identity",
+                peer.mnemonic(),
+            );
+        }
         let post_restart_target_non_empty = recovered_statuses
             .iter()
             .map(|status| status.blocks_non_empty)
             .max()
             .unwrap_or_default()
             .saturating_add(1);
+        // This is the final submission. Recovery must drain this finite workload
+        // without a background producer continually supplying fresh transactions.
         submit_account(network.client(), after_restart_account.clone()).await?;
         network
             .ensure_blocks_with(|height| height.non_empty >= post_restart_target_non_empty)
             .await
-            .wrap_err("the restored four-voter v2 network did not finalize a successor block")?;
+            .wrap_err("the restored exact committee did not finalize a successor block")?;
         wait_for_accounts_visible(
             &all_peers,
             &[
@@ -1423,11 +1530,18 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
             "finalization must continue after restart (recovered={recovered_floor}, final={final_floor})"
         );
         let final_v2 =
-            wait_for_common_awaiting_v2_round(&all_peers, final_floor, STATUS_TIMEOUT).await?;
-        validate_v2_status_set(&final_v2, VALIDATOR_COUNT)?;
+            wait_for_common_awaiting_v2_round_for_committee(&all_peers, final_floor, STATUS_TIMEOUT, validator_count).await?;
+        validate_v2_status_set(&final_v2, validator_count)?;
         for snapshot in &final_v2 {
             validate_applied_successor_witness(snapshot, final_floor)?;
         }
+        assert_restart_finality(
+            &all_peers,
+            &all_peers,
+            &network.network_id(),
+            final_floor,
+        )
+        .await?;
         for (before, after) in initial_v2.iter().zip(&final_v2) {
             ensure!(
                 before.node_fingerprint == after.node_fingerprint,
@@ -1449,7 +1563,70 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
     }
     .await;
     network.shutdown_and_release().await;
-    result
+    result.wrap_err_with(|| {
+        format!("{context}: validators={validator_count}, restarted={restart_indices:?}")
+    })
+}
+/// Authenticate a committed boundary against the original full committee,
+/// including validators which are currently offline, and compare every
+/// participating validator's committed block to that signed artifact.
+async fn assert_restart_finality(
+    online_peers: &[NetworkPeer],
+    all_validators: &[NetworkPeer],
+    network_id: &NetworkId,
+    height: u64,
+) -> Result<()> {
+    let proof_peer = online_peers
+        .first()
+        .ok_or_else(|| eyre!("restart finality requires at least one online validator"))?;
+    let proof = fetch_bridge_finality_proof(proof_peer, height).await?;
+    verify_bridge_finality_proof(&proof, network_id)
+        .wrap_err("restart boundary finality proof failed cryptographic validation")?;
+    let artifact = &proof.finality_artifact;
+    let expected_roster = all_validators
+        .iter()
+        .map(NetworkPeer::id)
+        .collect::<BTreeSet<_>>();
+    let actual_roster = artifact
+        .height_context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    let quorum = 2 * ((all_validators.len() - 1) / 3) + 1;
+    ensure!(
+        expected_roster.len() == all_validators.len()
+            && actual_roster == expected_roster
+            && artifact.height_context.roster.len() == all_validators.len()
+            && artifact
+                .height_context
+                .roster
+                .iter()
+                .all(|entry| entry.power == 1)
+            && usize::try_from(artifact.height_context.quorum.min_signers)? == quorum
+            && artifact.height_context.quorum.total_power == u64::try_from(all_validators.len())?
+            && artifact.commit_qc.signers.len() == quorum,
+        "restart boundary changed the frozen exact 3f+1 roster or 2f+1 equal-vote quorum: context={:?}, signers={:?}",
+        artifact.height_context,
+        artifact.commit_qc.signers,
+    );
+    ensure!(
+        artifact.height == height
+            && proof.block_header.height().get() == height
+            && artifact.commit_qc.phase == GlobalPhase::Commit
+            && artifact.commit_qc.round.height == height
+            && artifact.block_hash == proof.block_header.hash(),
+        "restart finality artifact does not authenticate the requested committed boundary {height}"
+    );
+    let committed = wait_for_committed_block_metadata(online_peers, height, STATUS_TIMEOUT).await?;
+    let proof_hash = proof.block_header.hash().to_string();
+    ensure!(
+        committed.iter().all(|(view, hash)| {
+            *view == proof.block_header.view_change_index() && hash == &proof_hash
+        }),
+        "validators disagree with authenticated height-{height} finality: proof={proof_hash}, committed={committed:?}"
+    );
+    Ok(())
 }
 /// The production NPoS runner must replace an unavailable view leader through
 /// a persisted timeout certificate and finalize within the Taira rollout bound.
@@ -2841,8 +3018,48 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
     network.shutdown_and_release().await;
     result
 }
-async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
+/// Run the SDK's synchronous query facade outside every Tokio runtime context.
+/// Tokio blocking workers retain a runtime handle, which the facade rejects.
+async fn run_blocking_sdk<T: Send + 'static>(
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
     task::spawn_blocking(move || {
+        std::thread::Builder::new()
+            .name("sumeragi-test-sdk".to_owned())
+            .spawn(operation)
+            .wrap_err("start synchronous SDK worker")?
+            .join()
+            .map_err(|_| eyre!("synchronous SDK worker panicked"))
+    })
+    .await
+    .wrap_err("synchronous SDK worker join task panicked")?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn synchronous_sdk_worker_has_no_runtime_context() -> Result<()> {
+    ensure!(tokio::runtime::Handle::try_current().is_ok());
+    let inside_runtime = run_blocking_sdk(|| tokio::runtime::Handle::try_current().is_ok()).await?;
+    ensure!(
+        !inside_runtime,
+        "SDK worker must not inherit the caller's Tokio context"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn synchronous_sdk_worker_reports_panics() {
+    let error = run_blocking_sdk(|| panic!("fixture SDK failure"))
+        .await
+        .expect_err("worker panic must reach the caller");
+    assert!(
+        error
+            .to_string()
+            .contains("synchronous SDK worker panicked")
+    );
+}
+
+async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
+    run_blocking_sdk(move || {
         client.submit(
             Register::account(Account::new(account_id)),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -2857,7 +3074,7 @@ async fn submit_pressure_account(
     account_id: AccountId,
     payload_bytes: usize,
 ) -> Result<()> {
-    task::spawn_blocking(move || {
+    run_blocking_sdk(move || {
         let instructions = vec![
             InstructionBox::from(Register::account(Account::new(account_id))),
             InstructionBox::from(Log::new(Level::INFO, "X".repeat(payload_bytes))),
@@ -2872,7 +3089,7 @@ async fn submit_pressure_account(
     Ok(())
 }
 async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
-    task::spawn_blocking(move || {
+    run_blocking_sdk(move || {
         client.submit(
             Register::account(Account::new(account_id)),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -2987,6 +3204,20 @@ async fn wait_for_common_awaiting_v2_round(
     min_committed_height: u64,
     timeout: Duration,
 ) -> Result<Vec<V2StatusSnapshot>> {
+    wait_for_common_awaiting_v2_round_for_committee(
+        peers,
+        min_committed_height,
+        timeout,
+        VALIDATOR_COUNT,
+    )
+    .await
+}
+async fn wait_for_common_awaiting_v2_round_for_committee(
+    peers: &[NetworkPeer],
+    min_committed_height: u64,
+    timeout: Duration,
+    validator_count: usize,
+) -> Result<Vec<V2StatusSnapshot>> {
     let deadline = Instant::now() + timeout;
     loop {
         let mut snapshots = Vec::with_capacity(peers.len());
@@ -3019,7 +3250,7 @@ async fn wait_for_common_awaiting_v2_round(
                 .collect::<Vec<_>>()
         );
         if snapshots.len() == peers.len() {
-            validate_v2_status_set(&snapshots, VALIDATOR_COUNT)?;
+            validate_v2_status_set(&snapshots, validator_count)?;
             let first = &snapshots[0];
             let common_awaiting_round = snapshots.iter().all(|snapshot| {
                 snapshot.height == first.height
@@ -3189,22 +3420,131 @@ async fn committed_block_metadata_at_height(
     peer: &NetworkPeer,
     height: u64,
 ) -> Result<(u64, String)> {
+    let block = committed_block_at_height(peer, height).await?;
+    Ok((block.header().view_change_index(), block.hash().to_string()))
+}
+
+fn decode_committed_block_wire(bytes: &[u8], height: u64) -> Result<SignedBlock> {
+    ensure!(height > 0, "committed block height must be nonzero");
+    ensure!(
+        bytes.len() <= AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+        "committed block wire exceeds the canonical carrier limit"
+    );
+    let block = norito::core::with_decode_limits_scope(
+        norito::canonical_decode_limits(bytes.len()),
+        || decode_framed_signed_block(bytes),
+    )
+    .wrap_err("decode canonical committed SignedBlockWire")?;
+    ensure!(
+        block.header().height().get() == height,
+        "committed block header height {} differs from requested height {height}",
+        block.header().height()
+    );
+    ensure!(
+        block.has_results(),
+        "committed height-{height} block has no execution results"
+    );
+    let canonical = block
+        .encode_wire()
+        .wrap_err("re-encode committed SignedBlockWire")?;
+    ensure!(
+        canonical.as_slice() == bytes,
+        "committed block response is not byte-identical canonical SignedBlockWire"
+    );
+    Ok(block)
+}
+
+#[test]
+fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()> {
+    use iroha::{crypto::SignatureOf, data_model::block::BlockSignature};
+    use std::num::NonZeroU64;
+
+    let key_pair = KeyPair::try_from_seed(vec![0x7B; 32], Algorithm::Ed25519)
+        .wrap_err("derive committed-block fixture signer")?;
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 7);
+    let signature = BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(key_pair.private_key(), header.hash())?,
+    );
+    let mut block = SignedBlock::presigned(signature, header, Vec::new());
+    let proposal_wire = block.encode_wire()?;
+    assert!(
+        decode_committed_block_wire(&proposal_wire, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("no execution results"),
+        "a canonical proposal is not a committed executed body"
+    );
+
+    block.set_transaction_results(Vec::new(), &[], Vec::new())?;
+    block.replace_signatures(BTreeSet::from([BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(key_pair.private_key(), block.hash())?,
+    )]))?;
+    let canonical = block.canonical_wire()?;
+    let decoded = decode_committed_block_wire(canonical.as_framed(), 2)?;
+    assert_eq!(decoded.hash(), block.hash());
+    assert_eq!(decoded.header().view_change_index(), 7);
+    assert!(decoded.has_results());
+    assert_eq!(decoded.encode_wire()?.as_slice(), canonical.as_framed());
+    assert!(
+        decode_committed_block_wire(canonical.as_framed(), 3)
+            .unwrap_err()
+            .to_string()
+            .contains("differs from requested height 3")
+    );
+    assert!(decode_committed_block_wire(canonical.as_framed(), 0).is_err());
+    assert!(decode_committed_block_wire(canonical.as_versioned(), 2).is_err());
+    let mut trailing = canonical.to_vec();
+    trailing.push(0);
+    assert!(decode_committed_block_wire(&trailing, 2).is_err());
+    Ok(())
+}
+
+async fn committed_block_at_height(peer: &NetworkPeer, height: u64) -> Result<SignedBlock> {
+    ensure!(height > 0, "committed block height must be nonzero");
     let client = peer.client();
-    let peer_name = peer.mnemonic().to_owned();
-    task::spawn_blocking(move || {
-        let blocks = client
-            .client()
-            .query(FindBlocks)
-            .execute_all()
-            .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
-        blocks
-            .iter()
-            .find(|block| block.header().height().get() == height)
-            .map(|block| (block.header().view_change_index(), block.hash().to_string()))
-            .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))
-    })
-    .await
-    .wrap_err_with(|| format!("block-metadata query panicked for {}", peer.mnemonic()))?
+    let url = client
+        .client()
+        .endpoint()
+        .join(&format!("v1/ledger/block/{height}"))
+        .wrap_err("construct committed-block URL")?;
+    let mut response = reqwest::Client::builder()
+        .timeout(
+            client
+                .client()
+                .torii_request_timeout()
+                .min(Duration::from_secs(5)),
+        )
+        .build()
+        .wrap_err("build committed-block HTTP client")?
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/x-norito")
+        .send()
+        .await
+        .wrap_err_with(|| format!("fetch committed block {height} from {}", peer.mnemonic()))?;
+    let status = response.status();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .wrap_err_with(|| format!("read committed block {height} from {}", peer.mnemonic()))?
+    {
+        ensure!(
+            chunk.len() <= AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 - bytes.len(),
+            "{} returned an oversized height-{height} committed block response",
+            peer.mnemonic()
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    ensure!(
+        status.is_success(),
+        "{} returned HTTP {status} for committed block {height}: {}",
+        peer.mnemonic(),
+        String::from_utf8_lossy(&bytes),
+    );
+    decode_committed_block_wire(&bytes, height)
+        .wrap_err_with(|| format!("validate committed block {height} from {}", peer.mnemonic()))
 }
 async fn wait_for_committed_block_metadata(
     peers: &[NetworkPeer],
@@ -3243,39 +3583,27 @@ async fn assert_account_registration_in_exact_block(
     account_id: &AccountId,
 ) -> Result<()> {
     try_join_all(peers.iter().map(|peer| {
-        let client = peer.client();
         let peer_name = peer.mnemonic().to_owned();
         let account_id = account_id.clone();
         async move {
-            task::spawn_blocking(move || {
-                let blocks = client
-                    .client().query(FindBlocks)
-                    .execute_all()
-                    .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
-                let block = blocks
-                    .iter()
-                    .find(|block| block.header().height().get() == height)
-                    .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))?;
-                let registered = block.external_transactions().any(|transaction| {
-                    let Executable::Instructions(instructions) = transaction.instructions() else {
-                        return false;
-                    };
-                    instructions.iter().any(|instruction| {
-                        matches!(
-                            instruction.as_any().downcast_ref::<RegisterBox>(),
-                            Some(RegisterBox::Account(register))
-                                if register.object().id() == &account_id
-                        )
-                    })
-                });
-                ensure!(
-                    registered,
-                    "{peer_name} height-{height} block does not contain the unique subject-B account registration {account_id}"
-                );
-                Ok::<(), eyre::Report>(())
-            })
-            .await
-            .wrap_err("exact block application query panicked")?
+            let block = committed_block_at_height(peer, height).await?;
+            let registered = block.external_transactions().any(|transaction| {
+                let Executable::Instructions(instructions) = transaction.instructions() else {
+                    return false;
+                };
+                instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<RegisterBox>(),
+                        Some(RegisterBox::Account(register))
+                            if register.object().id() == &account_id
+                    )
+                })
+            });
+            ensure!(
+                registered,
+                "{peer_name} height-{height} block does not contain the unique subject-B account registration {account_id}"
+            );
+            Ok::<(), eyre::Report>(())
         }
     }))
     .await?;
@@ -3860,27 +4188,57 @@ async fn wait_for_held_quorum_evidence(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
+/// Recognize only the direct account query's canonical missing-entity rejection.
+fn is_missing_account_response(error: &QueryError) -> bool {
+    matches!(error, QueryError::Http { status, code, .. }
+        if status.as_u16() == 404 && code == "query_validation_failed")
+}
+
+/// Query one exact account without mistaking transport or authorization errors for absence.
+fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
+    match client
+        .client()
+        .query_single(FindAccountById::new(expected.clone()))
+    {
+        Ok(stored) if stored.id() == expected => Ok(true),
+        Ok(stored) => Err(eyre!(
+            "account query for {expected} returned unexpected account {}",
+            stored.id()
+        )),
+        Err(error) if is_missing_account_response(&error) => Ok(false),
+        Err(error) => Err(eyre!(error)),
+    }
+}
+
+#[test]
+fn account_absence_requires_the_exact_http_rejection() {
+    for (status, code, expected) in [
+        (404_u16, "query_validation_failed", true),
+        (404, "route_not_found", false),
+        (403, "query_validation_failed", false),
+        (400, "query_validation_failed", false),
+        (503, "internal_server_error", false),
+    ] {
+        let error = QueryError::Http {
+            status: status.try_into().expect("fixture HTTP status"),
+            code: code.to_owned(),
+            message: "public diagnostic is not classification authority".to_owned(),
+        };
+        assert_eq!(is_missing_account_response(&error), expected);
+    }
+    assert!(!is_missing_account_response(&QueryError::Other(eyre!(
+        "404 query_validation_failed"
+    ))));
+}
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
     for peer in peers {
         for account in accounts {
             let client = peer.client();
-            let account = account.clone();
             let expected = account.clone();
             let expected_label = expected.to_string();
             let peer_name = peer.mnemonic().to_owned();
-            let found = task::spawn_blocking(move || -> Result<bool> {
-                match client.client().query_single(FindAccountById::new(account)) {
-                    Ok(stored) if stored.id() == &expected => Ok(true),
-                    Ok(stored) => Err(eyre!(
-                        "account query for {expected} returned unexpected account {}",
-                        stored.id()
-                    )),
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Find(FindError::Account(_))
-                        | QueryExecutionFail::NotFound,
-                    ))) => Ok(false),
-                    Err(error) => Err(eyre!(error)),
-                }
+            let found = run_blocking_sdk(move || -> Result<bool> {
+                query_account_visibility(&client, &expected)
             })
             .await
             .wrap_err_with(|| format!("fresh-genesis account query panicked for {peer_name}"))?
@@ -3907,23 +4265,11 @@ async fn wait_for_accounts_visible(
         for peer in peers {
             for account in accounts {
                 let client = peer.client();
-                let account = account.clone();
                 let expected = account.clone();
                 let expected_label = expected.to_string();
                 let peer_name = peer.mnemonic().to_owned();
-                let visible = task::spawn_blocking(move || -> Result<bool> {
-                    match client.client().query_single(FindAccountById::new(account)) {
-                        Ok(stored) if stored.id() == &expected => Ok(true),
-                        Ok(stored) => Err(eyre!(
-                            "account query for {expected} returned unexpected account {}",
-                            stored.id()
-                        )),
-                        Err(QueryError::Validation(ValidationFail::QueryFailed(
-                            QueryExecutionFail::Find(FindError::Account(_))
-                            | QueryExecutionFail::NotFound,
-                        ))) => Ok(false),
-                        Err(error) => Err(eyre!(error)),
-                    }
+                let visible = run_blocking_sdk(move || -> Result<bool> {
+                    query_account_visibility(&client, &expected)
                 })
                 .await
                 .wrap_err_with(|| format!("account visibility query panicked for {peer_name}"))?
@@ -3984,7 +4330,7 @@ async fn wait_for_v2_statuses(
 async fn fetch_v2_status(peer: &NetworkPeer) -> Result<V2StatusSnapshot> {
     let client = peer.client();
     let peer_name = peer.mnemonic().to_owned();
-    let value = task::spawn_blocking(move || client.client().get_sumeragi_status_json())
+    let value = run_blocking_sdk(move || client.client().get_sumeragi_status_json())
         .await
         .wrap_err_with(|| format!("v2 status task panicked for {peer_name}"))?
         .wrap_err_with(|| format!("fetch authoritative v2 status from {peer_name}"))?;

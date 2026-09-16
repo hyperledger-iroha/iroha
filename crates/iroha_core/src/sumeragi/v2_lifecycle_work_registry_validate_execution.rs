@@ -675,6 +675,18 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     /// under an armed fail-stop operation. Assertions therefore represent a
     /// process-fatal invariant violation, never a retryable completion error.
     pub(super) fn commit_after_exact_dequeue(self, dequeued: CertifiedFetchDequeuedResponse) {
+        self.commit_response_dequeue(dequeued, false);
+    }
+    /// Consume an authenticated Decision-excluded response without publishing Ready work.
+    pub(super) fn commit_cancelled_after_exact_dequeue(
+        self,
+        dequeued: CertifiedFetchDequeuedResponse,
+        exclusion: &crate::sumeragi::v2_effects::CertifiedFetchDecisionExclusionV1,
+    ) {
+        assert!(exclusion.matches_durable_body(self.durable_receipt.durable_body()));
+        self.commit_response_dequeue(dequeued, true);
+    }
+    fn commit_response_dequeue(self, dequeued: CertifiedFetchDequeuedResponse, cancelled: bool) {
         assert_eq!(dequeued.ingress_identity(), self.ingress_identity);
         let address = self.location.address();
         let incumbent = self
@@ -708,6 +720,9 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
             .entries
             .remove(&address)
             .expect("exclusively borrowed validated incumbent remains installed");
+        if cancelled {
+            return;
+        }
         let ConcreteLifecycleWork {
             digest: incumbent_digest,
             kind,

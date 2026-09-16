@@ -1874,7 +1874,7 @@ fn reserve_transaction_for_lane_test_with_identity(
         assert_eq!(coordinator.leg.route, expected_route);
         coordinator.lane_incarnation
     };
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let binding = crate::torii_proxy::new_queue_plan_admission_binding(
         state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
@@ -2125,7 +2125,7 @@ fn reserve_autonomous_crash_batch(
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture autonomous crash admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,

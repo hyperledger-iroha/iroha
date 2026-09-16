@@ -149,12 +149,18 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
         .arm_live_clocks(now)
         .expect("arm runtime while persistence owns dispatch");
     runtime
-        .enqueue_network(certificate)
+        .enqueue_network(
+            certificate,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit the authenticated TC behind the WAL fence");
     assert_eq!(runtime.queued_commands(), 1);
     assert!(
         runtime
-            .try_step_pacemaker_escape(now)
+            .try_step_pacemaker_escape(
+                now,
+                &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("parked pacemaker observation remains valid")
             .is_none(),
         "certified progress cannot cross an unacknowledged safety write"
@@ -178,7 +184,10 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
     assert!(!runtime.driver().pacemaker_escape_is_parked());
     assert!(runtime.driver().signature_fence_is_active());
     let escaped = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("post-ack pacemaker selection remains exact")
         .expect("the queued TC advances after its WAL predecessor");
     let RuntimeStep::Advanced(effects) = escaped else {

@@ -7005,7 +7005,8 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = state_block
-                .capture_exec_witness()
+                .finalize_lane_consensus_contexts(&block, None)
+                .and_then(|()| state_block.capture_exec_witness())
                 .map_err(Self::execution_context_error)
             {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
@@ -7085,7 +7086,8 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = state_block
-                .capture_exec_witness()
+                .finalize_lane_consensus_contexts(&block, None)
+                .and_then(|()| state_block.capture_exec_witness())
                 .map_err(Self::execution_context_error)
             {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -7961,7 +7963,13 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = state_block
-                .capture_exec_witness()
+                .finalize_lane_consensus_contexts(
+                    &block,
+                    validation_profile
+                        .v2_context()
+                        .and_then(SumeragiV2ValidationContext::authenticated_height_context),
+                )
+                .and_then(|()| state_block.capture_exec_witness())
                 .map_err(Self::execution_context_error)
             {
                 drop(state_block);
@@ -15911,8 +15919,9 @@ pub(crate) mod valid {
                 "unchecked certified merge execution requires exact post-effect authorization",
             );
             state_block
-                .capture_exec_witness()
-                .expect("unchecked block requires intact finalized FASTPQ source ownership");
+                .finalize_lane_consensus_contexts(&block, None)
+                .and_then(|()| state_block.capture_exec_witness())
+                .expect("unchecked block requires authenticated lane contexts and finalized source ownership");
             drop(exec_witness_guard);
             WithEvents::new(ValidBlock::new_unverified(block))
         }
@@ -24223,7 +24232,7 @@ pub(crate) mod valid {
                         validator_set,
                     }],
                 };
-                let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+                let binding = crate::torii_proxy::new_queue_plan_admission_binding(
                     state.network_id_ref(),
                     &entrypoint,
                     &routing_plan,

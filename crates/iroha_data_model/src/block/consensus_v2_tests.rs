@@ -2932,3 +2932,47 @@ fn retained_outbound_stage_wire_and_schema_describe_local_retention() {
         ]
     );
 }
+
+#[test]
+fn native_rs16_geometry_kernel_checks_layout_and_exact_stripe_rounding() {
+    let layout = DataAvailabilityLayout {
+        encoding: PayloadEncoding::ReedSolomon16,
+        chunk_size_bytes: 4,
+        data_shards: 2,
+        parity_shards: 1,
+        max_payload_size_bytes: 16,
+        max_chunk_count: 6,
+    };
+    for size in [1, 8, 9, 16] {
+        let expected = if size <= 8 { 3 } else { 6 };
+        assert_eq!(expected_encoded_chunk_count(size, layout), Ok(expected));
+        assert_eq!(
+            encode_payload_chunks(layout, &vec![0x5a; size as usize])
+                .unwrap()
+                .len(),
+            expected as usize
+        );
+    }
+    assert!(expected_encoded_chunk_count(0, layout).is_err());
+    assert!(expected_encoded_chunk_count(17, layout).is_err());
+    for invalid in [
+        DataAvailabilityLayout {
+            chunk_size_bytes: 0,
+            ..layout
+        },
+        DataAvailabilityLayout {
+            data_shards: 0,
+            ..layout
+        },
+        DataAvailabilityLayout {
+            parity_shards: 0,
+            ..layout
+        },
+        DataAvailabilityLayout {
+            max_chunk_count: 5,
+            ..layout
+        },
+    ] {
+        assert!(expected_encoded_chunk_count(1, invalid).is_err());
+    }
+}

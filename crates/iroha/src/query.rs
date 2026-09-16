@@ -247,12 +247,11 @@ fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
     };
     // ErrorEnvelope is the node's public, redacted diagnostic. Never display
     // unparsed upstream bytes or infer ValidationFail variants from status alone.
-    QueryError::Other(eyre!(
-        "query failed; HTTP {}; {}: {}",
-        response.status(),
-        envelope.code(),
-        envelope.message()
-    ))
+    QueryError::Http {
+        status: response.status(),
+        code: envelope.code().to_owned(),
+        message: envelope.message().to_owned(),
+    }
 }
 /// Decode `QueryResponse` from a canonical Norito byte body.
 fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
@@ -351,6 +350,16 @@ impl QueryCursor {
 /// Different errors as a result of query response handling
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
+    /// A server rejection decoded from one canonical public error envelope.
+    #[error("query failed; HTTP {status}; {code}: {message}")]
+    Http {
+        /// HTTP status returned by the server.
+        status: StatusCode,
+        /// Machine-readable error code from the validated envelope.
+        code: String,
+        /// Public diagnostic from the validated envelope.
+        message: String,
+    },
     /// Query validation error
     #[error("query validation error: {0}")]
     Validation(#[from] ValidationFail),
@@ -775,7 +784,9 @@ mod query_errors_handling {
                 .header(CONTENT_TYPE, media_type)
                 .body(body)?;
             let error = decode_singular_query_response(&response).expect_err("asset is missing");
-            assert!(matches!(error, QueryError::Other(_)));
+            assert!(matches!(&error, QueryError::Http { status, code, message }
+                if *status == StatusCode::NOT_FOUND && code == envelope.code()
+                    && message == envelope.message()));
             let message = error.to_string();
             assert!(message.contains("404") && message.contains(envelope.code()));
             assert!(message.contains(envelope.message()));
@@ -1034,6 +1045,11 @@ mod query_errors_handling {
         for (status, code, message) in [
             (
                 StatusCode::NOT_FOUND,
+                "query_validation_failed",
+                "missing fixture entity",
+            ),
+            (
+                StatusCode::NOT_FOUND,
                 "route_not_found",
                 "route unavailable",
             ),
@@ -1059,15 +1075,24 @@ mod query_errors_handling {
             ),
         ] {
             let envelope = ErrorEnvelope::new(code, message);
-            let response = Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, APPLICATION_NORITO)
-                .body(norito::to_bytes(&envelope)?)?;
-            let error = decode_query_response(&response).expect_err("server failure");
-            assert!(matches!(error, QueryError::Other(_)));
-            let rendered = error.to_string();
-            assert!(rendered.contains(status.as_str()));
-            assert!(rendered.contains(code) && rendered.contains(message));
+            for (media, body) in [
+                (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+                ("application/json", json::to_vec(&envelope)?),
+            ] {
+                let response = Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, media)
+                    .body(body)?;
+                let error = decode_query_response(&response).expect_err("server failure");
+                assert!(matches!(error, QueryError::Http {
+                status: actual_status,
+                code: ref actual_code,
+                message: ref actual_message,
+            } if actual_status == status && actual_code == code && actual_message == message));
+                let rendered = error.to_string();
+                assert!(rendered.contains(status.as_str()));
+                assert!(rendered.contains(code) && rendered.contains(message));
+            }
         }
         Ok(())
     }

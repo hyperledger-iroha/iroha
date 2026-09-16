@@ -1114,30 +1114,33 @@ def _persistent_recovery_cut_canonical_contracts():
         (key, "effects", name,
          (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),)
          if key == "publish_apply" else executor, before + (
+            "self.runtime_and_external_lifecycle_census()?",
             runtime_call,
-            "wal_step.complete(); if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }",
+            "wal_step.complete()",
+            "runtime_result.map_err(|error| self.close(error, services))?",
+            "if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }",
             consume_call,
         ))
         for key, name, before, runtime_call, consume_call in (
             ("publish_apply", "step_lifecycle_decision_apply_runtime_predecessor_after_cut", (),
-             "self.runtime.try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal())",
+             "runtime.try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal(), &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_pre_timeout", "step_pre_timeout_locked_prepare_qc_after_debt", (),
-             "self.runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut)",
+             "runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut, &external)",
              "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
             ("publish_pacemaker", "step_pacemaker_once", (),
-             "self.runtime.step_pacemaker_effects(now)",
+             "runtime.step_pacemaker_effects(now, &external)",
              "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
             ("publish_capacity", "step_completion_capacity_relief", (),
-             "self.runtime.step_completion_capacity_relief_effects(now, blocked_ordinal)",
+             "runtime.step_completion_capacity_relief_effects(now, blocked_ordinal, &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_step", "step", (
                 "self.ensure_open()?; if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close_after_transferring_runtime_terminals(error, services)); }",
                 "self.drain_retained_effect_batch(services, true)",
-             ), "self.runtime.step_effects(now)",
+             ), "runtime.step_effects(now, &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_recovery", "step_pending_tip_recovery", (),
-             "self.runtime.step_recovery_effects(now)",
+             "runtime.step_recovery_effects(now, &external)",
              "self.consume_pending_tip_recovery_effects(effects, services)?"),
         )
     )

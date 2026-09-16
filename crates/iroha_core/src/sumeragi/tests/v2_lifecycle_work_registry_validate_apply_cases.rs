@@ -1315,7 +1315,11 @@ fn ready_validate_apply_actor_global_child_fixture(
             let message = predecessor_message(sequence);
             let ownership = admit_fair_message(message.clone());
             runtime
-                .enqueue_network_with_ingress_ownership(message, ownership)
+                .enqueue_network_with_ingress_ownership(
+                    message,
+                    ownership,
+                    &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("authenticate and mint a real pre-Apply FIFO owner");
         }
         assert_eq!(
@@ -2118,8 +2122,12 @@ fn ready_validate_apply_actor_global_child_fixture(
         }
     );
     let barrier_key = executor
-        .live_lifecycle_decision_apply_key_for_test()
+        .live_lifecycle_decision_apply_key()
         .expect("capacity retry retains the exact live Apply retransmit owner");
+    assert!(
+        !executor.lifecycle_decision_apply_is_complete(),
+        "a protected Ready Apply has no durable finality receipt"
+    );
     assert_eq!(barrier_key.lineage(), LifecycleDecisionApplyLineageV1::Live);
     assert_eq!(barrier_key.lifecycle_ordinal(), child_ordinal);
     let live_work = owner
@@ -2154,7 +2162,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         assert_eq!(owner.registry.registry_for_test().entries.len(), 2);
     }
     assert_eq!(
-        executor.live_lifecycle_decision_apply_key_for_test(),
+        executor.live_lifecycle_decision_apply_key(),
         Some(barrier_key)
     );
     executor
@@ -2181,6 +2189,10 @@ fn ready_validate_apply_actor_global_child_fixture(
     else {
         panic!("live Apply fixture must produce an applied terminal")
     };
+    assert!(
+        !executor.lifecycle_decision_apply_is_complete(),
+        "an Applied worker result cannot replace Ledger and executor settlement"
+    );
     let lease = owner
         .coordinator
         .active_lease
@@ -2209,6 +2221,10 @@ fn ready_validate_apply_actor_global_child_fixture(
     owner.coordinator = staged;
     let finality = adapter.commit_after_durable_settlement();
     let status = executor.commit_lifecycle_decision_apply_finality(finality);
+    assert!(
+        executor.lifecycle_decision_apply_is_complete(),
+        "the exact settled live Apply publishes its retained terminal owner"
+    );
     let settled = completion.acknowledge_after_owner_settlement();
     assert!(matches!(
         settled,
@@ -2220,11 +2236,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         LifecycleState::Terminal(TerminalOutcome::Advanced)
     );
     assert!(owner.coordinator.active_lease.is_none());
-    assert!(
-        executor
-            .live_lifecycle_decision_apply_key_for_test()
-            .is_none()
-    );
+    assert!(executor.live_lifecycle_decision_apply_key().is_none());
     assert!(executor.durable_finality().is_some());
     if let Some(output_ordinal) = observer_output_ordinal {
         assert_eq!(owner.registry.registry_for_test().entries.len(), 1);
@@ -2553,6 +2565,7 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
     executor
         .reconcile_recovered_validate_retry_decision_for_test(decision, false, &mut services)
         .expect("reconcile the decided-body frontier without bypassing lifecycle-owned Apply");
+    assert!(!executor.lifecycle_decision_apply_is_complete());
     assert_eq!(
         executor.recovered_durable_validate_retry_keys_for_test(),
         vec![retry_key]
@@ -2582,6 +2595,10 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
             panic!("recovered Apply completion lost its dedicated queue class")
         }
     };
+    assert!(
+        !executor.lifecycle_decision_apply_is_complete(),
+        "recovered physical completion still needs exact durable settlement"
+    );
     assert!(matches!(
         super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
             &mut owner,
@@ -2590,6 +2607,10 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
         ),
         Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
     ));
+    assert!(
+        executor.lifecycle_decision_apply_is_complete(),
+        "recovered lineage must retain the same lifecycle finality classification"
+    );
     assert!(matches!(
         owner.coordinator.records[&apply_ordinal].state,
         LifecycleState::Terminal(TerminalOutcome::Advanced)
@@ -2933,7 +2954,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         );
     assert!(
         recovered_executor
-            .live_lifecycle_decision_apply_key_for_test()
+            .live_lifecycle_decision_apply_key()
             .is_none(),
         "genuine recovered executor must not inherit the live Apply owner"
     );
@@ -2949,7 +2970,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     let live_key = live_attestation.dispatch_key();
     assert_eq!(live_key.lineage(), LifecycleDecisionApplyLineageV1::Live);
     assert_eq!(
-        live_executor.live_lifecycle_decision_apply_key_for_test(),
+        live_executor.live_lifecycle_decision_apply_key(),
         Some(live_key),
         "live reconciliation and Ready attestation must retain the same complete key"
     );
@@ -3149,7 +3170,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         live_validate_predecessor_ordinal,
     );
     assert_eq!(
-        live_executor.live_lifecycle_decision_apply_key_for_test(),
+        live_executor.live_lifecycle_decision_apply_key(),
         Some(live_key),
         "live executor keeps its exact owner after lineage rejection and exact reprojection"
     );
@@ -3164,7 +3185,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     );
     assert!(
         recovered_executor
-            .live_lifecycle_decision_apply_key_for_test()
+            .live_lifecycle_decision_apply_key()
             .is_none(),
         "recovered executor cannot acquire a live owner through authority substitution"
     );

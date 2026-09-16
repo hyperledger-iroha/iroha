@@ -50,6 +50,10 @@ pub mod consensus_v2;
 pub mod execution_context;
 #[doc = "Block header structures and helpers."]
 pub mod header;
+/// Canonical routing and QueuePlan admission input values.
+pub mod lane_admission;
+/// Native lane consensus messages and immutable frozen authority values.
+pub mod lane_consensus;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 #[cfg(feature = "transparent_api")]

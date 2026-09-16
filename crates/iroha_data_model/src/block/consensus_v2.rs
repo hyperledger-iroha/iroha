@@ -4537,7 +4537,30 @@ fn payload_chunk_root(chunk_hashes: &[Hash]) -> Option<Hash> {
         .root()
         .map(Hash::from)
 }
-fn expected_encoded_chunk_count(
+/// Return the exact RS16 chunk count under a structurally valid signed layout.
+///
+/// Native consensus adapters can use this geometry kernel without constructing
+/// a global height context. This checks shape and bounds, not the layout's
+/// signature or the availability/authenticity of the actual body.
+///
+/// # Errors
+///
+/// Rejects invalid layouts and payload sizes outside the signed nonempty bound.
+pub fn expected_encoded_chunk_count(
+    payload_size_bytes: u64,
+    layout: DataAvailabilityLayout,
+) -> Result<u32, ValidationError> {
+    validate_data_availability_layout(layout)?;
+    if payload_size_bytes == 0 || payload_size_bytes > layout.max_payload_size_bytes {
+        return Err(if payload_size_bytes == 0 {
+            ValidationError::PayloadSizeMismatch
+        } else {
+            ValidationError::PayloadTooLarge
+        });
+    }
+    encoded_chunk_count_for_validated_layout(payload_size_bytes, layout)
+}
+fn encoded_chunk_count_for_validated_layout(
     payload_size_bytes: u64,
     layout: DataAvailabilityLayout,
 ) -> Result<u32, ValidationError> {
@@ -4576,7 +4599,7 @@ fn validate_data_availability_layout(
         return Err(ValidationError::InvalidDataAvailabilityLayout);
     }
     let required_chunk_capacity =
-        expected_encoded_chunk_count(layout.max_payload_size_bytes, layout)
+        encoded_chunk_count_for_validated_layout(layout.max_payload_size_bytes, layout)
             .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
     let required_encoded_bytes = u64::from(required_chunk_capacity)
         .checked_mul(u64::from(layout.chunk_size_bytes))

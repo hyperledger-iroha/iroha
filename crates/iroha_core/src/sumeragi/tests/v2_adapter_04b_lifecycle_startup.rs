@@ -320,6 +320,10 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     let mut activated = launched
         .activate(Instant::now(), activation, local_proposal_state)
         .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
+    assert_eq!(
+        activated.producer_claim_projection().expect("activated owner has no outstanding worker custody"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
     assert_eq!(
@@ -748,7 +752,6 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
         &mut npos_beacon,
         1,
         64,
-        super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
         None,
     )
     .expect("dispatch the first active CompleteTip recovered Sign");
@@ -758,13 +761,16 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
         "the recovered Sign worker owns Completion before ProducerTurn may claim"
     );
     assert!(first.requires_yield());
+    assert_eq!(
+        first.producer_claim(),
+        activated.producer_claim_projection().expect("inspect the actual Sign owner"),
+    );
     assert!(
         !output_guard.restart_required(),
         "queueing the recovered Sign must keep consensus output open"
     );
 
     let completion_deadline = Instant::now() + Duration::from_secs(5);
-    let mut producer_claim = first.producer_claim();
     loop {
         let next = super::super::v2_runner::drain_lifecycle_v2_ingress(
             &mut activated,
@@ -779,11 +785,11 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
             &mut npos_beacon,
             1,
             64,
-            producer_claim,
             None,
         )
         .expect("settle the active CompleteTip recovered Sign");
-        producer_claim = next.producer_claim();
+        let producer_claim = activated.producer_claim_projection().expect("inspect retained work after Completion");
+        assert_eq!(next.producer_claim(), producer_claim);
         if producer_claim == super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible
         {
             assert!(!next.requires_yield());
@@ -1377,7 +1383,9 @@ fn settle_terminal_fixture_runner_handoff(
     lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
-    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+    let permit = activated
+        .producer_claim_projection()
+        .expect("inspect the terminal fixture's actual Apply owner")
         .decided_lane_recovery_permit()
         .expect("settled Apply authorizes its exact runner handoff");
     activated
@@ -2574,62 +2582,61 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let batch_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let mut producer_claim =
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial();
-            let batch_deadline = Instant::now() + Duration::from_secs(5);
-            for turn in 0..64 {
-                let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
-                    &mut activated,
-                    &mut batch_runner,
-                    &leader_wire_ingress,
-                    &mut lane_work,
-                    kura.as_ref(),
-                    &local_signer,
-                    &mut block_sync_server,
-                    &mut block_sync,
-                    &mut block_sync_request,
-                    &mut npos_beacon,
-                    1,
-                    16,
-                    producer_claim,
-                    None,
-                )
-                .expect("drain one exact lifecycle-owned ordinary batch");
-                producer_claim = disposition.producer_claim();
-                settle_terminal_fixture_runner_handoff(
-                    &mut activated,
-                    &mut batch_runner,
-                    &mut lane_work,
-                    output_guard.as_ref(),
-                );
-                assert!(!output_guard.restart_required(), "{disposition:?}");
-                let retained_ordinals = leader_wire_ingress
-                    .state
-                    .lock()
-                    .lanes
-                    .values()
-                    .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
-                    .collect::<Vec<_>>();
-                if retained_ordinals.is_empty() {
-                    assert!(!disposition.requires_yield(), "{disposition:?}");
-                    break;
-                }
-                assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
-                // A settled Completion or Runtime output can stop before
-                // Ingress without requiring a yield before Producer planning.
-                // Preserve that typed stop and its claim for the next real turn.
-                assert!(
-                    disposition.advance_executor_yield().is_some()
-                        || disposition.terminal_settlement_stops_runtime(),
-                    "batch ordinal {batch_ordinal} survived without a pre-Ingress stop: {disposition:?}",
-                );
-                assert!(
-                    turn < 63 && Instant::now() < batch_deadline,
-                    "batch ordinal {batch_ordinal} did not drain after {} turns: {disposition:?}",
-                    turn + 1,
-                );
-                std::thread::yield_now();
-            }
+            let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
+                &mut activated,
+                &mut batch_runner,
+                &leader_wire_ingress,
+                &mut lane_work,
+                kura.as_ref(),
+                &local_signer,
+                &mut block_sync_server,
+                &mut block_sync,
+                &mut block_sync_request,
+                &mut npos_beacon,
+                1,
+                16,
+                None,
+            )
+            .expect("observe the settled Apply fence in the ordinary batch");
+            assert_eq!(
+                disposition.producer_claim(),
+                activated.producer_claim_projection().expect("inspect the batch's actual remaining owner"),
+            );
+            assert!(disposition.terminal_settlement_stops_runtime(), "{disposition:?}");
+            assert!(!disposition.requires_yield(), "{disposition:?}");
+            let retained_ordinals = leader_wire_ingress
+                .state
+                .lock()
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
+                .collect::<Vec<_>>();
+            assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut batch_runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
+            // The ordinary batch must preserve the terminal fence. Its bounded
+            // decided-lane recovery suffix owns this exact queued occurrence;
+            // resetting a runner claim to Eligible would conceal that contract.
+            let drained = activated.with_runner_runtime(
+                &mut batch_runner,
+                |_owner, executor, services, _local_proposal| {
+                    super::super::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
+                        &leader_wire_ingress,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &mut block_sync_server,
+                        1,
+                    )
+                },
+            )
+            .expect("drain the terminal occurrence through the production recovery suffix");
+            assert_eq!(drained, 1, "one bounded recovery turn must release the exact occurrence");
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =

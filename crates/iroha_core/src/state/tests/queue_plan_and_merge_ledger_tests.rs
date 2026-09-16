@@ -101,7 +101,7 @@ fn queue_plan_direct_application_without_signed_alias_rejects_terminal_marker() 
         let mut storage = state.world.smart_contract_state.block();
         storage.insert(
             registry_key,
-            State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
+            State::queue_plan_admission_registry_marker_payload(&binding.registry_value(), QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap())
                 .expect("fixture registry value"),
         );
         storage.commit();
@@ -207,7 +207,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let_row! { _ = state .lane_incarnations .write() .insert(participant_lane, participant_incarnation) };
     let_row! { registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()) .expect("fixture registry key") };
     let_row! { conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1, binding_hash: Hash::new(b"different-immutable-queue-plan-binding"), } };
-    let_row! { conflicting_payload = State::queue_plan_admission_registry_marker_payload(&conflicting_value) .expect("fixture conflicting registry value") };
+    let_row! { conflicting_payload = State::queue_plan_admission_registry_marker_payload(&conflicting_value, QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap()) .expect("fixture conflicting registry value") };
     {
         let mut world = state.world.block();
         world

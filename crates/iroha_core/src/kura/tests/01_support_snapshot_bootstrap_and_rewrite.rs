@@ -1154,6 +1154,13 @@ fn kagemusha_finality_witness_with_casting(
         reads: Vec::new(),
         writes: vec![
             ExecKv {
+                key: crate::state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY.to_vec(),
+                value: norito::to_bytes(&crate::state::LaneConsensusContextsCommitmentV1::from_contexts(
+                    test_network_id(b"kura-v2-finality-test"), height,
+                    &crate::state::LaneConsensusContextsV1::default(),
+                ).unwrap()).unwrap(),
+            },
+            ExecKv {
                 key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
                     .to_vec(),
                 value: norito::to_bytes(&validation_fee_snapshot)
@@ -1563,6 +1570,7 @@ fn kagemusha_borrowed_decode_fixture()
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"codec-only block identity")),
         ordinary_writes_root: commitment.ordinary_writes_root,
         post_state_root: commitment.post_state_root,
+        lane_consensus_contexts_witness: crate::state::LaneConsensusContextsWitnessV1::from_witness(&witness).unwrap().0,
         validation_fee_policy_witness,
         parliament_timed_ovn_casting_witness,
         parliament_timed_ovn_casting_bindings: bindings,
@@ -1578,6 +1586,7 @@ fn kagemusha_borrowed_decode_fixture()
             b"codec-only finality identity",
         )),
         validation_fee_policy_witness: staged.validation_fee_policy_witness.clone(),
+        lane_consensus_contexts_witness: staged.lane_consensus_contexts_witness.clone(),
         parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness.clone(),
         parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings.clone(),
         kagemusha_reserve_receipts: staged.kagemusha_reserve_receipts.clone(),
@@ -2433,6 +2442,43 @@ fn kagemusha_finality_stage_rejects_commitment_and_path_substitution() {
         !kura.kagemusha_finality_sidecar_path(1).exists(),
         "mutated witness-derived path must never be promoted"
     );
+}
+
+#[test]
+fn lane_context_finality_proof_survives_restart_and_rejects_carrier_substitution() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(), Hash::prehashed([0xC8; Hash::LENGTH]),
+        LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+    ).unwrap();
+    assert!(kura.lane_consensus_contexts_finality(1).unwrap().is_none());
+    let block = DummyBlocks::new().next();
+    let (witness, mut commitment) = kagemusha_finality_witness(1, 1);
+    commitment.executed_block_wire_len = block.encode_wire().unwrap().len() as u64;
+    commitment.executed_block_wire_hash = block.executed_block_wire_hash().unwrap();
+    let artifact = v2_finality_artifact_for_block_with_execution(&block, commitment);
+    kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, commitment, &[]).unwrap();
+    kura.store_block(Arc::clone(&block)).unwrap();
+    let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
+    assert!(kura.lane_consensus_contexts_finality(1).unwrap().is_none(),
+        "unpublished proof is not authority even when the finality artifact exists");
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
+    let expected = kura.lane_consensus_contexts_finality(1).unwrap().unwrap();
+    assert_eq!(expected.0, artifact);
+    assert!(expected.1.verify(artifact.height_context.network_id, 1, commitment.ordinary_writes_root));
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    assert_eq!(reopened.lane_consensus_contexts_finality(1).unwrap().unwrap(), expected);
+    let path = reopened.kagemusha_finality_sidecar_path(1);
+    let (mut sidecar, _) = reopened.decode_kagemusha_finality_sidecar(&path).unwrap().unwrap();
+    let (other_witness, _) = kagemusha_finality_witness(2, 2);
+    sidecar.lane_consensus_contexts_witness = crate::state::LaneConsensusContextsWitnessV1::from_witness(&other_witness).unwrap().0;
+    std::fs::write(&path, sidecar.encode()).unwrap();
+    assert!(reopened.lane_consensus_contexts_finality(1).is_err(),
+        "a valid proof from another carrier must not authorize this State projection");
 }
 #[test]
 fn immutable_sidecar_publication_never_clobbers_a_racing_destination() {

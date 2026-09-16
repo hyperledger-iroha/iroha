@@ -11,9 +11,15 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         .arm_live_clocks(now)
         .expect("arm runtime for production dispatch");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8C))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x8C),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal");
-    let proposal_effects = match runtime.step(now).expect("dispatch proposal") {
+    let proposal_effects = match runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch proposal")
+    {
         RuntimeStep::Advanced(effects) => effects,
         RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
     };
@@ -48,8 +54,9 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     runtime
         .commit_body_available(body_reservation)
         .expect("publish the owned body reconstruction completion");
-    let RuntimeStep::Advanced(body_effects) =
-        runtime.step(now).expect("dispatch body reconstruction")
+    let RuntimeStep::Advanced(body_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch body reconstruction")
     else {
         panic!("body reconstruction unexpectedly idled")
     };
@@ -160,7 +167,7 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         .expect("a late certified Store carrier keeps the queued incumbent completion");
     assert_eq!(runtime.queued_commands(), 1);
     let RuntimeStep::Advanced(store_effects) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("dispatch durable-store completion")
     else {
         panic!("durable-store completion unexpectedly idled")
@@ -194,7 +201,10 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         .arm_live_clocks(now)
         .expect("arm runtime before opening a signer fence");
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(now + runtime.round_timeout())
+        .step(
+            now + runtime.round_timeout(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("open a runtime-owned TimeoutVote signer fence")
     else {
         panic!("timeout dispatch unexpectedly idled")
@@ -208,9 +218,11 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     let [timeout_ownership] = timeout_ownership.as_slice() else {
         panic!("TimeoutVote Sign has one exact owner")
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish the pending TimeoutVote signer owner");
+    let external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let source_tag = runtime.round_tag();
     let rebound = EventTag::new(
         source_tag.height(),
@@ -410,9 +422,15 @@ fn queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner() {
         .arm_live_clocks(now)
         .expect("arm runtime for terminal-visibility dispatch");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8D))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x8D),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal");
-    let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("dispatch proposal") else {
+    let RuntimeStep::Advanced(fetch_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch proposal")
+    else {
         panic!("proposal dispatch unexpectedly idled")
     };
     runtime
@@ -437,8 +455,9 @@ fn queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner() {
     runtime
         .commit_body_available(reservation)
         .expect("publish body reconstruction");
-    let RuntimeStep::Advanced(store_effects) =
-        runtime.step(now).expect("dispatch body reconstruction")
+    let RuntimeStep::Advanced(store_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch body reconstruction")
     else {
         panic!("body reconstruction unexpectedly idled")
     };
@@ -513,8 +532,9 @@ fn queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner() {
     );
     assert_eq!(runtime.queued_commands(), 1);
     assert!(!runtime.fail_closed);
-    let RuntimeStep::Advanced(validate_effects) =
-        runtime.step(now).expect("dispatch durable-store terminal")
+    let RuntimeStep::Advanced(validate_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch durable-store terminal")
     else {
         panic!("durable-store terminal unexpectedly idled")
     };
@@ -708,9 +728,15 @@ fn body_stage_completion_previews_preserve_later_queued_ingress_exactly() {
         .arm_live_clocks(now)
         .expect("arm body-stage runtime");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x90))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x90),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue body-stage proposal");
-    let RuntimeStep::Advanced(effects) = runtime.step(now).expect("dispatch proposal") else {
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch proposal")
+    else {
         panic!("proposal unexpectedly idled")
     };
     runtime
@@ -732,11 +758,12 @@ fn body_stage_completion_previews_preserve_later_queued_ingress_exactly() {
     drop(runtime.take_leader_wire_runtime_terminals());
 
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(signed_runtime_quorum_certificate(
-                &context, &keys, 0x91,
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0x91),
             )),
-        ))
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("queue unrelated later ingress");
     let incumbent = |runtime: &SerializedV2Runtime| {
         let queued = runtime
@@ -844,7 +871,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
             signed_runtime_quorum_certificate(&context, &keys, 0x92),
         ));
     runtime
-        .enqueue_network(unrelated)
+        .enqueue_network(unrelated, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("queue one unrelated authenticated command");
     let incumbent_before = runtime
         .ingress
@@ -945,7 +972,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
     );
 
     let RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("completion rank dispatches LocalProposalReady first")
     else {
         panic!("LocalProposalReady dispatch unexpectedly idled")
@@ -1205,7 +1232,10 @@ fn local_proposal_admitted_before_clock_activation_retains_its_exact_handoff() {
         Some(&occurrence)
     );
     let RuntimeStep::Advanced(effects) = runtime
-        .step(started_at + runtime.round_timeout())
+        .step(
+            started_at + runtime.round_timeout(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("timely pre-arm Ready retains one bounded handoff")
     else {
         panic!("current Ready unexpectedly idled")
@@ -1263,7 +1293,7 @@ fn pre_timeout_local_proposal_ready_gets_one_bounded_handoff_turn() {
     let deadline = now + runtime.round_timeout();
 
     let RuntimeStep::Advanced(sign_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the pre-cut local proposal owns one bounded deadline turn")
     else {
         panic!("pre-timeout LocalProposalReady unexpectedly idled")
@@ -1289,7 +1319,7 @@ fn pre_timeout_local_proposal_ready_gets_one_bounded_handoff_turn() {
     assert_eq!(candidate.kind, RuntimeCommandKind::LocalProposalReady);
     assert_eq!(candidate.admission_ordinal, ready_admission_ordinal);
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the deadline owner remains frozen after the bounded handoff");
     assert!(ready_lifecycle_ordinal < timeout_owner.lifecycle_ordinal());
     assert!(ready_admission_ordinal < timeout_owner.lifecycle_ordinal());
@@ -1298,7 +1328,7 @@ fn pre_timeout_local_proposal_ready_gets_one_bounded_handoff_turn() {
         .expect("the Proposal Sign inherits the local handoff owner");
 
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the still-due timeout owns the following turn")
     else {
         panic!("the still-due timeout unexpectedly idled")
@@ -1372,7 +1402,10 @@ fn late_local_proposal_ready_cannot_beat_a_timeout_that_has_not_yet_been_frozen(
     assert!(!queued.local_proposal_ready_before_deadline);
     assert!(runtime.timeout_owner.is_none());
     let RuntimeStep::Advanced(effects) = runtime
-        .step(Instant::now())
+        .step(
+            Instant::now(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the first due step must select Timeout")
     else {
         panic!("an elapsed deadline must own one runtime step")
@@ -1428,7 +1461,7 @@ fn post_timeout_local_proposal_ready_does_not_bypass_deadline() {
         .expect("arm the local leader runtime");
     let deadline = now + runtime.round_timeout();
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("freeze the deadline before the validation completion arrives");
     let (ready_lifecycle_ordinal, ready_admission_ordinal) =
         enqueue_owned_local_proposal_ready_for_timeout_test(
@@ -1442,7 +1475,7 @@ fn post_timeout_local_proposal_ready_does_not_bypass_deadline() {
     assert!(timeout_owner.lifecycle_ordinal() < ready_admission_ordinal);
 
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("a post-cut local proposal cannot bypass the timeout")
     else {
         panic!("the due timeout unexpectedly idled")
@@ -1481,7 +1514,7 @@ fn body_available_rejects_second_persistent_lifecycle_before_mutation() {
         .expect("arm runtime before opening a signer fence");
     let deadline = now + runtime.round_timeout();
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("open a runtime-owned TimeoutVote signer fence")
     else {
         panic!("timeout dispatch unexpectedly idled")
@@ -1502,9 +1535,11 @@ fn body_available_rejects_second_persistent_lifecycle_before_mutation() {
     let [timeout_ownership] = timeout_ownership.as_slice() else {
         panic!("TimeoutVote Sign has one exact owner")
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish the pending TimeoutVote signer owner");
+    let external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let source_tag = runtime.round_tag();
     let manifest = runtime_manifest(&context, 0x90);
     let (source_ordinal, source_owner) = defer_persistent_body_available_for_test(
@@ -1588,7 +1623,7 @@ fn body_available_rebind_rejects_busy_source_and_restored_ingress_destination_be
         .expect("arm runtime before opening a signer fence");
     let deadline = now + runtime.round_timeout();
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("open a runtime-owned TimeoutVote signer fence")
     else {
         panic!("timeout dispatch unexpectedly idled")
@@ -1609,9 +1644,11 @@ fn body_available_rebind_rejects_busy_source_and_restored_ingress_destination_be
     let [timeout_ownership] = timeout_ownership.as_slice() else {
         panic!("TimeoutVote Sign has one exact owner")
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish the pending TimeoutVote signer owner");
+    let external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let source_tag = runtime.round_tag();
     let manifest = runtime_manifest(&context, 0x91);
     let (source_ordinal, source_owner) = defer_persistent_body_available_for_test(
@@ -1773,7 +1810,10 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
             Err(EnqueueError::FailClosed)
         );
         assert!(matches!(
-            runtime.step(Instant::now()),
+            runtime.step(
+                Instant::now(),
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(RuntimeError::FailClosed)
         ));
     }
@@ -1837,7 +1877,10 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
             Err(EnqueueError::FailClosed)
         );
         assert!(matches!(
-            runtime.step(Instant::now()),
+            runtime.step(
+                Instant::now(),
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(RuntimeError::FailClosed)
         ));
     }
@@ -1889,7 +1932,10 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
             Err(EnqueueError::FailClosed)
         );
         assert!(matches!(
-            runtime.step(Instant::now()),
+            runtime.step(
+                Instant::now(),
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(RuntimeError::FailClosed)
         ));
     }
@@ -1928,7 +1974,10 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
             Err(EnqueueError::FailClosed)
         );
         assert!(matches!(
-            runtime.step(Instant::now()),
+            runtime.step(
+                Instant::now(),
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(RuntimeError::FailClosed)
         ));
     }
@@ -1945,7 +1994,7 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         _ => unreachable!("fixture is a proposal"),
     };
     body_runtime
-        .enqueue_network(proposal)
+        .enqueue_network(proposal, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("enqueue the exact authenticated proposal");
     body_runtime
         .enqueue_body_available(owner_tag, manifest.clone())
@@ -2031,10 +2080,16 @@ fn applied_body_storage_phases_suppress_retries_before_ordinal_allocation() {
         .arm_live_clocks(now)
         .expect("arm runtime for production dispatch");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x9A))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x9A),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal");
     let proposal_effects = match runtime
-        .step_and_take_scheduler_ownership_for_test(now)
+        .step_and_take_scheduler_ownership_for_test(
+            now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch proposal")
     {
         RuntimeStep::Advanced(effects) => effects,
@@ -2056,7 +2111,7 @@ fn applied_body_storage_phases_suppress_retries_before_ordinal_allocation() {
         .expect("enqueue body reconstruction completion");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch body reconstruction"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
@@ -2079,7 +2134,7 @@ fn applied_body_storage_phases_suppress_retries_before_ordinal_allocation() {
         .expect("enqueue durable-store completion");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch durable-store completion"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])

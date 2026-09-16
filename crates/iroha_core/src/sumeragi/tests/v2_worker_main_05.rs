@@ -3363,7 +3363,11 @@ fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
         .expect("durable runtime handoff")
         .clone();
     runtime
-        .enqueue_network_with_ingress_ownership(message, owner)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            owner,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("transfer exact Commit owner into the real runtime");
     runtime
         .arm_live_clocks(now)
@@ -3373,7 +3377,10 @@ fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
         .leader_wire_recovery_authority()
         .expect("pre-admission WAL authority");
     let pending = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("current lock-missing Commit remains retryable");
     assert!(
         matches!(&pending, RuntimeStep::Idle),
@@ -3466,10 +3473,17 @@ fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
         .take_ingress_ownership()
         .expect("exact physical QC owner");
     runtime
-        .enqueue_network_with_ingress_ownership(qc_message, qc_owner)
+        .enqueue_network_with_ingress_ownership(
+            qc_message,
+            qc_owner,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the dependency behind the retained Commit");
     let RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("progress class services PrepareQC")
     else {
         panic!("current PrepareQC cannot idle behind a retained Commit");
@@ -3539,7 +3553,10 @@ fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
     let mut signed_local_commit = false;
     for _ in 0..6 {
         let step = runtime
-            .step(now)
+            .step(
+                now,
+                &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("bounded signing and Commit retry progress");
         let RuntimeStep::Advanced(effects) = step else {
             panic!("owned Commit or its signer remains runnable");

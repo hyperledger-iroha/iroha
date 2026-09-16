@@ -37,7 +37,7 @@ impl PersistenceDeadline {
     pub(super) async fn persist(
         &self,
         state: &State,
-        certificate: &[u8],
+        complete_input: &[u8],
     ) -> Result<PendingQueuePlanAdmissionPersistenceOutcome, String> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| "QueuePlan persistence requires an active Tokio runtime".to_owned())?;
@@ -47,10 +47,10 @@ impl PersistenceDeadline {
         loop {
             self.remaining().map_err(str::to_owned)?;
             // This does not spawn a writer: cancellation cannot detach physical
-            // persistence from the certificate or its enclosing W reservation.
+            // persistence from the complete input or its enclosing W reservation.
             let outcome = tokio::task::block_in_place(|| {
                 state.persist_classified_queue_plan_admission(
-                    certificate,
+                    complete_input,
                     QueuePlanAdmissionPersistenceScope::Admission,
                 )
             });

@@ -2614,6 +2614,11 @@ These are inspected test definitions, not fresh execution evidence.
 
 ### Explicitly out of scope
 
+The generic runtime items below are outside this ledger's `ML-*` feature rows,
+not excluded from release qualification. The
+[2026-09-16 liveness redesign](sumeragi_liveness_redesign_goals.md) owns generic
+scheduling/lifecycle replacement and its assembled-runtime acceptance evidence.
+
 - **Generic finalized-view archive retention:** the TODO beside
   `provider_ingest_finalized_archive` in
   `crates/iroha_core/src/sumeragi/v2_apply.rs` concerns a governed

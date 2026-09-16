@@ -17,10 +17,10 @@ fn queue_plan_test_certificate_at_height(
     let routing_plan =
         RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
     qp_lane_case! { let route_incarnations = routing_plan.legs().into_iter().map(|leg| { let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(&adapter.state.view(), leg.route, proposal_height).expect("route authority"); crate::queue::QueuePlanRouteIncarnationV1 { leg, lane_incarnation: adapter.state.lane_incarnation_at_height(leg.route.lane_id, proposal_height).expect("active route"), validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: u16::try_from(validator_set.len()).expect("validator count"), durability_threshold: u16::try_from(validator_set.len().div_ceil(3)).expect("threshold"), validator_set } }).collect(); let context = crate::queue::QueuePlanAdmissionContextV1 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, authority_height, proposal_height, predecessor_block_hash, routing_plan_digest: routing_plan.digest(), route_incarnations }; }
-    qp_lane_case! { let tx_key = KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519).expect("transaction key"); let mut tx = TransactionBuilder::new(adapter.context.network_id, AccountId::new(tx_key.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)); tx.set_creation_time(Duration::from_millis(u64::from(tag) + 1)); let entrypoint = TransactionEntrypoint::External(tx.with_instructions([Log::new(Level::INFO, format!("queue-plan-{tag}"))]).sign(tx_key.private_key())); let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(&adapter.context.network_id, &entrypoint, &routing_plan, context, u64::from(tag) + 100).expect("binding"); }
+    qp_lane_case! { let tx_key = KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519).expect("transaction key"); let mut tx = TransactionBuilder::new(adapter.context.network_id, AccountId::new(tx_key.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)); tx.set_creation_time(Duration::from_millis(u64::from(tag) + 1)); let entrypoint = TransactionEntrypoint::External(tx.with_instructions([Log::new(Level::INFO, format!("queue-plan-{tag}"))]).sign(tx_key.private_key())); let binding = crate::torii_proxy::new_queue_plan_admission_binding(&adapter.context.network_id, &entrypoint, &routing_plan, context, u64::from(tag) + 100).expect("binding"); }
     let binding_hash = binding.canonical_hash();
     let coordinator = &binding.admission_context.route_incarnations[0];
-    qp_lane_case! { let attestations = coordinator.validator_set.iter().take(usize::from(coordinator.durability_threshold)).enumerate().map(|(index, validator)| { let key = keys.iter().find(|key| key.public_key() == validator.public_key()).expect("authority key"); let validator_index = u16::try_from(index).expect("validator index"); let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(binding_hash, validator_index).expect("preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(key.private_key(), &preimage).expect("signature") } }).collect(); let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1, binding: binding.clone(), attestations }; (binding, norito::encode_canonical(&certificate).expect("certificate")) }
+    qp_lane_case! { let attestations = coordinator.validator_set.iter().take(usize::from(coordinator.durability_threshold)).enumerate().map(|(index, validator)| { let key = keys.iter().find(|key| key.public_key() == validator.public_key()).expect("authority key"); let validator_index = u16::try_from(index).expect("validator index"); let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(binding_hash, validator_index).expect("preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(key.private_key(), &preimage).expect("signature") } }).collect(); let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1, binding: binding.clone(), attestations }; (binding, norito::encode_canonical(&iroha_data_model::block::lane_admission::LaneAdmittedInputV1 { entrypoint, certificate }).expect("complete input")) }
 }
 
 pub(in crate::sumeragi) fn queue_plan_test_certificate(
@@ -253,12 +253,14 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
         let hashes = adapter.state.block_hashes.block_and_revert();
         hashes.commit_for_tests();
     }
-    let mut self_declared =
-        norito::decode_from_bytes::<crate::torii_proxy::QueuePlanAdmissionCertificateV1>(&future)
-            .expect("decode future certificate for adversarial roster mutation");
+    let mut self_declared = norito::decode_from_bytes::<
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    >(&future)
+    .expect("decode future certificate for adversarial roster mutation");
     let compromised_key = keys.first().expect("fixture current authority key");
     let self_declared_peer = PeerId::from(compromised_key.public_key().clone());
     let coordinator = self_declared
+        .certificate
         .binding
         .admission_context
         .route_incarnations
@@ -268,18 +270,28 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
     coordinator.validator_count = 1;
     coordinator.durability_threshold = 1;
     coordinator.validator_set_hash = HashOf::new(&coordinator.validator_set);
-    let self_declared_binding_hash = self_declared.binding.canonical_hash();
+    let plan = self_declared.certificate.binding.routing_plan().unwrap();
+    self_declared.certificate.binding = crate::torii_proxy::new_queue_plan_admission_binding(
+        adapter.state.network_id_ref(),
+        &self_declared.entrypoint,
+        &plan,
+        self_declared.certificate.binding.admission_context.clone(),
+        self_declared.certificate.binding.enqueue_timestamp_ms,
+    )
+    .expect("internally authentic input with a self-declared foreign roster");
+    let self_declared_binding_hash = self_declared.certificate.binding.canonical_hash();
     let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
         self_declared_binding_hash,
         0,
     )
     .expect("encode self-declared future attestation preimage");
-    self_declared.attestations = vec![crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
-        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-        validator_index: 0,
-        signature: Signature::try_new(compromised_key.private_key(), &signing_bytes)
-            .expect("sign self-declared future certificate"),
-    }];
+    self_declared.certificate.attestations =
+        vec![crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+            validator_index: 0,
+            signature: Signature::try_new(compromised_key.private_key(), &signing_bytes)
+                .expect("sign self-declared future certificate"),
+        }];
     let self_declared =
         norito::encode_canonical(&self_declared).expect("encode self-declared future certificate");
     assert_queue_plan_rejected(&mut adapter, &sender, self_declared.clone(), 0);
@@ -357,9 +369,14 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
     };
     {
         let mut world = adapter.state.world.block();
-        world
-            .smart_contract_state
-            .insert(key, norito::to_bytes(&marker).unwrap());
+        world.smart_contract_state.insert(
+            key,
+            State::queue_plan_admission_registry_marker_payload(
+                &marker,
+                crate::state::QueuePlanAdmissionPriorityV1::new(adapter.context.height, 0).unwrap(),
+            )
+            .unwrap(),
+        );
         world.commit();
     }
     assert_queue_plan_rejected(&mut adapter, &sender, conflict, 0);
@@ -564,6 +581,7 @@ fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover()
 }
 
 fn queue_plan_materialized_certificate_for_binding(
+    entrypoint: &TransactionEntrypoint,
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     keys: &[KeyPair],
 ) -> Vec<u8> {
@@ -589,11 +607,16 @@ fn queue_plan_materialized_certificate_for_binding(
             }
         })
         .collect();
-    norito::encode_canonical(&crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
-        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-        binding: binding.clone(),
-        attestations,
-    })
+    norito::encode_canonical(
+        &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+            entrypoint: entrypoint.clone(),
+            certificate: crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                binding: binding.clone(),
+                attestations,
+            },
+        },
+    )
     .unwrap()
 }
 
@@ -655,7 +678,7 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
         .unwrap();
     assert_eq!(context.authority_height, adapter.context.height);
     let current_height = context.proposal_height;
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let binding = crate::torii_proxy::new_queue_plan_admission_binding(
         adapter.state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
@@ -671,8 +694,9 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
             &binding,
         )
         .expect("materialize the exact current-State transaction and fsync its journal claim");
-    let certificate = queue_plan_materialized_certificate_for_binding(&binding, &keys);
-    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+    let certificate =
+        queue_plan_materialized_certificate_for_binding(accepted.entrypoint(), &binding, &keys);
+    crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
         adapter.state.network_id_ref(),
         &certificate,
     )

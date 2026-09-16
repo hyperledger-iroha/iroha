@@ -515,7 +515,7 @@ async fn queue_plan_outcome_unknown_validates_distinct_sealed_reveal_identities(
         .queue
         .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
         .expect("sealed-reveal QueuePlan admission context");
-    let admission_binding = QueuePlanAdmissionBindingV1::new(
+    let admission_binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
         &network_id,
         &entrypoint,
         &routing_plan,

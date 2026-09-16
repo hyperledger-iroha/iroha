@@ -129,7 +129,12 @@ fn validate_queue_plan_gossip_certificate(
         .classify_pending_queue_plan_admission(certificate, carrier_height)
         .map_err(|error| format!("QueuePlan gossip certificate is invalid: {error}"))?;
     let binding = validated.certificate.binding;
-    binding.validate_for_request(state.network_id_ref(), entrypoint, routing_plan)?;
+    crate::torii_proxy::validate_queue_plan_binding_for_request(
+        &binding,
+        state.network_id_ref(),
+        entrypoint,
+        routing_plan,
+    )?;
     let disposition = queue_plan_gossip_disposition(state, disposition)?;
     Ok((binding, disposition))
 }
@@ -4692,7 +4697,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let admission_context = queue
             .plan_admission_context_with_state(state.as_ref(), &routing_plan)
             .expect("capture exact QueuePlan gossip admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             &entrypoint,
             &routing_plan,
@@ -4745,8 +4750,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             binding: binding.clone(),
             attestations,
         };
-        let certificate = norito::encode_canonical(&certificate)
-            .expect("encode exact QueuePlan gossip certificate");
+        let certificate = norito::encode_canonical(
+            &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+                entrypoint,
+                certificate,
+            },
+        )
+        .expect("encode exact complete QueuePlan gossip input");
         if future {
             let hashes = state.block_hashes.block_and_revert();
             assert!(hashes.is_empty());
@@ -4827,10 +4837,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 .expect("read exact Pending QueuePlan gossip durable claim")
                 .expect("exact Pending QueuePlan gossip must own a durable claim");
             let reconstructed =
-                crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-                    &durable,
-                )
-                .expect("reconstruct exact Pending QueuePlan gossip binding");
+                crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable)
+                    .expect("reconstruct exact Pending QueuePlan gossip binding");
             assert_eq!(reconstructed, binding);
             let pending_certificates = gossiper
                 .state

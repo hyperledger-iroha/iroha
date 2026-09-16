@@ -267,13 +267,23 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     assert!(!executor.status().fail_closed);
 }
 #[test]
-fn executor_threads_its_independent_pending_bound_into_runtime_ownership() {
+fn executor_borrows_a_census_with_its_independent_pending_bound() {
     let fixture = Fixture::new();
     let config = EffectQueueConfig::default();
-    let executor = fixture.executor(config);
+    let mut executor = fixture.executor(config);
+    let (_, _, external) = executor
+        .runtime_and_external_lifecycle_census()
+        .expect("borrow current ownership");
+    assert_eq!(external.len(), 0);
     assert_eq!(
-        executor.runtime.external_lifecycle_owner_capacity,
-        Some(config.max_pending_work + 2 * MAX_EFFECTS_PER_STEP)
+        RuntimeExternalLifecycleCensus::capacity_for_pending_work(config.max_pending_work)
+            .expect("bounded pending work"),
+        config.max_pending_work + 2 * MAX_EFFECTS_PER_STEP
+    );
+    assert!(
+        EffectQueueConfig::new(usize::MAX, 1, 1, 1)
+            .validate()
+            .is_err()
     );
 }
 #[test]
@@ -458,11 +468,11 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         }
     }
     assert_eq!(executor.pending_fetches.len(), 1);
-    executor
-        .publish_external_lifecycle_owners()
-        .expect("publish runnable asynchronous ownership");
+    let (_, _, external) = executor
+        .runtime_and_external_lifecycle_census()
+        .expect("borrow current asynchronous ownership");
     assert_eq!(
-        executor.runtime.external_lifecycle_owner_count(),
+        external.len(),
         0,
         "a passive network fetch must not become the actor-global scheduler minimum"
     );
@@ -872,6 +882,11 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     );
     V2EffectServices::enqueue_body_fetch(&mut production_services, task_a.clone())
         .expect("install A's exact certified-Fetch service owner");
+    assert_eq!(
+        production_services.has_unleased_lifecycle_completion_work(),
+        Some(false),
+        "a network-only Fetch wait has no physical completion owner"
+    );
     let planned = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
@@ -890,7 +905,26 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         ),
     };
     assert_eq!(queued.ordinal(), lifecycle_ordinal);
-    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    assert_eq!(
+        production_services.has_unleased_lifecycle_completion_work(),
+        Some(true),
+        "queued certified persistence retains its unleased physical owner"
+    );
+    planner_io.execute_one_certified_fetch_with_active_observer(
+        Arc::clone(&fixture.executor.output_guard),
+        || {
+            assert_eq!(
+                production_services.has_unleased_lifecycle_completion_work(),
+                Some(true),
+                "active certified persistence retains its unleased physical owner"
+            );
+        },
+    );
+    assert_eq!(
+        production_services.has_unleased_lifecycle_completion_work(),
+        Some(true),
+        "physical completion preserves ownership until exact acknowledgement"
+    );
     let completion = match production_services
         .take_next_lifecycle_completion()
         .expect("the persisted A response retains its physical completion owner")
@@ -900,6 +934,11 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         }
         _ => panic!("the persisted A response must classify as CertifiedFetch"),
     };
+    assert_eq!(
+        production_services.has_unleased_lifecycle_completion_work(),
+        Some(true),
+        "taking the result does not acknowledge the retained worker owner"
+    );
     owner
         .complete_certified_fetch_for_test(
             &mut fixture.executor,
@@ -936,6 +975,11 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
                 error,
             ) => panic!("A failed after the persistence commit: {error}"),
         });
+    assert_eq!(
+        production_services.has_unleased_lifecycle_completion_work(),
+        Some(false),
+        "successful lifecycle settlement acknowledges the exact worker owner"
+    );
     assert_eq!(
         planner_io.execute_one_locked_candidate_load(&mut production_services),
         Some(locked_candidate_tag),
@@ -1238,8 +1282,8 @@ fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
     };
     assert_eq!(failure.work_id(), work_id);
     assert_eq!(
-        failure.failure(),
-        CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken,
+        failure.productive_ingress_failure(),
+        Some(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken),
     );
     assert!(fixture.executor.output_guard.restart_required());
     assert_eq!(

@@ -766,13 +766,12 @@ impl V2CandidateAssembler {
             .is_some();
         let mut carrier_queue_plan_bindings = BTreeMap::new();
         for certificate in &attachments.queue_plan_admissions {
-            let admission =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                    state.network_id_ref(),
-                    certificate,
-                )
-                .map_err(CandidateError::MergeApplicationContext)?;
-            let binding = admission.certificate.binding;
+            let admission = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                state.network_id_ref(),
+                certificate,
+            )
+            .map_err(CandidateError::MergeApplicationContext)?;
+            let binding = admission.certificate().certificate.binding.clone();
             if carrier_queue_plan_bindings
                 .insert(binding.entrypoint_hash.clone(), binding)
                 .is_some()
@@ -818,7 +817,8 @@ impl V2CandidateAssembler {
                 }
             };
             if let Some(binding) = queue_plan_binding
-                && let Err(reason) = binding.validate_for_request(
+                && let Err(reason) = crate::torii_proxy::validate_queue_plan_binding_for_request(
+                    &binding,
                     state.network_id_ref(),
                     transaction.entrypoint(),
                     &routing_plan,
@@ -2543,7 +2543,7 @@ pub(super) mod tests {
                 })
                 .collect(),
         };
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             queue_plan.entrypoint(),
             &routing_plan,

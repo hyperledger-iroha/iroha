@@ -21,11 +21,11 @@ pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
 /// Maximum number of globally ordered queue-plan admission controls in one block.
 pub const MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK: usize = 4_096;
-/// Maximum canonical size of one opaque queue-plan admission certificate.
+/// Maximum canonical size of one complete typed lane admission input.
 pub const MAX_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
 /// Maximum aggregate queue-plan admission bytes carried by one block.
 pub const MAX_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
-/// Return whether opaque queue-plan admission bytes fit their block envelope.
+/// Return whether canonical complete lane admission controls fit their block envelope.
 #[must_use]
 pub fn queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
     if admissions.len() > MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK {
@@ -353,12 +353,14 @@ pub struct BlockExecutionContextBundle {
     pub autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
     /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Canonical framed queue-plan admission certificates in strict source order.
+    /// Canonical framed [`super::lane_admission::LaneAdmittedInputV1`] controls
+    /// in strict registry-key order, including each exact executable entrypoint.
     ///
-    /// The concrete certificate type belongs to `iroha_core`, so the data
-    /// model retains exact canonical bytes without introducing a dependency
-    /// cycle. Runtime admission decodes, authenticates, and stages the
-    /// certificate bindings through an immutable WSV compare-and-set.
+    /// Each complete control has its own bounded canonical decoding boundary.
+    /// Runtime admission authenticates the certificate and its exact input,
+    /// plan, context and journal claim before the immutable WSV compare-and-set.
+    /// The first finalized carrier is the durable source for replacement committees;
+    /// a certificate-only frame is not a valid admission control.
     pub queue_plan_admissions: Vec<Vec<u8>>,
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
     #[norito(required)]
@@ -402,13 +404,13 @@ impl BlockExecutionContextBundle {
         self.lane_payload_ownerships = lane_payload_ownerships;
         self
     }
-    /// Attach globally ordered queue-plan admission certificate bytes.
+    /// Attach globally ordered complete lane admission input bytes.
     #[must_use]
     pub fn with_queue_plan_admissions(mut self, queue_plan_admissions: Vec<Vec<u8>>) -> Self {
         self.queue_plan_admissions = queue_plan_admissions;
         self
     }
-    /// Return the exact queue-plan admission certificate bytes carried by this bundle.
+    /// Return the exact complete lane admission input bytes carried by this bundle.
     #[must_use]
     pub fn queue_plan_admissions(&self) -> &[Vec<u8>] {
         &self.queue_plan_admissions

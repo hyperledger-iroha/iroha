@@ -46,425 +46,221 @@ pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
 /// Maximum participant routes admitted in one Native AMX routing-plan hint.
 pub const TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1: usize =
     crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS;
-/// Current first-release QueuePlan global-admission binding layout.
-pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1: u16 = 1;
-/// Current first-release QueuePlan authority-attestation layout.
-pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1: u16 = 1;
-/// Current first-release QueuePlan admission-certificate layout.
-pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1: u16 = 1;
 /// Schema version for peer-to-peer publication of a certified QueuePlan admission.
 pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
-const QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V1: &[u8] =
-    b"iroha:torii:queue-plan-admission-network:v1\0";
-const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V1: &[u8] =
-    b"iroha:torii:queue-plan-admission-binding:v1\0";
 const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V1: &[u8] =
     b"iroha:torii:queue-plan-admission-attestation:v1\0";
-const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1: &str = "torii:proxy:queue-plan-synced:v1";
-/// Return the exact network identity carried by every QueuePlan admission binding.
-#[must_use]
-pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
-    Hash::new_from_chunks(&[
-        QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V1,
-        network_id.as_bytes(),
-    ])
-}
-/// Derive the deterministic QueuePlanSynced request identity shared by every ingress.
+pub use iroha_data_model::block::lane_admission::{
+    LaneAdmittedInputV1, QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+    QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+    QueuePlanAdmissionAttestationV1, QueuePlanAdmissionBindingV1, QueuePlanAdmissionCertificateV1,
+    QueuePlanAdmissionRegistryKeyV1, QueuePlanAdmissionRegistryValueV1,
+    queue_plan_admission_network_id_digest, queue_plan_synced_request_id,
+    queue_plan_synced_request_id_from_network_digest,
+};
+
+/// Build the single exact binding an ingress node sends to every authority.
 ///
-/// This pure kernel deliberately excludes connection/session identity. Every responsive ingress
-/// therefore presents the same semantic request identity for one network and entrypoint while
-/// retaining its own process-local reply route.
-#[must_use]
-pub fn queue_plan_synced_request_id(
+/// # Errors
+/// Returns an error when the supplied context is not canonical for the routing plan or the
+/// exact current journal record cannot be encoded.
+pub fn new_queue_plan_admission_binding(
     network_id: &NetworkId,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> Hash {
-    queue_plan_synced_request_id_from_network_digest(
-        queue_plan_admission_network_id_digest(network_id),
-        entrypoint_hash,
-    )
-}
-/// Derive the deterministic QueuePlanSynced request identity from its durable projection.
-///
-/// Binding the request to the persisted network digest lets journal replay and certificate
-/// validation recompute the same semantic identity without trusting a human-readable chain
-/// label. Delivery ordinals and connection tenures remain deliberately excluded.
-#[must_use]
-pub fn queue_plan_synced_request_id_from_network_digest(
-    network_id_digest: Hash,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> Hash {
-    Hash::new(
-        norito::encode_canonical(&(
-            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,
+    transaction: &TransactionEntrypoint,
+    routing_plan: &crate::queue::RoutingPlan,
+    admission_context: crate::queue::QueuePlanAdmissionContextV1,
+    enqueue_timestamp_ms: u64,
+) -> Result<QueuePlanAdmissionBindingV1, String> {
+    admission_context.validate_for_routing_plan(routing_plan)?;
+    let network_id_digest = queue_plan_admission_network_id_digest(network_id);
+    let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+        version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
+        network_id_digest,
+        request_id: queue_plan_synced_request_id_from_network_digest(
             network_id_digest,
-            entrypoint_hash,
-        ))
-        .expect("deterministic QueuePlanSynced request identity must encode"),
+            transaction.hash(),
+        ),
+    };
+    let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
+        transaction.clone(),
+        routing_plan.clone(),
+        admission_context.clone(),
+        enqueue_timestamp_ms,
+        Some(global_admission_identity.clone()),
     )
+    .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
+    Ok(QueuePlanAdmissionBindingV1 {
+        version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+        network_id_digest: global_admission_identity.network_id_digest,
+        request_id: global_admission_identity.request_id,
+        entrypoint_hash: transaction.hash(),
+        signed_transaction_hash: crate::tx::exact_signed_transaction_hash(transaction),
+        routing_plan_digest: routing_plan.digest(),
+        admission_context,
+        enqueue_timestamp_ms,
+        queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
+        durable_admission_version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
+        journal_record_digest,
+    })
 }
 
-/// Globally unique registry key for one transaction-entrypoint admission.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryKeyV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
-pub struct QueuePlanAdmissionRegistryKeyV1 {
-    /// Registry-key layout version.
-    pub version: u16,
-    /// Exact network that owns the entrypoint.
-    pub network_id_digest: Hash,
-    /// Typed canonical transaction-entrypoint identity.
-    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
-}
-/// Immutable value claimed by a QueuePlan global-admission registry key.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryValueV1")]
-pub struct QueuePlanAdmissionRegistryValueV1 {
-    /// Registry-value layout version.
-    pub version: u16,
-    /// Domain-separated hash of the complete admission binding.
-    pub binding_hash: Hash,
-}
-/// One exact queue-journal claim shared by every authority in an admission certificate.
+/// Reconstruct a shared binding from one exact locally durable queue claim.
 ///
-/// The complete context carries ordered rosters for every coordinator/participant leg. The
-/// journal digest covers the exact transaction wire, routing plan, context, canonical ingress
-/// timestamp, network digest, and deterministic request identity. Authorities never substitute a
-/// locally sampled timestamp or independently reconstructed claim.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionBindingV1")]
-pub struct QueuePlanAdmissionBindingV1 {
-    /// Binding layout version.
-    pub version: u16,
-    /// Domain-separated exact network identity.
-    pub network_id_digest: Hash,
-    /// Deterministic QueuePlanSynced proxy request identity.
-    pub request_id: Hash,
-    /// Typed canonical transaction-entrypoint identity.
-    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
-    /// Real signed-transaction identity when the entrypoint contains one.
-    pub signed_transaction_hash: Option<HashOf<SignedTransaction>>,
-    /// Complete canonical routing-plan digest.
-    pub routing_plan_digest: Hash,
-    /// Exact lifecycle, incarnation, and ordered per-leg authority context.
-    pub admission_context: crate::queue::QueuePlanAdmissionContextV1,
-    /// Canonical ingress timestamp persisted identically by every authority.
-    pub enqueue_timestamp_ms: u64,
-    /// Exact queue-plan journal record layout.
-    pub queue_plan_journal_version: u16,
-    /// Exact durable-claim layout returned by queue admission.
-    pub durable_admission_version: u16,
-    /// Domain-separated digest of the exact canonical journal record.
-    pub journal_record_digest: Hash,
+/// # Errors
+/// Returns an error for ordinary claims without a global identity or for any inconsistent
+/// version, transaction, routing, context, or journal field.
+pub fn queue_plan_binding_from_durable_admission(
+    durable: &crate::queue::QueuePlanDurableAdmissionV1,
+) -> Result<QueuePlanAdmissionBindingV1, String> {
+    if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
+        return Err("QueuePlan durable-admission version is unsupported".to_owned());
+    }
+    let identity = durable
+        .global_admission_identity
+        .as_ref()
+        .ok_or_else(|| "QueuePlan durable admission has no global identity".to_owned())?;
+    if identity.version != crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1 {
+        return Err("QueuePlan global-admission identity version is unsupported".to_owned());
+    }
+    let binding = QueuePlanAdmissionBindingV1 {
+        version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+        network_id_digest: identity.network_id_digest,
+        request_id: identity.request_id,
+        entrypoint_hash: durable.entrypoint_hash.clone(),
+        signed_transaction_hash: durable.signed_transaction_hash.clone(),
+        routing_plan_digest: durable.routing_plan.digest(),
+        admission_context: durable.context.clone(),
+        enqueue_timestamp_ms: durable.enqueue_timestamp_ms,
+        queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
+        durable_admission_version: durable.version,
+        journal_record_digest: durable.journal_record_digest,
+    };
+    binding.validate_structure()?;
+    Ok(binding)
 }
-impl QueuePlanAdmissionBindingV1 {
-    /// Build the single exact binding an ingress node sends to every authority.
-    ///
-    /// # Errors
-    /// Returns an error when the supplied context is not canonical for the routing plan or the
-    /// exact version-4 journal record cannot be encoded.
-    pub fn new(
-        network_id: &NetworkId,
-        transaction: &TransactionEntrypoint,
-        routing_plan: &crate::queue::RoutingPlan,
-        admission_context: crate::queue::QueuePlanAdmissionContextV1,
-        enqueue_timestamp_ms: u64,
-    ) -> Result<Self, String> {
-        admission_context.validate_for_routing_plan(routing_plan)?;
-        let network_id_digest = queue_plan_admission_network_id_digest(network_id);
-        let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
-            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
-            network_id_digest,
-            request_id: queue_plan_synced_request_id_from_network_digest(
-                network_id_digest,
-                transaction.hash(),
-            ),
-        };
-        let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
-            transaction.clone(),
-            routing_plan.clone(),
-            admission_context.clone(),
-            enqueue_timestamp_ms,
-            Some(global_admission_identity.clone()),
-        )
-        .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
-        Ok(Self {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-            network_id_digest: global_admission_identity.network_id_digest,
-            request_id: global_admission_identity.request_id,
-            entrypoint_hash: transaction.hash(),
-            signed_transaction_hash: crate::tx::exact_signed_transaction_hash(transaction),
-            routing_plan_digest: routing_plan.digest(),
-            admission_context,
-            enqueue_timestamp_ms,
-            queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
-            durable_admission_version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-            journal_record_digest,
-        })
-    }
-    /// Reconstruct a shared binding from one exact locally durable queue claim.
-    ///
-    /// # Errors
-    /// Returns an error for ordinary claims without a global identity or for any inconsistent
-    /// version, transaction, routing, context, or journal field.
-    pub fn try_from_durable_admission(
-        durable: &crate::queue::QueuePlanDurableAdmissionV1,
-    ) -> Result<Self, String> {
-        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
-            return Err("QueuePlan durable-admission version is unsupported".to_owned());
-        }
-        let identity = durable
-            .global_admission_identity
-            .as_ref()
-            .ok_or_else(|| "QueuePlan durable admission has no global identity".to_owned())?;
-        if identity.version != crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1 {
-            return Err("QueuePlan global-admission identity version is unsupported".to_owned());
-        }
-        let binding = Self {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-            network_id_digest: identity.network_id_digest,
-            request_id: identity.request_id,
-            entrypoint_hash: durable.entrypoint_hash.clone(),
-            signed_transaction_hash: durable.signed_transaction_hash.clone(),
-            routing_plan_digest: durable.routing_plan.digest(),
-            admission_context: durable.context.clone(),
-            enqueue_timestamp_ms: durable.enqueue_timestamp_ms,
-            queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
-            durable_admission_version: durable.version,
-            journal_record_digest: durable.journal_record_digest,
-        };
-        binding.validate_structure()?;
-        Ok(binding)
-    }
-    /// Return the global identity persisted inside the exact queue-plan journal record.
-    #[must_use]
-    pub fn global_admission_identity(&self) -> crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
-        crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
-            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
-            network_id_digest: self.network_id_digest,
-            request_id: self.request_id,
-        }
-    }
-    /// Return the canonical routing plan carried redundantly by the context.
-    ///
-    /// # Errors
-    /// Returns an error when the context cannot encode a canonical routing plan or its advertised
-    /// digest differs.
-    pub fn routing_plan(&self) -> Result<crate::queue::RoutingPlan, String> {
-        let routing_plan = self.admission_context.routing_plan()?;
-        self.admission_context
-            .validate_for_routing_plan(&routing_plan)?;
-        if routing_plan.digest() != self.routing_plan_digest {
-            return Err("QueuePlan binding routing digest differs from its context".to_owned());
-        }
-        Ok(routing_plan)
-    }
-    /// Validate all fields that do not require the exact transaction wire.
-    ///
-    /// # Errors
-    /// Returns the first unsupported version, zero identity, context, routing, or journal failure.
-    pub fn validate_structure(&self) -> Result<(), String> {
-        if self.version != QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1 {
-            return Err("QueuePlan admission-binding version is unsupported".to_owned());
-        }
-        if self.network_id_digest == Hash::prehashed([0; Hash::LENGTH])
-            || self.request_id == Hash::prehashed([0; Hash::LENGTH])
-            || self.journal_record_digest == Hash::prehashed([0; Hash::LENGTH])
-        {
-            return Err("QueuePlan admission binding contains a zero identity hash".to_owned());
-        }
-        if self.request_id
-            != queue_plan_synced_request_id_from_network_digest(
-                self.network_id_digest,
-                self.entrypoint_hash.clone(),
-            )
-        {
-            return Err(
-                "QueuePlan admission binding has a noncanonical semantic request identity"
-                    .to_owned(),
-            );
-        }
-        if self.admission_context.version != crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1 {
-            return Err("QueuePlan admission-context version is unsupported".to_owned());
-        }
-        if self.queue_plan_journal_version != crate::queue::QUEUE_PLAN_JOURNAL_VERSION {
-            return Err("QueuePlan journal version is unsupported".to_owned());
-        }
-        if self.durable_admission_version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
-            return Err("QueuePlan durable-admission version is unsupported".to_owned());
-        }
-        self.routing_plan().map(|_| ())
-    }
-    /// Validate this binding against the exact request transaction and routing plan.
-    ///
-    /// # Errors
-    /// Returns an error when any typed transaction identity, plan/context field, network identity,
-    /// or canonical version-4 journal-record digest differs.
-    pub fn validate_for_request(
-        &self,
-        network_id: &NetworkId,
-        transaction: &TransactionEntrypoint,
-        routing_plan: &crate::queue::RoutingPlan,
-    ) -> Result<(), String> {
-        if self.network_id_digest != queue_plan_admission_network_id_digest(network_id) {
-            return Err("QueuePlan admission binding belongs to another network".to_owned());
-        }
-        if self.request_id != queue_plan_synced_request_id(network_id, transaction.hash()) {
-            return Err(
-                "QueuePlan admission binding has a noncanonical semantic request identity"
-                    .to_owned(),
-            );
-        }
-        self.validate_for_transaction_and_plan(transaction, routing_plan)
-    }
-    /// Validate the complete durable identity that authorizes a lane reservation Commit.
-    ///
-    /// The exact coordinator and its admitting incarnation are recovered from this binding's
-    /// immutable routing context. The binding hash authenticates the original admission height,
-    /// while the reservation key's distinct proposal height identifies the later lane slot that
-    /// actually took queue ownership.
-    ///
-    /// # Errors
-    /// Returns an error for a malformed reservation key or any entrypoint, plan,
-    /// backdated reservation height, coordinator, incarnation, or canonical binding-hash
-    /// mismatch.
-    pub(crate) fn validate_for_lane_reservation_commit(
-        &self,
-        key: &crate::queue::LaneQueueReservationKeyV1,
-    ) -> Result<(), String> {
-        key.validate().map_err(str::to_owned)?;
-        self.validate_structure()?;
-        if key.proposal_height < self.admission_context.proposal_height {
-            return Err(
-                "lane reservation proposal height precedes its durable QueuePlan admission"
-                    .to_owned(),
-            );
-        }
-        if self.entrypoint_hash != key.entrypoint_hash
-            || self.routing_plan_digest != key.routing_plan_digest
-            || self.canonical_hash() != key.queue_plan_admission_binding_hash
-        {
-            return Err(
-                "QueuePlan binding does not match the lane reservation transaction, plan, or binding identity"
-                    .to_owned(),
-            );
-        }
-        let routing_plan = self.routing_plan()?;
-        let coordinator = self
-            .admission_context
-            .route_incarnations
-            .first()
-            .ok_or_else(|| "QueuePlan admission context has no coordinator".to_owned())?;
-        if routing_plan.coordinator_leg() != key.coordinator_leg
-            || coordinator.leg != key.coordinator_leg
-            || coordinator.lane_incarnation != key.lane_incarnation
-        {
-            return Err(
-                "QueuePlan binding does not match the lane reservation coordinator generation"
-                    .to_owned(),
-            );
-        }
-        Ok(())
-    }
-    /// Validate the exact transaction, routing plan, and journal record when the trusted caller
-    /// has already established the chain identity.
-    ///
-    /// # Errors
-    /// Returns an error for any typed transaction identity, plan/context, or journal mismatch.
-    pub fn validate_for_transaction_and_plan(
-        &self,
-        transaction: &TransactionEntrypoint,
-        routing_plan: &crate::queue::RoutingPlan,
-    ) -> Result<(), String> {
-        self.validate_structure()?;
-        if self.entrypoint_hash != transaction.hash()
-            || self.signed_transaction_hash != crate::tx::exact_signed_transaction_hash(transaction)
-        {
-            return Err(
-                "QueuePlan admission binding has a different transaction identity".to_owned(),
-            );
-        }
-        if self.routing_plan_digest != routing_plan.digest() {
-            return Err("QueuePlan admission binding has a different routing plan".to_owned());
-        }
-        self.admission_context
-            .validate_for_routing_plan(routing_plan)?;
-        let exact_digest = crate::queue::queue_plan_journal_record_claim_digest(
-            transaction.clone(),
-            routing_plan.clone(),
-            self.admission_context.clone(),
-            self.enqueue_timestamp_ms,
-            Some(self.global_admission_identity()),
-        )
-        .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
-        if exact_digest != self.journal_record_digest {
-            return Err(
-                "QueuePlan admission binding does not cover the exact journal record".to_owned(),
-            );
-        }
-        Ok(())
-    }
-    /// Return the domain-separated hash attested by coordinator authorities.
-    #[must_use]
-    pub fn canonical_hash(&self) -> Hash {
-        let bytes = norito::encode_canonical(self)
-            .expect("QueuePlan admission binding must have a canonical Norito encoding");
-        Hash::new_from_chunks(&[QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V1, bytes.as_slice()])
-    }
-    /// Return the immutable WSV registry key for this transaction entrypoint.
-    #[must_use]
-    pub fn registry_key(&self) -> QueuePlanAdmissionRegistryKeyV1 {
-        QueuePlanAdmissionRegistryKeyV1 {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-            network_id_digest: self.network_id_digest,
-            entrypoint_hash: self.entrypoint_hash.clone(),
-        }
-    }
-    /// Return the immutable WSV registry value for this exact binding.
-    #[must_use]
-    pub fn registry_value(&self) -> QueuePlanAdmissionRegistryValueV1 {
-        QueuePlanAdmissionRegistryValueV1 {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-            binding_hash: self.canonical_hash(),
-        }
-    }
-}
-/// One compact signature over a shared QueuePlan admission binding.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionAttestationV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionAttestationV1 {
-    /// Attestation layout version.
-    pub version: u16,
-    /// Signer's index in the exact ordered coordinator validator set.
-    pub validator_index: u16,
-    /// Signature over the binding hash and validator index.
-    pub signature: Signature,
-}
-/// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionCertificateV1")]
-pub struct QueuePlanAdmissionCertificateV1 {
-    /// Certificate layout version.
-    pub version: u16,
-    /// One canonical binding shared by every attestation.
-    pub binding: QueuePlanAdmissionBindingV1,
-    /// Strictly increasing validator-index attestations.
-    pub attestations: Vec<QueuePlanAdmissionAttestationV1>,
-}
-/// Canonical QueuePlan certificate disseminated from an ingress aggregator to validators.
+
+/// Validate this binding against the exact request transaction and routing plan.
 ///
-/// The certificate stays as exact Norito bytes so every receiving validator can enforce the
-/// same bounded canonical-decoding boundary before publishing those bytes durably in Kura.
+/// # Errors
+/// Returns an error when any typed transaction identity, plan/context field, network identity,
+/// or canonical current journal-record digest differs.
+pub fn validate_queue_plan_binding_for_request(
+    binding: &QueuePlanAdmissionBindingV1,
+    network_id: &NetworkId,
+    transaction: &TransactionEntrypoint,
+    routing_plan: &crate::queue::RoutingPlan,
+) -> Result<(), String> {
+    if binding.network_id_digest != queue_plan_admission_network_id_digest(network_id) {
+        return Err("QueuePlan admission binding belongs to another network".to_owned());
+    }
+    if binding.request_id != queue_plan_synced_request_id(network_id, transaction.hash()) {
+        return Err(
+            "QueuePlan admission binding has a noncanonical semantic request identity".to_owned(),
+        );
+    }
+    validate_queue_plan_binding_for_transaction_and_plan(binding, transaction, routing_plan)
+}
+
+/// Validate the exact transaction, routing plan, and journal record when the trusted caller
+/// has already established the chain identity.
+///
+/// # Errors
+/// Returns an error for any typed transaction identity, plan/context, or journal mismatch.
+pub fn validate_queue_plan_binding_for_transaction_and_plan(
+    binding: &QueuePlanAdmissionBindingV1,
+    transaction: &TransactionEntrypoint,
+    routing_plan: &crate::queue::RoutingPlan,
+) -> Result<(), String> {
+    binding.validate_structure()?;
+    if binding.entrypoint_hash != transaction.hash()
+        || binding.signed_transaction_hash != crate::tx::exact_signed_transaction_hash(transaction)
+    {
+        return Err("QueuePlan admission binding has a different transaction identity".to_owned());
+    }
+    if binding.routing_plan_digest != routing_plan.digest() {
+        return Err("QueuePlan admission binding has a different routing plan".to_owned());
+    }
+    binding
+        .admission_context
+        .validate_for_routing_plan(routing_plan)?;
+    let exact_digest = crate::queue::queue_plan_journal_record_claim_digest(
+        transaction.clone(),
+        routing_plan.clone(),
+        binding.admission_context.clone(),
+        binding.enqueue_timestamp_ms,
+        Some(binding.global_admission_identity()),
+    )
+    .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
+    if exact_digest != binding.journal_record_digest {
+        return Err(
+            "QueuePlan admission binding does not cover the exact journal record".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate the complete durable identity that authorizes a lane reservation Commit.
+///
+/// The exact coordinator and its admitting incarnation are recovered from this binding's
+/// immutable routing context. The binding hash authenticates the original admission height,
+/// while the reservation key's distinct proposal height identifies the later lane slot that
+/// actually took queue ownership.
+///
+/// # Errors
+/// Returns an error for a malformed reservation key or any entrypoint, plan,
+/// backdated reservation height, coordinator, incarnation, or canonical binding-hash
+/// mismatch.
+pub(crate) fn validate_queue_plan_binding_for_lane_reservation_commit(
+    binding: &QueuePlanAdmissionBindingV1,
+    key: &crate::queue::LaneQueueReservationKeyV1,
+) -> Result<(), String> {
+    key.validate().map_err(str::to_owned)?;
+    binding.validate_structure()?;
+    if key.proposal_height < binding.admission_context.proposal_height {
+        return Err(
+            "lane reservation proposal height precedes its durable QueuePlan admission".to_owned(),
+        );
+    }
+    if binding.entrypoint_hash != key.entrypoint_hash
+        || binding.routing_plan_digest != key.routing_plan_digest
+        || binding.canonical_hash() != key.queue_plan_admission_binding_hash
+    {
+        return Err(
+            "QueuePlan binding does not match the lane reservation transaction, plan, or binding identity"
+                .to_owned(),
+        );
+    }
+    let routing_plan = binding.routing_plan()?;
+    let coordinator = binding
+        .admission_context
+        .route_incarnations
+        .first()
+        .ok_or_else(|| "QueuePlan admission context has no coordinator".to_owned())?;
+    if routing_plan.coordinator_leg() != key.coordinator_leg
+        || coordinator.leg != key.coordinator_leg
+        || coordinator.lane_incarnation != key.lane_incarnation
+    {
+        return Err(
+            "QueuePlan binding does not match the lane reservation coordinator generation"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Complete QueuePlan input disseminated from an ingress aggregator to validators.
+///
+/// The field contains one canonical [`LaneAdmittedInputV1`] frame: exact original
+/// entrypoint plus quorum certificate. Every receiver authenticates the complete
+/// bounded input before retaining the same bytes in Kura. Certificate-only
+/// authority and public HTTP responses use their separate certificate API.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionPublicationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionPublicationV1 {
     /// Publication envelope schema version.
     pub schema_version: u16,
-    /// Exact canonical [`QueuePlanAdmissionCertificateV1`] bytes.
+    /// Exact canonical [`LaneAdmittedInputV1`] bytes.
     pub certificate: Vec<u8>,
 }
 /// Strength required while validating a QueuePlan admission certificate.
@@ -654,6 +450,8 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
         QueuePlanAdmissionCertificateStrengthV1::Quorum,
     )
 }
+
+include!("torii_proxy/lane_admitted_input.rs");
 
 #[cfg(test)]
 thread_local! {
@@ -1604,9 +1402,14 @@ mod tests {
                 durability_threshold: 1,
             }],
         };
-        let binding =
-            QueuePlanAdmissionBindingV1::new(&network_id, &transaction, &routing_plan, context, 73)
-                .expect("construct canonical admission binding");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            &network_id,
+            &transaction,
+            &routing_plan,
+            context,
+            73,
+        )
+        .expect("construct canonical admission binding");
         (network_id, transaction, routing_plan, binding, validator)
     }
     #[test]
@@ -1632,14 +1435,15 @@ mod tests {
             reservation_owner_hash: Hash::new(b"lane-reservation-owner"),
             proposal_identity_hash: Hash::new(b"lane-reservation-proposal"),
         };
-        binding
-            .validate_for_lane_reservation_commit(&key)
+        crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(&binding, &key)
             .expect("matching admission and reservation heights must validate");
         let mut later_reservation = key;
         later_reservation.proposal_height += 1;
-        binding
-            .validate_for_lane_reservation_commit(&later_reservation)
-            .expect("a later reservation slot retains the exact earlier admission binding");
+        crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+            &binding,
+            &later_reservation,
+        )
+        .expect("a later reservation slot retains the exact earlier admission binding");
         assert_ne!(
             key.digest(),
             later_reservation.digest(),
@@ -1648,9 +1452,11 @@ mod tests {
         let mut conflicting_binding = later_reservation;
         conflicting_binding.queue_plan_admission_binding_hash =
             Hash::new(b"different QueuePlan admission binding");
-        let error = binding
-            .validate_for_lane_reservation_commit(&conflicting_binding)
-            .expect_err("a different admission binding must be rejected");
+        let error = crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+            &binding,
+            &conflicting_binding,
+        )
+        .expect_err("a different admission binding must be rejected");
         assert!(
             error.contains("binding identity"),
             "unexpected rejection: {error}"
@@ -1661,7 +1467,7 @@ mod tests {
         height_two_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(
             Hash::new(b"height-one committed predecessor"),
         ));
-        let height_two_binding = QueuePlanAdmissionBindingV1::new(
+        let height_two_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             &network_id,
             &transaction,
             &routing_plan,
@@ -1672,9 +1478,11 @@ mod tests {
         let mut backdated_reservation = key;
         backdated_reservation.queue_plan_admission_binding_hash =
             height_two_binding.canonical_hash();
-        let error = height_two_binding
-            .validate_for_lane_reservation_commit(&backdated_reservation)
-            .expect_err("a reservation slot before durable admission must be rejected");
+        let error = crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+            &height_two_binding,
+            &backdated_reservation,
+        )
+        .expect_err("a reservation slot before durable admission must be rejected");
         assert!(
             error.contains("precedes its durable QueuePlan admission"),
             "unexpected rejection: {error}"
@@ -1900,9 +1708,14 @@ mod tests {
                 },
             ],
         };
-        let binding =
-            QueuePlanAdmissionBindingV1::new(&network_id, &transaction, &routing_plan, context, 42)
-                .expect("build Native admission binding");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            &network_id,
+            &transaction,
+            &routing_plan,
+            context,
+            42,
+        )
+        .expect("build Native admission binding");
         assert_eq!(
             binding.routing_plan().expect("bound Native routing plan"),
             routing_plan,
@@ -2267,4 +2080,5 @@ mod tests {
             ))
         );
     }
+    include!("torii_proxy/lane_admitted_input_tests.rs");
 }

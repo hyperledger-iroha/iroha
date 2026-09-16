@@ -422,7 +422,7 @@ fn prepare_canonical_autonomous_batch_with_instructions(
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture canonical autonomous admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
