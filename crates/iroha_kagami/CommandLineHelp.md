@@ -36,6 +36,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced codec norito-to-json`↴](#kagami-advanced-codec-norito-to-json)
 * [`kagami advanced codec json-to-norito`↴](#kagami-advanced-codec-json-to-norito)
 * [`kagami advanced kura`↴](#kagami-advanced-kura)
+* [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura sidecar`↴](#kagami-advanced-kura-sidecar)
 * [`kagami advanced markdown-help`↴](#kagami-advanced-markdown-help)
@@ -298,7 +299,9 @@ Derive one typed public parameter without submitting a transaction.
 ## `kagami kagemusha derive-mint-finality-epoch-schedule-v1`
 
 Derive the public schedule consumed by `iroha taira epoch-maintenance`. Private
-input uses the same owned pipe and is erased before public output.
+input uses the same owned pipe and is erased before public output. Required output
+`genesis_roster` contains the epoch-zero public keys derived from those same seeds;
+consumers compare it with their independently authenticated signed genesis.
 
 **Usage:** `kagami kagemusha derive-mint-finality-epoch-schedule-v1 --network-id <NETWORK_ID> --epoch <EPOCH> --validator <PEER_ID> --seed-fd <FD> --epoch-count <EPOCH_COUNT> --payment-asset <PAYMENT_ASSET> --transaction-fee-maximum <TRANSACTION_FEE_MAXIMUM>`
 
@@ -735,6 +738,7 @@ Commands related to block inspection
 
 ###### **Subcommands:**
 
+* `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
 
@@ -745,6 +749,20 @@ Commands related to block inspection
 ###### **Options:**
 
 * `-f`, `--from <BLOCK_HEIGHT>` — Height of the block from which start the inspection. Defaults to the latest block height
+
+
+
+## `kagami advanced kura beacon-history`
+
+Project bounded typed public beacon candidates, with explicit coverage limits
+
+**Usage:** `kagami advanced kura beacon-history [OPTIONS] --length <LENGTH>`
+
+###### **Options:**
+
+* `--length <LENGTH>` — Exact number of blocks, from the enclosing --from height (1..=4096)
+* `--merge-sidecar <FILE>` — Exact canonical public merge-entry file; repeat for referenced carriers only
+* `-o`, `--output <OUTPUT>` — Write bounded JSON outside the inspected store; defaults to stdout
 
 
 

@@ -2591,6 +2591,23 @@ pub(in crate::sumeragi) fn project_recovered_wal_decision_fetch(
         verified,
     )
 }
+/// Borrow the native PendingKura replay solely for passive lifecycle comparison.
+///
+/// The ephemeral Fetch/Apply bindings cannot escape this closed join. The
+/// original authenticated Fetch remains solely owned by interrupted-tip replay.
+pub(in crate::sumeragi) fn project_pending_kura_passive_apply(
+    verified: &VerifiedHeightContext,
+    replay: &super::v2::RecoveredPendingKuraApplyReplayV1,
+    manifest: &wire::PayloadManifest,
+    validated: &super::v2_body_store::ValidatedBodyReceipt,
+) -> Option<super::v2_lifecycle_coordinator::PendingKuraApplyComparisonV1> {
+    replay.project_passive_lifecycle_apply(
+        RecoveredWalDecisionFetchPendingMintPermit::new(),
+        verified,
+        manifest,
+        validated,
+    )
+}
 /// Ownership-preserving failure from the consuming recovered-WAL projection.
 #[must_use = "failed recovered WAL projection retains its move-only successor"]
 pub(crate) enum RecoveredWalVoteProjectionFailure {

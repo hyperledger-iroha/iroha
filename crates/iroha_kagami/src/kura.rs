@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod scaling_evidence;
 
+mod beacon_history;
+
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
@@ -31,6 +33,8 @@ pub struct Args {
 }
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
+    /// Project bounded typed public beacon candidates, with explicit coverage limits.
+    BeaconHistory(beacon_history::Args),
     /// Print contents of a certain length of the blocks
     Print {
         /// Number of the blocks to print. The excess will be truncated
@@ -62,6 +66,14 @@ impl<T: Write> RunArgs<T> for Args {
             }
         }).transpose()?;
         match args.command {
+            Command::BeaconHistory(options) => write_inspection_output(
+                writer,
+                &args.path_to_block_store,
+                options.output.clone(),
+                |out| {
+                    beacon_history::inspect(out, &args.path_to_block_store, from_height, &options)
+                },
+            ),
             Command::Print { length, output } => {
                 tui::status("Inspecting Kura block store");
                 write_inspection_output(writer, &args.path_to_block_store, output, |out| {

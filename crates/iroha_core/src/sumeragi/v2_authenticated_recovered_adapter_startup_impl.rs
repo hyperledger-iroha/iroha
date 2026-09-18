@@ -160,6 +160,32 @@ impl AuthenticatedRecoveredAdapterStartup {
         factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1,
         body_store: super::v2_body_store::QuarantinedV2BodyStore,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
+        self.open_production_lifecycle_owner_with_pending_kura_v1(
+            config,
+            reply_route_source_capacity,
+            factory_inputs,
+            body_store,
+            None,
+        )
+    }
+
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_production_lifecycle_owner_with_pending_kura_v1(
+        self,
+        config: &iroha_config::parameters::actual::SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1,
+        body_store: super::v2_body_store::QuarantinedV2BodyStore,
+        pending_kura: Option<&RecoveredPendingKuraApplyReplayV1>,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
+        if pending_kura.is_some() && !matches!(self.authority, RecoveredWalStartupAuthorityV1::None)
+        {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                    "pending Kura replay cannot own an ordinary recovered WAL carrier",
+                ),
+            ));
+        }
         if !self.effects.is_empty() {
             return Err(ProductionLifecycleOwnerStartupErrorV1::new(
                 ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
@@ -245,6 +271,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             },
             body_store,
             &local_signer,
+            pending_kura,
         )?;
         let owner = match successor_floor {
             Some(floor) => owner
@@ -279,6 +306,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         local_signer: &KeyPair,
+        pending_kura: Option<&RecoveredPendingKuraApplyReplayV1>,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         if !self.effects.is_empty() {
             return Err(ProductionLifecycleOwnerStartupErrorV1::new(
@@ -320,6 +348,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 ledger_root,
                 payload_store_target,
                 local_signer,
+                pending_kura,
             ),
             RecoveredWalStartupAuthorityV1::ControlSign(control) => {
                 Self::open_recovered_control_authority_branch(
@@ -727,15 +756,29 @@ impl AuthenticatedRecoveredAdapterStartup {
         ledger_root: &std::path::Path,
         payload_store_target: CertifiedServePayloadStoreStartupTargetV1<'_>,
         local_signer: &KeyPair,
+        pending_kura: Option<&RecoveredPendingKuraApplyReplayV1>,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         Self::ensure_recovered_body_store_context(&body_store, &verified)?;
+        let pending_apply = pending_kura
+            .map(|replay| {
+                body_store
+                    .pending_kura_apply_comparison(&verified, replay)
+                    .ok_or_else(|| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "pending Kura Apply lost its exact Decision and revalidated BodyFrame",
+                            ),
+                        )
+                    })
+            })
+            .transpose()?;
         let (body_store, payload_store, serve_payloads) = Self::open_recovered_non_apply_stores(
             &verified,
             body_store,
             payload_store_target,
             local_signer,
         )?;
-        ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(
+        ProductionLifecycleOwnerV1::open_storage_only_recovered_startup_with_pending_apply(
             verified,
             ledger_root,
             body_store,
@@ -748,6 +791,7 @@ impl AuthenticatedRecoveredAdapterStartup {
                 effects,
                 local_proposal_attempt,
             ),
+            pending_apply,
         )
         .map_err(|error| {
             ProductionLifecycleOwnerStartupErrorV1::new(
@@ -1075,6 +1119,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             CertifiedServePayloadStoreStartupTargetV1::FixtureRoot(serve_payload_root),
             body_store,
             local_signer,
+            None,
         )
     }
     /// Enter the shared owner implementation with an already-revalidated test store.
@@ -1096,6 +1141,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             CertifiedServePayloadStoreStartupTargetV1::FixtureRoot(serve_payload_root),
             body_store,
             local_signer,
+            None,
         )
     }
     #[cfg(test)]

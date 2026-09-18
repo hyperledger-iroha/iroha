@@ -2,6 +2,12 @@
 
 #[path = "taira_public_reset_beacon.rs"]
 pub(super) mod beacon;
+#[path = "taira_public_reset_epoch_generation.rs"]
+pub(super) mod epoch_generation;
+#[path = "taira_public_reset_epoch_seed_custody.rs"]
+pub(super) mod epoch_seed_custody;
+#[path = "taira_public_reset_epoch_supervisor.rs"]
+pub(super) mod epoch_supervisor;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
@@ -631,6 +637,10 @@ enum HostAction {
     Upload,
     Stage,
     InrouStageUpload,
+    EpochSupervisorPause,
+    EpochSupervisorStart,
+    EpochSupervisorRollbackPause,
+    EpochSupervisorRollbackRestore,
     Stop,
     Install,
     Reset,
@@ -654,6 +664,10 @@ impl HostAction {
             Self::Upload => "upload",
             Self::Stage => "stage",
             Self::InrouStageUpload => "inrou_stage_upload",
+            Self::EpochSupervisorPause => "epoch_supervisor_pause",
+            Self::EpochSupervisorStart => "epoch_supervisor_start",
+            Self::EpochSupervisorRollbackPause => "epoch_supervisor_rollback_pause",
+            Self::EpochSupervisorRollbackRestore => "epoch_supervisor_rollback_restore",
             Self::Stop => "stop",
             Self::Install => "install",
             Self::Reset => "reset",
@@ -677,6 +691,10 @@ impl HostAction {
             "upload" => Ok(Self::Upload),
             "stage" => Ok(Self::Stage),
             "inrou_stage_upload" => Ok(Self::InrouStageUpload),
+            "epoch_supervisor_pause" => Ok(Self::EpochSupervisorPause),
+            "epoch_supervisor_start" => Ok(Self::EpochSupervisorStart),
+            "epoch_supervisor_rollback_pause" => Ok(Self::EpochSupervisorRollbackPause),
+            "epoch_supervisor_rollback_restore" => Ok(Self::EpochSupervisorRollbackRestore),
             "stop" => Ok(Self::Stop),
             "install" => Ok(Self::Install),
             "reset" => Ok(Self::Reset),
@@ -695,10 +713,22 @@ impl HostAction {
         }
     }
 
+    const fn is_supervisor_rollback(self) -> bool {
+        matches!(
+            self,
+            Self::EpochSupervisorRollbackPause | Self::EpochSupervisorRollbackRestore
+        )
+    }
+
     fn timeout_secs(self, inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
         Ok(match self {
             Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
                 inventory.timeouts.install_secs
+            }
+            Self::EpochSupervisorPause => inventory.timeouts.epoch_supervisor_pause_secs,
+            Self::EpochSupervisorStart => inventory.timeouts.epoch_supervisor_start_secs,
+            Self::EpochSupervisorRollbackPause | Self::EpochSupervisorRollbackRestore => {
+                inventory.timeouts.rollback_secs
             }
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
@@ -809,6 +839,7 @@ impl HostTarget {
     }
 }
 
+#[derive(Clone)]
 struct HostAdmission {
     request: HostRequestV1,
     request_sha256: String,
@@ -832,7 +863,11 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
     if request.recovery_only
         && !matches!(
             action,
-            HostAction::Restart | HostAction::BeaconActivate | HostAction::MutationReserve
+            HostAction::Restart
+                | HostAction::BeaconActivate
+                | HostAction::EpochSupervisorPause
+                | HostAction::EpochSupervisorStart
+                | HostAction::MutationReserve
         )
     {
         return Err(eyre!(
@@ -840,7 +875,9 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         ));
     }
     let (admitted, _chain_guard) = admit_host_request(request, action)?;
-    if !matches!(action, HostAction::Upload | HostAction::InrouStageUpload) {
+    if !matches!(action, HostAction::Upload | HostAction::InrouStageUpload)
+        && !(action == HostAction::EpochSupervisorStart && !admitted.request.recovery_only)
+    {
         require_stream_eof(body)?;
     }
     if action == HostAction::Preflight {
@@ -856,15 +893,35 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
     }
     let _action_lock = lock_host_action(&admitted)?;
     ensure_host_lease(&admitted, action)?;
+    let _epoch_deployment_lock = epoch_supervisor::lifecycle_lock(&admitted, action)?;
     if action == HostAction::MutationReserve {
         let progress = load_or_create_host_progress(&admitted)?;
         return coordinate_prepared_mutation(&admitted, &progress);
+    }
+    if action.is_supervisor_rollback() {
+        return epoch_supervisor::dispatch_rollback(&admitted, action);
     }
     let mut progress = load_or_create_host_progress(&admitted)?;
     let progress_decision = admit_host_action_progress(&admitted, action, &progress)?;
     let receipt_name = host_receipt_name(action, &admitted.request.artifact_role)?;
     let receipt_dir = ensure_host_receipt_dir(&admitted)?;
+    if action == HostAction::EpochSupervisorStart && !admitted.request.recovery_only {
+        epoch_supervisor::materialize_stream(&admitted, body)?;
+    }
     if admitted.request.recovery_only {
+        if matches!(
+            action,
+            HostAction::EpochSupervisorPause | HostAction::EpochSupervisorStart
+        ) {
+            return epoch_supervisor::recover(
+                &admitted,
+                action,
+                &receipt_dir,
+                &receipt_name,
+                &mut progress,
+                progress_decision,
+            );
+        }
         if action == HostAction::BeaconActivate {
             return beacon::recover_provider_host(
                 &admitted,
@@ -945,6 +1002,8 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         && !matches!(
             action,
             HostAction::Cleanup
+                | HostAction::EpochSupervisorPause
+                | HostAction::EpochSupervisorStart
                 | HostAction::Restart
                 | HostAction::EdgeCutover
                 | HostAction::Rollback
@@ -971,7 +1030,11 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
     if admitted.execution_expired
         && !matches!(
             action,
-            HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+            HostAction::Rollback
+                | HostAction::EpochSupervisorRollbackPause
+                | HostAction::EpochSupervisorRollbackRestore
+                | HostAction::Seal
+                | HostAction::Cleanup
         )
     {
         return Err(eyre!(
@@ -3106,6 +3169,47 @@ fn unit_restart_evidence(
     })
 }
 
+/// Bind a native epoch worker receipt to its live Linux process incarnation.
+pub(crate) fn epoch_worker_process_identity() -> Result<(String, u32, u64)> {
+    epoch_worker_process_identity_for(std::process::id())
+}
+
+/// Read a separately manager-selected live process incarnation from bounded Linux evidence.
+pub(crate) fn epoch_worker_process_identity_for(expected_pid: u32) -> Result<(String, u32, u64)> {
+    #[cfg(target_os = "linux")]
+    {
+        if expected_pid == 0 {
+            return Err(eyre!("epoch worker PID cannot be zero"));
+        }
+        let boot = host_boot_id()?;
+        let path = PathBuf::from(format!("/proc/{expected_pid}/stat"));
+        let (pid, _, start_time_ticks) =
+            maintenance::process_identity(&maintenance::proc_bytes(&path, 4096)?)?;
+        if pid != expected_pid || start_time_ticks == 0 || host_boot_id()? != boot {
+            return Err(eyre!("epoch worker kernel process identity changed"));
+        }
+        Ok((boot, pid, start_time_ticks))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = expected_pid;
+        Err(eyre!(
+            "epoch worker process incarnation evidence requires Linux"
+        ))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn epoch_worker_process_identity_binds_current_kernel_incarnation() {
+    let first = epoch_worker_process_identity().unwrap();
+    let second = epoch_worker_process_identity().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.1, std::process::id());
+    assert!(first.2 > 0);
+    validate_boot_id(&first.0).unwrap();
+}
+
 fn host_boot_id() -> Result<String> {
     let path = Path::new("/proc/sys/kernel/random/boot_id");
     let (mut file, snapshot) = open_pinned_regular(path, "kernel boot identity")?;
@@ -3266,7 +3370,9 @@ fn admit_host_request(
             &trusted_key,
             now,
         )?;
-    } else if action == HostAction::Rollback || execution_expired {
+    } else if (action == HostAction::Rollback || action.is_supervisor_rollback())
+        || execution_expired
+    {
         // Terminal recovery is authorized only by the already-acquired,
         // semantically matching durable lease. Verify the exact signed
         // execution claims at an instant inside their original window here;
@@ -3365,7 +3471,11 @@ fn validate_action_deadline(
     let authorization_limit = if execution_expired
         || matches!(
             action,
-            HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+            HostAction::Rollback
+                | HostAction::EpochSupervisorRollbackPause
+                | HostAction::EpochSupervisorRollbackRestore
+                | HostAction::Seal
+                | HostAction::Cleanup
         ) {
         u64::MAX
     } else {
@@ -4250,6 +4360,7 @@ fn verify_occupied_predecessor(admitted: &HostAdmission, validator: &ValidatorV1
 }
 
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
+    epoch_supervisor::preflight(admitted)?;
     #[cfg(unix)]
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(eyre!("fixed public-reset dispatcher must run as root"));
@@ -4549,7 +4660,9 @@ fn ensure_host_lease(admitted: &HostAdmission, action: HostAction) -> Result<()>
             drop(bytes);
             return Ok(());
         }
-        if action == HostAction::Rollback || admitted.execution_expired {
+        if (action == HostAction::Rollback || action.is_supervisor_rollback())
+            || admitted.execution_expired
+        {
             return Err(eyre!(
                 "expired or rollback recovery cannot replace a foreign host lease"
             ));
@@ -4565,7 +4678,9 @@ fn ensure_host_lease(admitted: &HostAdmission, action: HostAction) -> Result<()>
         let destination = expired_dir.join(format!("{}.json", lease.authorization_semantic_sha256));
         archive_file_noreplace_exact(&lease_path, &destination)
             .wrap_err("failed to archive released host deployment lease")?;
-    } else if action == HostAction::Rollback || admitted.execution_expired {
+    } else if (action == HostAction::Rollback || action.is_supervisor_rollback())
+        || admitted.execution_expired
+    {
         return Err(eyre!(
             "expired recovery requires an already-acquired matching host lease"
         ));
@@ -4795,6 +4910,16 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
+    if validators
+        .iter()
+        .any(|validator| validator.slug == admitted.inventory.epoch_supervisor.host_slug)
+    {
+        plan.push(HostActionKeyV1 {
+            host_slug: admitted.inventory.epoch_supervisor.host_slug.clone(),
+            action: HostAction::EpochSupervisorPause.label().to_owned(),
+            artifact_role: String::new(),
+        });
+    }
     for action in [HostAction::Stop, HostAction::Install, HostAction::Reset] {
         for validator in &validators {
             plan.push(HostActionKeyV1 {
@@ -4826,6 +4951,16 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
         plan.push(HostActionKeyV1 {
             host_slug: validator.slug.clone(),
             action: HostAction::BeaconActivate.label().to_owned(),
+            artifact_role: String::new(),
+        });
+    }
+    if validators
+        .iter()
+        .any(|validator| validator.slug == admitted.inventory.epoch_supervisor.host_slug)
+    {
+        plan.push(HostActionKeyV1 {
+            host_slug: admitted.inventory.epoch_supervisor.host_slug.clone(),
+            action: HostAction::EpochSupervisorStart.label().to_owned(),
             artifact_role: String::new(),
         });
     }
@@ -5140,7 +5275,11 @@ fn advance_host_progress(
         progress.sealed = usize::from(progress.next_forward_ordinal) >= first_cleanup;
     }
     progress.prepared_action = None;
-    replace_host_progress(admitted, progress)
+    replace_host_progress(admitted, progress)?;
+    if action == HostAction::Seal {
+        epoch_supervisor::finish_seal(admitted, progress)?;
+    }
+    Ok(())
 }
 
 fn rollback_rank(inventory: &InventoryV1, slug: &str) -> Option<u8> {
@@ -5414,6 +5553,13 @@ fn revalidate_cached_action_postcondition(
         .join("releases")
         .join(&admitted.inventory.revision.commit);
     match action {
+        HostAction::EpochSupervisorPause => epoch_supervisor::pause(admitted, true),
+        HostAction::EpochSupervisorStart => epoch_supervisor::start(admitted, true),
+        HostAction::EpochSupervisorRollbackPause | HostAction::EpochSupervisorRollbackRestore => {
+            Err(eyre!(
+                "supervisor rollback has a separate durable containment protocol"
+            ))
+        }
         HostAction::Preflight => Err(eyre!("preflight does not have a durable action receipt")),
         HostAction::MutationReserve => Err(eyre!(
             "mutation reservation has no reusable action postcondition"
@@ -5711,7 +5857,44 @@ fn execute_host_action(
     body: &mut impl Read,
 ) -> Result<(u64, u64, String)> {
     ensure_action_deadline(admitted)?;
+    // Keep the actual native journal lock alive through the complete state mutation.
+    let _epoch_journal_guard = if matches!(
+        action,
+        HostAction::Stop
+            | HostAction::Install
+            | HostAction::Reset
+            | HostAction::Preseed
+            | HostAction::Start
+            | HostAction::BeaconActivate
+    ) {
+        epoch_supervisor::require_forward_pause(admitted)?
+    } else if action == HostAction::Rollback {
+        epoch_supervisor::require_rollback_pause(admitted)?
+    } else {
+        None
+    };
     let result = match action {
+        HostAction::EpochSupervisorPause => {
+            epoch_supervisor::pause(admitted, false)?;
+            Ok((
+                0,
+                0,
+                "cohort supervisor durably paused and native journal owner absent".to_owned(),
+            ))
+        }
+        HostAction::EpochSupervisorStart => {
+            epoch_supervisor::start(admitted, false)?;
+            Ok((
+                0,
+                0,
+                "cohort supervisor current worker completed native authenticated target".to_owned(),
+            ))
+        }
+        HostAction::EpochSupervisorRollbackPause | HostAction::EpochSupervisorRollbackRestore => {
+            Err(eyre!(
+                "supervisor rollback is handled by the dedicated containment dispatcher"
+            ))
+        }
         HostAction::Preflight => Err(eyre!("preflight is not a mutating host action")),
         HostAction::MutationReserve => Err(eyre!(
             "mutation reservation is handled before the host action executor"
@@ -12087,6 +12270,8 @@ fn sync_directory(path: &Path) -> Result<()> {
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeCanaryInputs {
     pub(super) client_config: PathBuf,
+    pub(super) maintenance_admin_config: PathBuf,
+    pub(super) epoch_seed_sources: Vec<PathBuf>,
     pub(super) validator_client_configs: Vec<PathBuf>,
     pub(super) validator_operator_key: PathBuf,
     pub(super) onboarding_token: PathBuf,
@@ -12096,6 +12281,8 @@ pub(super) struct RuntimeCanaryInputs {
 
 struct RuntimeCustody {
     client_config: super::PinnedInput,
+    maintenance_admin_config: Option<super::PinnedInput>,
+    epoch_seed_sources: Vec<epoch_seed_custody::OriginalSeed>,
     validator_client_configs: Vec<super::PinnedInput>,
     validator_operator_key: Option<super::PinnedInput>,
     onboarding_token: Option<super::PinnedInput>,
@@ -12137,6 +12324,59 @@ fn validate_pinned_validator_operator_key(
 }
 
 impl RuntimeCustody {
+    fn epoch_generation_stream(
+        &self,
+        admitted: &AdmittedReset,
+        deadline: Instant,
+    ) -> Result<(Vec<u8>, Vec<(File, u64)>)> {
+        self.revalidate(admitted, deadline, false)?;
+        let administrator = self
+            .maintenance_admin_config
+            .as_ref()
+            .ok_or_else(|| eyre!("readonly recovery cannot resend administrator custody"))?;
+        let http = self
+            .validator_operator_key
+            .as_ref()
+            .ok_or_else(|| eyre!("readonly recovery cannot resend HTTP operator custody"))?;
+        let plan = &admitted.inventory.epoch_supervisor;
+        if hash_pinned_input(administrator, "maintenance administrator", Some(deadline))?
+            != plan.admin_config_sha256
+            || hash_pinned_input(http, "maintenance HTTP operator", Some(deadline))?
+                != plan.http_operator_key_sha256
+        {
+            return Err(eyre!(
+                "epoch generation credentials differ from signed input digests"
+            ));
+        }
+        if self.epoch_seed_sources.len() != 4 {
+            return Err(eyre!("recovery has no original epoch seed custody"));
+        }
+        let mut header = Vec::with_capacity(48);
+        let mut files = Vec::new();
+        for (input, maximum) in [
+            (
+                administrator,
+                iroha_config_base::toml::MAX_TOML_SOURCE_BYTES,
+            ),
+            (http, 4096_u64),
+        ] {
+            if input.snapshot.len == 0 || input.snapshot.len > maximum {
+                return Err(eyre!(
+                    "epoch generation native custody stream exceeds bound"
+                ));
+            }
+            header.extend_from_slice(&input.snapshot.len.to_be_bytes());
+            let mut file = input.file.try_clone()?;
+            file.rewind()?;
+            files.push((file, input.snapshot.len));
+        }
+        for seed in &self.epoch_seed_sources {
+            seed.revalidate()?;
+            header.extend_from_slice(&32_u64.to_be_bytes());
+            files.push((seed.stream_file()?, 32));
+        }
+        Ok((header, files))
+    }
     fn inrou(&self) -> Result<&InrouStageCustody> {
         self.inrou
             .as_ref()
@@ -12159,6 +12399,31 @@ impl RuntimeCustody {
         journal_dir: &Path,
     ) -> Result<Self> {
         admitted.inventory.validate_inrou_scope()?;
+        let maintenance_admin_config = epoch_supervisor::pin_runtime_administrator(
+            &inputs.maintenance_admin_config,
+            &admitted.inventory,
+        )?;
+        if inputs.epoch_seed_sources.len() != 4
+            || inputs
+                .epoch_seed_sources
+                .iter()
+                .zip(&admitted.inventory.epoch_supervisor.original_seed_sources)
+                .any(|(path, expected)| path != Path::new(&expected.path))
+        {
+            return Err(eyre!(
+                "runtime original seed source mapping differs from signed sorted peer mapping"
+            ));
+        }
+        let mut seed_identities = BTreeSet::new();
+        let mut epoch_seed_sources = Vec::new();
+        for path in &inputs.epoch_seed_sources {
+            let source = epoch_seed_custody::OriginalSeed::open(path)?;
+            if !seed_identities.insert(source.identity()) {
+                return Err(eyre!("original seed source descriptors alias one inode"));
+            }
+            epoch_seed_sources.push(source);
+        }
+
         admitted
             .inventory
             .qualification_scope
@@ -12275,6 +12540,8 @@ impl RuntimeCustody {
         Ok(Self {
             client_config,
             validator_client_configs,
+            maintenance_admin_config: Some(maintenance_admin_config),
+            epoch_seed_sources,
             validator_operator_key: Some(validator_operator_key),
             onboarding_token: Some(onboarding_token),
             inrou,
@@ -12290,6 +12557,13 @@ impl RuntimeCustody {
     ) -> Result<()> {
         ensure_local_deadline(Some(deadline))?;
         revalidate_pinned(&self.client_config, "Taira runtime client config")?;
+        if let Some(input) = &self.maintenance_admin_config {
+            epoch_supervisor::validate_runtime_administrator(input, &admitted.inventory)?;
+        }
+        for source in &self.epoch_seed_sources {
+            source.revalidate()?;
+        }
+
         if require_onboarding_token {
             revalidate_pinned(
                 self.onboarding_token
@@ -12513,6 +12787,8 @@ impl RuntimeCustody {
             validator_client_configs,
             validator_operator_key,
             onboarding_token: None,
+            maintenance_admin_config: None,
+            epoch_seed_sources: Vec::new(),
             inrou,
             fee_args,
         })
@@ -13451,7 +13727,12 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
 ) -> Result<()> {
     if !matches!(
         action,
-        HostAction::Preflight | HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+        HostAction::Preflight
+            | HostAction::Rollback
+            | HostAction::EpochSupervisorRollbackPause
+            | HostAction::EpochSupervisorRollbackRestore
+            | HostAction::Seal
+            | HostAction::Cleanup
     ) {
         return Err(eyre!(
             "minimal host dispatch permits only preflight, rollback, seal, or cleanup"
@@ -13529,6 +13810,45 @@ fn dispatch_custodied_host_action<R: ProcessRunner>(
 }
 
 impl ResetTransport for RollbackSshTransport<'_> {
+    fn rollback_epoch_supervisor_pause(
+        &mut self,
+        inventory: &InventoryV1,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let target = inventory
+            .validators
+            .iter()
+            .find(|v| v.slug == inventory.epoch_supervisor.host_slug)
+            .ok_or_else(|| eyre!("supervisor rollback host missing"))?;
+        dispatch_custodied_host_action(
+            self.admitted,
+            &mut self.runner,
+            &target.slug,
+            &target.endpoint,
+            HostAction::EpochSupervisorRollbackPause,
+            timeout_secs,
+        )
+    }
+    fn rollback_epoch_supervisor_restore(
+        &mut self,
+        inventory: &InventoryV1,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        let target = inventory
+            .validators
+            .iter()
+            .find(|v| v.slug == inventory.epoch_supervisor.host_slug)
+            .ok_or_else(|| eyre!("supervisor rollback host missing"))?;
+        dispatch_custodied_host_action(
+            self.admitted,
+            &mut self.runner,
+            &target.slug,
+            &target.endpoint,
+            HostAction::EpochSupervisorRollbackRestore,
+            timeout_secs,
+        )
+    }
+
     fn validator_step(
         &mut self,
         _inventory: &InventoryV1,
@@ -13711,6 +14031,32 @@ impl ResetTransport for RecoverySshTransport<'_> {
 }
 
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
+    fn dispatch_epoch_supervisor(
+        &mut self,
+        action: HostAction,
+        recovery_only: bool,
+        timeout_secs: u64,
+    ) -> Result<HostReceiptV1> {
+        let validator = self
+            .admitted
+            .inventory
+            .validators
+            .iter()
+            .find(|v| v.slug == self.admitted.inventory.epoch_supervisor.host_slug)
+            .ok_or_else(|| eyre!("epoch supervisor nominated host is absent"))?
+            .clone();
+        self.dispatch(
+            &validator.slug,
+            &validator.endpoint,
+            &validator.service_root,
+            action,
+            None,
+            recovery_only,
+            None,
+            timeout_secs,
+        )
+    }
+
     fn bootstrap_and_dispatch_validator(
         &mut self,
         validator: &ValidatorV1,
@@ -13812,7 +14158,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .ok_or_else(|| eyre!("host dispatch monotonic deadline overflow"))?;
         revalidate_pinned(&self.admitted.ssh_identity, "OpenSSH identity")?;
         revalidate_pinned(&self.admitted.known_hosts, "OpenSSH known-hosts")?;
-        if !recovery_only && action != HostAction::Preflight && action != HostAction::Rollback {
+        if !recovery_only
+            && action != HostAction::Preflight
+            && action != HostAction::Rollback
+            && !action.is_supervisor_rollback()
+        {
             ensure_authorization_current(self.admitted)?;
             if action != HostAction::Cleanup {
                 require_forward_lease_budget(self.admitted, timeout_secs)?;
@@ -13854,6 +14204,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     files,
                     frame,
                 )
+            }
+            None if action == HostAction::EpochSupervisorStart && !recovery_only => {
+                let (frame, files) = self
+                    .runtime
+                    .epoch_generation_stream(self.admitted, deadline)?;
+                (String::new(), String::new(), 0, 0, None, files, frame)
             }
             None if action != HostAction::Upload => (
                 String::new(),
@@ -13952,9 +14308,17 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         };
         let ambiguous_recoverable = matches!(
             action,
-            HostAction::Restart | HostAction::BeaconActivate | HostAction::MutationReserve
+            HostAction::Restart
+                | HostAction::BeaconActivate
+                | HostAction::EpochSupervisorPause
+                | HostAction::EpochSupervisorStart
+                | HostAction::MutationReserve
         ) && !recovery_only;
-        let process = match self.runner.run(&spec) {
+        let process_result = self.runner.run(&spec);
+        if action == HostAction::EpochSupervisorStart && !recovery_only {
+            self.runtime.revalidate(self.admitted, deadline, false)?;
+        }
+        let process = match process_result {
             Ok(process) => process,
             Err(error) if ambiguous_recoverable => {
                 eprintln!("public-reset remote host outcome is ambiguous (ephemeral): {error:#}");
@@ -15794,6 +16158,12 @@ pub(super) fn build_recovery_intent(
 ) -> Option<RecoveryIntentV1> {
     let nonce = &inventory.authorization_nonce;
     let mutations = match step {
+        ExecutionStep::EpochSupervisorPause => vec![recovery_child_mutation(
+            nonce,
+            "pre_stop",
+            "epoch_supervisor_pause",
+            None,
+        )],
         ExecutionStep::Canary => inventory
             .qualification_scope
             .canary_kinds()
@@ -15850,6 +16220,31 @@ fn recovery_child_mutation(
 }
 
 impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
+    fn rollback_epoch_supervisor_pause(
+        &mut self,
+        _inventory: &InventoryV1,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        self.dispatch_epoch_supervisor(
+            HostAction::EpochSupervisorRollbackPause,
+            false,
+            timeout_secs,
+        )?;
+        Ok(())
+    }
+    fn rollback_epoch_supervisor_restore(
+        &mut self,
+        _inventory: &InventoryV1,
+        timeout_secs: u64,
+    ) -> Result<()> {
+        self.dispatch_epoch_supervisor(
+            HostAction::EpochSupervisorRollbackRestore,
+            false,
+            timeout_secs,
+        )?;
+        Ok(())
+    }
+
     fn recovery_intent(
         &self,
         inventory: &InventoryV1,
@@ -15895,6 +16290,24 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 return Ok(RecoveryOutcome::ReadyToContinue);
             }
             let outcome = match mutation.kind.as_str() {
+                "epoch_supervisor_pause" | "epoch_supervisor_start" => {
+                    let action = if mutation.kind == "epoch_supervisor_pause" {
+                        HostAction::EpochSupervisorPause
+                    } else {
+                        HostAction::EpochSupervisorStart
+                    };
+                    match self.dispatch_epoch_supervisor(action, true, remaining_seconds(deadline)?)
+                    {
+                        Ok(receipt) if receipt.status == "ok" => PreparedMutationOutcome::Applied {
+                            value: json::Value::Null,
+                            evidence: Vec::new(),
+                        },
+                        Ok(receipt) if receipt.status == "rejected" => {
+                            PreparedMutationOutcome::Rejected(receipt.detail)
+                        }
+                        Ok(_) | Err(_) => PreparedMutationOutcome::Pending,
+                    }
+                }
                 "host_restart" => {
                     let scope = inventory.qualification_scope;
                     let validator = scope.restart_wave(&mutation.phase).and_then(|wave| {
@@ -15982,7 +16395,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             }
         }
         match step {
-            ExecutionStep::Canary => {}
+            ExecutionStep::EpochSupervisorPause | ExecutionStep::Canary => {}
             ExecutionStep::RestartProof => {
                 let result = (|| {
                     if inventory.qualification_scope.includes_inrou() {
@@ -16043,6 +16456,18 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         }
         let next_mutation = usize::from(intent.next_mutation);
         match step {
+            ExecutionStep::EpochSupervisorPause => {
+                if next_mutation == 0 {
+                    progress.mark_submitted(0)?;
+                    self.dispatch_epoch_supervisor(
+                        HostAction::EpochSupervisorPause,
+                        false,
+                        inventory.timeouts.epoch_supervisor_pause_secs,
+                    )?;
+                    progress.mark_applied(0)?;
+                }
+                Ok(())
+            }
             ExecutionStep::Canary => {
                 let deadline = Instant::now()
                     .checked_add(Duration::from_secs(inventory.timeouts.canary_secs))
@@ -16053,12 +16478,22 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     super::recovery_ready_to_resume_beacon_activation(intent, step),
                     deadline,
                 )?;
+                if next_mutation <= 8 {
+                    progress.mark_submitted(8)?;
+                    self.dispatch_epoch_supervisor(
+                        HostAction::EpochSupervisorStart,
+                        false,
+                        remaining_seconds(deadline)?
+                            .min(inventory.timeouts.epoch_supervisor_start_secs),
+                    )?;
+                    progress.mark_applied(8)?;
+                }
                 for (index, kind) in inventory
                     .qualification_scope
                     .canary_kinds()
                     .iter()
                     .enumerate()
-                    .skip(next_mutation.max(8))
+                    .skip(next_mutation.max(9))
                 {
                     match *kind {
                         "onboarding" | "faucet" | "write_canary" => self
@@ -16228,6 +16663,16 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             }
             ExecutionStep::Convergence => {
                 require_forward_lease_budget(self.admitted, timeout_secs)?;
+                let supervisor = self.dispatch_epoch_supervisor(
+                    HostAction::EpochSupervisorStart,
+                    true,
+                    inventory.timeouts.epoch_supervisor_start_secs,
+                )?;
+                if supervisor.status != "ok" {
+                    return Err(eyre!(
+                        "convergence requires current native supervisor completion"
+                    ));
+                }
                 let deadline = Instant::now()
                     .checked_add(Duration::from_secs(timeout_secs))
                     .ok_or_else(|| eyre!("convergence readiness deadline overflow"))?;
@@ -20564,6 +21009,10 @@ mod tests {
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
+            epoch_supervisor_authorization: "until_stopped".to_owned(),
+            epoch_supervisor_policy_sha256: inventory.epoch_supervisor.policy_sha256.clone(),
+            maintenance_admin_config_sha256: inventory.maintenance_admin_config_sha256.clone(),
+            maintenance_admin_identity: inventory.maintenance_admin_identity.clone(),
             qualification_scope: inventory.qualification_scope,
             deployment_id: inventory.deployment_id.clone(),
             inventory_sha256: inventory_sha256.clone(),
@@ -20834,6 +21283,10 @@ mod tests {
             Upload,
             Stage,
             InrouStageUpload,
+            EpochSupervisorPause,
+            EpochSupervisorStart,
+            EpochSupervisorRollbackPause,
+            EpochSupervisorRollbackRestore,
             Stop,
             Install,
             Reset,
@@ -23912,11 +24365,42 @@ time.sleep(30)
     }
 
     #[test]
+    fn epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start() {
+        let admitted = progress_admission();
+        let plan = host_forward_plan(&admitted);
+        let positions = |action: HostAction| {
+            plan.iter()
+                .enumerate()
+                .filter_map(|(index, key)| (key.action == action.label()).then_some(index))
+                .collect::<Vec<_>>()
+        };
+        let pause = positions(HostAction::EpochSupervisorPause);
+        let start = positions(HostAction::EpochSupervisorStart);
+        assert_eq!(pause.len(), 1);
+        assert_eq!(start.len(), 1);
+        assert!(positions(HostAction::Stage).iter().all(|i| *i < pause[0]));
+        assert!(positions(HostAction::Stop).iter().all(|i| *i > pause[0]));
+        let activations = positions(HostAction::BeaconActivate);
+        assert_eq!(activations.len(), 4);
+        assert!(activations.iter().all(|i| *i < start[0]));
+        assert!(positions(HostAction::Restart).iter().all(|i| *i > start[0]));
+        let pause_intent =
+            build_recovery_intent(&admitted.inventory, ExecutionStep::EpochSupervisorPause)
+                .unwrap();
+        assert_eq!(pause_intent.mutations.len(), 1);
+        assert_eq!(pause_intent.mutations[0].kind, "epoch_supervisor_pause");
+        assert_eq!(pause_intent.mutations[0].phase, "pre_stop");
+        let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary).unwrap();
+        assert_eq!(canary.mutations[8].kind, "epoch_supervisor_start");
+        assert_eq!(canary.mutations[8].phase, "pre_edge");
+    }
+
+    #[test]
     fn recovery_intent_exposes_every_ordered_child_mutation() {
         let inventory = super::super::sample_inventory_fixture();
         let canary = build_recovery_intent(&inventory, ExecutionStep::Canary)
             .expect("canary recovery intent");
-        assert_eq!(canary.mutations.len(), 12);
+        assert_eq!(canary.mutations.len(), 13);
         assert_eq!(
             canary
                 .mutations
@@ -23932,6 +24416,7 @@ time.sleep(30)
                 "beacon_provider_2",
                 "beacon_provider_3",
                 "beacon_provider_4",
+                "epoch_supervisor_start",
                 "inrou_bundle_pin",
                 "inrou_guest_pin",
                 "inrou_discovery_pin",
@@ -24023,7 +24508,8 @@ time.sleep(30)
                 "beacon_provider_1",
                 "beacon_provider_2",
                 "beacon_provider_3",
-                "beacon_provider_4"
+                "beacon_provider_4",
+                "epoch_supervisor_start"
             ]
         );
         assert!(!recovery_intent_identity_matches(&canary, &full_canary));

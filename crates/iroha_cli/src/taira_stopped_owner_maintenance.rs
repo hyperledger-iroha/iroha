@@ -202,7 +202,7 @@ fn public_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
-fn proc_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+pub(super) fn proc_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take(maximum + 1)
@@ -214,7 +214,7 @@ fn proc_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn process_identity(bytes: &[u8]) -> Result<(u32, u32, u64)> {
+pub(super) fn process_identity(bytes: &[u8]) -> Result<(u32, u32, u64)> {
     let text = std::str::from_utf8(bytes)?;
     let (prefix, tail) = text
         .rsplit_once(") ")

@@ -1,6 +1,6 @@
 //! Once-per-epoch operator maintenance of independently provisioned public mint keys.
 //!
-//! This command never accepts validator seeds. The native Kagami provisioner emits
+//! Transaction commands never accept validator seeds. The native Kagami provisioner emits
 //! the public schedule; the configured ledger owner authorizes one real parameter
 //! transaction per epoch. A retained dispatch is only observed, never replaced.
 
@@ -14,6 +14,9 @@ use iroha_data_model::{
 };
 use std::{collections::BTreeSet, num::NonZeroU64};
 
+#[path = "taira_epoch_supervisor.rs"]
+mod supervisor;
+
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum Command {
     /// Read authenticated epoch state and report missing or mismatched provisioning early.
@@ -26,6 +29,10 @@ pub(crate) enum Command {
     Status(TargetArgs),
     /// Stage each next epoch only after observing its real predecessor epoch.
     Maintain(MaintainArgs),
+    /// Renew native public schedules under explicit operator custody and one worker lock.
+    Supervise(supervisor::Args),
+    /// Reauthenticate process-bound supervisor readiness without signing or submitting.
+    SupervisorStatus(supervisor::StatusArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -69,6 +76,7 @@ pub(crate) struct MaintainArgs {
 struct ScheduleV1 {
     schema_version: u8,
     network_id: NetworkId,
+    genesis_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     parameters: Vec<Parameter>,
     payment_asset: AssetDefinitionId,
     transaction_fee_maximum: Quantity,
@@ -141,6 +149,17 @@ impl ScheduleV1 {
             "epoch schedule must have version1 and one to256 public epoch parameters",
         )?;
         trust.validate(self.network_id)?;
+        let genesis =
+            iroha_genesis::decode_signed_genesis(&hex::decode(&trust.genesis_signed_wire_hex)?)?;
+        let expected_genesis_roster = iroha_genesis::signed_genesis_consensus_metadata(&genesis)?
+            .kagemusha_mint_finality
+            .epoch_roster
+            .bind_network_id(self.network_id)
+            .map_err(|error| eyre!("invalid signed genesis mint roster: {error}"))?;
+        require(
+            self.genesis_roster == expected_genesis_roster,
+            "native schedule seed custody differs from the authenticated genesis mint roster",
+        )?;
         require(
             self.transaction_fee_maximum > Quantity::zero(),
             "epoch maintenance requires a positive explicit transaction fee cap",
@@ -315,8 +334,11 @@ fn retained_write_read_deadline(
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    let journal = Journal::open(&path, false)?;
-    let plan: EpochPlanV1 = journal.read_json("plan.json")?;
+    let journal = open_initializing_journal(&path, false)?;
+    let Some(plan) = journal.optional_json::<EpochPlanV1>("plan.json")? else {
+        require_uninitialized_journal(&journal, &["trust.json"])?;
+        return Ok(invocation);
+    };
     require(
         plan.network_id == network && plan.target_epoch == target,
         "retained epoch deadline belongs to another operation",
@@ -415,6 +437,249 @@ fn verify_prepared(
         .map_err(|error| eyre!(error))?;
     fee_matches(schedule, &prepared.fee_quote)?;
     Ok(transaction)
+}
+
+/// Preserve original intent trust while a selected current release authenticates fresh reads.
+fn validate_observation_trust(
+    original: &DeploymentTrustV1,
+    current: &DeploymentTrustV1,
+    network: NetworkId,
+) -> Result<()> {
+    original.validate(network)?;
+    current.validate(network)?;
+    let mut identity = current.clone();
+    for (peer, retained) in identity.peers.iter_mut().zip(&original.peers) {
+        peer.build_fingerprint = retained.build_fingerprint;
+        peer.config_fingerprint = retained.config_fingerprint;
+    }
+    require(
+        &identity == original,
+        "current observation trust changed original network, genesis, roster, peer identity or endpoint; only independently selected release build/config fingerprints may change",
+    )
+}
+
+/// Validate one generation's exact policy, public trust, custody map and signer context.
+///
+/// This pure boundary performs no file, executable, seed or network admission.
+pub(crate) fn supervisor_generation_admission(
+    policy_bytes: &[u8],
+    trust_bytes: &[u8],
+    custody_bytes: &[u8],
+    config: &iroha::config::Config,
+    http_operator: &iroha_crypto::KeyPair,
+) -> Result<()> {
+    supervisor::generation_admission(
+        policy_bytes,
+        trust_bytes,
+        custody_bytes,
+        config,
+        http_operator,
+    )
+}
+
+/// Read-only custody of a supervisor journal, or its pre-installation absence.
+///
+/// The caller must retain its distinct deployment lock through quiescence and
+/// drop this guard immediately before starting the supervised worker.
+pub(crate) struct SupervisorJournalGuard {
+    journal: Option<Journal>,
+    parent_path: PathBuf,
+    parent: File,
+    worker_name: String,
+}
+
+impl SupervisorJournalGuard {
+    #[cfg(unix)]
+    fn revalidate_parent(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+        require(
+            self.parent_path.canonicalize()? == self.parent_path,
+            "supervisor journal parent must remain a direct canonical path",
+        )?;
+        let named = fs::symlink_metadata(&self.parent_path)?;
+        let held = self.parent.metadata()?;
+        private_metadata(&named, true)?;
+        private_metadata(&held, true)?;
+        require(
+            named.dev() == held.dev() && named.ino() == held.ino(),
+            "supervisor journal parent was replaced during quiescence",
+        )
+    }
+
+    /// Recheck the held journal lock, or the unchanged parent and absent child.
+    #[cfg(unix)]
+    pub(crate) fn revalidate(&self) -> Result<()> {
+        self.revalidate_parent()?;
+        if let Some(journal) = &self.journal {
+            journal.revalidate()?;
+        } else {
+            match rustix::fs::statat(
+                &self.parent,
+                self.worker_name.as_str(),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Err(rustix::io::Errno::NOENT) => {}
+                Ok(_) => {
+                    eyre::bail!("supervisor journal appeared after the pre-installation check")
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        self.revalidate_parent()
+    }
+
+    /// Supervisor journal custody is available only on Unix.
+    #[cfg(not(unix))]
+    pub(crate) fn revalidate(&self) -> Result<()> {
+        eyre::bail!("supervisor journal quiescence requires Unix descriptor custody")
+    }
+}
+
+/// Hold the existing native worker lock without creating or repairing a journal.
+///
+/// An absent child is accepted only as a pre-first-installation observation;
+/// callers retain their deployment lock and must revalidate before worker start.
+#[cfg(unix)]
+pub(crate) fn supervisor_journal_guard(
+    journal_dir: &Path,
+    network: NetworkId,
+) -> Result<SupervisorJournalGuard> {
+    use rustix::fs::{Mode, OFlags};
+    require(
+        journal_dir.is_absolute()
+            && journal_dir.components().all(|part| {
+                matches!(
+                    part,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            })
+            && journal_dir.canonicalize()? == journal_dir,
+        "supervisor journal parent must be an absolute direct canonical directory",
+    )?;
+    let parent = File::from(rustix::fs::open(
+        journal_dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )?);
+    private_metadata(&parent.metadata()?, true)?;
+    let mut guard = SupervisorJournalGuard {
+        journal: None,
+        parent_path: journal_dir.into(),
+        parent,
+        worker_name: format!("epoch-worker-{network}"),
+    };
+    guard.revalidate_parent()?;
+    match rustix::fs::statat(
+        &guard.parent,
+        guard.worker_name.as_str(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(_) => {
+            guard.journal = Some(Journal::open(
+                &guard.parent_path.join(&guard.worker_name),
+                false,
+            )?);
+        }
+        Err(rustix::io::Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    guard.revalidate()?;
+    Ok(guard)
+}
+
+/// Supervisor journal custody is available only on Unix.
+#[cfg(not(unix))]
+pub(crate) fn supervisor_journal_guard(_: &Path, _: NetworkId) -> Result<SupervisorJournalGuard> {
+    eyre::bail!("supervisor journal quiescence requires Unix descriptor custody")
+}
+
+/// Repair only the mkdir-before-lock cut, never any prepared operation state.
+#[cfg(unix)]
+fn open_initializing_journal(path: &Path, create: bool) -> Result<Journal> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
+    if !create
+        && fs::symlink_metadata(path.join("lock"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        let name = path
+            .file_name()
+            .ok_or_else(|| eyre!("initial journal has no filename"))?;
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| eyre!("initial journal has no parent"))?
+            .canonicalize()?;
+        let parent = File::from(rustix::fs::open(
+            &parent_path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?);
+        private_metadata(&parent.metadata()?, true)?;
+        let directory = File::from(rustix::fs::openat(
+            &parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?);
+        let held = directory.metadata()?;
+        private_metadata(&held, true)?;
+        let named_path = parent_path.join(name);
+        require(
+            fs::read_dir(&named_path)?.next().is_none(),
+            "missing journal lock with retained evidence cannot be recreated",
+        )?;
+        let named = fs::symlink_metadata(&named_path)?;
+        require(
+            named.is_dir() && named.dev() == held.dev() && named.ino() == held.ino(),
+            "initial journal directory changed before lock recovery",
+        )?;
+        match rustix::fs::openat(
+            &directory,
+            "lock",
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::from_raw_mode(0o600),
+        ) {
+            Ok(fd) => {
+                File::from(fd).sync_all()?;
+                directory.sync_all()?;
+            }
+            Err(rustix::io::Errno::EXIST) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Journal::open(path, create)
+}
+
+#[cfg(not(unix))]
+fn open_initializing_journal(_: &Path, _: bool) -> Result<Journal> {
+    eyre::bail!("epoch journal initialization requires Unix")
+}
+
+/// Only a provably unprepared initialization may resume after a publication crash.
+fn require_uninitialized_journal(journal: &Journal, allowed: &[&str]) -> Result<()> {
+    journal.revalidate()?;
+    for (index, entry) in fs::read_dir(&journal.path)?.enumerate() {
+        require(
+            index < 64,
+            "incomplete journal has excessive initialization debris",
+        )?;
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| eyre!("invalid initialization evidence name"))?;
+        let unreferenced_stage = name.strip_prefix(".staging-").is_some_and(|suffix| {
+            suffix.len() == 32
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+        require(
+            name == "lock" || allowed.contains(&name) || unreferenced_stage,
+            "incomplete journal contains retained operation evidence; initialization cannot replace it",
+        )?;
+    }
+    journal.revalidate()
 }
 
 fn validate_plan(
@@ -831,29 +1096,55 @@ fn execute<C: RunContext>(
         )?;
         require_next_epoch(current, target)?;
     }
-    let journal = Journal::open(&path, create)?;
-    let expected_schedule = digest(&json::to_vec(&runtime.schedule)?);
-    let expected_trust = digest(&json::to_vec(&runtime.trust)?);
-    let plan = if create {
-        let plan = EpochPlanV1 {
-            schema_version: 1,
-            network_id: runtime.schedule.network_id,
-            target_epoch: target,
-            owner: context.config().account.clone(),
-            schedule_sha256: expected_schedule.clone(),
-            payment_asset: runtime.schedule.payment_asset.clone(),
-            transaction_fee_maximum: runtime.schedule.transaction_fee_maximum.clone(),
-            trust_sha256: expected_trust.clone(),
-            parameter: parameter.clone(),
-            epoch_end_height: current.epoch_end_height,
-            expires_at_ms: now_ms()?
-                .checked_add(common.operation_timeout_ms)
-                .ok_or_else(|| eyre!("epoch operation deadline overflow"))?,
-        };
-        journal.install_json("plan.json", &plan)?;
-        plan
+    let journal = if action == Action::Status {
+        Journal::open(&path, false)?
     } else {
-        journal.read_json::<EpochPlanV1>("plan.json")?
+        open_initializing_journal(&path, create)?
+    };
+    let existing_plan: Option<EpochPlanV1> = journal.optional_json("plan.json")?;
+    if existing_plan.is_none() {
+        require(
+            action != Action::Status,
+            "epoch has no retained preparation",
+        )?;
+        require_next_epoch(current, target)?;
+        // No original deadline exists yet. Any prepared/submitted/completed evidence
+        // makes this an invalid journal, never a license to initialize another intent.
+        require_uninitialized_journal(&journal, &["trust.json"])?;
+    }
+    let original_trust = match journal.optional_json::<DeploymentTrustV1>("trust.json")? {
+        Some(trust) => trust,
+        None if existing_plan.is_none() => {
+            journal.install_json("trust.json", &runtime.trust)?;
+            runtime.trust.clone()
+        }
+        None => eyre::bail!(
+            "original epoch trust journal is missing; first-release journals require immutable original trust"
+        ),
+    };
+    validate_observation_trust(&original_trust, &runtime.trust, runtime.schedule.network_id)?;
+    let expected_trust = digest(&json::to_vec(&original_trust)?);
+    let plan = match existing_plan {
+        Some(plan) => plan,
+        None => {
+            let plan = EpochPlanV1 {
+                schema_version: 1,
+                network_id: runtime.schedule.network_id,
+                target_epoch: target,
+                owner: context.config().account.clone(),
+                schedule_sha256: digest(&json::to_vec(&runtime.schedule)?),
+                payment_asset: runtime.schedule.payment_asset.clone(),
+                transaction_fee_maximum: runtime.schedule.transaction_fee_maximum.clone(),
+                trust_sha256: expected_trust.clone(),
+                parameter: parameter.clone(),
+                epoch_end_height: current.epoch_end_height,
+                expires_at_ms: now_ms()?
+                    .checked_add(common.operation_timeout_ms)
+                    .ok_or_else(|| eyre!("epoch operation deadline overflow"))?,
+            };
+            journal.install_json("plan.json", &plan)?;
+            plan
+        }
     };
     validate_plan(
         &plan,
@@ -1056,14 +1347,18 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
         match self {
-            Self::Maintain(args) => maintain(context, args),
+            Self::Maintain(args) => maintain(context, args).map(|_| ()),
+            Self::Supervise(args) => supervisor::run(context, args),
+            Self::SupervisorStatus(args) => supervisor::status(context, args),
             command => {
                 let (args, action) = match command {
                     Self::Preflight(args) => (args, Action::Preflight),
                     Self::Prepare(args) => (args, Action::Prepare),
                     Self::Apply(args) => (args, Action::Apply),
                     Self::Status(args) => (args, Action::Status),
-                    Self::Maintain(_) => unreachable!(),
+                    Self::Maintain(_) | Self::Supervise(_) | Self::SupervisorStatus(_) => {
+                        unreachable!()
+                    }
                 };
                 let mut runtime = Runtime::new(context, &args.common)?;
                 let mut read_deadline = if action == Action::Apply || action == Action::Prepare {
@@ -1109,6 +1404,10 @@ impl Run for Command {
     }
 }
 
+fn completion_is_current(target_epoch: u64, observed_epoch: u64) -> bool {
+    observed_epoch.checked_add(1) == Some(target_epoch)
+}
+
 fn maintenance_action(claim_at_invocation_start: bool, historical_or_completed: bool) -> Action {
     if claim_at_invocation_start || historical_or_completed {
         Action::Status
@@ -1117,8 +1416,20 @@ fn maintenance_action(claim_at_invocation_start: bool, historical_or_completed: 
     }
 }
 
-fn maintain<C: RunContext>(context: &mut C, args: MaintainArgs) -> Result<()> {
+fn maintain<C: RunContext>(context: &mut C, args: MaintainArgs) -> Result<CompletionV1> {
+    maintain_until(context, args, None, |_| Ok(()))
+}
+
+fn maintain_until<C: RunContext>(
+    context: &mut C,
+    args: MaintainArgs,
+    invocation_deadline: Option<Instant>,
+    mut current_epoch_complete: impl FnMut(&CompletionV1) -> Result<()>,
+) -> Result<CompletionV1> {
     let mut runtime = Runtime::new(context, &args.common)?;
+    if let Some(deadline) = invocation_deadline {
+        runtime.deadline = runtime.deadline.min(deadline);
+    }
     runtime.schedule.parameter(args.stop_after_epoch)?;
     let resumed_claims = runtime
         .schedule
@@ -1197,11 +1508,17 @@ fn maintain<C: RunContext>(context: &mut C, args: MaintainArgs) -> Result<()> {
             historical_claim || fs::symlink_metadata(&completed_path).is_ok(),
         );
         match execute(&mut runtime, context, &args.common, next, action, &height) {
-            Ok(Some(_)) => {
+            Ok(Some(receipt)) => {
+                // A finality wait can cross an epoch transition. Re-authenticate now;
+                // the loop's pre-execute checkpoint cannot authorize readiness.
+                let fresh = runtime.checkpoint_until(runtime.deadline)?;
+                if completion_is_current(receipt.target_epoch, context_at(&fresh)?.epoch) {
+                    current_epoch_complete(&receipt)?;
+                }
                 read_deadline = runtime.deadline;
                 verified.insert(next);
                 if next == args.stop_after_epoch {
-                    return Ok(());
+                    return Ok(receipt);
                 }
             }
             Ok(None) => {}
@@ -1235,7 +1552,7 @@ mod tests {
     use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
     use iroha_torii_shared::{FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation};
 
-    fn schedule() -> (ScheduleV1, DeploymentTrustV1, KeyPair) {
+    pub(super) fn schedule() -> (ScheduleV1, DeploymentTrustV1, KeyPair) {
         let trust = finality::test_trust();
         let network = finality::test_network_id();
         let mut peers = trust
@@ -1257,6 +1574,17 @@ mod tests {
             ScheduleV1 {
                 schema_version: 1,
                 network_id: network,
+                genesis_roster: iroha_genesis::signed_genesis_consensus_metadata(
+                    &iroha_genesis::decode_signed_genesis(
+                        &hex::decode(&trust.genesis_signed_wire_hex).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+                .kagemusha_mint_finality
+                .epoch_roster
+                .bind_network_id(network)
+                .unwrap(),
                 parameters,
                 payment_asset: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap(),
                 transaction_fee_maximum: Quantity::from(2_u32),
@@ -1330,6 +1658,178 @@ mod tests {
             alias_plan: None,
         };
         (plan, prepared)
+    }
+
+    #[cfg(unix)]
+    fn supervisor_guard_fixture() -> (tempfile::TempDir, PathBuf, NetworkId, PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let parent = directory.path().canonicalize().unwrap();
+        let network = finality::test_network_id();
+        let child = parent.join(format!("epoch-worker-{network}"));
+        (directory, parent, network, child)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn epoch_supervisor_journal_guard_excludes_active_worker_until_drop() {
+        let (_directory, parent, network, child) = supervisor_guard_fixture();
+        let worker = Journal::open(&child, true).unwrap();
+        assert!(supervisor_journal_guard(&parent, network).is_err());
+        drop(worker);
+        let guard = supervisor_journal_guard(&parent, network).unwrap();
+        guard.revalidate().unwrap();
+        assert!(Journal::open(&child, false).is_err());
+        drop(guard);
+        Journal::open(&child, false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated() {
+        let (_directory, parent, network, child) = supervisor_guard_fixture();
+        let guard = supervisor_journal_guard(&parent, network).unwrap();
+        guard.revalidate().unwrap();
+        assert!(!child.exists());
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
+        let worker = Journal::open(&child, true).unwrap();
+        assert!(guard.revalidate().is_err());
+        drop(worker);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn epoch_supervisor_journal_guard_never_repairs_missing_lock() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_directory, parent, network, child) = supervisor_guard_fixture();
+        fs::create_dir(&child).unwrap();
+        fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(supervisor_journal_guard(&parent, network).is_err());
+        assert_eq!(fs::read_dir(&child).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn epoch_supervisor_journal_guard_rejects_symlink_parent_and_child() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let (_directory, parent, network, child) = supervisor_guard_fixture();
+        let real = parent.join("real");
+        fs::create_dir(&real).unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
+        let alias = parent.join("alias");
+        symlink(&real, &alias).unwrap();
+        assert!(supervisor_journal_guard(&alias, network).is_err());
+        symlink(&real, &child).unwrap();
+        assert!(supervisor_journal_guard(&parent, network).is_err());
+        assert!(!real.join("lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn epoch_supervisor_journal_guard_rejects_parent_and_child_rebinding() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_directory, base, network, _) = supervisor_guard_fixture();
+        let parent = base.join("journals");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        let absent = supervisor_journal_guard(&parent, network).unwrap();
+        fs::rename(&parent, base.join("original-parent")).unwrap();
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(absent.revalidate().is_err());
+        drop(absent);
+        let child = parent.join(format!("epoch-worker-{network}"));
+        drop(Journal::open(&child, true).unwrap());
+        let guard = supervisor_journal_guard(&parent, network).unwrap();
+        fs::rename(&child, parent.join("original-child")).unwrap();
+        let replacement = Journal::open(&child, true).unwrap();
+        assert!(guard.revalidate().is_err());
+        drop(replacement);
+    }
+
+    #[test]
+    fn epoch_maintenance_partial_initialization_never_replaces_retained_dispatch() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("epoch");
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            Journal::open(&path, false).is_err(),
+            "read-only observation does not repair the missing lock"
+        );
+        let journal = open_initializing_journal(&path, false).unwrap();
+        require_uninitialized_journal(&journal, &["trust.json"]).unwrap();
+        let (schedule, trust, key) = schedule();
+        journal.install_json("trust.json", &trust).unwrap();
+        require_uninitialized_journal(&journal, &["trust.json"]).unwrap();
+        let (plan, prepared) = prepared(&schedule, &trust, &key);
+        journal.install_json("prepared.json", &prepared).unwrap();
+        assert!(require_uninitialized_journal(&journal, &["trust.json"]).is_err());
+        journal.install_json("plan.json", &plan).unwrap();
+        drop(journal);
+        let resumed = Journal::open(&path, false).unwrap();
+        assert_eq!(resumed.read_json::<EpochPlanV1>("plan.json").unwrap(), plan);
+        assert_eq!(
+            resumed.read_json::<PreparedV1>("prepared.json").unwrap(),
+            prepared
+        );
+        assert!(require_uninitialized_journal(&resumed, &["trust.json"]).is_err());
+    }
+
+    #[test]
+    fn epoch_maintenance_readiness_rechecks_transition_after_completion_wait() {
+        assert!(completion_is_current(1, 0));
+        assert!(
+            !completion_is_current(1, 1),
+            "completion from the old predecessor cannot declare readiness after the actual transition"
+        );
+        assert!(completion_is_current(2, 1));
+        assert!(!completion_is_current(1, u64::MAX));
+    }
+
+    #[test]
+    fn epoch_maintenance_retains_original_trust_across_explicit_release_observation() {
+        let (schedule, trust, key) = schedule();
+        let (plan, prepared) = prepared(&schedule, &trust, &key);
+        let mut current = trust.clone();
+        for peer in &mut current.peers {
+            peer.build_fingerprint = Hash::new(b"independently selected release");
+            peer.config_fingerprint = Hash::new(b"independently selected current config");
+        }
+        validate_observation_trust(&trust, &current, schedule.network_id).unwrap();
+        validate_plan(
+            &plan,
+            &schedule,
+            &digest(&json::to_vec(&trust).unwrap()),
+            &plan.owner,
+            plan.target_epoch,
+            &plan.parameter,
+        )
+        .unwrap();
+        assert!(
+            validate_plan(
+                &plan,
+                &schedule,
+                &digest(&json::to_vec(&current).unwrap()),
+                &plan.owner,
+                plan.target_epoch,
+                &plan.parameter
+            )
+            .is_err()
+        );
+        verify_prepared(&plan, &schedule, &prepared).unwrap();
+        let mut changed = current.clone();
+        changed.peers[0].torii_origin = "http://127.0.0.1:9999/".into();
+        assert!(validate_observation_trust(&trust, &changed, schedule.network_id).is_err());
+        changed = current.clone();
+        changed.peers.swap(0, 1);
+        assert!(validate_observation_trust(&trust, &changed, schedule.network_id).is_err());
+        changed = current;
+        changed.genesis_signed_wire_hex.push_str("00");
+        assert!(validate_observation_trust(&trust, &changed, schedule.network_id).is_err());
     }
 
     #[test]

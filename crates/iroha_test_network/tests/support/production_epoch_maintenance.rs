@@ -1,15 +1,27 @@
 //! Genuine bounded epoch maintenance runs independently of application operations.
 //! Only native Kagami handles seed derivation; only the shipping CLI dispatches.
 use super::*;
+use iroha_crypto::PublicKey;
 use iroha_data_model::{
     NetworkId,
     bridge::BridgeFinalityVerifier,
+    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     parameter::{Parameter, system::KagemushaMintFinalityNextEpochParameterV1},
     transaction::SignedTransaction,
 };
 use iroha_model_base::peer::PeerId;
 use iroha_version::codec::DecodeVersioned as _;
 use std::{collections::BTreeMap, io::Write, num::NonZeroU64};
+
+#[cfg(target_os = "linux")]
+#[path = "production_epoch_supervisor.rs"]
+mod supervisor;
+
+pub(super) enum Driver {
+    Finite,
+    #[cfg(target_os = "linux")]
+    Supervised,
+}
 
 const EPOCH_LENGTH: u64 = 11;
 const SCHEDULE_EPOCHS: u64 = 8;
@@ -66,10 +78,30 @@ fn copy_fixture_seed(path: &Path, output: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+fn signed_genesis_roster(
+    directory: &Path,
+    network: NetworkId,
+    public_key: &PublicKey,
+) -> Result<KagemushaMintFinalityEpochRosterV1> {
+    let (hash, metadata) = iroha_core::release_identity::genesis_identity(
+        &fs::read(directory.join("genesis.signed.nrt"))?,
+        public_key,
+    )?;
+    ensure!(
+        hash == iroha_crypto::Hash::from(network.into_genesis_hash()),
+        "epoch fixture genesis has another network identity"
+    );
+    Ok(metadata
+        .kagemusha_mint_finality
+        .epoch_roster
+        .bind_network_id(network)?)
+}
+
 fn schedule_parameters(
     bytes: &[u8],
     network: NetworkId,
     roster: &[PeerId],
+    genesis_roster: &KagemushaMintFinalityEpochRosterV1,
 ) -> Result<Vec<KagemushaMintFinalityNextEpochParameterV1>> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let value: Value = json::from_slice(bytes)?;
@@ -77,6 +109,14 @@ fn schedule_parameters(
         field(&value, "schema_version")?.as_u64() == Some(1)
             && json::from_value::<NetworkId>(field(&value, "network_id")?.clone())? == network,
         "native epoch schedule belongs to another schema or network"
+    );
+    let derived_genesis: KagemushaMintFinalityEpochRosterV1 =
+        json::from_value(field(&value, "genesis_roster")?.clone())?;
+    ensure!(
+        derived_genesis == *genesis_roster
+            && genesis_roster.network_id == network
+            && genesis_roster.epoch == 0,
+        "native epoch schedule was not derived from the signed genesis mint seeds"
     );
     let parameters: Vec<Parameter> = json::from_value(field(&value, "parameters")?.clone())?;
     ensure!(
@@ -123,6 +163,7 @@ pub(super) async fn prepare_schedule(
     kagami: &Path,
     roster: &[PeerId],
     network: NetworkId,
+    genesis_public_key: &PublicKey,
     deadline: Instant,
 ) -> Result<PathBuf> {
     let mut ordered = BTreeMap::new();
@@ -188,7 +229,12 @@ pub(super) async fn prepare_schedule(
     inherit(&mut derive, &[(read.as_raw_fd(), 197)])?;
     let bytes = run(derive, deadline).await?;
     drop(read);
-    schedule_parameters(&bytes, network, roster)?;
+    let genesis_roster = signed_genesis_roster(
+        &directory.join("final-genesis"),
+        network,
+        genesis_public_key,
+    )?;
+    schedule_parameters(&bytes, network, roster, &genesis_roster)?;
     let path = directory.join("epoch-schedule.json");
     private_file(&path, &bytes)?;
     Ok(path)
@@ -203,6 +249,8 @@ pub(super) struct Maintenance {
     network: NetworkId,
     child: Child,
     stopped: bool,
+    #[cfg(target_os = "linux")]
+    supervisor: Option<supervisor::Supervisor>,
 }
 impl Maintenance {
     pub(super) fn start(
@@ -241,8 +289,21 @@ impl Maintenance {
             network: prepared.network_id,
             child: child.spawn()?,
             stopped: false,
+            #[cfg(target_os = "linux")]
+            supervisor: None,
         })
     }
+    #[cfg(target_os = "linux")]
+    pub(super) fn start_supervisor(
+        binary: &Path,
+        kagami: &Path,
+        prepared: &prepare::Prepared,
+        trust: PathBuf,
+        build_identity: iroha_core::release_identity::BuildIdentity,
+    ) -> Result<Self> {
+        supervisor::start(binary, kagami, prepared, trust, build_identity)
+    }
+
     fn base_command(binary: &Path, directory: &Path) -> Command {
         let mut child = command(binary, directory);
         child
@@ -321,7 +382,7 @@ impl Maintenance {
         &mut self,
         deadline: Instant,
     ) -> Result<HashOf<TransactionEntrypoint>> {
-        timeout_at(deadline, async {
+        let transaction = timeout_at(deadline, async {
             while !self.operation(1).join("completion.json").try_exists()? {
                 ensure!(
                     self.child.try_wait()?.is_none(),
@@ -343,10 +404,15 @@ impl Maintenance {
                 && text(&receipt, "transaction_hash")? == hex(transaction.hash().as_ref())
                 && field(&receipt, "applied_height")?.as_u64() == Some(10),
                 "first maintenance progress differs from the exact retained network/transaction/pulse height");
-            Ok(transaction.hash_as_entrypoint())
+            Ok::<_, eyre::Report>(transaction.hash_as_entrypoint())
         })
         .await
-        .wrap_err("first genuine epoch maintenance exceeded the original phase deadline")?
+        .wrap_err("first genuine epoch maintenance exceeded the original phase deadline")??;
+        #[cfg(target_os = "linux")]
+        if self.supervisor.is_some() {
+            supervisor::restart(self, deadline).await?;
+        }
+        Ok(transaction)
     }
     pub(super) async fn stop(&mut self, deadline: Instant) -> Result<()> {
         if self.stopped {
@@ -372,8 +438,17 @@ impl Maintenance {
         clients: &[iroha::client::Client],
         deadline: Instant,
     ) -> Result<()> {
-        let parameters =
-            schedule_parameters(&fs::read(&self.schedule)?, self.network, &prepared.roster)?;
+        let genesis_roster = signed_genesis_roster(
+            &prepared.genesis_directory,
+            self.network,
+            &prepared.genesis_public_key,
+        )?;
+        let parameters = schedule_parameters(
+            &fs::read(&self.schedule)?,
+            self.network,
+            &prepared.roster,
+            &genesis_roster,
+        )?;
         ensure!(
             self.stopped,
             "operator must be stopped before the final read-only audit"
@@ -421,6 +496,10 @@ impl Maintenance {
             (1..=height / EPOCH_LENGTH).all(|epoch| completed.contains(&epoch)),
             "crossed epoch lacks authenticated completed maintenance"
         );
+        #[cfg(target_os = "linux")]
+        if let Some(supervisor) = &self.supervisor {
+            supervisor::verify(self, supervisor, height)?;
+        }
         verify_boundary_chain(prepared, clients, &parameters, height, deadline).await
     }
 }
@@ -584,23 +663,73 @@ fn production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound(
             roster: KagemushaMintFinalityEpochRosterV1 { version: KAGEMUSHA_CHAIN_VERSION_V1, network_id: network, epoch, validators }
         }.into_custom_parameter()))
     }).collect::<Result<Vec<_>>>()?;
-    let native = norito::json!({"schema_version":1, "network_id":network, "parameters":parameters});
+    let genesis_roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1, network_id: network, epoch: 0,
+        validators: roster.iter().enumerate().map(|(index, peer)| {
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[index as u8 + 1; 32], 0, peer.clone()).map_err(|error| eyre!("native genesis keys: {error:?}"))
+        }).collect::<Result<Vec<_>>>()?,
+    };
+    let native = norito::json!({"schema_version":1, "network_id":network, "genesis_roster":genesis_roster, "parameters":parameters});
     assert_eq!(
-        schedule_parameters(&json::to_vec(&native)?, network, &roster)?.len(),
+        schedule_parameters(&json::to_vec(&native)?, network, &roster, &genesis_roster)?.len(),
         8
     );
     let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
         b"different-epoch-fixture",
     )));
-    assert!(schedule_parameters(&json::to_vec(&native)?, foreign, &roster).is_err());
-    assert!(schedule_parameters(&json::to_vec(&native)?, network, &roster[..3]).is_err());
+    assert!(
+        schedule_parameters(&json::to_vec(&native)?, foreign, &roster, &genesis_roster).is_err()
+    );
+    assert!(
+        schedule_parameters(
+            &json::to_vec(&native)?,
+            network,
+            &roster[..3],
+            &genesis_roster
+        )
+        .is_err()
+    );
     let mut gap = native.clone();
     gap.get_mut("parameters")
         .unwrap()
         .as_array_mut()
         .unwrap()
         .swap(1, 2);
-    assert!(schedule_parameters(&json::to_vec(&gap)?, network, &roster).is_err());
+    assert!(schedule_parameters(&json::to_vec(&gap)?, network, &roster, &genesis_roster).is_err());
+    let mut substituted = native.clone();
+    let mut other_keys = genesis_roster.clone();
+    other_keys.validators[0] =
+        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            &[99; 32],
+            0,
+            roster[0].clone(),
+        )
+        .map_err(|error| eyre!("substituted seed keys: {error:?}"))?;
+    *substituted.get_mut("genesis_roster").unwrap() = json::to_value(&other_keys)?;
+    assert!(
+        schedule_parameters(
+            &json::to_vec(&substituted)?,
+            network,
+            &roster,
+            &genesis_roster
+        )
+        .is_err()
+    );
+    let mut absent_genesis = native.clone();
+    absent_genesis
+        .as_object_mut()
+        .unwrap()
+        .remove("genesis_roster");
+    assert!(
+        schedule_parameters(
+            &json::to_vec(&absent_genesis)?,
+            network,
+            &roster,
+            &genesis_roster
+        )
+        .is_err()
+    );
     let mut missing = native;
     missing
         .get_mut("parameters")
@@ -608,6 +737,14 @@ fn production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound(
         .as_array_mut()
         .unwrap()
         .pop();
-    assert!(schedule_parameters(&json::to_vec(&missing)?, network, &roster).is_err());
+    assert!(
+        schedule_parameters(&json::to_vec(&missing)?, network, &roster, &genesis_roster).is_err()
+    );
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn production_epoch_supervisor_renews_and_resumes_after_owned_restart() -> Result<()> {
+    super::run_fresh_custody_bootstrap(Driver::Supervised).await
 }

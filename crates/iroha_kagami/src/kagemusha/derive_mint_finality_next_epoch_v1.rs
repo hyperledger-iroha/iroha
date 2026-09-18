@@ -80,6 +80,7 @@ pub(super) struct ScheduleArgs {
 struct ScheduleV1 {
     schema_version: u8,
     network_id: NetworkId,
+    genesis_roster: KagemushaMintFinalityEpochRosterV1,
     parameters: Vec<Parameter>,
     payment_asset: AssetDefinitionId,
     transaction_fee_maximum: Quantity,
@@ -132,6 +133,7 @@ fn derive_schedule(
     Ok(ScheduleV1 {
         schema_version: 1,
         network_id,
+        genesis_roster: derive_roster(network_id, 0, validators, seeds)?,
         parameters,
         payment_asset: args.payment_asset.clone(),
         transaction_fee_maximum: args.transaction_fee_maximum.clone(),
@@ -275,8 +277,28 @@ fn derive_parameter(
     validators: &[PeerId],
     seeds: &[u8; INPUT_BYTES],
 ) -> color_eyre::Result<Parameter> {
-    if epoch == 0 || validators.len() != VALIDATORS {
+    if epoch == 0 {
         bail!("invalid next-epoch derivation context");
+    }
+    let typed = KagemushaMintFinalityNextEpochParameterV1 {
+        roster: derive_roster(network_id, epoch, validators, seeds)?,
+    };
+    typed
+        .validate()
+        .map_err(|_| eyre!("derived next-epoch roster is structurally invalid"))?;
+    Ok(Parameter::Custom(typed.into_custom_parameter()))
+}
+
+// The same consumed seed input supplies both the epoch-zero custody comparison
+// and future keys. Epoch zero is public evidence, never a next-epoch parameter.
+fn derive_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    validators: &[PeerId],
+    seeds: &[u8; INPUT_BYTES],
+) -> color_eyre::Result<KagemushaMintFinalityEpochRosterV1> {
+    if validators.len() != VALIDATORS {
+        bail!("invalid mint-finality derivation context");
     }
     let validators = validators
         .iter()
@@ -289,20 +311,18 @@ fn derive_parameter(
                 .map_err(|_| eyre!("mint-finality public key derivation failed"))
         })
         .collect::<color_eyre::Result<Vec<_>>>()?;
-    let typed = KagemushaMintFinalityNextEpochParameterV1 {
-        roster: KagemushaMintFinalityEpochRosterV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch,
-            validators,
-        },
+    let roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators,
     };
-    typed
+    roster
         .validate()
-        .map_err(|_| eyre!("derived next-epoch roster is structurally invalid"))?;
-    validate_kagemusha_mint_finality_roster_keys_v1(&typed.roster)
-        .map_err(|_| eyre!("derived next-epoch roster contains invalid public points"))?;
-    Ok(Parameter::Custom(typed.into_custom_parameter()))
+        .map_err(|_| eyre!("derived mint-finality roster is structurally invalid"))?;
+    validate_kagemusha_mint_finality_roster_keys_v1(&roster)
+        .map_err(|_| eyre!("derived mint-finality roster contains invalid public points"))?;
+    Ok(roster)
 }
 
 #[cfg(test)]
@@ -374,6 +394,36 @@ mod tests {
         let decoded: ScheduleV1 = norito::json::from_slice(&bytes).unwrap();
         assert_eq!(decoded.schema_version, 1);
         assert_eq!(decoded.network_id, network_id);
+        assert_eq!(decoded.genesis_roster.network_id, network_id);
+        assert_eq!(decoded.genesis_roster.epoch, 0);
+        for ((entry, peer), seed) in decoded
+            .genesis_roster
+            .validators
+            .iter()
+            .zip(&validators)
+            .zip(seeds().chunks_exact(SEED_BYTES))
+        {
+            assert_eq!(
+                *entry,
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    seed.try_into().unwrap(),
+                    0,
+                    peer.clone()
+                )
+                .unwrap()
+            );
+        }
+        let mut substituted = seeds();
+        substituted[0] ^= 1;
+        let foreign = derive_schedule(&args, network_id, &validators, &substituted).unwrap();
+        assert_ne!(
+            decoded.genesis_roster, foreign.genesis_roster,
+            "a replaced original seed must change the public genesis custody comparison"
+        );
+        assert!(derive_parameter(network_id, 0, &validators, &seeds()).is_err());
+        let mut missing = norito::json::from_slice::<norito::json::Value>(&bytes).unwrap();
+        missing.as_object_mut().unwrap().remove("genesis_roster");
+        assert!(norito::json::from_value::<ScheduleV1>(missing).is_err());
         assert_eq!(decoded.payment_asset, args.payment_asset);
         assert_eq!(
             decoded.transaction_fee_maximum,

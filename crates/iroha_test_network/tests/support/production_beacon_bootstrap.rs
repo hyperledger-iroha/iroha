@@ -1397,6 +1397,10 @@ async fn both_public_sequences(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<()> {
+    run_fresh_custody_bootstrap(epoch_maintenance::Driver::Finite).await
+}
+
+async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Result<()> {
     // Validate the same immutable identity used by the paid trust helper before
     // artifact reads, custody creation, genesis generation, or child startup.
     // Explicit development identity remains valid for diagnostic runs; signed
@@ -1559,7 +1563,11 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
         }, &epoch_trust)?;
-        maintenance = Some(epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?);
+        maintenance = Some(match driver {
+            epoch_maintenance::Driver::Finite => epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?,
+            #[cfg(target_os = "linux")]
+            epoch_maintenance::Driver::Supervised => epoch_maintenance::Maintenance::start_supervisor(&cli, &kagami, &prepared, epoch_trust, build_identity)?,
+        });
         let maintenance_deadline = Instant::now() + PHASE_BUDGET;
         let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(maintenance_deadline).await?;
         wait_for_exact_height(&clients, 10, maintenance_deadline).await?;

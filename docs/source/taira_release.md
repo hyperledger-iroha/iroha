@@ -361,17 +361,50 @@ provisioned trusted host dispatcher and reset guard remain prerequisites for
 ## Updating an initialized testnet
 
 For a routine update of the existing four-validator Taira installation, use the
-completed basic preparation directly:
+completed basic preparation in three explicit phases. First prepare the exact
+same-release binaries at the operation's immutable release path:
+
+    python3 scripts/taira_update.py \
+      --prepare-artifacts \
+      --deployment /absolute/owner-private/taira/deployment.json \
+      --prepared-result /absolute/completed-preparation/result.json \
+      --operation update-0123456789abcdef0123456789abcdef \
+      --output /absolute/owner-private/taira/artifact-output
+
+Then invoke that admitted candidate `bin/iroha` to materialize the immutable
+supervisor generation. The preparation wrapper binds the same operation, original
+and desired service states, original and actually installed unit bindings, and
+successor policy/unit/custody. Its required `original_seed_sources` contains four
+exact sorted `{validator, path}` references to the original validator seed files.
+The native helper retains those exact bytes; it never generates replacement
+seeds. Existing generations may select the already retained original files. The
+operator supplies already-open administrator and HTTP private input descriptors;
+Python does not read or hash any credential or seed contents:
+
+    /absolute/runtime/release-COMMIT-update-0123456789abcdef0123456789abcdef/bin/iroha \
+      taira public-reset epoch-supervisor-host materialize \
+      --wrapper /absolute/owner-private/taira/epoch-generation-preparation.json \
+      --administrator-config-fd ADMIN_FD --http-operator-key-fd HTTP_FD \
+      --timeout-ms 90000
+
+Bind the returned exact public provisioning receipt reference into the final
+supervisor wrapper. Apply the reviewed transition using the same operation:
 
     python3 scripts/taira_update.py \
       --deployment /absolute/owner-private/taira/deployment.json \
       --prepared-result /absolute/completed-preparation/result.json \
+      --operation update-0123456789abcdef0123456789abcdef \
+      --supervisor-plan /absolute/owner-private/taira/epoch-supervisor-update.json \
       --output /absolute/owner-private/taira/update-output
 
 The deployment record contains the approved SSH route and public host-key pins,
 network and directory identities, and the exact completed predecessor receipt.
-Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
-preserves configuration, signer custody and ledger state, and verifies native
+Keep it outside Git. Artifact preparation creates the exact same-release daemon,
+CLI and Kagami from the maintained four-artifact preparation without overwriting
+existing files. Apply requires all three already provisioned files and rechecks
+their exact native digests, size, source and root-owned mode0755 custody; it never
+creates a missing binary as a fallback. It preserves
+configuration, signer custody and ledger state, and verifies native
 Strict snapshot restoration and public basic health. It does not invoke Cargo.
 All four validators must prove the candidate identity and restore their own stopped
 retained tips. Every overlapping stopped prefix is checked before startup. Two
@@ -384,6 +417,35 @@ Identity, hash, malformed response, and process failures stop immediately; only
 declared startup transport failures and HTTP 503 are polled. An idle chain does
 not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
+The operation is explicit and determines the immutable candidate binary paths;
+there is no random operation fallback. The required public supervisor wrapper
+binds the exact raw policy, current observation trust, custody references, fixed
+unit, same-release CLI/Kagami, and native provisioning receipt. Its original
+`before` binding and `original_service_state` remain immutable across recovery;
+`installed` separately records the unit actually published. The required
+`successor_service_state` preserves an existing running or stopped state and
+explicitly selects the first-install state when the original was absent.
+
+The policy grants explicit ongoing `until_stopped` epoch maintenance; a finite
+reset lease does not grant this authority. The administrator is a separately
+provisioned genesis-authorized client, distinct from canary and HTTP identities.
+Only the native `public-reset epoch-supervisor-host materialize` boundary consumes
+inherited administrator-config and HTTP-operator-key descriptors or seed custody.
+Python handles public bindings and receipts only. Existing original trust and
+once-per-epoch journals remain unchanged.
+
+The updater holds `/var/lib/taira-epoch-supervisor/.deployment.lock` throughout
+the transition and rejects any retained `.reset-owner.json` without clearing it.
+It journals the supervisor pause before stopping any validator and retains a
+native journal-lock child across validator replacement and qualification. An
+ambiguous pause or partial validator stop admits read-only reconciliation only.
+After a confirmed stop, pre-start failure leaves both services paused; after
+candidate start, failure contains the candidate validators and supervisor even
+if evidence publication fails. The native journal guard is released immediately
+before an explicitly authorized supervisor start. A running successor succeeds
+only after native `supervisor-status` authenticates initial and current epoch
+completion for the same policy and unchanged live worker and manager identity;
+a stale receipt or active unit alone is insufficient. Stopped intent stays stopped.
 
 After all four stopped checkpoints are recorded, the matching candidate CLI runs
 `iroha taira stopped-owner-maintenance` once before unit replacement or startup.

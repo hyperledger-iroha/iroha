@@ -2952,13 +2952,55 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                 })?;
         self.open_owner_with_authority(authority, payload_store, serve_payloads, adapter_startup)
     }
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_production_owner_with_pending_apply(
+        self,
+        config: &SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
+        pending_apply: Option<super::PendingKuraApplyComparisonV1>,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleStartupErrorV1> {
+        let authority =
+            authority::production_authority(&self.verified, config, reply_route_source_capacity)
+                .ok_or_else(|| {
+                    ProductionLifecycleStartupErrorV1::new(
+                        ProductionLifecycleStartupErrorKindV1::InvalidAuthority,
+                    )
+                })?;
+        self.open_owner_with_authority_and_pending_apply(
+            authority,
+            payload_store,
+            serve_payloads,
+            adapter_startup,
+            pending_apply,
+        )
+    }
     #[allow(clippy::result_large_err)]
     fn open_owner_with_authority(
+        self,
+        authority: super::authority::AuthenticatedEpisodeAuthority,
+        payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleStartupErrorV1> {
+        self.open_owner_with_authority_and_pending_apply(
+            authority,
+            payload_store,
+            serve_payloads,
+            adapter_startup,
+            None,
+        )
+    }
+    #[allow(clippy::result_large_err)]
+    fn open_owner_with_authority_and_pending_apply(
         self,
         authority: super::authority::AuthenticatedEpisodeAuthority,
         mut payload_store: CertifiedServePayloadStoreV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         adapter_startup: ProductionLifecycleAdapterStartupV1,
+        pending_apply: Option<super::PendingKuraApplyComparisonV1>,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleStartupErrorV1> {
         if !self.is_exact() {
             return Err(ProductionLifecycleStartupErrorV1::new(
@@ -3025,7 +3067,7 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                 ledger,
                 serve_payloads,
                 &mut body_store,
-                body_pipeline,
+                body_pipeline.with_pending_kura_apply(pending_apply),
             )
             .map_err(|error| {
                 ProductionLifecycleStartupErrorV1::new(
@@ -3189,6 +3231,31 @@ impl ProductionLifecycleOwnerV1 {
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         adapter_startup: ProductionLifecycleAdapterStartupV1,
     ) -> Result<Self, ProductionLifecycleStartupErrorV1> {
+        Self::open_storage_only_recovered_startup_with_pending_apply(
+            verified,
+            ledger_root,
+            body_store,
+            config,
+            reply_route_source_capacity,
+            payload_store,
+            serve_payloads,
+            adapter_startup,
+            None,
+        )
+    }
+    /// Open native interrupted-tip recovery while retaining its exact passive Apply row.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn open_storage_only_recovered_startup_with_pending_apply(
+        verified: VerifiedHeightContext,
+        ledger_root: &Path,
+        body_store: V2BodyStore,
+        config: &SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
+        pending_apply: Option<super::PendingKuraApplyComparisonV1>,
+    ) -> Result<Self, ProductionLifecycleStartupErrorV1> {
         let context = projection::lifecycle_context(verified.context());
         let (ledger_store, ledger) =
             LifecycleLedgerStoreV1::open(ledger_root, context).map_err(|error| {
@@ -3207,12 +3274,13 @@ impl ProductionLifecycleOwnerV1 {
                     ProductionLifecycleStartupErrorKindV1::BodyPipeline(error),
                 )
             })?;
-        storage.open_production_owner(
+        storage.open_production_owner_with_pending_apply(
             config,
             reply_route_source_capacity,
             payload_store,
             serve_payloads,
             adapter_startup,
+            pending_apply,
         )
     }
     /// Repair/coalesce and open one exact Proposal/Timeout control Sign.
