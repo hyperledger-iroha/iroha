@@ -9,9 +9,16 @@ fn exact_install_borrow_and_take_are_one_shot() {
     let lease = lease(owner, 1, slot, digest);
     let expected = work.effect().clone();
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-    registry
-        .install(address, digest, work)
-        .expect("install exact work");
+    let result = registry.install(address, digest, Box::new(work));
+    assert!(
+        std::mem::size_of_val(&result) <= 128,
+        "installation errors must not move complete carriers on the stack"
+    );
+    assert!(
+        std::mem::size_of::<RegistryPublicationError<()>>() <= 128,
+        "publication errors must retain heap ownership of their carriers"
+    );
+    result.expect("install exact work");
     assert_eq!(registry.borrow_for_lease(&lease, slot), Ok(&expected));
     let taken = registry
         .take_for_lease(&lease, slot)
@@ -19,7 +26,7 @@ fn exact_install_borrow_and_take_are_one_shot() {
     assert_eq!(taken.effect(), &expected);
     assert!(taken.validate_exact());
     registry
-        .install(address, digest, taken)
+        .install(address, digest, Box::new(taken))
         .expect("restore the complete token after a deferred outcome");
     assert_eq!(registry.borrow_for_lease(&lease, slot), Ok(&expected));
     let retired = registry
@@ -42,7 +49,7 @@ fn certified_fetch_execution_rejects_unclosed_or_inexact_leases_without_mutation
     let address = ConcreteWorkAddress::new(owner, 0x31, slot).expect("valid exact address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, digest, work)
+        .install(address, digest, Box::new(work))
         .expect("install still-pending work");
     let store_lease = lease(owner, 0x31, slot, digest);
     assert!(matches!(
@@ -90,9 +97,12 @@ fn installation_unwind_removes_unpublished_work() {
     let address = ConcreteWorkAddress::new(owner, 0x21, slot).expect("valid address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     let unwind = catch_unwind(AssertUnwindSafe(|| {
-        let _ = registry.install_before_publication(address, digest, work, || -> Result<(), ()> {
-            panic!("injected admission publication unwind")
-        });
+        let _ = registry.install_before_publication(
+            address,
+            digest,
+            Box::new(work),
+            || -> Result<(), ()> { panic!("injected admission publication unwind") },
+        );
     }));
     assert!(unwind.is_err());
     assert!(registry.is_empty());
@@ -107,11 +117,11 @@ fn mismatches_and_duplicates_never_remove_or_overwrite() {
     let exact_lease = lease(admitted, 2, slot, digest);
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, digest, first)
+        .install(address, digest, Box::new(first))
         .expect("install first work");
     let duplicate = concrete(effect(3), 93);
     assert!(matches!(
-        registry.install(address, duplicate.digest, duplicate),
+        registry.install(address, duplicate.digest, Box::new(duplicate)),
         Err((RegistryError::Occupied, _))
     ));
     assert_eq!(registry.len(), 1);
@@ -161,10 +171,10 @@ fn physical_digest_does_not_alias_distinct_logical_addresses() {
     let second_address = ConcreteWorkAddress::new(shared_owner, 5, slot).expect("second address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(first_address, digest, first)
+        .install(first_address, digest, Box::new(first))
         .expect("install first logical address");
     registry
-        .install(second_address, digest, second)
+        .install(second_address, digest, Box::new(second))
         .expect("install second logical address");
     assert_eq!(registry.len(), 2);
 }
@@ -177,7 +187,7 @@ fn install_rejects_a_foreign_causal_owner_without_consuming_work() {
         .expect("syntactically valid foreign address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     let returned = registry
-        .install(address, digest, work)
+        .install(address, digest, Box::new(work))
         .expect_err("causal owner mismatch must fail closed");
     assert_eq!(returned.0, RegistryError::CausalOwnerMismatch);
     assert!(returned.1.validate_exact());
@@ -198,7 +208,7 @@ fn exact_replacement_commits_or_restores_the_incumbent_atomically() {
     let address = ConcreteWorkAddress::new(owner, 11, slot).expect("valid address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, incumbent_digest, incumbent)
+        .install(address, incumbent_digest, Box::new(incumbent))
         .expect("install replacement incumbent");
     let error = registry
         .replace_before_publication(
@@ -244,7 +254,7 @@ fn replacement_unwind_restores_the_incumbent() {
     let address = ConcreteWorkAddress::new(owner, 13, slot).expect("valid address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, incumbent_digest, incumbent)
+        .install(address, incumbent_digest, Box::new(incumbent))
         .expect("install unwind incumbent");
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         let _ = registry.replace_before_publication(
@@ -271,7 +281,7 @@ fn replacement_validation_never_changes_the_incumbent() {
     let address = ConcreteWorkAddress::new(incumbent_owner, 12, slot).expect("valid address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, incumbent_digest, incumbent)
+        .install(address, incumbent_digest, Box::new(incumbent))
         .expect("install validation incumbent");
     let wrong_digest = LifecycleDigest::new([0xFF; 32]);
     let error = registry
@@ -595,9 +605,28 @@ fn recovered_single_child_transitions_store_only_exact_staged_bound_successors()
 
 #[test]
 fn registry_entries_bound_inline_carrier_storage() {
-    // A large retained Apply or Broadcast must not inflate every BTree row.
-    // The genuine nonzero-view restart test exercises publication on the
-    // default libtest stack; this bound also catches future layout regressions.
+    // Measure the installed value, not just the carrier: even a bounded
+    // carrier can exhaust the stack when a BTree operation moves node arrays.
+    let work = concrete(effect(0x71), 0x71);
+    let digest = work.digest();
+    let owner = admitted_owner(&work, 0x71);
+    let slot = super::super::PhysicalSlotId::for_capacity(super::super::CapacityClass::Effect, 0);
+    let address = ConcreteWorkAddress::new(owner, 0x71, slot).expect("valid address");
+    let mut registry = ConcreteLifecycleWorkRegistry::default();
+    registry
+        .install(address, digest, Box::new(work))
+        .expect("install exact work");
+    let stored = registry
+        .entries
+        .get(&address)
+        .expect("installed registry row");
+    assert_eq!(
+        std::mem::size_of_val(stored),
+        std::mem::size_of::<usize>(),
+        "BTree rows must retain only a pointer to their move-only work"
+    );
+
+    // The largest individual lineages also stay outside the carrier itself.
     let inline = std::mem::size_of::<ConcreteLifecycleWork>();
     let broadcast = std::mem::size_of::<DurableRecoveredLifecycleSignedBroadcastWork>();
     let apply = std::mem::size_of::<DurableRecoveredDecisionApplyWork>();

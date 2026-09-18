@@ -339,7 +339,7 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
         } = self;
         let ExecutedDurableValidateDispatch { executed, wake } = dispatch;
         let ExecutedDurableValidateExecution { request, outcome } = executed;
-        let Some(incumbent) = registry.entries.remove(&authority.address) else {
+        let Some(mut row) = registry.entries.remove(&authority.address) else {
             return Err((
                 DurableValidateCompletionPublicationError::Registry(
                     DurableValidateCompletionConversionError::Execution(
@@ -355,17 +355,15 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
         let ConcreteLifecycleWork {
             digest: incumbent_digest,
             kind,
-        } = incumbent;
+        } = *row;
         let incumbent = match kind {
             ConcreteLifecycleWorkKind::DurableValidateBody(incumbent) => incumbent,
             kind => {
-                let _ = registry.entries.insert(
-                    authority.address,
-                    ConcreteLifecycleWork {
-                        digest: incumbent_digest,
-                        kind,
-                    },
-                );
+                *row = ConcreteLifecycleWork {
+                    digest: incumbent_digest,
+                    kind,
+                };
+                let _ = registry.entries.insert(authority.address, row);
                 return Err((
                     DurableValidateCompletionPublicationError::Registry(
                         DurableValidateCompletionConversionError::Execution(
@@ -389,7 +387,8 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
             digest: replacement_digest,
             kind: ConcreteLifecycleWorkKind::DurableValidateCompletion(completion),
         };
-        let displaced = registry.entries.insert(authority.address, installed);
+        *row = installed;
+        let displaced = registry.entries.insert(authority.address, row);
         let staged = StagedDurableValidateCompletion {
             rollback: ArmedDurableValidateRollback {
                 entries: &mut registry.entries,
@@ -422,7 +421,7 @@ impl ArmedDurableValidateRollback<'_> {
         self.armed = false;
         let request = self.request.take();
         let wake = self.wake.take();
-        let Some(installed) = self.entries.remove(&self.address) else {
+        let Some(mut row) = self.entries.remove(&self.address) else {
             drop(request);
             drop(wake);
             return None;
@@ -430,17 +429,15 @@ impl ArmedDurableValidateRollback<'_> {
         let ConcreteLifecycleWork {
             digest: replacement_digest,
             kind,
-        } = installed;
+        } = *row;
         let completion = match kind {
             ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => completion,
             kind => {
-                let _ = self.entries.insert(
-                    self.address,
-                    ConcreteLifecycleWork {
-                        digest: replacement_digest,
-                        kind,
-                    },
-                );
+                *row = ConcreteLifecycleWork {
+                    digest: replacement_digest,
+                    kind,
+                };
+                let _ = self.entries.insert(self.address, row);
                 drop(request);
                 drop(wake);
                 return None;
@@ -452,13 +449,11 @@ impl ArmedDurableValidateRollback<'_> {
             incumbent_digest,
             outcome,
         } = completion;
-        let _ = self.entries.insert(
-            address,
-            ConcreteLifecycleWork {
-                digest: incumbent_digest,
-                kind: ConcreteLifecycleWorkKind::DurableValidateBody(incumbent),
-            },
-        );
+        *row = ConcreteLifecycleWork {
+            digest: incumbent_digest,
+            kind: ConcreteLifecycleWorkKind::DurableValidateBody(incumbent),
+        };
+        let _ = self.entries.insert(address, row);
         let (Some(request), Some(wake)) = (request, wake) else {
             return None;
         };
@@ -708,7 +703,7 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
             &self.authenticated_responder,
             &self.durable_receipt,
         ));
-        let incumbent = self
+        let mut row = self
             .registry
             .entries
             .remove(&address)
@@ -716,7 +711,7 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
         let ConcreteLifecycleWork {
             digest: incumbent_digest,
             kind,
-        } = incumbent;
+        } = *row;
         let ConcreteLifecycleWorkKind::PendingAdapter {
             effect: incumbent_effect,
             pending: incumbent_pending,
@@ -740,8 +735,9 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
             kind: ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion),
         };
         assert!(installed.validate_exact());
+        *row = installed;
         assert!(
-            self.registry.entries.insert(address, installed).is_none(),
+            self.registry.entries.insert(address, row).is_none(),
             "removed completion address remains vacant until same-address install"
         );
     }

@@ -25148,6 +25148,9 @@ fn normalize_proxied_transaction_submission_response(
     response
 }
 #[cfg(feature = "connect")]
+mod threshold_key_lifecycle_ingress;
+
+#[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>,
@@ -25164,11 +25167,9 @@ async fn execute_torii_transaction_via_proxy(
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
     if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return torii_proxy_error_response(
-            StatusCode::CONFLICT,
-            "queue_plan_admission_intent_mismatch",
-            "public transaction submission requires a signature-bound QueuePlanSynced admission intent",
-        );
+        return threshold_key_lifecycle_ingress::submit(
+            app.clone(), accepted_transaction, routing_plan, minimal_response, format,
+        ).await;
     }
     // An ordinary durable ingress/gossip claim deliberately has no global identity yet. It is
     // not a public QueuePlanSynced retry: construct the canonical global binding below and let

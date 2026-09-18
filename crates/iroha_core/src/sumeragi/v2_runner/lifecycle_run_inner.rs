@@ -1626,8 +1626,24 @@ fn run_lifecycle_active_height(
                         &mut lane_work,
                         npos_beacon,
                         retransmit_interval,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        iroha_logger::error!(
+                            ?error,
+                            height = context.height,
+                            "Sumeragi v2 local proposal scheduling failed closed"
+                        );
+                        error
+                    })?;
                     dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                        .map_err(|error| {
+                            iroha_logger::error!(
+                                ?error,
+                                height = context.height,
+                                "Sumeragi v2 post-proposal lane output dispatch failed closed"
+                            );
+                            error
+                        })
                 },
             );
             if let Err(error) = scheduled {
@@ -1896,8 +1912,9 @@ fn run_lifecycle_active_height(
                         receiver,
                         ingress_snapshot.oldest_age,
                         ingress_snapshot.service_idle_age,
-                        last_advance_executor_yield
-                            .map(|(phase, reason, at)| (phase, reason, now.saturating_duration_since(at))),
+                        last_advance_executor_yield.map(|(phase, reason, at)| {
+                            (phase, reason, now.saturating_duration_since(at))
+                        }),
                     );
                 }
                 activated.with_runner_runtime(
@@ -1981,29 +1998,34 @@ fn run_lifecycle_active_height(
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }
-                let (drained_terminal_ingress, drained_terminal_relay) = activated.with_runner_runtime(
-                    &mut active_runner,
-                    |_owner, executor, services, _local_proposal| {
-                        let drained = drain_decided_lane_recovery_ingress(
-                            receiver,
-                            executor,
-                            services,
-                            &mut lane_work,
-                            executor.current_tag().view(),
-                            kura.as_ref(),
-                            block_sync_server,
-                            DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
-                        )?;
-                        let drained_relay = drain_finalized_lane_relay_prefix(
-                            lane_relay_rx,
-                            &mut lane_work,
-                            executor.current_tag().view(),
-                            control_queue_capacity,
-                        );
-                        dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                        Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
-                    },
-                )?;
+                let (drained_terminal_ingress, drained_terminal_relay) = activated
+                    .with_runner_runtime(
+                        &mut active_runner,
+                        |_owner, executor, services, _local_proposal| {
+                            let drained = drain_decided_lane_recovery_ingress(
+                                receiver,
+                                executor,
+                                services,
+                                &mut lane_work,
+                                executor.current_tag().view(),
+                                kura.as_ref(),
+                                block_sync_server,
+                                DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+                            )?;
+                            let drained_relay = drain_finalized_lane_relay_prefix(
+                                lane_relay_rx,
+                                &mut lane_work,
+                                executor.current_tag().view(),
+                                control_queue_capacity,
+                            );
+                            dispatch_lane_work_effects(
+                                &mut lane_work,
+                                services,
+                                control_queue_capacity,
+                            )?;
+                            Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
+                        },
+                    )?;
                 let cut = terminal_finalization_cut
                     .as_ref()
                     .expect("rollover-ready closure authenticated the terminal cut above");
@@ -2321,9 +2343,9 @@ pub(super) fn run_non_pending_lifecycle_loop(
             local_validator,
             global_beacon_partial_signer.as_deref(),
         );
-        let mut npos_beacon = V2GlobalBeaconLifecycle::open(
+        let mut npos_beacon = V2GlobalBeaconLifecycle::open_deferred(
             &context,
-            state.as_ref(),
+            Arc::clone(&state),
             local_validator,
             global_beacon_partial_signer.clone(),
         )

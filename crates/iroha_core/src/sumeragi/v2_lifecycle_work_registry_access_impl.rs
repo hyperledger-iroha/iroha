@@ -37,7 +37,7 @@ impl ConcreteLifecycleWorkRegistry {
         {
             return Err(RegistryError::WrongWorkKind);
         }
-        Ok(self
+        Ok(*self
             .entries
             .remove(&address)
             .expect("validated lease address remains present"))
@@ -58,7 +58,7 @@ impl ConcreteLifecycleWorkRegistry {
         if work.digest != expected_digest {
             return Err(RegistryError::DigestMismatch);
         }
-        Ok(self
+        Ok(*self
             .entries
             .remove(&address)
             .expect("validated rollback address remains present"))

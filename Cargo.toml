@@ -408,6 +408,14 @@ opt-level = 3
 [profile.test.package.blake2]
 opt-level = 3
 
+# The native faucet solver executes the configured memory-hard Scrypt puzzle.
+# Optimize its arithmetic in local profiles without changing work or deadlines.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.test.package.scrypt]
+opt-level = 3
+
 # Four-peer native consensus profiling found BLS signing and verification in
 # unoptimized field arithmetic. Optimize the concrete crypto instantiations and
 # their arithmetic dependencies in both runnable profiles, retaining assertions

@@ -22,7 +22,23 @@ CAPACITY = SCRIPT.with_name("taira_disk_capacity.py")
 SPEC_CAPACITY = importlib.util.spec_from_file_location("retry_capacity_test", CAPACITY)
 capacity = importlib.util.module_from_spec(SPEC_CAPACITY)
 SPEC_CAPACITY.loader.exec_module(capacity)
+UNIT_RENDERER_PATH = SCRIPT.with_name("taira_validator_unit.py")
+UNIT_RENDERER = {"__name__": "reviewed_unit_fixture", "__file__": str(UNIT_RENDERER_PATH)}
+exec(compile(UNIT_RENDERER_PATH.read_bytes(), str(UNIT_RENDERER_PATH), "exec"), UNIT_RENDERER)
 OPERATOR_PUBLIC_KEY = "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
+
+
+def beacon_input_fixture(draft):
+    return {
+        "schema": "iroha.taira.public-reset.beacon-inputs.v1",
+        "authorization_nonce": draft["authorization_nonce"],
+        "request": {"native_public_request": "opaque to Python"},
+        "final_units": [{
+            "validator": row["slug"], "signer_index": seat,
+            "credential_path": f"/var/lib/taira/.public-reset-control-v1/beacon/{draft['authorization_nonce']}/ceremony/seat-{seat}/iroha-global-beacon-partial-signer-v1.norito",
+            "config_file": "beacon.toml",
+        } for row, seat in zip(draft["validators"], [3, 1, 4, 2])],
+    }
 
 
 def artifact_receipts():
@@ -300,9 +316,10 @@ class RetryTests(unittest.TestCase):
         with self.assertRaises(retry.RetryError):
             retry.public_record(fifo)
 
-    def test_fresh_inventory_changes_only_attempt_and_nonce(self):
+    def test_fresh_inventory_rederives_beacon_plan_for_new_attempt_and_nonce(self):
         previous = {
             "deployment_id": "retained",
+            "beacon_bootstrap": {"old_signed_session": "must not enter unsigned draft"},
             "qualification_scope": "core_testnet",
             "inrou_canary": None, "inrou_stage_tree_sha256": None,
             "operator_public_key": OPERATOR_PUBLIC_KEY,
@@ -316,6 +333,7 @@ class RetryTests(unittest.TestCase):
             ],
         }
         expected = copy.deepcopy(previous)
+        expected.pop("beacon_bootstrap")
         actual = retry.fresh_inventory(
             previous, "retry-1788850000000000000-1234abcd", "1" * 32
         )
@@ -1014,6 +1032,183 @@ class RetryTests(unittest.TestCase):
         )
 
 
+class BeaconArgumentTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.reads = []
+        self.counter = 0
+        self.renderer = self.root / "renderer.py"
+        self.renderer.write_bytes(UNIT_RENDERER_PATH.read_bytes())
+        self.plan = {"unit_renderer": {"path": str(self.renderer), "sha256": retry.hashlib.sha256(self.renderer.read_bytes()).hexdigest()}}
+        self.draft = {"authorization_nonce": "1" * 32, "validators": []}
+        self.arguments = {"--validator-unit": []}
+        for index in range(1, 5):
+            role = f"taira-validator-{index}"
+            path = self.root / ("iroha3d-" + role + ".service")
+            raw = UNIT_RENDERER["render"](role, f"/unread/{index}.key", f"/unread/{index}.seed").encode()
+            path.write_bytes(raw)
+            self.arguments["--validator-unit"].append(str(path))
+            self.draft["validators"].append({"slug": role, "systemd_unit": path.name, "systemd_unit_sha256": retry.hashlib.sha256(raw).hexdigest()})
+        self.static = ["--public-inputs", "/retained/public-inputs", "--validator-unit", *self.arguments["--validator-unit"]]
+        real_read = retry.public_record
+        def public_read(path, expected=None, **kwargs):
+            self.reads.append(Path(path))
+            kwargs.pop("owner", None)  # Fixture files belong to the local test runner.
+            return real_read(path, expected, **kwargs)
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(retry, "public_record", side_effect=public_read))
+        self.stack.enter_context(mock.patch.object(retry, "_continuity_read", side_effect=lambda path, limit=1024*1024, expected=None: public_read(path, expected, limit=limit)))
+
+    def prepare(self, change=None):
+        self.counter += 1
+        assembly = self.root / str(self.counter)
+        assembly.mkdir(mode=0o700)
+        value = beacon_input_fixture(self.draft)
+        if change:
+            change(value)
+        def native(argv, directory, *, phase):
+            self.assertEqual(phase, "prepare-beacon-inputs")
+            self.assertEqual(argv[3], "prepare-beacon-inputs")
+            self.assertEqual(argv[argv.index("--public-inputs") + 1], assembly / "public-inputs")
+            retry.write_public(Path(argv[argv.index("--output") + 1]), value)
+        with mock.patch.object(retry, "run_native", side_effect=native):
+            derived = retry.prepare_beacon_arguments(["/native/iroha", "taira", "public-reset"], assembly, self.plan, self.static, self.arguments, self.draft, assembly / "native")
+        return assembly, derived, value
+
+    def test_native_nonce_seat_map_renders_exact_four_units_without_private_reads(self):
+        original = list(self.static)
+        assembly, derived, value = self.prepare()
+        self.assertEqual(self.static, original)
+        self.assertEqual(derived[1], str(assembly / "public-inputs"))
+        self.assertEqual(json.loads((assembly / "native-assembly-args.json").read_bytes()), derived)
+        paths = derived[derived.index("--beacon-validator-unit") + 1:]
+        self.assertEqual(len(paths), 4)
+        for index, (path, row) in enumerate(zip(paths, value["final_units"]), 1):
+            expected = UNIT_RENDERER["render"](row["validator"], f"/unread/{index}.key", f"/unread/{index}.seed", row["credential_path"], config_file="beacon.toml")
+            self.assertEqual(Path(path).read_text(), expected)
+            self.assertEqual(Path(path).stat().st_mode & 0o777, 0o644)
+        self.assertEqual(set(self.reads), {self.renderer, assembly / "beacon-inputs.json", *(Path(p) for p in self.arguments["--validator-unit"])})
+        self.assertFalse(any(str(path).startswith("/unread/") for path in self.reads))
+
+    def test_native_output_rejects_wrong_nonce_duplicate_seat_role_path_and_config(self):
+        mutations = [
+            lambda v: v.update(authorization_nonce="2" * 32),
+            lambda v: v.update(schema="old"),
+            lambda v: v.update(extra="ambiguous"),
+            lambda v: v["final_units"].pop(),
+            lambda v: v["final_units"][0].update(signer_index=True),
+            lambda v: v["final_units"][0].update(signer_index=v["final_units"][1]["signer_index"]),
+            lambda v: v["final_units"][0].update(validator="taira-validator-2"),
+            lambda v: v["final_units"][0].update(credential_path="/foreign/credential"),
+            lambda v: v["final_units"][0].update(config_file="../config.toml"),
+        ]
+        for change in mutations:
+            with self.subTest(change=change), self.assertRaises(retry.RetryError):
+                self.prepare(change)
+            self.assertFalse((self.root / str(self.counter) / "beacon-units").exists())
+
+    def test_initial_unit_and_renderer_bytes_must_match_pins(self):
+        self.plan["unit_renderer"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(retry.RetryError, "digest"):
+            self.prepare()
+        self.plan["unit_renderer"]["sha256"] = retry.hashlib.sha256(self.renderer.read_bytes()).hexdigest()
+        initial = Path(self.arguments["--validator-unit"][0])
+        initial.write_bytes(initial.read_bytes() + b"# unexpected edit\n")
+        with self.assertRaisesRegex(retry.RetryError, "digest"):
+            self.prepare()
+        self.draft["validators"][0]["systemd_unit_sha256"] = retry.hashlib.sha256(initial.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(RuntimeError, "exact reviewed"):
+            self.prepare()
+
+    def test_apply_arguments_exclude_all_assembly_only_inputs_in_both_scopes(self):
+        inputs = {flag: ["/path/" + flag[2:]] for flag in (
+            "--runtime-client-config", "--validator-client-config", "--validator-operator-key",
+            "--onboarding-token", "--inrou-stage-dir", "--public-inputs", "--validator-unit",
+            "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
+        for scope in ("core_testnet", "full_inrou"):
+            result = retry.apply_arguments(inputs, scope)
+            self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
+            for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
+                self.assertNotIn(flag, result)
+
+
+class BeaconCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.assembly = Path("/runtime/retry-v1/attempt/assembly")
+        self.before = {"inventory_sha256": "a" * 64, "nodes": []}
+        self.frontier = {"inventory_sha256": "a" * 64, "authorization_sha256": "b" * 64}
+        self.inventory = {"authorization_nonce": "1" * 32, "validators": [], "validator_clients": [],
+                          "beacon_bootstrap": {"request": {"dkg_session": {"session_id": [7] * 32}}, "final_units": []}}
+        self.markers = {}
+        for index in range(1, 5):
+            role = f"taira-validator-{index}"
+            unit = f"iroha3d-{role}.service"
+            original = f"/srv/taira/{role}/releases/commit/config/config.toml"
+            argv = [f"/srv/taira/{role}/current/bin/iroha3d_taira", "--config", f"/srv/taira/{role}/current/config/config.toml", "--sora"]
+            self.inventory["validators"].append({"slug": role, "systemd_unit": unit,
+                "artifacts": [{"role": "config", "remote_path": original, "sha256": "c" * 64}]})
+            self.inventory["validator_clients"].append({"slug": role, "peer_id": f"peer-{index}"})
+            self.inventory["beacon_bootstrap"]["final_units"].append({"validator": role, "sha256": "d" * 64})
+            self.before["nodes"].append({"peer_id": f"peer-{index}", "systemd_unit": unit,
+                "unit_sha256": "e" * 64, "config_sha256": "c" * 64, "seed_file": {"inode": index},
+                "seed_fd": 199, "node_fingerprint": f"node-{index}",
+                "binding": {"config_path": original, "config_sha256": "c" * 64,
+                            "config_files": [{"path": original, "sha256": "c" * 64}], "argv": argv}})
+            self.markers[role] = {"schema": "iroha.taira.public-reset.beacon-provider-active.v1",
+                "authorization_sha256": "b" * 64, "bundle_sha256": "f" * 64,
+                "validator": role, "session_id": [7] * 32, "config_sha256": "9" * 64, "unit_sha256": "d" * 64}
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.completed = self.stack.enter_context(mock.patch.object(retry, "completed_attempt", return_value={"inventory": self.inventory}))
+        self.reads = []
+        def public_read(path, *args, **kwargs):
+            self.reads.append(str(path))
+            if Path(path).name == "apply-started.json":
+                return json.dumps(self.frontier).encode()
+            self.assertEqual(Path(path).parent, Path("/var/lib/taira/.public-reset-control-v1/beacon") / ("1" * 32))
+            role = Path(path).name.removesuffix(".active.json")
+            return json.dumps(self.markers[role]).encode()
+        self.stack.enter_context(mock.patch.object(retry, "public_record", side_effect=public_read))
+
+    def test_completed_native_activation_changes_only_authenticated_process_binding(self):
+        original = copy.deepcopy(self.before)
+        rows = retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+        self.completed.assert_called_once_with({"runtime_root": "/runtime"}, self.assembly.parent, required=True)
+        self.assertEqual(self.before, original)
+        for old, row in zip(original["nodes"], rows):
+            self.assertEqual(row["seed_file"], old["seed_file"])
+            self.assertEqual(row["seed_fd"], 199)
+            self.assertEqual(row["node_fingerprint"], old["node_fingerprint"])
+            self.assertEqual(row["unit_sha256"], "d" * 64)
+            self.assertEqual(row["config_sha256"], "9" * 64)
+            self.assertTrue(row["binding"]["config_path"].endswith("/beacon.toml"))
+            self.assertTrue(row["binding"]["argv"][2].endswith("/beacon.toml"))
+        self.assertFalse(any(path.endswith(".toml") for path in self.reads))
+
+    def test_marker_cannot_authorize_without_exact_native_completion(self):
+        self.completed.side_effect = retry.RetryError("exact native completed receipt is missing")
+        with self.assertRaisesRegex(retry.RetryError, "completed receipt"):
+            retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+        self.assertEqual(self.reads, [])
+
+    def test_projection_rejects_foreign_authorization_session_unit_bundle_and_inventory(self):
+        for field, value in (("authorization_sha256", "0" * 64), ("session_id", [8] * 32),
+                             ("unit_sha256", "0" * 64), ("bundle_sha256", "0" * 64),
+                             ("validator", "foreign"), ("config_sha256", "invalid")):
+            with self.subTest(field=field):
+                saved = copy.deepcopy(self.markers)
+                self.markers["taira-validator-2"][field] = value
+                with self.assertRaises(retry.RetryError):
+                    retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+                self.markers = saved
+        self.frontier["inventory_sha256"] = "0" * 64
+        with self.assertRaisesRegex(retry.RetryError, "pre-start inventory"):
+            retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+
+
 class CoreScopeTests(unittest.TestCase):
     def test_scope_steps_match_native_preseed_and_seal_boundaries(self):
         core = retry.qualification_steps("core_testnet")
@@ -1022,9 +1217,26 @@ class CoreScopeTests(unittest.TestCase):
         self.assertEqual(core, tuple(step for step in full if step != "preseed"))
         self.assertEqual((core[5], full[5], full[6]), ("start", "preseed", "start"))
         self.assertEqual((core[12], full[13]), ("seal", "seal"))
+        self.assertEqual(core[6:9], ("canary", "convergence", "restart_proof"))
+        self.assertEqual(full[7:10], core[6:9])
         for scope in (None, "inrou", "basic", "full", ""):
             with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
                 retry.qualification_steps(scope)
+
+    def test_journal_order_matches_native_execution_arrays_and_serialized_labels(self):
+        # This is a cross-language journal cursor contract: consume the native
+        # arrays and label mapping, so changing either producer fails here.
+        source = (SCRIPT.parents[1] / "crates/iroha_cli/src/taira_public_reset.rs").read_text()
+        label_start = source.index("impl ExecutionStep {")
+        label_end = source.index("\n    }", label_start)
+        labels = dict(retry.re.findall(r'Self::(\w+)\s*=>\s*"([a-z_]+)"', source[label_start:label_end]))
+        for scope, name in (("core_testnet", "CORE_TESTNET_EXECUTION_STEPS"), ("full_inrou", "FULL_INROU_EXECUTION_STEPS")):
+            match = retry.re.search(r"const " + name + r": \[ExecutionStep; (\d+)\] = \[(.*?)\];", source, retry.re.S)
+            self.assertIsNotNone(match, name)
+            variants = retry.re.findall(r"ExecutionStep::(\w+)", match.group(2))
+            self.assertEqual(len(variants), int(match.group(1)))
+            self.assertEqual(len(set(variants)), len(variants))
+            self.assertEqual(retry.qualification_steps(scope), tuple(labels[variant] for variant in variants))
 
     def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
         args = []
@@ -1159,10 +1371,15 @@ class WorkflowTests(unittest.TestCase):
                 f"/public-fixture/{flag.removeprefix('--')}-{i}" for i in range(count)
             ]
             if flag == "--validator-unit":
-                paths = [
-                    f"/units/{row['systemd_unit']}"
-                    for row in self.inventory["validators"]
-                ]
+                unit_root = self.root / "initial-units"
+                unit_root.mkdir(mode=0o700)
+                paths = []
+                for row in self.inventory["validators"]:
+                    path = unit_root / row["systemd_unit"]
+                    unit = UNIT_RENDERER["render"](row["slug"], "/private-fixture/" + row["slug"] + ".key", "/private-fixture/" + row["slug"] + ".seed").encode()
+                    path.write_bytes(unit)
+                    row["systemd_unit_sha256"] = retry.hashlib.sha256(unit).hexdigest()
+                    paths.append(str(path))
             if flag == "--known-hosts":
                 paths = ["/public-fixture/known_hosts"]
             args.extend([flag, *paths])
@@ -1190,6 +1407,7 @@ class WorkflowTests(unittest.TestCase):
             "expected_mac": "00:00:00:00:00:00",
             "capacity_plan": core_plan(),
         }
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
         self.request = {
             "intent": "deployment",
             "plan": self.plan,
@@ -1230,6 +1448,7 @@ class WorkflowTests(unittest.TestCase):
             )
         )
         self.stack.enter_context(mock.patch.object(retry, "emit"))
+        self.stack.enter_context(mock.patch.object(retry, "_continuity_load_public_module", return_value=UNIT_RENDERER))
         self.stack.enter_context(
             mock.patch.object(retry, "run_native", side_effect=self.native)
         )
@@ -1265,6 +1484,9 @@ class WorkflowTests(unittest.TestCase):
         self, argv, directory, *, phase, pass_fds=(), env=None, journal_path=None
     ):
         self.calls.append(phase)
+        if phase == "apply":
+            for forbidden in ("--beacon-inputs", "--beacon-validator-unit", "--beacon-genesis-manifest", "--public-inputs", "--validator-unit", "--edge-unit"):
+                self.assertNotIn(forbidden, argv)
         if phase in ("assemble", "apply"):
             self.assertEqual("--public-inputs" in argv, phase == "assemble")
             self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
@@ -1277,7 +1499,23 @@ class WorkflowTests(unittest.TestCase):
         if phase == self.fail_phase:
             self.fail_phase = None
             raise retry.RetryError("public injected native failure")
+        if phase == "prepare-public-inputs":
+            self.assertEqual(argv[argv.index("--localnet-dir") + 1], Path("/public-fixture/prep/network"))
+            self.assertNotIn("--canary-public-key", argv)
+            draft_path = Path(argv[argv.index("--inventory-draft") + 1])
+            self.assertEqual(draft_path.parent.name, "assembly")
+            self.assertNotIn("beacon_bootstrap", json.loads(draft_path.read_bytes()))
+            output = Path(argv[argv.index("--output-dir") + 1])
+            self.assertEqual(output.parent.name, "assembly")
+            self.assertFalse(output.exists())
+            output.mkdir(mode=0o700)
+        if phase == "prepare-beacon-inputs":
+            draft = json.loads(Path(argv[argv.index("--inventory-draft") + 1]).read_bytes())
+            self.assertNotIn("beacon_bootstrap", draft)
+            retry.write_public(Path(argv[argv.index("--output") + 1]), beacon_input_fixture(draft))
         if phase == "assemble":
+            self.assertIn("--beacon-inputs", argv)
+            self.assertIn("--beacon-validator-unit", argv)
             draft = json.loads(
                 Path(argv[argv.index("--inventory-draft") + 1]).read_bytes()
             )
@@ -1336,6 +1574,8 @@ class WorkflowTests(unittest.TestCase):
 
     def authorize(self, cli, assembly, args, plan, directory):
         self.calls.append("authorize")
+        self.assertEqual(args, json.loads((assembly / "native-assembly-args.json").read_bytes()))
+        self.assertNotIn("--beacon-inputs", json.loads((assembly / "native-local-args.json").read_bytes()))
         retry.write_public(
             assembly / "authorization.json", {"public_signature_fixture": True}
         )
@@ -1384,9 +1624,35 @@ class WorkflowTests(unittest.TestCase):
         attempt = Path(result["private_attempt"])
         self.assertTrue(result["passed"])
         self.assertTrue((attempt / "apply-started.json").exists())
-        self.assertEqual(self.calls, ["assemble", "authorize", "preflight", "apply"])
+        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs", "assemble", "authorize", "preflight", "apply"])
         self.assertEqual(result["completed"], list(retry.PHASES))
         self.assertEqual(result["qualification_scope"], "core_testnet")
+
+    def test_beacon_preparation_failure_stops_before_authorization_and_keeps_same_nonce(self):
+        self.fail_phase = "prepare-beacon-inputs"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        pointer = json.loads((self.attempts / "latest.json").read_bytes())
+        attempt = self.attempts / pointer["attempt_id"]
+        operation = (attempt / "operation.json").read_bytes()
+        self.assertEqual(json.loads((attempt / "failure.json").read_bytes())["phase"], "prepare-beacon-inputs")
+        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs"])
+        self.assertFalse((attempt / "apply-started.json").exists())
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(result["attempt_id"], pointer["attempt_id"])
+        self.assertEqual((attempt / "operation.json").read_bytes(), operation)
+        self.assertEqual(self.calls.count("apply"), 1)
+        self.assertEqual(len(list(attempt.glob("preapply-evidence-*"))), 1)
+
+    def test_fresh_native_public_bundle_failure_cannot_reuse_retained_bundle(self):
+        self.fail_phase = "prepare-public-inputs"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(self.calls, ["prepare-public-inputs"])
+        pointer = json.loads((self.attempts / "latest.json").read_bytes())
+        attempt = self.attempts / pointer["attempt_id"]
+        self.assertFalse((attempt / "assembly/native-assembly-args.json").exists())
+        self.assertFalse((attempt / "apply-started.json").exists())
 
     def test_missing_scope_stops_before_retirement_or_native_calls(self):
         del self.inventory["qualification_scope"]

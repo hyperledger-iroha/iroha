@@ -3,6 +3,11 @@
 
 The build identity is immutable; each attempt gets a fresh inventory and nonce.
 Native assemble/authorize/apply remain the authentication and execution authority.
+Native prepare-public-inputs binds the retained localnet and unsigned inventory to
+one fresh five-file public bundle. Native prepare-beacon-inputs derives each fresh
+nonce's request and seat paths; only the pinned renderer creates final FD200 units.
+Static retained path arguments and per-attempt derived assembly arguments have
+separate records. No prior four-file public bundle is accepted as the new closure.
 Runtime signing keys and peer configs are passed only to native code. This module
 also retains the locked operator-custody retirement, seed metadata continuity and
 boot publication checks used by the deployed corridor.
@@ -46,6 +51,8 @@ RESULT_SCHEMA = "taira.retry-result.v1"
 PROGRESS_SECONDS = 30
 PHASES = (
     "retire",
+    "prepare-public-inputs",
+    "prepare-beacon-inputs",
     "assemble",
     "seed-pre",
     "authorize",
@@ -143,12 +150,20 @@ def decode(raw):
 def write_public(path, value):
     """Publish one new private evidence record; previous attempts are never overwritten."""
     raw = (json.dumps(value, sort_keys=True) + "\n").encode()
+    return write_public_bytes(path, raw)
+
+
+def write_public_bytes(path, raw, *, mode=0o600):
+    """Publish exact public bytes; only rendered public units use mode0644."""
+    require(mode in (0o600, 0o644), "public output mode must be0600 or0644")
     fd = os.open(
         path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
     )
     with os.fdopen(fd, "wb") as output:
         output.write(raw)
         output.flush()
+        if mode != 0o600:
+            os.fchmod(output.fileno(), mode)
         os.fsync(output.fileno())
     sync_directory(Path(path).parent)
     return hashlib.sha256(raw).hexdigest()
@@ -356,7 +371,7 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 def qualification_steps(scope):
     """Exact first-release native journal sequence; never reinterpret old indices."""
     require(scope in ("core_testnet", "full_inrou"), "one explicit canonical qualification scope is required")
-    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "convergence", "canary", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
+    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
 
 
 def require_candidate_probe_inventory(inventory):
@@ -411,6 +426,9 @@ def fresh_inventory(previous, attempt_id, nonce):
         "fresh authorization nonce required",
     )
     value = copy.deepcopy(previous)
+    # A signed predecessor owns its old nonce/session. Native assembly derives
+    # the fresh required plan; an unsigned draft must never supply this field.
+    value.pop("beacon_bootstrap", None)
     value["deployment_id"] = "taira-" + attempt_id
     value["authorization_nonce"] = nonce
     require(
@@ -2811,6 +2829,76 @@ def _continuity_capture(args):
     )
 
 
+def beacon_completed_rows(runtime, assembly, before):
+    """Bind final process paths to completed native authorization and activation.
+
+    The native controller verifies the bundle, installation inclusion and exact
+    private config projection before recording completion. Python consumes only
+    its public hashes, after proving that exact completed deployment; an isolated
+    activation marker never authorizes a process or a config.
+    """
+    proof = completed_attempt({"runtime_root": str(runtime)}, assembly.parent, required=True)
+    inventory = proof["inventory"]
+    frontier = decode(public_record(assembly.parent / "apply-started.json", owner=0, private=True))
+    require(before["inventory_sha256"] == frontier["inventory_sha256"],
+            "beacon completion belongs to another pre-start inventory")
+    plan = inventory["beacon_bootstrap"]
+    units = plan["final_units"]
+    validators = inventory["validators"]
+    clients = inventory["validator_clients"]
+    require(len(units) == len(validators) == len(clients) == len(before["nodes"]) == 4,
+            "completed beacon projection requires the exact four validators")
+    prior = {row["peer_id"]: row for row in before["nodes"]}
+    require(len(prior) == 4, "pre-start beacon identities repeat")
+    rows = {}
+    bundle_sha = None
+    for validator, client, unit in zip(validators, clients, units):
+        role = validator["slug"]
+        require(client["slug"] == unit["validator"] == role and client["peer_id"] in prior,
+                "signed final beacon unit or peer order differs")
+        row = copy.deepcopy(prior[client["peer_id"]])
+        require(row["systemd_unit"] == validator["systemd_unit"],
+                "pre-start unit differs from completed validator")
+        marker_path = (Path("/var/lib/taira/.public-reset-control-v1/beacon")
+                       / inventory["authorization_nonce"] / (role + ".active.json"))
+        marker = decode(public_record(marker_path, owner=0, private=True, limit=65536))
+        require(isinstance(marker, dict) and set(marker) == {
+                    "schema", "authorization_sha256", "bundle_sha256", "validator",
+                    "session_id", "config_sha256", "unit_sha256"}
+                and marker["schema"] == "iroha.taira.public-reset.beacon-provider-active.v1"
+                and marker["authorization_sha256"] == frontier["authorization_sha256"]
+                and marker["validator"] == role
+                and marker["session_id"] == plan["request"]["dkg_session"]["session_id"]
+                and marker["unit_sha256"] == unit["sha256"]
+                and all(isinstance(marker[name], str)
+                        and re.fullmatch("[0-9a-f]{64}", marker[name])
+                        for name in ("bundle_sha256", "config_sha256", "unit_sha256")),
+                "native beacon activation differs from exact completed authorization")
+        if bundle_sha is None:
+            bundle_sha = marker["bundle_sha256"]
+        require(marker["bundle_sha256"] == bundle_sha,
+                "native beacon activations disagree on the verified bundle")
+        config = next((item for item in validator["artifacts"] if item["role"] == "config"), None)
+        require(config is not None and row["binding"]["config_path"] == config["remote_path"]
+                and row["config_sha256"] == config["sha256"],
+                "pre-start config differs from the signed original artifact")
+        final_config = str(Path(config["remote_path"]).with_name("beacon.toml"))
+        row["unit_sha256"] = marker["unit_sha256"]
+        row["config_sha256"] = marker["config_sha256"]
+        binding = row["binding"]
+        require(binding["argv"].count("--config") == 1
+                and binding["argv"][binding["argv"].index("--config") + 1]
+                    == f"/srv/taira/{role}/current/config/config.toml",
+                "pre-start config argument differs from exact initial renderer")
+        binding["argv"][binding["argv"].index("--config") + 1] = f"/srv/taira/{role}/current/config/beacon.toml"
+        binding["config_path"] = final_config
+        binding["config_sha256"] = marker["config_sha256"]
+        binding["config_files"] = [{"path": final_config, "sha256": marker["config_sha256"]}]
+        rows[row["peer_id"]] = row
+    require(set(rows) == set(prior), "completed beacon projection omitted a peer")
+    return [rows[row["peer_id"]] for row in before["nodes"]]
+
+
 def _continuity_reconcile(args):
     _continuity_need(
         args.prestart_sha256 and args.local_node_module and args.local_node_sha256,
@@ -2831,6 +2919,7 @@ def _continuity_reconcile(args):
     _continuity_read(
         CONTINUITY_ASSEMBLY / "inventory.json", expected=before["inventory_sha256"]
     )
+    before["nodes"] = beacon_completed_rows(CONTINUITY_RUNTIME, CONTINUITY_ASSEMBLY, before)
     node_class = _continuity_load_public_module(
         Path(args.local_node_module), args.local_node_sha256
     )["LocalNode"]
@@ -3311,13 +3400,14 @@ def _boot_main(request):
         and inventory["next_genesis_hash"] == BOOT_GENESIS,
         "assembled signed deployment differs",
     )
+    pre["nodes"] = beacon_completed_rows(BOOT_ROOT, BOOT_ASSEMBLY, pre)
     validators = inventory["validators"]
     _boot_need(
         len(validators) == 4
         and tuple((v["systemd_unit"] for v in validators)) == BOOT_UNITS[:4],
         "exact four signed units required",
     )
-    hashes = {v["systemd_unit"]: v["systemd_unit_sha256"] for v in validators}
+    hashes = {row["systemd_unit"]: row["unit_sha256"] for row in pre["nodes"]}
     hashes["nginx.service"] = BOOT_NGINX_SHA
     _boot_need(
         inventory["edge"]["systemd_unit_sha256"] == BOOT_NGINX_SHA,
@@ -3479,6 +3569,76 @@ def local_arguments(raw, qualification_scope):
         result[flag] = paths
         offset += count + 1
     return value, result
+
+
+def apply_arguments(arguments, qualification_scope):
+    """Apply receives runtime paths only, never public assembly or unit inputs."""
+    qualification_steps(qualification_scope)
+    flags = ["--runtime-client-config", "--validator-client-config",
+             "--validator-operator-key", "--onboarding-token"]
+    if qualification_scope == "full_inrou":
+        flags.append("--inrou-stage-dir")
+    return [item for flag in flags for item in [flag, *arguments[flag]]]
+
+
+def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft, logs):
+    """Use native public derivation and the pinned renderer; never load a key/config."""
+    bundle = assembly / "public-inputs"
+    inputs = assembly / "beacon-inputs.json"
+    run_native([
+        *cli, "prepare-beacon-inputs", "--inventory-draft", assembly / "inventory-draft.json",
+        "--public-inputs", bundle, "--output", inputs,
+    ], logs / "prepare-beacon-inputs", phase="prepare-beacon-inputs")
+    value = decode(public_record(inputs, owner=0, private=True))
+    require(isinstance(value, dict)
+            and set(value) == {"schema", "authorization_nonce", "request", "final_units"}
+            and value["schema"] == "iroha.taira.public-reset.beacon-inputs.v1"
+            and value["authorization_nonce"] == draft["authorization_nonce"]
+            and isinstance(value["request"], dict)
+            and isinstance(value["final_units"], list) and len(value["final_units"]) == 4,
+            "native beacon inputs differ from this exact fresh attempt")
+    validators = draft["validators"]
+    require(len(validators) == 4 and len(arguments["--validator-unit"]) == 4,
+            "beacon preparation requires four exact validator units")
+    seen = set()
+    # Admit all public descriptors before executing even the authenticated renderer.
+    for index, (validator, row) in enumerate(zip(validators, value["final_units"]), 1):
+        require(isinstance(row, dict)
+                and set(row) == {"validator", "signer_index", "credential_path", "config_file"}
+                and row["validator"] == validator["slug"] == f"taira-validator-{index}"
+                and type(row["signer_index"]) is int and 1 <= row["signer_index"] <= 4
+                and row["signer_index"] not in seen and row["config_file"] == "beacon.toml",
+                "native beacon unit descriptors omit, repeat or reorder a validator seat")
+        seat = row["signer_index"]
+        expected = (Path("/var/lib/taira/.public-reset-control-v1/beacon")
+                    / draft["authorization_nonce"] / "ceremony" / f"seat-{seat}"
+                    / "iroha-global-beacon-partial-signer-v1.norito")
+        require(row["credential_path"] == str(expected),
+                "native beacon credential path differs from its nonce and signer seat")
+        seen.add(seat)
+    renderer = _continuity_load_public_module(
+        Path(plan["unit_renderer"]["path"]), plan["unit_renderer"]["sha256"])
+    units = assembly / "beacon-units"
+    units.mkdir(mode=0o700)
+    paths = []
+    for validator, row, initial in zip(validators, value["final_units"], arguments["--validator-unit"]):
+        data = public_record(initial, validator["systemd_unit_sha256"], owner=0)
+        fields = _continuity_unit_sources(data, validator["slug"], renderer)
+        rendered = renderer["render"](
+            validator["slug"], fields["runtime_key"], fields["mint_finality_seed"],
+            row["credential_path"], config_file=row["config_file"])
+        require(isinstance(rendered, str), "authenticated renderer omitted exact unit text")
+        path = units / validator["systemd_unit"]
+        require(path.parent == units and path.name == f"iroha3d-{validator['slug']}.service",
+                "signed validator unit filename differs")
+        write_public_bytes(path, rendered.encode(), mode=0o644)
+        paths.append(str(path))
+    # Keep the static retained closure intact; derived arguments have distinct custody.
+    derived = list(static_args)
+    derived[derived.index("--public-inputs") + 1] = str(bundle)
+    derived.extend(["--beacon-inputs", str(inputs), "--beacon-validator-unit", *paths])
+    write_public(assembly / "native-assembly-args.json", derived)
+    return derived
 
 
 def find_terminal(journal_root, deployment_id):
@@ -4556,6 +4716,18 @@ def guest_locked(request, capacity, root):
                 write_public(ready, result)
             print(json.dumps(result, sort_keys=True), flush=True)
             return result
+        phase = "prepare-public-inputs"
+        check_capacity(capacity, plan["capacity_plan"], phase, attempt)
+        run_native([
+            *cli, "prepare-public-inputs", "--localnet-dir", Path(plan["prep_root"]) / "network",
+            "--inventory-draft", assembly / "inventory-draft.json",
+            "--output-dir", assembly / "public-inputs",
+        ], logs / phase, phase=phase)
+        completed.append(phase)
+        phase = "prepare-beacon-inputs"
+        derived_args = prepare_beacon_arguments(
+            cli, assembly, plan, args, arguments, draft, logs)
+        completed.append(phase)
         phase = "assemble"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
         run_native(
@@ -4564,7 +4736,7 @@ def guest_locked(request, capacity, root):
                 "assemble",
                 "--inventory-draft",
                 assembly / "inventory-draft.json",
-                *args,
+                *derived_args,
                 "--output",
                 assembly / "inventory.json",
             ],
@@ -4597,7 +4769,7 @@ def guest_locked(request, capacity, root):
         completed.append(phase)
         phase = "authorize"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
-        authorize_native(cli, assembly, args, plan, logs / phase)
+        authorize_native(cli, assembly, derived_args, plan, logs / phase)
         authentication = [
             "--inventory",
             assembly / "inventory.json",
@@ -4620,7 +4792,7 @@ def guest_locked(request, capacity, root):
             attempt / "apply-started.json", preflight_identity(attempt, assembled)
         )
         run_native(
-            [*cli, "apply", *authentication, *args[args.index("--runtime-client-config"): args.index("--validator-unit")]],
+            [*cli, "apply", *authentication, *apply_arguments(arguments, inventory["qualification_scope"])],
             logs / phase,
             phase=phase,
             journal_path=Path(plan["runtime_root"])

@@ -80,12 +80,12 @@ mod host;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
+#[path = "taira_public_reset_deployment_profile.rs"]
+mod deployment_profile;
 #[path = "taira_public_reset_inputs.rs"]
 mod inputs;
 #[path = "taira_public_reset_public_inputs.rs"]
 mod public_inputs;
-#[path = "taira_public_reset_deployment_profile.rs"]
-mod deployment_profile;
 
 #[cfg(test)]
 pub(crate) fn deployment_genesis_fixture()
@@ -117,6 +117,8 @@ enum PublicResetCommand {
     OperatorKeygen(config::OperatorKeygen),
     /// Derive and validate the complete public genesis and canary bundle without private keys.
     PreparePublicInputs(public_inputs::PreparePublicInputs),
+    /// Derive the nonce-bound public beacon request and exact renderer seat paths.
+    PrepareBeaconInputs(inputs::PrepareBeaconInputs),
     /// Export a public deployment target profile from assembled inventory and native inputs.
     ExportDeploymentProfile(deployment_profile::ExportDeploymentProfile),
     /// Assemble exact release inputs locally from an explicit inventory draft.
@@ -196,7 +198,7 @@ struct PublicResetApply {
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
-    /// Four ordered validator read configs for forward work or RestartProof recovery;
+    /// Four ordered validator read configs for forward work, Canary or RestartProof recovery;
     /// other recovery steps ignore these paths.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
@@ -232,20 +234,15 @@ impl PublicResetApply {
         step: executor_model::ExecutionStep,
     ) -> Result<Vec<PathBuf>> {
         match step {
-            executor_model::ExecutionStep::RestartProof
-                if self.validator_client_config.len() == 4 =>
-            {
+            executor_model::ExecutionStep::RestartProof | executor_model::ExecutionStep::Canary => {
+                if self.validator_client_config.len() != 4 {
+                    return Err(eyre!(
+                        "Canary/RestartProof recovery requires exactly four --validator-client-config values"
+                    ));
+                }
                 Ok(self.validator_client_config.clone())
             }
-            executor_model::ExecutionStep::RestartProof => Err(eyre!(
-                "RestartProof recovery requires exactly four --validator-client-config values"
-            )),
-            executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::EdgeVerify => {
-                // Retrying the original apply command must retain its exact inputs.
-                // These steps reconcile only the runtime client's prepared mutations;
-                // do not open or admit the unused forward validator configs.
-                Ok(Vec::new())
-            }
+            executor_model::ExecutionStep::EdgeVerify => Ok(Vec::new()),
             _ => Err(eyre!("journal does not identify a recoverable V1 step")),
         }
     }
@@ -338,6 +335,10 @@ impl PublicReset {
             }
             PublicResetCommand::PreparePublicInputs(args) => {
                 public_inputs::prepare(args, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::PrepareBeaconInputs(args) => {
+                inputs::prepare_beacon_inputs(args)?;
                 return Ok(());
             }
             PublicResetCommand::ExportDeploymentProfile(args) => {
@@ -690,11 +691,25 @@ impl QualificationScopeV1 {
 
     const fn canary_kinds(self) -> &'static [&'static str] {
         match self {
-            Self::CoreTestnet => &["onboarding", "faucet", "write_canary"],
+            Self::CoreTestnet => &[
+                "onboarding",
+                "faucet",
+                "write_canary",
+                "beacon_install",
+                "beacon_provider_1",
+                "beacon_provider_2",
+                "beacon_provider_3",
+                "beacon_provider_4",
+            ],
             Self::FullInrou => &[
                 "onboarding",
                 "faucet",
                 "write_canary",
+                "beacon_install",
+                "beacon_provider_1",
+                "beacon_provider_2",
+                "beacon_provider_3",
+                "beacon_provider_4",
                 "inrou_bundle_pin",
                 "inrou_guest_pin",
                 "inrou_discovery_pin",
@@ -751,6 +766,8 @@ struct InventoryV1 {
     canary_onboarding_request: AccountOnboardingPlanRequestV1,
     faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
+    /// Exact fresh ceremony and final provider units authorized before execution.
+    beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
     cleanup: CleanupV1,
     timeouts: TimeoutsV1,
     artifact_closure_sha256: String,
@@ -897,6 +914,56 @@ struct ValidatorAdmittedReleaseV1 {
     /// Exact daemon argv, including the stable configuration selector.
     argv: Vec<String>,
     artifacts: Vec<OccupiedArtifactV1>,
+    /// Independently selected predecessor service state; never inferred from a failed probe.
+    service_state: PriorValidatorServiceStateV1,
+}
+
+/// Signed rollback intent for an occupied validator; neither branch denotes vacancy.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "state", content = "value")]
+#[norito(deny_unknown_fields)]
+enum PriorValidatorServiceStateV1 {
+    #[norito(rename = "running")]
+    Running,
+    #[norito(rename = "stopped")]
+    Stopped(StoppedValidatorStateV1),
+}
+
+/// Identity of the independently selected stopped state directory, not a health assertion.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct StoppedValidatorStateV1 {
+    device: u64,
+    inode: u64,
+}
+
+impl PriorValidatorServiceStateV1 {
+    fn validate(&self) -> Result<()> {
+        if matches!(self, Self::Stopped(state) if state.inode == 0) {
+            return Err(eyre!("stopped predecessor state inode must be nonzero"));
+        }
+        Ok(())
+    }
+
+    fn stopped_state(&self) -> Option<&StoppedValidatorStateV1> {
+        match self {
+            Self::Running => None,
+            Self::Stopped(state) => Some(state),
+        }
+    }
+
+    fn validate_state_identity(&self, device: u64, inode: u64) -> Result<()> {
+        self.validate()?;
+        if self
+            .stopped_state()
+            .is_some_and(|state| state.device != device || state.inode != inode)
+        {
+            return Err(eyre!(
+                "stopped predecessor state differs from its signed directory identity"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// An independently admitted prior artifact. These bytes are never supplied by the candidate.
@@ -1174,6 +1241,7 @@ pub(super) enum RecoveryMutationStateV1 {
 pub(super) enum RecoveryOutcome {
     Applied,
     ReadyToContinue,
+    ResumeSubmittedBeaconActivation,
     Pending,
     Rejected(String),
 }
@@ -1555,9 +1623,11 @@ fn verify_authorization_window(
 }
 
 fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
-    let timeouts = &inventory.timeouts;
-    let physical_validator_hosts = inventory
-        .validators
+    execution_lifetime_for_inputs(&inventory.timeouts, &inventory.validators)
+}
+
+fn execution_lifetime_for_inputs(timeouts: &TimeoutsV1, validators: &[ValidatorV1]) -> Result<u64> {
+    let physical_validator_hosts = validators
         .iter()
         .map(|validator| validator.endpoint.host_identity_sha256.as_str())
         .collect::<BTreeSet<_>>()
@@ -1640,6 +1710,17 @@ fn validate_inventory_for_controller(
     inventory: &InventoryV1,
     admission: ControllerAdmission,
 ) -> Result<()> {
+    validate_inventory_with_revision(inventory, |revision| {
+        validate_revision_for_controller(revision, admission)
+    })
+}
+
+// The production entry point above always supplies exact compiled-release admission.
+// Pure inventory tests exercise the same structure without claiming a release identity.
+fn validate_inventory_with_revision(
+    inventory: &InventoryV1,
+    validate_revision: impl FnOnce(&RevisionV1) -> Result<()>,
+) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
@@ -1663,6 +1744,7 @@ fn validate_inventory_for_controller(
         validate_lower_hex(label, value, 64)?;
     }
     inventory.validate_inrou_scope()?;
+    host::beacon::validate_plan(inventory)?;
     for (label, value) in [
         (
             "previous genesis hash",
@@ -1678,7 +1760,7 @@ fn validate_inventory_for_controller(
         ));
     }
     validate_nonce(&inventory.authorization_nonce)?;
-    validate_revision_for_controller(&inventory.revision, admission)?;
+    validate_revision(&inventory.revision)?;
     validate_timeout_policy(inventory)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
     validate_faucet_policy(&inventory.faucet_policy)?;
@@ -1864,6 +1946,20 @@ fn validate_revision_for_controller(
     revision: &RevisionV1,
     admission: ControllerAdmission,
 ) -> Result<()> {
+    validate_revision_source_fields(revision)?;
+    let compiled_sha = crate::compiled_build_identity()?.release_source_commit()?;
+    validate_lower_hex("compiled CLI Git SHA", compiled_sha, 40)
+        .wrap_err("compiled CLI has unknown or dirty source provenance")?;
+    validate_revision_build_fields(revision)?;
+    if admission == ControllerAdmission::CurrentExecutable && revision.commit != compiled_sha {
+        return Err(eyre!(
+            "revision commit/build_id must equal the compiled CLI SHA"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_revision_source_fields(revision: &RevisionV1) -> Result<()> {
     if revision.branch != SOURCE_BRANCH {
         return Err(eyre!("revision branch must be exact `{SOURCE_BRANCH}`"));
     }
@@ -1885,9 +1981,10 @@ fn validate_revision_for_controller(
         Path::new(&revision.source_manifest_path),
         "source manifest path",
     )?;
-    let compiled_sha = crate::compiled_build_identity()?.release_source_commit()?;
-    validate_lower_hex("compiled CLI Git SHA", compiled_sha, 40)
-        .wrap_err("compiled CLI has unknown or dirty source provenance")?;
+    Ok(())
+}
+
+fn validate_revision_build_fields(revision: &RevisionV1) -> Result<()> {
     if revision.target != BUILD_TARGET
         || revision.profile != BUILD_PROFILE
         || revision.build_id != revision.commit
@@ -1896,12 +1993,42 @@ fn validate_revision_for_controller(
             "revision must use target `{BUILD_TARGET}`, evidence profile `{BUILD_PROFILE}`, and identical commit/build_id"
         ));
     }
-    if admission == ControllerAdmission::CurrentExecutable && revision.commit != compiled_sha {
-        return Err(eyre!(
-            "revision commit/build_id must equal the compiled CLI SHA"
-        ));
-    }
     Ok(())
+}
+
+#[cfg(test)]
+fn validate_inventory_structure(inventory: &InventoryV1) -> Result<()> {
+    validate_inventory_with_revision(inventory, |revision| {
+        validate_revision_source_fields(revision)?;
+        validate_revision_build_fields(revision)
+    })
+}
+
+#[cfg(test)]
+fn test_compiled_release_commit() -> Option<&'static str> {
+    use iroha_core::release_identity::BuildIdentityError;
+    match crate::compiled_build_identity()
+        .expect("valid compiled executable identity")
+        .release_source_commit()
+    {
+        Ok(commit) => Some(commit),
+        Err(BuildIdentityError::DevelopmentSource) => None,
+        Err(error) => panic!("invalid compiled executable identity: {error}"),
+    }
+}
+
+#[cfg(test)]
+fn assert_compiled_admission_error(error: &eyre::Report, release_message: &str) {
+    use iroha_core::release_identity::BuildIdentityError;
+    if test_compiled_release_commit().is_some() {
+        assert!(error.to_string().contains(release_message), "{error:#}");
+    } else {
+        assert_eq!(
+            error.downcast_ref::<BuildIdentityError>(),
+            Some(&BuildIdentityError::DevelopmentSource),
+            "development executables must fail release admission before custody: {error:#}",
+        );
+    }
 }
 
 fn validate_source_closure(revision: &RevisionV1) -> Result<()> {
@@ -3246,6 +3373,34 @@ fn recovery_ready_to_continue(
             .is_some_and(|mutation| mutation.state == RecoveryMutationStateV1::Prepared)
 }
 
+/// Only a host-side provider publication can retain Submitted while resuming
+/// forward work. Ceremony and ledger submissions have no such continuation.
+fn recovery_ready_to_resume_beacon_activation(
+    intent: &RecoveryIntentV1,
+    step: executor_model::ExecutionStep,
+) -> bool {
+    if step != executor_model::ExecutionStep::Canary
+        || validate_recovery_intent(intent, step).is_err()
+    {
+        return false;
+    }
+    let index = usize::from(intent.next_mutation);
+    (4..8).contains(&index)
+        && intent.mutations.get(index).is_some_and(|mutation| {
+            mutation.state == RecoveryMutationStateV1::Submitted
+                && mutation.phase == "pre_edge"
+                && mutation.kind == format!("beacon_provider_{}", index - 3)
+        })
+}
+
+fn recovery_has_forward_frontier(
+    intent: &RecoveryIntentV1,
+    step: executor_model::ExecutionStep,
+) -> bool {
+    recovery_ready_to_continue(intent, step)
+        || recovery_ready_to_resume_beacon_activation(intent, step)
+}
+
 fn validate_absolute_normal_path(path: &Path, label: &str) -> Result<()> {
     if !path.is_absolute()
         || path
@@ -4066,7 +4221,8 @@ mod executor_model {
                             .get(usize::from(actual.next_step))
                             .copied()
                             .is_some_and(|step| {
-                                step.supports_recovery() && recovery_ready_to_continue(intent, step)
+                                step.supports_recovery()
+                                    && recovery_has_forward_frontier(intent, step)
                             })
                     })
                     || actual.edge_rollback_complete
@@ -4261,7 +4417,7 @@ mod executor_model {
                         .get(usize::from(after.next_step))
                         .copied()
                         .zip(after.recovery_intent.as_ref())
-                        .is_some_and(|(step, intent)| recovery_ready_to_continue(intent, step))
+                        .is_some_and(|(step, intent)| recovery_has_forward_frontier(intent, step))
             }
             ("in_progress", "in_progress") => before.recovery_intent == after.recovery_intent,
             ("in_progress", "rolling_back") => after.recovery_intent.is_none(),
@@ -4818,8 +4974,8 @@ mod executor_model {
         ExecutionStep::Reset,
         ExecutionStep::Preseed,
         ExecutionStep::Start,
-        ExecutionStep::Convergence,
         ExecutionStep::Canary,
+        ExecutionStep::Convergence,
         ExecutionStep::RestartProof,
         ExecutionStep::EdgeStage,
         ExecutionStep::EdgeCutover,
@@ -4835,8 +4991,8 @@ mod executor_model {
         ExecutionStep::Install,
         ExecutionStep::Reset,
         ExecutionStep::Start,
-        ExecutionStep::Convergence,
         ExecutionStep::Canary,
+        ExecutionStep::Convergence,
         ExecutionStep::RestartProof,
         ExecutionStep::EdgeStage,
         ExecutionStep::EdgeCutover,
@@ -5059,7 +5215,7 @@ mod executor_model {
                     return rollback_after_failure(inventory, transport, journal, error);
                 }
                 let intent = if let Some(retained) = journal.state().recovery_intent.as_ref() {
-                    if !recovery_ready_to_continue(retained, step)
+                    if !recovery_has_forward_frontier(retained, step)
                         || !host::recovery_intent_identity_matches(retained, &intent)
                     {
                         return rollback_after_failure(
@@ -5295,6 +5451,29 @@ mod executor_model {
                 journal.replace(state)?;
                 Err(eyre!(
                     "read-only recovery advanced the mutation cursor; resume remaining Prepared mutations with the original forward authorization"
+                ))
+            }
+            RecoveryOutcome::ResumeSubmittedBeaconActivation => {
+                let mut state = journal.state().clone();
+                if !state
+                    .recovery_intent
+                    .as_ref()
+                    .is_some_and(|intent| recovery_ready_to_resume_beacon_activation(intent, step))
+                {
+                    return preserve_recovery_pending(
+                        journal,
+                        step,
+                        eyre!("provider continuation is outside its exact submitted host intent"),
+                    );
+                }
+                // The transport verified the exact host intent and live original
+                // authorization. Retain Submitted; a normal forward reopen verifies
+                // that authorization again before any host mutation.
+                state.status = "in_progress".to_owned();
+                state.failure_summary.clear();
+                journal.replace(state)?;
+                Err(eyre!(
+                    "provider publication can resume only with the original forward authorization"
                 ))
             }
             RecoveryOutcome::Applied => {
@@ -5587,7 +5766,7 @@ mod executor_model {
                 onboarding_token: Some(unavailable.join("onboarding-token")),
                 inrou_stage_dir: Some(unavailable.join("inrou-stage")),
             };
-            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
+            for step in [ExecutionStep::EdgeVerify] {
                 assert!(
                     args.recovery_validator_client_configs(step)
                         .expect("identical forward arguments permit read-only recovery")
@@ -5595,6 +5774,11 @@ mod executor_model {
                     "unused validator paths must not reach recovery custody"
                 );
             }
+            assert_eq!(
+                args.recovery_validator_client_configs(ExecutionStep::Canary)
+                    .unwrap(),
+                validator_configs
+            );
             assert_eq!(
                 args.recovery_validator_client_configs(ExecutionStep::RestartProof)
                     .expect("RestartProof retains its exact ordered four-config closure"),
@@ -5608,6 +5792,10 @@ mod executor_model {
                     args.recovery_validator_client_configs(ExecutionStep::RestartProof)
                         .is_err(),
                     "RestartProof must reject {count} configs"
+                );
+                assert!(
+                    args.recovery_validator_client_configs(ExecutionStep::Canary)
+                        .is_err()
                 );
             }
             assert!(
@@ -5627,11 +5815,15 @@ mod executor_model {
                         .unwrap()
                         .is_none()
                 );
-                assert!(
-                    args.recovery_validator_client_configs(step)
-                        .expect("unused forward arguments remain optional")
-                        .is_empty()
-                );
+                if step == ExecutionStep::Canary {
+                    assert!(args.recovery_validator_client_configs(step).is_err());
+                } else {
+                    assert!(
+                        args.recovery_validator_client_configs(step)
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
             }
         }
 
@@ -5899,7 +6091,7 @@ mod executor_model {
             AccountId::parse_encoded(&inventory.canary_onboarding_request.account_id)
                 .expect_err("a Taira I105 identity must not parse under the SORA discriminant");
 
-            validate_inventory(&inventory)
+            validate_inventory_structure(&inventory)
                 .expect("inventory validation enters the signed Taira discriminant");
             let _inventory_guard = enter_inventory_chain_discriminant(&inventory)
                 .expect("canonical Taira inventory chain guard");
@@ -5961,7 +6153,8 @@ mod executor_model {
                         .expect("full Inrou fixture")
                         .placement_targets
                 );
-                validate_inventory(&decoded).expect("decoded inventory remains admissible");
+                validate_inventory_structure(&decoded)
+                    .expect("decoded inventory remains admissible");
                 assert_eq!(
                     canonical_inventory_bytes(&decoded).expect("reencode"),
                     bytes
@@ -6053,43 +6246,45 @@ mod executor_model {
         #[test]
         fn qualification_scope_requires_exact_nullable_inrou_closure() {
             let full = sample_inventory();
-            validate_inventory(&full).expect("complete full_inrou fixture");
+            validate_inventory_structure(&full).expect("complete full_inrou fixture");
             let mut core = full.clone();
             core.qualification_scope = QualificationScopeV1::CoreTestnet;
             assert!(
-                validate_inventory(&core).is_err(),
+                validate_inventory_structure(&core).is_err(),
                 "core rejects an Inrou object"
             );
             core.inrou_canary = None;
             assert!(
-                validate_inventory(&core).is_err(),
+                validate_inventory_structure(&core).is_err(),
                 "core rejects an Inrou stage hash"
             );
             core.inrou_stage_tree_sha256 = None;
-            validate_inventory(&core).expect("core accepts validators reporting KVM API 12");
+            validate_inventory_structure(&core)
+                .expect("core accepts validators reporting KVM API 12");
             let mut no_kvm_core = core.clone();
             for validator in &mut no_kvm_core.validators {
                 validator.platform.kvm_api_version = 0;
             }
-            validate_inventory(&no_kvm_core).expect("all four core validators may run without KVM");
+            validate_inventory_structure(&no_kvm_core)
+                .expect("all four core validators may run without KVM");
             for index in 0..full.validators.len() {
                 let mut no_kvm_full = full.clone();
                 no_kvm_full.validators[index].platform.kvm_api_version = 0;
                 assert!(
-                    validate_inventory(&no_kvm_full).is_err(),
+                    validate_inventory_structure(&no_kvm_full).is_err(),
                     "every full_inrou validator requires KVM API 12"
                 );
             }
             let mut unknown_kvm_core = no_kvm_core.clone();
             unknown_kvm_core.validators[0].platform.kvm_api_version = 11;
             assert!(
-                validate_inventory(&unknown_kvm_core).is_err(),
+                validate_inventory_structure(&unknown_kvm_core).is_err(),
                 "core still rejects unsupported observed KVM API versions"
             );
             let mut kvm_edge = no_kvm_core.clone();
             kvm_edge.edge.platform.kvm_api_version = 12;
             assert!(
-                validate_inventory(&kvm_edge).is_err(),
+                validate_inventory_structure(&kvm_edge).is_err(),
                 "the edge must still declare KVM API 0"
             );
             for inventory in [&core, &full] {
@@ -6118,13 +6313,13 @@ mod executor_model {
                     incomplete.inrou_stage_tree_sha256 = None;
                 }
                 assert!(
-                    validate_inventory(&incomplete).is_err(),
+                    validate_inventory_structure(&incomplete).is_err(),
                     "full scope never defaults a missing stage dependency"
                 );
             }
             let mut drift = full.clone();
             drift.inrou_stage_tree_sha256 = Some("b".repeat(64));
-            assert!(validate_inventory(&drift).is_err());
+            assert!(validate_inventory_structure(&drift).is_err());
             assert!(
                 json::from_value::<QualificationScopeV1>(Value::String("inrou".to_owned()))
                     .is_err(),
@@ -6234,7 +6429,8 @@ mod executor_model {
                     inventory.inrou_canary = None;
                     inventory.inrou_stage_tree_sha256 = None;
                 }
-                validate_inventory(&inventory).expect("both explicit scopes are admitted");
+                validate_inventory_structure(&inventory)
+                    .expect("both explicit scopes are admitted");
                 let bytes = canonical_inventory_bytes(&inventory).expect("inventory bytes");
                 let inventory_value: Value = json::from_slice(&bytes).expect("inventory JSON");
                 let (decoded, _guard) =
@@ -6720,23 +6916,36 @@ mod executor_model {
 
         #[test]
         fn inventory_genesis_hashes_require_the_iroha_marker_bit() {
+            let original = sample_inventory();
+            validate_inventory_structure(&original).expect("complete genesis-bound inventory");
             let unmarked = unmarked_iroha_hash(b"unmarked Taira genesis fixture");
-            for field in ["previous", "next"] {
-                let mut inventory = sample_inventory();
-                let expected_label = match field {
+            for (field, label) in [
+                ("previous", "previous genesis hash"),
+                ("next", "next genesis hash"),
+            ] {
+                let hash_error = validate_canonical_iroha_hash(label, &unmarked)
+                    .expect_err("both genesis anchors require the native marker bit");
+                assert!(format!("{hash_error:#}").contains(label));
+                let mut inventory = original.clone();
+                let expected_inventory_error = match field {
                     "previous" => {
                         inventory.previous_genesis_hash = unmarked.clone();
-                        "previous genesis hash"
+                        label
                     }
                     "next" => {
                         inventory.next_genesis_hash = unmarked.clone();
-                        "next genesis hash"
+                        // The beacon plan already binds the canonical next hash;
+                        // admission checks that exact binding before hash labels.
+                        "beacon bootstrap plan differs from the exact signed four-validator deployment"
                     }
                     _ => unreachable!("closed genesis-hash fixture field"),
                 };
-                let error = validate_inventory(&inventory)
+                let error = validate_inventory_structure(&inventory)
                     .expect_err("an unmarked genesis hash must fail inventory admission");
-                assert!(format!("{error:#}").contains(expected_label));
+                assert!(
+                    format!("{error:#}").contains(expected_inventory_error),
+                    "{error:#}"
+                );
             }
         }
 
@@ -7434,7 +7643,7 @@ mod executor_model {
             assert_eq!(recovery.events, ["recover:canary"]);
             assert_eq!(journal.state().status, "in_progress");
             assert_eq!(usize::from(journal.state().next_step), step_index + 1);
-            assert_eq!(journal.state().phase, ExecutionStep::RestartProof.label());
+            assert_eq!(journal.state().phase, ExecutionStep::Convergence.label());
             assert!(
                 !journal.state().edge_touched,
                 "candidate replay cannot establish public edge custody"
@@ -7449,7 +7658,7 @@ mod executor_model {
             };
             assert_eq!(resumed.resume_disposition(), ResumeDisposition::Forward);
             assert_eq!(usize::from(resumed.state().next_step), step_index + 1);
-            assert_eq!(resumed.state().phase, ExecutionStep::RestartProof.label());
+            assert_eq!(resumed.state().phase, ExecutionStep::Convergence.label());
         }
 
         #[test]
@@ -7655,6 +7864,91 @@ mod executor_model {
                     );
                 }
             }
+        }
+
+        #[test]
+        fn beacon_submitted_continuation_retains_exact_host_cursor_and_excludes_ledger_work() {
+            let (inventory, mut journal) = journal(sample_inventory());
+            let step = ExecutionStep::Canary;
+            let mut intent = host::build_recovery_intent(&inventory, step).unwrap();
+            intent.next_mutation = 4;
+            for previous in &mut intent.mutations[..4] {
+                previous.state = RecoveryMutationStateV1::Applied;
+            }
+            intent.mutations[4].state = RecoveryMutationStateV1::Submitted;
+            assert!(recovery_ready_to_resume_beacon_activation(&intent, step));
+            assert!(!recovery_ready_to_continue(&intent, step));
+            journal.state.status = "recovery_pending".into();
+            journal.state.phase = step.label().into();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|value| *value == step)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.recovery_intent = Some(intent.clone());
+            let before = journal.state.clone();
+            let mut transport = MockTransport {
+                recovery_outcome: Some(RecoveryOutcome::ResumeSubmittedBeaconActivation),
+                ..MockTransport::default()
+            };
+            assert!(recover_pending_step(&inventory, &mut transport, &mut journal).is_err());
+            assert_eq!(journal.state.status, "in_progress");
+            assert_eq!(journal.state.recovery_intent, before.recovery_intent);
+            assert!(valid_recovery_intent_transition(&before, &journal.state));
+            assert!(transport.mutation_dispatches.is_empty());
+            for kind in [
+                "onboarding",
+                "faucet",
+                "write_canary",
+                "beacon_install",
+                "host_restart",
+                "beacon_provider_2",
+            ] {
+                let mut wrong = intent.clone();
+                wrong.mutations[4].kind = kind.into();
+                assert!(
+                    !recovery_ready_to_resume_beacon_activation(&wrong, step),
+                    "{kind}"
+                );
+            }
+            let mut wrong = intent.clone();
+            wrong.mutations[4].phase = "post_edge".into();
+            assert!(!recovery_ready_to_resume_beacon_activation(&wrong, step));
+            let mut wrong = intent;
+            wrong.mutations[4].state = RecoveryMutationStateV1::Prepared;
+            assert!(!recovery_ready_to_resume_beacon_activation(&wrong, step));
+        }
+
+        #[test]
+        fn beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction() {
+            let (inventory, mut journal) = journal(sample_inventory());
+            let step = ExecutionStep::Canary;
+            let mut intent = host::build_recovery_intent(&inventory, step).unwrap();
+            intent.next_mutation = 3;
+            for previous in &mut intent.mutations[..3] {
+                previous.state = RecoveryMutationStateV1::Applied;
+            }
+            intent.mutations[3].state = RecoveryMutationStateV1::Submitted;
+            journal.state.status = "recovery_pending".into();
+            journal.state.phase = step.label().into();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|value| *value == step)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.recovery_intent = Some(intent.clone());
+            let mut transport = MockTransport {
+                recovery_outcome: Some(RecoveryOutcome::ResumeSubmittedBeaconActivation),
+                ..MockTransport::default()
+            };
+            assert!(recover_pending_step(&inventory, &mut transport, &mut journal).is_err());
+            assert_eq!(journal.state.status, "recovery_pending");
+            assert_eq!(journal.state.recovery_intent, Some(intent));
+            assert!(transport.mutation_dispatches.is_empty());
         }
 
         #[test]
@@ -8352,7 +8646,7 @@ mod executor_model {
                 } else {
                     sample_inventory()
                 };
-                validate_inventory(&original).expect("complete cohost inventory");
+                validate_inventory_structure(&original).expect("complete cohost inventory");
                 for mask in 0_u8..15 {
                     let mut inventory = original.clone();
                     for (index, validator) in inventory.validators.iter_mut().enumerate() {
@@ -8361,7 +8655,7 @@ mod executor_model {
                                 hex::encode([index as u8 + 1; 32]);
                         }
                     }
-                    let error = validate_inventory(&inventory)
+                    let error = validate_inventory_structure(&inventory)
                         .expect_err("dedicated or partial-edge placement must fail admission");
                     assert!(
                         error
@@ -8412,7 +8706,7 @@ mod executor_model {
                         _ => unreachable!(),
                     }
                     assert!(
-                        validate_inventory(&inventory).is_err(),
+                        validate_inventory_structure(&inventory).is_err(),
                         "target={target} field={field}"
                     );
                 }
@@ -8429,6 +8723,12 @@ mod executor_model {
             let path = root.join("inventory.json");
             let mut inventory = sample_inventory();
             inventory.edge.endpoint.host_identity_sha256 = "f".repeat(64);
+            assert!(
+                validate_inventory_structure(&inventory)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("one authenticated SSH host identity")
+            );
             let mut file = create_private_new(&path).expect("private inventory fixture");
             file.write_all(&canonical_inventory_bytes(&inventory).expect("inventory JSON"))
                 .expect("write inventory");
@@ -8437,12 +8737,7 @@ mod executor_model {
             let error = admit_signed_inputs(&path, &absent, &absent, &absent, &absent)
                 .err()
                 .expect("unsupported placement fails before any private input");
-            assert!(
-                error
-                    .to_string()
-                    .contains("one authenticated SSH host identity"),
-                "{error:#}"
-            );
+            assert_compiled_admission_error(&error, "one authenticated SSH host identity");
             assert!(!absent.exists());
             assert_eq!(fs::read_dir(&root).expect("fixture directory").count(), 1);
         }
@@ -8483,7 +8778,7 @@ mod executor_model {
             file.write_all(format!("{}\n", lines.join("\n")).as_bytes())
                 .expect("write known-hosts");
             drop(file);
-            validate_inventory(&inventory).expect("cohost structural inventory");
+            validate_inventory_structure(&inventory).expect("cohost structural inventory");
             drop(validate_known_hosts(&inventory, &path).expect("five aliases pin one actual key"));
 
             let foreign_identity = public_identity(2);
@@ -8491,7 +8786,7 @@ mod executor_model {
             inventory.edge.endpoint.known_host_line_sha256 = sha256_hex(lines[4].as_bytes());
             fs::write(&path, format!("{}\n", lines.join("\n")))
                 .expect("replace public-key fixture");
-            validate_inventory(&inventory)
+            validate_inventory_structure(&inventory)
                 .expect("a line digest cannot prove actual cohost identity");
             let error = validate_known_hosts(&inventory, &path)
                 .err()
@@ -8503,8 +8798,8 @@ mod executor_model {
 
             inventory.edge.endpoint.host_identity_sha256 = sha256_hex(foreign_identity.as_bytes());
             drop(validate_known_hosts(&inventory, &path).expect("truthful distinct key pins"));
-            let error =
-                validate_inventory(&inventory).expect_err("truthful dedicated edge is unsupported");
+            let error = validate_inventory_structure(&inventory)
+                .expect_err("truthful dedicated edge is unsupported");
             assert!(
                 error
                     .to_string()
@@ -8516,7 +8811,15 @@ mod executor_model {
         #[test]
         fn canonical_admitted_fixture_passes_positive_inventory_admission() {
             let inventory = sample_inventory();
-            validate_inventory(&inventory).expect("positive structural inventory admission");
+            validate_inventory_structure(&inventory)
+                .expect("positive structural inventory admission");
+            if test_compiled_release_commit().is_some() {
+                validate_inventory(&inventory).expect("exact compiled release admission");
+            } else {
+                let error = validate_inventory(&inventory)
+                    .expect_err("a structural fixture never grants development release authority");
+                assert_compiled_admission_error(&error, "unused on development builds");
+            }
             validate_shared_validator_closure(&inventory).expect("same-revision shared artifacts");
         }
 
@@ -8538,7 +8841,8 @@ mod executor_model {
                 canonical_inventory_bytes(&inventory).expect("canonical admitted inventory");
             let (decoded, _inventory_guard) =
                 decode_inventory(&encoded, "inventory").expect("admitted inventory roundtrip");
-            validate_inventory(&decoded).expect("roundtripped admitted inventory is admissible");
+            validate_inventory_structure(&decoded)
+                .expect("roundtripped admitted inventory is admissible");
             assert_eq!(
                 canonical_inventory_bytes(&decoded).expect("reencoded inventory"),
                 encoded
@@ -8559,6 +8863,99 @@ mod executor_model {
             check(
                 &inventory.edge.initial_state,
                 &format!(r#"{{"state":"admitted_release","value":{edge_payload}}}"#),
+            );
+        }
+
+        #[test]
+        fn occupied_service_state_is_explicit_strict_and_signed() {
+            let inventory = sample_inventory();
+            let prior = inventory.validators[0].admitted_release().unwrap();
+            let mut encoded = json::to_value(prior).unwrap();
+            encoded.as_object_mut().unwrap().remove("service_state");
+            assert!(json::from_value::<ValidatorAdmittedReleaseV1>(encoded).is_err());
+            for invalid in [
+                r#"{}"#,
+                r#"{"state":"running"}"#,
+                r#"{"state":"running","value":{}}"#,
+                r#"{"state":"stopped","value":null}"#,
+                r#"{"state":"stopped","value":{"device":1}}"#,
+                r#"{"state":"stopped","value":{"device":1,"inode":2,"extra":0}}"#,
+                r#"{"state":"vacant","value":null}"#,
+                r#"{"state":"running","state":"stopped","value":null}"#,
+            ] {
+                assert!(
+                    json::from_str::<PriorValidatorServiceStateV1>(invalid).is_err(),
+                    "{invalid}"
+                );
+            }
+            let invalid: PriorValidatorServiceStateV1 =
+                json::from_str(r#"{"state":"stopped","value":{"device":1,"inode":0}}"#).unwrap();
+            assert!(invalid.validate().is_err());
+            let before = canonical_inventory_bytes(&inventory).unwrap();
+            let mut stopped = inventory.clone();
+            let ValidatorInitialStateV1::AdmittedRelease(prior) =
+                &mut stopped.validators[0].initial_state
+            else {
+                unreachable!()
+            };
+            prior.service_state = PriorValidatorServiceStateV1::Stopped(StoppedValidatorStateV1 {
+                device: 7,
+                inode: 11,
+            });
+            let expected_service_state = prior.service_state.clone();
+            let after = canonical_inventory_bytes(&stopped).unwrap();
+            assert_ne!(sha256_hex(&before), sha256_hex(&after));
+            let (decoded, _guard) = decode_inventory(&after, "stopped fixture").unwrap();
+            validate_inventory_structure(&decoded).unwrap();
+            assert_eq!(canonical_inventory_bytes(&decoded).unwrap(), after);
+            assert!(!decoded.validators[0].is_vacant());
+            assert_eq!(
+                decoded.validators[0]
+                    .admitted_release()
+                    .unwrap()
+                    .service_state,
+                expected_service_state
+            );
+        }
+
+        #[test]
+        fn stopped_state_identity_survives_archive_restore_and_rejects_substitution() {
+            let root = tempfile::tempdir().unwrap();
+            let state = root.path().join("state");
+            let retained = root.path().join("retained");
+            fs::create_dir(&state).unwrap();
+            fs::write(state.join("retained-ledger"), b"existing durable bytes").unwrap();
+            let metadata = fs::symlink_metadata(&state).unwrap();
+            let bound = PriorValidatorServiceStateV1::Stopped(StoppedValidatorStateV1 {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            });
+            fs::rename(&state, &retained).unwrap();
+            fs::create_dir(&state).unwrap();
+            let replacement = fs::symlink_metadata(&state).unwrap();
+            assert!(
+                bound
+                    .validate_state_identity(replacement.dev(), replacement.ino())
+                    .is_err()
+            );
+            let archived = fs::symlink_metadata(&retained).unwrap();
+            bound
+                .validate_state_identity(archived.dev(), archived.ino())
+                .unwrap();
+            assert!(
+                bound
+                    .validate_state_identity(archived.dev() ^ 1, archived.ino())
+                    .is_err()
+            );
+            fs::remove_dir(&state).unwrap();
+            fs::rename(&retained, &state).unwrap();
+            let restored = fs::symlink_metadata(&state).unwrap();
+            bound
+                .validate_state_identity(restored.dev(), restored.ino())
+                .unwrap();
+            assert_eq!(
+                fs::read(state.join("retained-ledger")).unwrap(),
+                b"existing durable bytes"
             );
         }
 
@@ -8636,7 +9033,8 @@ mod executor_model {
             drop(file);
             let (decoded, _, _inventory_guard) = read_inventory(&path, "inventory")
                 .expect("canonical vacant inventory decodes at admission boundary");
-            validate_inventory(&decoded).expect("canonical vacant inventory is admissible");
+            validate_inventory_structure(&decoded)
+                .expect("canonical vacant inventory is admissible");
             assert!(decoded.validators.iter().all(ValidatorV1::is_vacant));
             assert!(decoded.edge.is_vacant());
 
@@ -8766,9 +9164,9 @@ mod executor_model {
                     .position(|value| value == event)
                     .expect(event)
             };
-            assert!(at("start:taira-validator-4") < at("convergence"));
-            assert!(at("convergence") < at("canary"));
-            assert!(at("canary") < at("restart_proof"));
+            assert!(at("start:taira-validator-4") < at("canary"));
+            assert!(at("canary") < at("convergence"));
+            assert!(at("convergence") < at("restart_proof"));
             assert!(at("restart_proof") < at("edge_stage"));
             assert!(at("edge_stage") < at("edge_cutover"));
             assert!(at("edge_cutover") < at("edge_verify"));
@@ -8829,17 +9227,17 @@ mod executor_model {
         #[test]
         fn validator_public_origins_require_distinct_canonical_https_roots() {
             let mut inventory = sample_inventory();
-            validate_inventory(&inventory).expect("existing canonical HTTPS roots");
+            validate_inventory_structure(&inventory).expect("existing canonical HTTPS roots");
             for (index, client) in inventory.validator_clients.iter_mut().enumerate() {
                 client.torii_origin = format!("https://test.example.org:{}/", 8443 + index);
             }
-            validate_inventory(&inventory)
+            validate_inventory_structure(&inventory)
                 .expect("four authenticated peers on distinct HTTPS ports");
             let mut duplicate = inventory.clone();
             duplicate.validator_clients[1].torii_origin =
                 duplicate.validator_clients[0].torii_origin.clone();
             assert!(
-                validate_inventory(&duplicate)
+                validate_inventory_structure(&duplicate)
                     .unwrap_err()
                     .to_string()
                     .contains("origins must be distinct")
@@ -8853,7 +9251,7 @@ mod executor_model {
                     duplicate.validator_clients[1].peer_id =
                         duplicate.validator_clients[0].peer_id.clone();
                 }
-                assert!(validate_inventory(&duplicate).is_err(), "{field}");
+                assert!(validate_inventory_structure(&duplicate).is_err(), "{field}");
             }
             for origin in [
                 "http://test.example.org:8443/",
@@ -8880,7 +9278,7 @@ mod executor_model {
                 );
                 let mut invalid = inventory.clone();
                 invalid.validator_clients[0].torii_origin = origin.to_owned();
-                assert!(validate_inventory(&invalid).is_err(), "{origin}");
+                assert!(validate_inventory_structure(&invalid).is_err(), "{origin}");
             }
         }
 
@@ -8910,14 +9308,19 @@ mod executor_model {
             let mut inventory = sample_inventory();
             inventory.validator_clients[1].probe_origin =
                 inventory.validator_clients[0].probe_origin.clone();
-            assert!(validate_inventory(&inventory).is_err());
+            assert!(validate_inventory_structure(&inventory).is_err());
         }
 
         #[test]
         fn revision_admission_requires_the_compiled_executable_identity() {
-            let identity = crate::compiled_build_identity().expect("compiled executable identity");
             let mut revision = sample_inventory().revision;
-            assert_eq!(revision.commit, identity.release_source_commit().unwrap());
+            let Some(compiled) = test_compiled_release_commit() else {
+                let error = validate_revision(&revision)
+                    .expect_err("development identity cannot authorize a release revision");
+                assert_compiled_admission_error(&error, "unused on development builds");
+                return;
+            };
+            assert_eq!(revision.commit, compiled);
             validate_revision(&revision).expect("the exact compiled revision is admissible");
             revision.commit = if revision.commit == "ffffffffffffffffffffffffffffffffffffffff" {
                 "0000000000000000000000000000000000000000".to_owned()
@@ -8936,20 +9339,20 @@ mod executor_model {
         #[test]
         fn vacant_inventory_preserves_all_other_admission_requirements() {
             let inventory = vacant_execution_fixture();
-            validate_inventory(&inventory)
+            validate_inventory_structure(&inventory)
                 .expect("vacant targets with a real prior network anchor");
             let mut wrong = inventory.clone();
             wrong.validators[0].platform.kvm_api_version = 0;
-            assert!(validate_inventory(&wrong).is_err());
+            assert!(validate_inventory_structure(&wrong).is_err());
             let mut wrong = inventory.clone();
             wrong.validators[0].artifacts[0]
                 .remote_path
                 .push_str(".other");
             wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
-            assert!(validate_inventory(&wrong).is_err());
+            assert!(validate_inventory_structure(&wrong).is_err());
             let mut wrong = inventory;
             wrong.edge.systemd_unit_sha256.clear();
-            assert!(validate_inventory(&wrong).is_err());
+            assert!(validate_inventory_structure(&wrong).is_err());
         }
 
         pub(in super::super) fn sample_inventory() -> InventoryV1 {
@@ -8965,9 +9368,12 @@ mod executor_model {
             let canary_onboarding_request =
                 AccountOnboardingPlanRequestV1::try_new(canary_alias, &canary_account, Vec::new())
                     .expect("deterministic canary onboarding request");
+            // This placeholder is only a structural fixture, never executable provenance.
+            let fixture_commit = test_compiled_release_commit()
+                .unwrap_or("1111111111111111111111111111111111111111");
             let revision = RevisionV1 {
                 branch: SOURCE_BRANCH.to_owned(),
-                commit: crate::VERGEN_GIT_SHA.to_owned(),
+                commit: fixture_commit.to_owned(),
                 tree: "2".repeat(40),
                 cargo_lock_sha256: "3".repeat(64),
                 source_root: "/private/source".to_owned(),
@@ -8976,9 +9382,9 @@ mod executor_model {
                 source_closure_sha256: "7".repeat(64),
                 target: BUILD_TARGET.to_owned(),
                 profile: BUILD_PROFILE.to_owned(),
-                build_id: crate::VERGEN_GIT_SHA.to_owned(),
+                build_id: fixture_commit.to_owned(),
             };
-            let validators = VALIDATOR_SLUGS
+            let validators: Vec<ValidatorV1> = VALIDATOR_SLUGS
                 .iter()
                 .enumerate()
                 .map(|(index, slug)| {
@@ -9007,6 +9413,7 @@ mod executor_model {
                         artifacts: artifacts(&service_root, &revision, &VALIDATOR_ARTIFACT_ROLES),
                         initial_state: ValidatorInitialStateV1::AdmittedRelease(
                             ValidatorAdmittedReleaseV1 {
+                                service_state: PriorValidatorServiceStateV1::Running,
                                 commit: "4".repeat(40),
                                 release_root: format!("{service_root}/releases/{}", "4".repeat(40)),
                                 argv: vec![
@@ -9095,6 +9502,7 @@ mod executor_model {
                 next_genesis_hash: Hash::new(b"fixture next Taira genesis").to_string(),
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
+                beacon_bootstrap: host::beacon::fixture_plan(&validators, &validator_clients),
                 validators,
                 validator_clients,
                 operator_public_key: iroha_crypto::KeyPair::from_seed(

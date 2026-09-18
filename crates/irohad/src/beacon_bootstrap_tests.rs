@@ -305,6 +305,38 @@ fn bootstrap_rejects_foreign_genesis_rosters_transcripts_and_lifecycle_substitut
 }
 
 #[test]
+fn bootstrap_records_observed_height_jumps_and_rejects_pulse_collision() {
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    let (request, genesis, _) = request_and_genesis();
+    // A queued canary can finish several real carriers after the faucet. The
+    // ceremony must retain that observation, rather than inventing height four.
+    for observed in [6, 14] {
+        let mut heights = [2, 3, observed].into_iter();
+        let outcome = ceremony(
+            request.clone(),
+            genesis.clone(),
+            1,
+            Instant::now() + Duration::from_secs(60),
+            |_| Ok(()),
+            |_| heights.next().ok_or(Error::Height),
+        );
+        assert!(heights.next().is_none());
+        if observed == 6 {
+            let (bundle, credentials) = outcome.expect("real observed jump fits signed epoch");
+            assert_eq!(bundle.finalized_observed_height, 6);
+            assert_eq!(bundle.record.session.adaptive_dkg.finalized_at_height, 6);
+            assert_eq!(bundle.certificate.effective_height, 7);
+            assert_eq!(credentials.len(), 4);
+            validate_bundle(&bundle).expect("unmodified native bundle remains valid");
+        } else {
+            // This signed genesis requires a pulse at fifteen, before an
+            // installation at fifteen could activate its session at sixteen.
+            assert!(matches!(outcome, Err(Error::InvalidInput)));
+        }
+    }
+}
+
+#[test]
 fn bootstrap_phase_eof_and_deadline_abort_without_fabricated_height() {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let (request, genesis, _) = request_and_genesis();

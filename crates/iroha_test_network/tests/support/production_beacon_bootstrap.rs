@@ -6,10 +6,16 @@ use iroha_core::{
     beacon,
     kura::{BlockIndex, BlockStore},
 };
-use iroha_crypto::{ExposedPrivateKey, KeyPair};
+use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
     consensus::GlobalThresholdBeaconChainAnchorV1,
+    isi::consensus_keys::{
+        ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+        ThresholdKeyLifecycleCertificateV1,
+    },
+    parameter::system::SumeragiNposParameters,
+    transaction::TransactionEntrypoint,
 };
 use iroha_test_network::{ReleasePrebuiltBinary, revalidate_release_prebuilt_binary};
 use std::{
@@ -30,6 +36,10 @@ use tokio::{
 
 #[path = "production_beacon_prepare.rs"]
 mod prepare;
+#[path = "public_transaction_sequence.rs"]
+mod public_sequence;
+#[path = "production_epoch_maintenance.rs"]
+mod epoch_maintenance;
 
 const CHAIN: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CREDENTIAL: &str = "iroha-global-beacon-partial-signer-v1.norito";
@@ -216,14 +226,28 @@ async fn run(mut command: Command, deadline: Instant) -> Result<Vec<u8>> {
 }
 fn config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    ConfigReader::new()
+    let parsed: iroha_config::parameters::actual::Root = ConfigReader::new()
         .without_env()
         .read_toml_with_extends(path.to_owned())
         .map_err(|_| eyre!("cannot read native fixture config"))?
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .map_err(|_| eyre!("cannot decode native fixture config"))?
         .parse()
-        .map_err(|_| eyre!("cannot validate native fixture config"))
+        .map_err(|_| eyre!("cannot validate native fixture config"))?;
+    // These are the original retained-catalog fixture prerequisites. Verify
+    // the generated native values; never rewrite a differing protocol mode.
+    ensure!(
+        matches!(parsed.kura.init_mode, iroha_config::kura::InitMode::Strict),
+        "native fixture must retain strict Kura replay"
+    );
+    ensure!(
+        matches!(
+            parsed.nexus.staking.restricted_validator_mode,
+            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged
+        ),
+        "native restricted lanes must retain admin-managed validator admission"
+    );
+    Ok(parsed)
 }
 fn client(path: &Path, port: u16) -> Result<iroha::client::Client> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
@@ -254,6 +278,52 @@ async fn status_height(clients: &[iroha::client::Client], deadline: Instant) -> 
     .await
     .wrap_err("four validators did not reach the same drained committed height")?
 }
+fn exact_height_reached(
+    statuses: &[iroha_torii_shared::status::Status],
+    expected: u64,
+) -> Result<bool> {
+    ensure!(
+        statuses.len() == 4 && expected > 0,
+        "exact height requires four validators and a positive target"
+    );
+    for (peer, status) in statuses.iter().enumerate() {
+        ensure!(
+            status.blocks <= expected,
+            "validator {peer} advanced beyond exact height {expected}: observed {}",
+            status.blocks
+        );
+    }
+    Ok(statuses
+        .iter()
+        .all(|status| status.blocks == expected && status.queue_size == 0))
+}
+
+async fn wait_for_exact_height(
+    clients: &[iroha::client::Client],
+    expected: u64,
+    deadline: Instant,
+) -> Result<()> {
+    ensure!(
+        clients.len() == 4 && expected > 0,
+        "exact height requires four validators and a positive target"
+    );
+    let mut last = Vec::new();
+    timeout_at(deadline, async {
+        loop {
+            let statuses = try_join_all(
+                clients.iter().map(|client| validator_status_until(client, deadline)),
+            ).await?;
+            last = statuses.iter().map(|status| (status.blocks, status.queue_size)).collect::<Vec<_>>();
+            if exact_height_reached(&statuses, expected)? {
+                return Ok::<_, eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.wrap_err_with(|| format!(
+        "four validators did not reach exact drained height {expected}; last (height, queue) observations={last:?}"
+    ))?
+}
+
 async fn ready(port: u16, expected: u16, deadline: Instant) -> Result<()> {
     timeout_at(deadline, async {
         loop {
@@ -270,22 +340,44 @@ async fn ready(port: u16, expected: u16, deadline: Instant) -> Result<()> {
     }).await.wrap_err("native readiness did not match the authenticated custody stage")?
 }
 
-async fn listeners_started(api: u16, deadline: Instant) -> Result<()> {
+async fn listeners_started(peers: &mut Peers, api: u16, deadline: Instant) -> Result<()> {
+    let started = Instant::now();
+    eprintln!(
+        "beacon fixture waiting for public listeners: remaining={:.3}s",
+        deadline.saturating_duration_since(started).as_secs_f64()
+    );
     timeout_at(deadline, async {
         for offset in 0..4 {
             loop {
+                for (index, child) in peers.children.iter_mut().enumerate() {
+                    if let Some(status) = child.try_wait()? {
+                        return Err(eyre!(
+                            "fixture validator {index} exited before public listeners: {status}; inspect its retained stderr log"
+                        ));
+                    }
+                }
                 if tokio::net::TcpStream::connect(("127.0.0.1", api + offset))
                     .await
                     .is_ok()
                 {
+                    eprintln!(
+                        "beacon fixture validator {offset} listener bound: elapsed={:.3}s",
+                        started.elapsed().as_secs_f64()
+                    );
                     break;
                 }
                 sleep(Duration::from_millis(200)).await;
             }
         }
+        Ok::<_, eyre::Report>(())
     })
     .await
-    .wrap_err("fixture validators did not bind their public listeners")?;
+    .wrap_err_with(|| {
+        format!(
+            "fixture validators did not bind their public listeners after {:.3}s of listener wait",
+            started.elapsed().as_secs_f64()
+        )
+    })??;
     Ok(())
 }
 struct Peers {
@@ -351,6 +443,7 @@ fn spawn_peers(
             .transpose()?;
         let mut child = command(daemon, directory);
         child
+            .arg("--sora")
             .arg("--config")
             .arg(&path)
             .arg("--test-network-production-beacon-custody")
@@ -461,8 +554,9 @@ impl Canary<'_> {
         operation: &str,
         predecessor: Option<&Path>,
         deadline: Instant,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, u64)> {
         let envelope = self.directory.join(format!("{operation}.prepared.json"));
+        let mut proved_height = None;
         let kind = if operation == "final-canary" {
             "write_canary"
         } else {
@@ -475,6 +569,7 @@ impl Canary<'_> {
                 .arg(self.config)
                 .arg("--operator-private-key-file")
                 .arg(self.directory.join("runtime/operator-signer.key"))
+                .args(["--fee-payer", "authority"])
                 .args([
                     "taira",
                     "write-canary",
@@ -538,12 +633,54 @@ impl Canary<'_> {
                 descriptors.push((previous.as_raw_fd(), 101));
             }
             inherit(&mut child, &descriptors)?;
-            let bytes = run(child, deadline).await?;
+            let phase = if prepare { "prepare" } else { "submit" };
+            let started = Instant::now();
+            eprintln!(
+                "beacon fixture {operation} {phase} started: remaining={:.3}s",
+                deadline.saturating_duration_since(started).as_secs_f64()
+            );
+            let bytes = run(child, deadline).await.wrap_err_with(|| {
+                format!(
+                    "native {operation} {phase} failed after {:.3}s",
+                    started.elapsed().as_secs_f64()
+                )
+            })?;
+            eprintln!(
+                "beacon fixture {operation} {phase} complete: elapsed={:.3}s",
+                started.elapsed().as_secs_f64()
+            );
             let receipt: Value = json::from_slice(&bytes)?;
             ensure!(
                 text(&receipt, "status")? == "ok",
                 "native prepared canary did not succeed"
             );
+            if !prepare {
+                // The native child requires state-resolved Applied and proves
+                // the committed transaction is byte-identical to this retained
+                // envelope. Counters alone must never drive the DKG height FD.
+                let retained = fs::read(&envelope)?;
+                ensure!(
+                    text(&receipt, "recovery_outcome")? == "Applied"
+                        && text(&receipt, "prepared_envelope_sha256")?
+                            == hex(&iroha_crypto::sha256(&retained))
+                        && field(&receipt, "prepared_envelope_size")?.as_u64()
+                            == Some(retained.len() as u64)
+                        && text(&receipt, "authorization_sha256")? == self.authorization
+                        && text(&receipt, "authorization_nonce")? == self.nonce
+                        && text(&receipt, "mutation_kind")? == kind
+                        && text(&receipt, "mutation_phase")? == "pre_edge"
+                        && text(&receipt, "idempotency_key")? == idempotency(&self.nonce, kind)
+                        && !text(&receipt, "evidence")?.is_empty(),
+                    "native canary proof receipt does not bind the exact retained operation"
+                );
+                proved_height = field(&receipt, "applied_block_height")?
+                    .as_u64()
+                    .filter(|height| *height > 1);
+                ensure!(
+                    proved_height.is_some(),
+                    "native canary omitted its proved Applied height"
+                );
+            }
             private_file(
                 &self.directory.join(format!(
                     "{operation}-{}.json",
@@ -552,7 +689,10 @@ impl Canary<'_> {
                 &bytes,
             )?;
         }
-        Ok(envelope)
+        Ok((
+            envelope,
+            proved_height.ok_or_else(|| eyre!("missing native canary proof receipt"))?,
+        ))
     }
 }
 
@@ -668,13 +808,26 @@ async fn sign_and_assemble(
 async fn submit_install(
     client: &iroha::client::Client,
     instructions_path: &Path,
+    expected_certificate: &ThresholdKeyLifecycleCertificateV1,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<u64> {
     let instructions: Vec<InstructionBox> = json::from_slice(&fs::read(instructions_path)?)?;
     ensure!(
         instructions.len() == 1,
         "native installation must be one certificate instruction"
     );
+    let installation = instructions[0]
+        .as_any()
+        .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+        .ok_or_else(|| eyre!("native installation is not a lifecycle certificate"))?;
+    let mut unsigned_certificate = installation.certificate.clone();
+    unsigned_certificate.signatures.clear();
+    ensure!(
+        unsigned_certificate == *expected_certificate
+            && unsigned_certificate.action == ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        "assembled installation differs from the native bootstrap certificate"
+    );
+    let install_height = installation.certificate.effective_height;
     let client = client.with_request_deadline(deadline.into_std());
     let account = client.account_client()?;
     let mut payload = account.prepare_transaction(
@@ -683,11 +836,17 @@ async fn submit_install(
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+        // This sole exact-height lifecycle certificate uses authenticated
+        // Ordinary ingress; useful canaries and paid deployment keep QueuePlanSynced.
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary),
     )?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;
+    ensure!(
+        quote.observation.next_block_height == install_height,
+        "install quote changed the certificate's exact next height"
+    );
     ensure!(
         payload
             .fee_payment
@@ -706,7 +865,7 @@ async fn submit_install(
         timeout_at(deadline, account.submit_transaction_and_wait(&transaction)).await?? == expected,
         "installation hash changed"
     );
-    Ok(())
+    Ok(install_height)
 }
 
 fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
@@ -725,10 +884,43 @@ fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
     store.read_block_data(index[0].start, &mut bytes)?;
     Ok(decode_framed_signed_block(&bytes)?)
 }
-fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
+fn verify_pulse(
+    peer_configs: &[PathBuf],
+    bundle: &Value,
+    maintenance_entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    iroha_genesis::init_instruction_registry();
     let record: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
         json::from_value(field(bundle, "record")?.clone())?;
     record.validate()?;
+    let genesis = field(bundle, "genesis")?;
+    let manifest: iroha_genesis::RawGenesisTransaction =
+        json::from_value(field(genesis, "manifest")?.clone())?;
+    let signed_wire: Vec<u8> = json::from_value(field(genesis, "signed_wire")?.clone())?;
+    let public_key: iroha_crypto::PublicKey =
+        json::from_value(field(genesis, "public_key")?.clone())?;
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &signed_wire,
+        &manifest,
+        &public_key,
+        record.session.network_id.into_genesis_hash(),
+    )?;
+    let parameters = manifest.effective_parameters()?;
+    let npos = parameters
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
+    let epoch_length = npos.epoch_length_blocks().get();
+    ensure!(epoch_length == 11, "fixture must exercise real maintenance merge at mandatory height 10");
+    let maintenance_tree: MerkleTree<TransactionEntrypoint> =
+        [maintenance_entrypoint_hash].into_iter().collect();
+    let pulse_height = epoch_length
+        .checked_sub(1)
+        .filter(|height| *height > 1)
+        .ok_or_else(|| eyre!("signed genesis has no first mandatory pulse anchor"))?;
+    let anchor_height = pulse_height - 1;
     let session = beacon::validate_global_threshold_beacon_session_v1(
         record.session.clone(),
         &beacon::GlobalThresholdBeaconSessionBindingV1 {
@@ -745,25 +937,53 @@ fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
         let native = config(config_path)?;
         let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
         ensure!(
-            store.read_index_count()? >= 8,
+            store.read_index_count()? >= epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
-        let anchor = read_block(&mut store, 6)?;
-        let block = read_block(&mut store, 7)?;
+        let anchor = read_block(&mut store, anchor_height)?;
+        let block = read_block(&mut store, pulse_height)?;
+        // Native completion has already authenticated this exact native maintenance
+        // transaction as Applied on all four peers. Bind it to the sole leaf of
+        // the execution-bearing merge at the mandatory pulse height, excluding
+        // unrelated transactions, QueuePlan admissions and anchor padding.
+        let context = block.execution_context()
+            .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
+        let reference = context.merge_entry.as_ref()
+            .ok_or_else(|| eyre!("first maintenance transaction did not execute on the mandatory pulse carrier"))?;
         ensure!(
-            !block.is_empty() && block.external_entrypoint_count() > 0,
-            "mandatory pulse was carried by an empty block"
+            reference.execution_batch_hash.is_some()
+                && reference.entrypoint_count == Some(1)
+                && reference.entrypoint_merkle_root == maintenance_tree.root()
+                && block.external_entrypoint_count() == 0
+                && context.queue_plan_admissions.is_empty()
+                && context.autonomous_lane_payloads.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native maintenance merge"
+        );
+        // Canonical QueuePlan admissions and autonomous anchors are genuine
+        // protocol content even when they contain no external transaction row.
+        ensure!(
+            !block.is_empty()
+                && (block.external_entrypoint_count() > 0
+                    || block
+                        .execution_context()
+                        .is_some_and(|context| !context.is_empty())),
+            "mandatory pulse lacks useful canonical content independent of its effects"
         );
         let pulse = block
             .npos_consensus_effects()
             .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref())
-            .ok_or_else(|| eyre!("mandatory pulse is absent from block seven"))?;
-        ensure!(pulse.height == 7, "mandatory pulse height differs");
+            .ok_or_else(|| {
+                eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
+            })?;
+        ensure!(
+            pulse.height == pulse_height,
+            "mandatory pulse height differs"
+        );
         beacon::verify_finalized_global_threshold_beacon_pulse_v1(
             &session,
             pulse,
             GlobalThresholdBeaconChainAnchorV1 {
-                height: 6,
+                height: anchor_height,
                 block_hash: anchor.hash(),
             },
         )?;
@@ -784,8 +1004,405 @@ fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
     Ok(())
 }
 
+fn set_snapshot_mode(peer_configs: &[PathBuf], mode: &str) -> Result<()> {
+    ensure!(
+        matches!(mode, "disabled" | "read_write"),
+        "invalid fixture snapshot mode"
+    );
+    for path in peer_configs {
+        let mut table: toml::Table = fs::read_to_string(path)?.parse()?;
+        let snapshot = table
+            .get_mut("snapshot")
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| eyre!("fixture snapshot configuration missing"))?;
+        snapshot.insert("mode".into(), toml::Value::String(mode.into()));
+        fs::write(path, toml::to_string(&table)?)?;
+    }
+    Ok(())
+}
+fn peer_logs(directory: &Path, peer: usize, run: u16) -> [PathBuf; 2] {
+    [
+        directory.join(format!("peer{peer}-run{run}-stdout.log")),
+        directory.join(format!("peer{peer}-run{run}-stderr.log")),
+    ]
+}
+struct Runtime<'a> {
+    directory: &'a Path,
+    daemon: &'a Path,
+    roster: &'a [iroha_model_base::peer::PeerId],
+    ceremony: &'a Path,
+    api: u16,
+    clients: &'a [iroha::client::Client],
+    peers: &'a mut Peers,
+    run: u16,
+}
+impl Runtime<'_> {
+    async fn restart(&mut self, deadline: Instant) -> Result<()> {
+        self.peers.stop(deadline).await?;
+        self.run = self
+            .run
+            .checked_add(1)
+            .ok_or_else(|| eyre!("fixture run counter overflow"))?;
+        *self.peers = spawn_peers(
+            self.directory,
+            self.daemon,
+            self.roster,
+            Some(self.ceremony),
+            self.run,
+        )?;
+        listeners_started(self.peers, self.api, deadline).await?;
+        for index in 0..4 {
+            ready(self.api + index, 200, deadline).await?;
+        }
+        Ok(())
+    }
+    async fn signed_snapshot_restart(&mut self, applied_height: u64) -> Result<()> {
+        let snapshot_deadline = Instant::now() + Duration::from_secs(60);
+        timeout_at(snapshot_deadline, async {
+            loop {
+                let mut complete = true;
+                for peer in 0..4 {
+                    let root = self.directory.join(format!("state/peer{peer}/snapshot"));
+                    let height = public_sequence::snapshot_height(&root)?;
+                    complete &= if let Some(height) = height {
+                        height >= applied_height && public_sequence::snapshot_log_contains_height(&peer_logs(self.directory, peer, self.run), "Successfully created a snapshot of state", height)?
+                    } else { false };
+                }
+                if complete { return Ok::<_, eyre::Report>(()); }
+                sleep(Duration::from_millis(200)).await;
+            }
+        }).await.wrap_err("all validators must publish complete signed snapshots after the exact Applied transaction")??;
+        let restart = Instant::now() + PHASE_BUDGET;
+        self.peers.stop(restart).await?;
+        let heights = (0..4)
+            .map(|peer| {
+                public_sequence::snapshot_height(
+                    &self.directory.join(format!("state/peer{peer}/snapshot")),
+                )?
+                .ok_or_else(|| eyre!("snapshot disappeared during shutdown"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            heights.iter().all(|height| *height >= applied_height),
+            "shutdown snapshot regressed"
+        );
+        // Restart uses newly consumed FD198/199/200 copies of the same retained
+        // production credentials, never the already-truncated launch copies.
+        self.restart(restart).await?;
+        timeout_at(restart, async {
+            loop {
+                let mut complete = true;
+                for peer in 0..4 {
+                    let status = validator_status_until(&self.clients[peer], restart).await?;
+                    complete &= status.blocks >= heights[peer]
+                        && public_sequence::snapshot_log_contains_height(
+                            &peer_logs(self.directory, peer, self.run),
+                            "Successfully loaded the state from a snapshot",
+                            heights[peer],
+                        )?;
+                }
+                if complete {
+                    return Ok::<_, eyre::Report>(());
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .wrap_err("native restart did not authenticate each retained signed snapshot")??;
+        Ok(())
+    }
+}
+
+fn assert_native_routes(
+    peer_configs: &[PathBuf],
+    universal: &iroha::client::Client,
+    routed: &iroha::client::Client,
+) -> Result<()> {
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    let universal = universal
+        .to_builder()
+        .account
+        .to_i105_for_discriminant(369)?;
+    let routed = routed.to_builder().account.to_i105_for_discriminant(369)?;
+    ensure!(
+        universal != routed,
+        "route scenarios must use different canonical accounts"
+    );
+    for path in peer_configs {
+        let native = config(path)?;
+        let policy = &native.nexus.routing_policy;
+        ensure!(
+            policy.default_lane.as_u32() == 0,
+            "universal scenario lost its native default route"
+        );
+        ensure!(
+            policy
+                .rules
+                .iter()
+                .all(|rule| rule.matcher.account.as_deref() != Some(universal.as_str())),
+            "default-route account gained an exact override"
+        );
+        let selected = policy
+            .rules
+            .iter()
+            .find(|rule| rule.matcher.account.as_deref() == Some(routed.as_str()))
+            .ok_or_else(|| eyre!("explicit routed fixture account absent"))?;
+        let lane = native
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id.as_u32() == 3)
+            .ok_or_else(|| eyre!("native PayNet lane absent"))?;
+        ensure!(
+            selected.lane == lane.id
+                && selected.dataspace == Some(lane.dataspace_id)
+                && selected.matcher.instruction.is_none(),
+            "explicit account route changed native lane or dataspace"
+        );
+    }
+    Ok(())
+}
+
+// The preceding paid helper has already authenticated the exact three retained
+// transactions and completion on all four peers. Reconstruct its catalog result
+// from that local plan and the unchanged generated startup authority, never from
+// an HTTP state response that the next scenario is meant to verify.
+fn catalog_fixture(
+    prepared: &prepare::Prepared,
+    peer_configs: &[PathBuf],
+    clients: &[iroha::client::Client],
+    api: u16,
+) -> Result<super::runtime_catalog_transition::real_custody::CatalogFixture> {
+    use super::runtime_catalog_transition::real_custody::{CatalogFixture, CatalogPeer};
+    use iroha_core::governance::manifest::LaneManifestRegistry;
+    use iroha_crypto::Hash;
+    use iroha_data_model::nexus::{
+        LaneCatalog, LaneLifecycleParameterV1, LaneLifecycleStatusV1, NexusCatalogTransitionV1,
+        NexusRuntimeCatalogV1, dataspace_catalog_hash,
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    ensure!(
+        peer_configs.len() == 4 && clients.len() == 4,
+        "catalog requires four native configurations"
+    );
+    let configs = peer_configs
+        .iter()
+        .map(|path| config(path))
+        .collect::<Result<Vec<_>>>()?;
+    let first = &configs[0].nexus;
+    let registry = LaneManifestRegistry::from_config(
+        &first.configured_lane_catalog,
+        &first.governance,
+        &first.registry,
+    );
+    let manifests_hash = Hash::prehashed(registry.baseline_consensus_policy_digest());
+    for config in &configs {
+        let nexus = &config.nexus;
+        let registry = LaneManifestRegistry::from_config(
+            &nexus.configured_lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        );
+        ensure!(
+            nexus.configured_lane_catalog == first.configured_lane_catalog
+                && nexus.configured_dataspace_catalog == first.configured_dataspace_catalog
+                && Hash::prehashed(registry.baseline_consensus_policy_digest()) == manifests_hash,
+            "four generated immutable catalog authorities differ"
+        );
+    }
+    let plan: Value = json::from_slice(&fs::read(
+        prepared
+            .directory
+            .join("paid-deployment/journal/clean-client-dpn/plan.json"),
+    )?)?;
+    let baseline: LaneLifecycleStatusV1 = json::from_value(field(&plan, "baseline")?.clone())?;
+    let transition: NexusCatalogTransitionV1 =
+        json::from_value(field(&plan, "catalog_transition")?.clone())?;
+    transition.validate_structure()?;
+    ensure!(
+        text(&plan, "operation_id")? == "clean-client-dpn"
+            && field(&plan, "baseline_overlay")?.is_null()
+            && baseline.validate()? == first.configured_lane_catalog
+            && baseline.catalog_hash
+                == LaneLifecycleParameterV1::catalog_hash(&first.configured_lane_catalog)
+            && transition.expected_catalog_hash == baseline.catalog_hash
+            && transition.expected_incarnation_root == baseline.incarnation_root
+            && transition.expected_runtime_catalog_hash.is_none(),
+        "retained paid transition is not bound to the exact native baseline"
+    );
+    ensure!(
+        transition.lane_additions.len() == 1
+            && transition.lane_additions[0].id == LaneId::new(6)
+            && transition.dataspace_additions.len() == 1
+            && transition.manifest_additions.len() == 1,
+        "paid fixture no longer has its exact single catalog addition"
+    );
+    let mut lanes = first.configured_lane_catalog.lanes().to_vec();
+    lanes.extend(transition.lane_additions.clone());
+    let lane_count = lanes
+        .iter()
+        .map(|lane| lane.id.as_u32() + 1)
+        .max()
+        .unwrap()
+        .max(baseline.lane_count);
+    let lanes = LaneCatalog::new(
+        std::num::NonZeroU32::new(lane_count).ok_or_else(|| eyre!("zero namespace"))?,
+        lanes,
+    )?;
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: dataspace_catalog_hash(&first.configured_dataspace_catalog),
+        baseline_manifests_hash: manifests_hash,
+        dataspaces: transition.dataspace_additions,
+        manifests: transition.manifest_additions,
+    };
+    runtime.validate_structure()?;
+    let old = first
+        .configured_lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == first.routing_policy.default_lane)
+        .ok_or_else(|| eyre!("configured default lane missing"))?;
+    let writer = client(&prepared.directory.join("client.toml"), api)?;
+    let grantee = client(&prepared.routed_client, api)?.to_builder().account;
+    let manifest = iroha_genesis::RawGenesisTransaction::from_path(
+        prepared.genesis_directory.join("genesis.json"),
+    )?;
+    let genesis = iroha_genesis::validate_prepared_genesis_bundle(
+        &fs::read(prepared.genesis_directory.join("genesis.signed.nrt"))?,
+        &manifest,
+        &prepared.genesis_public_key,
+        prepared.network_id.into_genesis_hash(),
+    )?;
+    let peers = configs
+        .iter()
+        .zip(clients)
+        .map(|(config, client)| CatalogPeer {
+            client: client.clone(),
+            peer_id: config.common.peer.id.clone(),
+            kura_store: config.kura.store_dir.value().to_path_buf(),
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| eyre!("catalog reader count differs"))?;
+    Ok(CatalogFixture {
+        peers,
+        delegator: writer.to_builder().account,
+        writer,
+        genesis,
+        baseline_dataspaces: first.configured_dataspace_catalog.clone(),
+        baseline_lanes: lanes.lanes().to_vec(),
+        previous_runtime: Some(runtime),
+        old_route: (old.id, old.dataspace_id),
+        added_lane: LaneId::new(5),
+        added_dataspace: DataSpaceId::new(56_005),
+        grantee,
+    })
+}
+
+async fn retained_catalog_recovery(
+    runtime: &mut Runtime<'_>,
+    prepared: &prepare::Prepared,
+    peer_configs: &[PathBuf],
+) -> Result<()> {
+    use super::runtime_catalog_transition::real_custody::{
+        CatalogScenario, replayed_complete_history,
+    };
+    let mut scenario = CatalogScenario::begin(catalog_fixture(
+        prepared,
+        peer_configs,
+        runtime.clients,
+        runtime.api,
+    )?)
+    .await?;
+    let replay_height = scenario.replay_height();
+    let restart_deadline = Instant::now() + FUNCTIONAL_FINALITY_TIMEOUT;
+    runtime.peers.stop(restart_deadline).await?;
+    for peer in 0..4 {
+        ensure!(
+            public_sequence::snapshot_height(
+                &runtime.directory.join(format!("state/peer{peer}/snapshot"))
+            )?
+            .is_none(),
+            "retained full replay must precede every signed snapshot publication"
+        );
+    }
+    // Enabling the writer on this restart matches the retained contract: state
+    // first reconstructs the complete Kura prefix, then may publish snapshots.
+    set_snapshot_mode(peer_configs, "read_write")?;
+    let previous_run = runtime.run;
+    runtime.restart(restart_deadline).await?;
+    ensure!(
+        runtime.run > previous_run,
+        "full replay reused a prior daemon run"
+    );
+    timeout_at(restart_deadline, async {
+        loop {
+            let mut complete = true;
+            for peer in 0..4 {
+                complete &= validator_status_until(&runtime.clients[peer], restart_deadline)
+                    .await?
+                    .blocks
+                    >= replay_height
+                    && replayed_complete_history(
+                        &peer_logs(runtime.directory, peer, runtime.run),
+                        replay_height,
+                    )?;
+            }
+            if complete {
+                return Ok::<_, eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .wrap_err("all four validators must replay the authenticated complete Kura prefix")??;
+    let snapshot_height = scenario.after_full_replay().await?;
+    runtime.signed_snapshot_restart(snapshot_height).await?;
+    scenario.after_snapshot_restore().await?;
+    eprintln!(
+        "catalog expansion retained exact four-peer execution, committee and permission history through full replay and signed snapshot restore"
+    );
+    Ok(())
+}
+
+async fn both_public_sequences(
+    runtime: &mut Runtime<'_>,
+    peer_configs: &[PathBuf],
+    routed_config: &Path,
+) -> Result<()> {
+    let universal = client(&runtime.directory.join("client.toml"), runtime.api)?;
+    let routed = client(routed_config, runtime.api)?;
+    assert_native_routes(peer_configs, &universal, &routed)?;
+    set_snapshot_mode(peer_configs, "read_write")?;
+    runtime.restart(Instant::now() + PHASE_BUDGET).await?;
+    for (scope, client) in [("universal", universal), ("explicit PayNet", routed)] {
+        let mut height = status_height(runtime.clients, Instant::now() + PHASE_BUDGET).await?;
+        for sequence in 1..=3 {
+            height =
+                public_sequence::submit_and_observe(&client, runtime.clients, sequence, height)
+                    .await?;
+            if sequence == 2 {
+                runtime.signed_snapshot_restart(height).await?;
+            }
+        }
+        eprintln!(
+            "retained {scope} three-transaction contract passed on real custody, including all-four signed-snapshot restore and post-restart Applied"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<()> {
+    // Validate the same immutable identity used by the paid trust helper before
+    // artifact reads, custody creation, genesis generation, or child startup.
+    // Explicit development identity remains valid for diagnostic runs; signed
+    // source and artifact qualification belong to the maintained outer gate.
+    let build_identity = iroha_core::compiled_build_identity!()
+        .wrap_err("production beacon fixture has invalid compiled build metadata")?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let daemon = binary(
@@ -800,8 +1417,27 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
     let kagami = binary("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami)?;
     let workspace = runtime_workspace()?;
     let (api, p2p, reservations) = reserve_ports()?;
-    let startup = Instant::now() + PHASE_BUDGET;
-    let prepared = prepare::prepare(workspace.path(), &kagami, api, p2p, startup).await?;
+    let preparation_started = Instant::now();
+    let preparation_deadline = preparation_started + PHASE_BUDGET;
+    eprintln!(
+        "beacon fixture preparing fresh genesis: budget={:.3}s",
+        PHASE_BUDGET.as_secs_f64()
+    );
+    let prepared =
+        match prepare::prepare(workspace.path(), &kagami, api, p2p, preparation_deadline).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!(
+                    "beacon fixture preparation retained at {}",
+                    workspace.keep().display()
+                );
+                return Err(error);
+            }
+        };
+    eprintln!(
+        "beacon fixture fresh genesis prepared: elapsed={:.3}s",
+        preparation_started.elapsed().as_secs_f64()
+    );
     let directory = &prepared.directory;
     let fresh = fresh_client(directory, &prepared.network_id)?;
     let clients = (0..4)
@@ -831,20 +1467,30 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
         .map_err(|_| eyre!("faucet policy length"))?;
     drop(table);
     drop(reservations);
+    // Native genesis generation is a separate bounded phase. Each daemon must
+    // authenticate and execute that genesis before its public listener starts.
+    let startup_started = Instant::now();
+    let startup = startup_started + PHASE_BUDGET;
+    eprintln!(
+        "beacon fixture starting four validators: budget={:.3}s",
+        PHASE_BUDGET.as_secs_f64()
+    );
     let mut peers = spawn_peers(directory, &daemon, &prepared.roster, None, 1)?;
+    let mut maintenance = None;
     let outcome: Result<()> = async {
-        listeners_started(api, startup).await?;
-        ensure!(status_height(&clients, startup).await? == 1, "fresh network produced unsolicited blocks");
+        listeners_started(&mut peers, api, startup).await?;
+        wait_for_exact_height(&clients, 1, startup).await?;
         for offset in 0..4 { ready(api + offset, 503, startup).await?; }
+        eprintln!("beacon fixture initial startup complete: elapsed={:.3}s", startup_started.elapsed().as_secs_f64());
         let ceremony_deadline = Instant::now() + PHASE_BUDGET;
         let ceremony = directory.join("beacon-ceremony");
         let (height_read, height_write) = nix::unistd::pipe()?;
         let mut height_write = File::from(height_write);
         let mut provision = command(&launcher, directory);
         provision.args(["beacon-bootstrap", "provision", "--request"]).arg(&prepared.request)
-            .arg("--genesis-manifest").arg(directory.join("genesis.json"))
-            .arg("--genesis-signed").arg(directory.join("genesis.signed.nrt"))
-            .arg("--genesis-public-key").arg(directory.join("genesis.public_key"))
+            .arg("--genesis-manifest").arg(prepared.genesis_directory.join("genesis.json"))
+            .arg("--genesis-signed").arg(prepared.genesis_directory.join("genesis.signed.nrt"))
+            .arg("--genesis-public-key").arg(prepared.genesis_directory.join("genesis.public_key"))
             .args(["--observed-height", "1", "--height-fd", "197", "--output"]).arg(&ceremony)
             .args(["--timeout-ms", "180000"]);
         inherit(&mut provision, &[(height_read.as_raw_fd(), 197)])?;
@@ -861,47 +1507,87 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
         let expires_ms = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis())? + 180_000;
         let canary = Canary { binary: &cli, directory, config: &fresh, root: format!("http://127.0.0.1:{api}"), nonce, authorization, expires_ms, faucet };
         let mut previous = None;
-        for (index, operation) in ["onboarding", "faucet", "final-canary"].iter().enumerate() {
-            previous = Some(canary.operation(operation, previous.as_deref(), ceremony_deadline).await?);
-            let height = status_height(&clients, ceremony_deadline).await?;
-            ensure!(height == (index as u64) + 2, "useful bootstrap operation did not advance exactly once");
-            writeln!(height_write, "{height}")?;
+        let mut last_proved_height = 1;
+        for operation in ["onboarding", "faucet", "final-canary"] {
+            let (envelope, proved_height) = canary.operation(operation, previous.as_deref(), ceremony_deadline).await?;
+            previous = Some(envelope);
+            ensure!(proved_height > last_proved_height, "proved useful operation did not strictly advance height");
+            wait_for_exact_height(&clients, proved_height, ceremony_deadline).await?;
+            last_proved_height = proved_height;
+            writeln!(height_write, "{proved_height}")?;
             height_write.flush()?;
         }
         drop(height_write);
         let status = timeout_at(ceremony_deadline, provision.wait()).await??;
         ensure!(status.success(), "fresh native DKG provisioning failed");
         let bundle: Value = json::from_slice(&fs::read(ceremony.join("public-bundle.json"))?)?;
-        ensure!(field(&bundle, "finalized_observed_height")?.as_u64() == Some(4), "ceremony backdated its finalization");
+        ensure!(field(&bundle, "finalized_observed_height")?.as_u64() == Some(last_proved_height), "ceremony backdated its finalization");
+        let certificate: ThresholdKeyLifecycleCertificateV1 = json::from_value(field(&bundle, "certificate")?.clone())?;
+        let expected_install_height = last_proved_height.checked_add(1).ok_or_else(|| eyre!("installation height overflow"))?;
+        ensure!(certificate.effective_height == expected_install_height, "native certificate is not effective at the exact next proved height");
         let instruction = sign_and_assemble(&launcher, directory, &ceremony, &prepared.roster, ceremony_deadline).await?;
-        // Install real credentials before the on-chain certificate. The same
-        // four ledgers are retained; this cannot manufacture a bootstrap pulse.
+        // Match the maintained controller: commit the certificate without a
+        // local beacon provider, then activate custody on the same four ledgers.
+        // Installation and provider restart share one unchanged phase deadline.
         let restart = Instant::now() + PHASE_BUDGET;
+        let install_height = submit_install(&clients[0], &instruction, &certificate, restart).await?;
+        wait_for_exact_height(&clients, install_height, restart).await?;
+        for offset in 0..4 { ready(api + offset, 503, restart).await?; }
         peers.stop(restart).await?;
         let peer_configs = install_provider_configs(directory, &bundle, &prepared.roster)?;
         peers = spawn_peers(directory, &daemon, &prepared.roster, Some(&ceremony), 2)?;
-        listeners_started(api, restart).await?;
-        ensure!(status_height(&clients, restart).await? == 4, "credential installation changed the retained chain");
-        for offset in 0..4 { ready(api + offset, 503, restart).await?; }
-        submit_install(&clients[0], &instruction, restart).await?;
-        ensure!(status_height(&clients, restart).await? == 5, "certificate did not install at its exact next height");
+        listeners_started(&mut peers, api, restart).await?;
+        wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
         let mut doctor = command(&cli, directory);
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
-        run(doctor, restart).await?;
-        // The complete prior clean-client assertions run on real custody. Its
-        // paid bootstrap transaction carries height seven's mandatory pulse.
-        let genesis_wire = fs::read(directory.join("genesis.signed.nrt"))?;
+        let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
+        let doctor_report: Value = json::from_slice(&run(doctor, doctor_deadline).await?)
+            .wrap_err("basic public doctor returned invalid JSON")?;
+        ensure!(doctor_report.get("status").and_then(Value::as_str) == Some("ok")
+            && doctor_report.get("scope").and_then(Value::as_str) == Some("basic"),
+            "basic public doctor omitted its successful scope");
+        // The complete prior clean-client assertions run on real custody.
+        // Their genuine operations cross the signed genesis's mandatory pulse.
+        let genesis_wire = fs::read(prepared.genesis_directory.join("genesis.signed.nrt"))?;
+        // Deployment uses the generated genesis-authorized client. The fresh
+        // public account remains the onboarding/faucet/canary actor and receives
+        // no deployment administration permissions.
+        let epoch_trust = directory.join("epoch-trust.json");
+        super::dataspace_deploy_cli::write_fixture_trust(&super::dataspace_deploy_cli::PaidDeploymentFixture {
+            binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
+            root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
+            genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
+        }, &epoch_trust)?;
+        maintenance = Some(epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?);
+        let maintenance_deadline = Instant::now() + PHASE_BUDGET;
+        let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(maintenance_deadline).await?;
+        wait_for_exact_height(&clients, 10, maintenance_deadline).await?;
+        // Paid deployment still verifies its exact three signed operations and
+        // all-four finality; it does not carry or drive operator maintenance.
         super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
-            binary: &cli, config: &fresh, operator: &directory.join("runtime/operator-signer.key"),
+            binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
         }).await?;
+        {
+            let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,
+                ceremony: &ceremony, api, clients: &clients, peers: &mut peers, run: 2 };
+            retained_catalog_recovery(&mut runtime, &prepared, &peer_configs).await?;
+            both_public_sequences(&mut runtime, &peer_configs, &prepared.routed_client).await?;
+        }
+        let operator = maintenance.as_mut().unwrap();
+        operator.stop(Instant::now() + Duration::from_secs(30)).await?;
+        operator.verify(&prepared, &clients, Instant::now() + PHASE_BUDGET).await?;
         peers.stop(Instant::now() + PHASE_BUDGET).await?;
-        verify_pulse(&peer_configs, &bundle)?;
+        verify_pulse(&peer_configs, &bundle, maintenance_entrypoint_hash)?;
         eprintln!("four fresh production-custody validators completed native onboarding/faucet/canary/install and paid deployment across a verified mandatory pulse");
         Ok(())
     }.await;
+    if let Some(operator) = &mut maintenance {
+        let stopped = operator.stop(Instant::now() + Duration::from_secs(30)).await;
+        if outcome.is_ok() { stopped?; }
+    }
     if !peers.children.is_empty() {
         let stopped = peers.stop(Instant::now() + Duration::from_secs(30)).await;
         if outcome.is_ok() {
@@ -916,6 +1602,35 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
         );
     }
     outcome
+}
+
+#[test]
+fn production_beacon_exact_height_wait_preserves_retained_tip() -> Result<()> {
+    use iroha_torii_shared::status::Status;
+    let mut statuses: [Status; 4] = std::array::from_fn(|_| Status {
+        blocks: 6,
+        ..Status::default()
+    });
+    // A shared drained replay prefix is not the retained tip. Require every
+    // peer to finish its pending tip rather than returning the common prefix.
+    assert!(!exact_height_reached(&statuses, 7)?);
+    for peer in 0..3 {
+        statuses[peer].blocks = 7;
+        assert!(!exact_height_reached(&statuses, 7)?);
+    }
+    statuses[3].blocks = 7;
+    statuses[2].queue_size = 1;
+    assert!(!exact_height_reached(&statuses, 7)?);
+    statuses[2].queue_size = 0;
+    assert!(exact_height_reached(&statuses, 7)?);
+    // Overshoot is fatal even while another peer is behind or has queued work.
+    statuses[0].blocks = 8;
+    statuses[1].blocks = 6;
+    statuses[1].queue_size = 1;
+    assert!(exact_height_reached(&statuses, 7).is_err());
+    assert!(exact_height_reached(&statuses[..3], 7).is_err());
+    assert!(exact_height_reached(&statuses, 0).is_err());
+    Ok(())
 }
 
 #[test]

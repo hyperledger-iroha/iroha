@@ -2610,6 +2610,8 @@ fn is_zero(bytes: &[u8]) -> bool {
 mod fixtures;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::signed_persisted_pulse_fixture_for_world;
+#[cfg(test)]
+pub(crate) use fixtures::signed_pulses_fixture_for_roster_and_anchors;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -4208,6 +4210,84 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn threshold_beacon_deferred_mandatory_height_stays_idle_until_real_work() {
+        let keys = live_producer_keys();
+        let network_id = beacon_fixture_network_id(0xA9);
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD9; 32]));
+        let context = live_producer_context(&keys, network_id, parent_hash);
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let mut dkg_session = adaptive_dkg_session_fixture();
+        dkg_session.network_id = network_id;
+        dkg_session.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
+        let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+        let cursor = GlobalThresholdBeaconPulseLinkV1 {
+            pulse_id: [0x69; 32],
+            seed: [0x6A; 32],
+            height: 0,
+            round: 0,
+        };
+        let state = Arc::new(live_producer_state(&fixture, cursor, parent_hash));
+        {
+            let mut world = state.world.block();
+            world
+                .global_beacon_active_session
+                .remove(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY);
+            world.commit();
+        }
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let signer: Arc<dyn GlobalThresholdBeaconPartialSignerV1> =
+            Arc::new(FailOnceBeaconSigner {
+                inner: live_fixture_signer(&fixture, 1),
+                attempts: Arc::clone(&attempts),
+            });
+        assert_eq!(context.height + 1, context.epoch_end_height);
+        let mut producer = V2GlobalBeaconLifecycle::open_deferred(
+            &context,
+            Arc::clone(&state),
+            Some(0),
+            Some(signer),
+        )
+        .expect("an idle mandatory height does not require session activation");
+        assert!(producer.pulse_requested());
+        assert!(producer.pulse_required_for_consensus());
+        for view in [0, 1] {
+            producer
+                .begin_round(view)
+                .expect("idle view remains dormant");
+            assert!(producer.take_outbound().is_empty());
+            assert!(producer.retransmission().is_empty());
+            assert!(producer.finalized_pulse(view).is_none());
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            assert!(matches!(
+                producer.activate(),
+                Err(V2GlobalBeaconError::State("active key session is absent"))
+            ));
+            let mut effects = NposConsensusEffects::default();
+            assert!(producer.attach_candidate_effects(1, &mut effects).is_err());
+            assert!(effects.is_empty());
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        assert!(producer.take_outbound().is_empty());
+        assert_eq!(state.block_hashes.view().len(), 40);
+        assert_eq!(state.block_hashes.view().last(), Some(&parent_hash));
+        let world = state.world.view();
+        assert!(world.global_beacon_pulses().iter().next().is_none());
+        assert_eq!(
+            world
+                .global_beacon_latest_pulse()
+                .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY),
+            Some(&cursor),
+            "idle and rejected activation must not advance the committed pulse cursor"
+        );
+    }
+
+    #[test]
     fn threshold_beacon_live_v2_producer_is_bound_restartable_and_persists_effect() {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xA1);
@@ -4228,20 +4308,28 @@ pub(crate) mod tests {
             height: 0,
             round: 0,
         };
-        let state = live_producer_state(&fixture, cursor, parent_hash);
+        let state = Arc::new(live_producer_state(&fixture, cursor, parent_hash));
         let signers = (1_u16..=4)
             .map(|index| live_fixture_signer(&fixture, index))
             .collect::<Vec<_>>();
 
         let mut messages = Vec::new();
         for (index, signer) in signers.iter().enumerate() {
-            let mut producer = V2GlobalBeaconLifecycle::open(
+            let mut producer = V2GlobalBeaconLifecycle::open_deferred(
                 &context,
-                &state,
+                Arc::clone(&state),
                 Some(u32::try_from(index).expect("validator index")),
                 Some(Arc::clone(signer)),
             )
-            .expect("open validator producer");
+            .expect("open deferred validator producer");
+            producer.begin_round(0).expect("idle round remains dormant");
+            assert!(producer.take_outbound().is_empty());
+            assert!(producer.retransmission().is_empty());
+            assert!(producer.finalized_pulse(0).is_none());
+            producer
+                .activate()
+                .expect("real carrier demand activates the exact session");
+            producer.activate().expect("activation is idempotent");
             producer.begin_round(0).expect("sign exact round");
             let outbound = producer.take_outbound();
             assert_eq!(outbound.len(), 1);
@@ -4339,6 +4427,50 @@ pub(crate) mod tests {
             .attach_candidate_effects(0, &mut effects)
             .expect("attach exact finalized pulse to candidate effects");
         assert_eq!(effects.finalized_global_beacon_pulse, Some(pulse));
+
+        let mut pulse_only: iroha_data_model::block::SignedBlock =
+            crate::block::ValidBlock::new_dummy_and_modify_header(
+                keys[0].private_key(),
+                |header| {
+                    header.set_height(
+                        core::num::NonZeroU64::new(context.height).expect("pulse height"),
+                    );
+                    header.set_prev_block_hash(Some(parent_hash));
+                },
+            )
+            .into();
+        pulse_only.set_npos_consensus_effects(Some(effects.clone()));
+        assert!(
+            !crate::sumeragi::v2_candidate::candidate_block_has_proposal_work(
+                &pulse_only,
+                &state,
+                false,
+            ),
+            "a cryptographically finalized pulse cannot manufacture proposal work"
+        );
+        let account_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("external operation key");
+        let transaction = iroha_data_model::transaction::TransactionBuilder::new(
+            network_id,
+            AccountId::new(account_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "genuine operation accompanying the required pulse".to_owned(),
+        )])
+        .sign(account_key.private_key());
+        pulse_only.set_external_entrypoints(vec![
+            iroha_data_model::transaction::TransactionEntrypoint::External(transaction),
+        ]);
+        assert!(
+            crate::sumeragi::v2_candidate::candidate_block_has_proposal_work(
+                &pulse_only,
+                &state,
+                false,
+            ),
+            "the same authenticated pulse may accompany a genuine external operation"
+        );
 
         let mut restarted = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None)
             .expect("restart signerless validator reducer");

@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **786 native regressions on macOS**: startup
+`--native-check-scope basic` runs **852 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **965-case** native census,
+Use `--native-check-scope full` to execute the full **1030-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -16,18 +16,76 @@ changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
 
+Both scopes reject pulse-only proposal work, including received and recovered
+bodies. An idle mandatory height defers session activation and signing until
+independent work exists; useful work still requires its exact validated pulse.
+The bounded proposal snapshot retains its queue ownership while that pulse is
+pending, and the real threshold-signature regression checks the shared gate.
+Both scopes also verify a genuine threshold pulse composed with certified merge
+execution: original certified roots remain bound, the composed state commits
+once, and invalid effects or changes after sealing are rejected.
+
+Before the four-peer fixture, both scopes check that paid lane authorities come
+from registered and activated accounts bound to peers in signed genesis, and
+that failure summaries retain public phase status without transaction payloads.
+
+Both scopes select the seven native single-epoch derivation controls and four
+bounded public epoch-schedule controls. They cover exact network, epoch and
+validator binding, range and fee bounds, explicit public CLI inputs, one private
+pipe consumption, descriptor closure, wiped inputs and complete public output.
+These producer controls do not establish committed maintenance or authorize a
+live transaction; the operator workflow requires its separate lifecycle checks.
+
+Both scopes require the native epoch-maintenance controls for authenticated
+current-height observation, bounded roster schedules, actual-epoch and carrier
+deadlines, fee and lifetime binding, durable single dispatch across renewal, and
+staking admission. The two fixture controls reject unsafe seed-pipe custody and
+noncontiguous or incorrectly bound public schedules before peer startup. The
+complete four-peer network selector remains unchanged. These gate selections do
+not claim operational maintainer startup or supervision; those remain deployment
+prerequisites.
+
 Both scopes qualify production beacon capability against the exact public session
 and validator seat, consumed runtime credentials, genesis-bound bootstrap and
 readiness before network fixtures. An uninitialized signer fails readiness while
 bootstrap ingress remains available. Setup uses real committed transactions to
 advance DKG phases; it never creates empty blocks or invents committed heights.
 The shipping Taira bootstrap executable is a separately authenticated artifact.
-The real four-peer fixture uses fresh native DKG custody, reaches the mandatory
-beacon pulse, then runs the complete paid dataspace deployment and four-peer
-finality workflow. Its generated custody lives only in a validated owner-only
+The real four-peer fixture uses fresh native DKG custody and crosses the mandatory
+beacon pulse during the complete paid dataspace deployment and four-peer
+finality workflow, additive catalog recovery, and both public routing sequences.
+Its signed short epoch allows the real admission, payload-anchor and merge
+carriers to complete before certificate installation and signer activation. DKG
+finalization records the actual authenticated committed height; it does not
+assume one block per operation. Pulse verification derives its height and parent
+anchor from the signed genesis and accepts only a nonempty canonical carrier.
+One fresh ceremony serves this complete sequence in both scopes. Its generated custody lives only in a validated owner-only
 runtime directory outside Git; the isolated shipping Kagami and Taira launcher
 are explicit inputs, and a separate message-control daemon exercises the exact
 Core-only seam. The full launcher’s Linux/Inrou requirements remain enforced.
+
+Both Core startup selections check the fixed-domain IPA parameter cache with
+concurrent cold initialization, canonical bytes/fingerprints, owned clone
+isolation, rejected domains, warm-cache malformed metadata and relabelled-key
+rejection. Caching public parameters never substitutes for key authentication.
+
+Both scopes also require the signed stopped-predecessor controls: strict state
+decoding, retained directory identity across archive/restore, complete process
+absence, exact prior/successor unit authority, and rollback without restarting an
+explicitly stopped predecessor or downgrading a failed running predecessor.
+
+Both scopes exercise the native reset controller’s signed beacon plan, exact
+roster/seat and provider/unit bindings, and bounded continuation after submission.
+A lost ceremony or an early child exit cannot repeat committed canaries or admit
+a later operation. Public input assembly derives beacon authority from the exact
+native genesis and unsigned draft, rejects caller-supplied generated authority,
+and preserves credential-free preparation and atomic public bundle publication.
+These controls use the existing CLI harness and support exact focused selection.
+
+Prepared canary and beacon-install transactions bind their TTL to the signed
+execution window before fee quoting, retaining the exact creation timestamp and
+any shorter configured lifetime. Both scopes check exhausted windows before HTTP
+and delayed quotes without extending authorization or repeating submission.
 
 Finality readback honors HTTP 429 retry delays within the caller’s original
 absolute deadline. Invalid retry instructions and fixed response/proof failures
@@ -269,22 +327,30 @@ confirmation budget. It continues polling within that deadline;
 shorter configured request timeouts, malformed responses and other lookup
 failures remain errors. Confirmation never resubmits the transaction.
 
-The next gate launches four validators from the freshly emitted native
-`iroha3d` binary using the same three-dataspace topology and mandatory NPoS/DA
-policies in both scopes. Basic uses the already funded genesis account on the
-universal default route, matching basic BPNG traffic. Full additionally runs the
-original ALICE account route through lane 1/dataspace 1. Neither scope changes
-the network topology, fee policy or confirmation deadlines. Each test submits
-three consecutive signature-bound `QueuePlanSynced` public transactions, as
-required by public Torii admission, and requires state-resolved Applied
-in both local and global status on every validator at each transaction's committed height.
-Between the second and third transactions it waits for a signed snapshot, stops
-and restarts one validator with the same storage, and requires the new process to
-load that snapshot, serve `/readyz`, and retain the snapshot height. An unchanged idle height is valid; the third
-transaction must then reach Applied on all four validators.
+The network gate runs one fresh native four-validator production-custody fixture
+with mandatory NPoS/DA in both scopes. It preserves the generated Taira catalog
+and tests both its funded universal default-route account and a distinct fresh
+funded account explicitly routed through the configured PayNet lane. The paid
+DPN workflow precedes a second additive catalog transition, full authenticated
+Kura replay and signed-snapshot recovery, with exact historical transaction,
+committee, permission and storage proofs retained on all four peers.
+
+Each public routing sequence submits three consecutive signature-bound
+`QueuePlanSynced` transactions and requires the same exact state-resolved Applied
+height in both local and global status on every validator. Between the second
+and third transactions, all four validators publish complete signed snapshots
+and restart with their retained storage and real custody. Every new process must
+load its exact snapshot, serve `/readyz`, and retain at least that height; the
+third transaction then proves renewed Applied execution on all four peers.
+The original transaction, observation and restart deadlines remain unchanged.
 The CLI gate also checks that prepared Inrou pin operations preserve sponsored
 fees and the public QueuePlanSynced intent through signing and replay validation.
-Dedicated service-owned Ordinary admission remains a separate contract.
+Dedicated service-owned Ordinary admission remains a separate contract. A sole
+native threshold-key lifecycle certificate also uses signed Ordinary admission
+so that its exact next-height authorization executes in the same global carrier.
+That ingress authenticates the current frozen-roster quorum certificate and
+preserves fee, signature, network, height and routing checks. Other public
+transactions still require QueuePlanSynced admission.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
 identity and endpoint overrides. Each status read uses the SDK routed request

@@ -2196,6 +2196,24 @@ fn worker_wal_authority_fixture(
     directory: &TempDir,
     local_validator: Option<wire::ValidatorIndex>,
 ) -> WorkerWalAuthorityFixture {
+    let verified =
+        VerifiedHeightContext::genesis(service.context.clone(), service.validator_set_pops.clone())
+            .expect("authenticate worker fixture context");
+    worker_wal_authority_fixture_with_verified_context(
+        service,
+        directory,
+        local_validator,
+        verified,
+    )
+}
+
+#[cfg(feature = "bls")]
+fn worker_wal_authority_fixture_with_verified_context(
+    service: &mut ProductionV2Services,
+    directory: &TempDir,
+    local_validator: Option<wire::ValidatorIndex>,
+    verified: VerifiedHeightContext,
+) -> WorkerWalAuthorityFixture {
     let context = service.context.clone();
     let wal_path = directory.path().join("worker-authority.wal");
     let fingerprints = AdapterFingerprints {
@@ -2205,8 +2223,7 @@ fn worker_wal_authority_fixture(
     };
     let (adapter, startup) = SumeragiV2Adapter::open(
         &wal_path,
-        VerifiedHeightContext::genesis(context.clone(), service.validator_set_pops.clone())
-            .expect("authenticate worker fixture context"),
+        verified,
         local_validator,
         service.active_tag.generation(),
         [0xE2; 32],

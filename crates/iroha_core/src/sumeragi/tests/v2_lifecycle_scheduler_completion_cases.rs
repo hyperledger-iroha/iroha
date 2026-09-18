@@ -2886,7 +2886,7 @@ impl ProductionLifecycleOwnerV1 {
             .expect("the admitted Fetch owns one exact concrete address");
         registry
             .registry_mut()
-            .install(address, work_digest, work)
+            .install(address, work_digest, Box::new(work))
             .unwrap_or_else(|(error, _)| {
                 panic!("the exact selected Fetch must enter the concrete registry: {error:?}")
             });

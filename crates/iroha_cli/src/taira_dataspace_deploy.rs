@@ -43,6 +43,8 @@ use std::{
 
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
+#[path = "taira_epoch_maintenance.rs"]
+pub(crate) mod epoch_maintenance;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
 
@@ -896,6 +898,22 @@ fn observe(
     }
     if failed {
         result.state = "failed".into();
+        if [&result.global_status, &result.peer_status]
+            .into_iter()
+            .flatten()
+            .any(|value| value.status.kind == "Rejected")
+        {
+            result.committed = retain_rejected_details(
+                transaction,
+                client.get_transaction_details(transaction.hash_as_entrypoint()),
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "deployment phase {} transaction {}: read exact rejection details",
+                    prepared.phase, prepared.transaction_hash
+                )
+            })?;
+        }
         return Ok(result);
     }
     if applied_height.is_some() {
@@ -918,6 +936,37 @@ fn observe(
         result.committed = Some(details);
     }
     Ok(result)
+}
+
+// A precommit rejection may have no committed details. Only native typed
+// absence permits that result; malformed, unauthorized and unbound reads fail.
+fn retain_rejected_details(
+    transaction: &SignedTransaction,
+    response: std::result::Result<PipelineTransactionDetailsResponse, iroha::query::QueryError>,
+) -> Result<Option<PipelineTransactionDetailsResponse>> {
+    let details = match response {
+        Ok(details) => details,
+        Err(iroha::query::QueryError::Validation(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ),
+        )) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    // The SDK binds entrypoint/result hashes. The deployment additionally binds
+    // the exact retained wire and requires the rejected native result.
+    let TransactionEntrypoint::External(actual) = details.transaction.entrypoint() else {
+        eyre::bail!("rejection details are not an external transaction");
+    };
+    require(
+        actual.encode_wire_v1()? == transaction.encode_wire_v1()?,
+        "rejection details differ from the retained exact signed transaction",
+    )?;
+    require(
+        details.transaction.result().is_err(),
+        "Rejected status resolves to a successful committed transaction",
+    )?;
+    Ok(Some(details))
 }
 
 fn matching_applied_height(
@@ -1245,13 +1294,89 @@ fn print_saved_report(
             "dataspace deployment {} did not complete ({}): {}",
             report.operation_id,
             report.state,
-            report
-                .verification_error
-                .as_deref()
-                .unwrap_or("inspect the retained operation with status")
+            incomplete_report_detail(report)
         );
     }
     Ok(())
+}
+
+// Render retained observations and authenticated-query rejection details only.
+// Neither is an independently anchored finality or deployment completion claim.
+fn incomplete_report_detail(report: &ReportV1) -> String {
+    let mut details: Vec<String> = report.verification_error.iter().cloned().collect();
+    for phase in &report.verification.transactions {
+        if phase.state != "failed" {
+            continue;
+        }
+        for (status, scope) in [
+            (&phase.global_status, "global"),
+            (&phase.peer_status, "local"),
+        ] {
+            let Some(status) = status else { continue };
+            if phase.transaction_hash.as_deref() != Some(status.hash.as_str())
+                || status.scope != scope
+                || !matches!(status.status.kind.as_str(), "Rejected" | "Expired")
+            {
+                continue;
+            }
+            let height = status
+                .status
+                .block_height
+                .map(|height| format!(", block {height}"))
+                .unwrap_or_default();
+            let reason = if status.status.kind == "Rejected" {
+                match phase
+                    .committed
+                    .as_ref()
+                    .and_then(|details| details.transaction.result().as_ref().err())
+                {
+                    Some(reason) => {
+                        format!("; rejection reason: {}", rejection_error_chain(reason))
+                    }
+                    None => "; committed rejection details unavailable".into(),
+                }
+            } else {
+                String::new()
+            };
+            details.push(format!(
+                "phase {}: observed {} for transaction {} (scope {}, source {}{}){}",
+                phase.phase,
+                status.status.kind,
+                status.hash,
+                scope,
+                status.resolved_from,
+                height,
+                reason
+            ));
+        }
+    }
+    if details.is_empty() {
+        "inspect the retained operation with status".into()
+    } else {
+        details.join("; ")
+    }
+}
+
+// Display/source messages expose the native cause without Debug-formatting
+// instruction or signed transaction payloads. Bound terminal diagnostic size.
+fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut next = Some(error);
+    let mut parts = Vec::new();
+    for _ in 0..16 {
+        let Some(error) = next else { break };
+        let message = error.to_string();
+        if !message.is_empty() {
+            parts.push(message);
+        }
+        next = error.source();
+    }
+    let message = parts.join(": ");
+    let mut chars = message.chars();
+    let mut bounded: String = chars.by_ref().take(4096).collect();
+    if chars.next().is_some() || next.is_some() {
+        bounded.push_str(" [truncated]");
+    }
+    bounded
 }
 
 /// Read-only native entry point for the anchored finality/four-peer verification layer.
@@ -1889,6 +2014,229 @@ mod tests {
                 }
             }
         }
+        // Both native terminal kinds are rendered for either bound scope. The
+        // machine report stays intact and the status command remains read-only.
+        let hash = "ab".repeat(32);
+        for scope in ["global", "local"] {
+            for kind in ["Rejected", "Expired"] {
+                let mut phase = pending_observation();
+                phase.phase = "catalog".into();
+                phase.state = "failed".into();
+                let status = PipelineTransactionStatusResponse {
+                    hash: hash.clone(),
+                    scope: scope.into(),
+                    resolved_from: "cache".into(),
+                    status: PipelineTransactionStatus {
+                        kind: kind.into(),
+                        block_height: (kind == "Rejected").then_some(10),
+                    },
+                };
+                if scope == "global" {
+                    phase.global_status = Some(status);
+                } else {
+                    phase.peer_status = Some(status);
+                }
+                let report = phase_report(&fixture_plan(), vec![phase.clone()]);
+                let before = json::to_value(&report).unwrap();
+                let mut output = Vec::new();
+                let error = print_saved_report(&report, true, |value| {
+                    output.push(json::to_value(value)?);
+                    Ok(())
+                })
+                .unwrap_err();
+                let height = if kind == "Rejected" { ", block 10" } else { "" };
+                let missing = if kind == "Rejected" {
+                    "; committed rejection details unavailable"
+                } else {
+                    ""
+                };
+                let detail = format!(
+                    "phase catalog: observed {kind} for transaction {hash} (scope {scope}, source cache{height}){missing}"
+                );
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "dataspace deployment {} did not complete (failed): {detail}",
+                        report.operation_id
+                    )
+                );
+                assert_eq!(output, vec![before.clone()]);
+                assert_eq!(json::to_value(&report).unwrap(), before);
+                assert!(print_saved_report(&report, false, |_| Ok(())).is_ok());
+                let mut with_verification_error = report.clone();
+                with_verification_error.verification_error = Some("invalid validator proof".into());
+                assert_eq!(
+                    incomplete_report_detail(&with_verification_error),
+                    format!("invalid validator proof; {detail}")
+                );
+
+                // Unbound, absent, or nonterminal observations cannot be
+                // attributed as the failed transaction's native outcome.
+                for defect in 0..5 {
+                    let mut altered = phase.clone();
+                    match defect {
+                        0 => altered.transaction_hash = Some("ef".repeat(32)),
+                        1 => altered.transaction_hash = None,
+                        2 => {
+                            let value = altered
+                                .global_status
+                                .as_mut()
+                                .or(altered.peer_status.as_mut())
+                                .unwrap();
+                            value.scope = "other".into();
+                        }
+                        3 => {
+                            let value = altered
+                                .global_status
+                                .as_mut()
+                                .or(altered.peer_status.as_mut())
+                                .unwrap();
+                            value.status.kind = "Queued".into();
+                        }
+                        _ => altered.state = "pending".into(),
+                    }
+                    let report = phase_report(&fixture_plan(), vec![altered]);
+                    assert_eq!(
+                        incomplete_report_detail(&report),
+                        "inspect the retained operation with status"
+                    );
+                }
+            }
+        }
+        use iroha_data_model::{
+            ValidationFail,
+            isi::error::InstructionExecutionError,
+            query::CommittedTransaction,
+            transaction::{
+                DataTriggerSequence, TransactionResult,
+                error::{InstructionExecutionFail, TransactionRejectionReason},
+            },
+        };
+        let plan = fixture_plan();
+        let prepared = prepared(&plan);
+        let transaction = prepared.verify(&plan, "catalog").unwrap();
+        let marker = "lane 6 manifest authority account is not registered";
+        let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::Conversion(marker.into()),
+        ));
+        let make_details = |transaction: SignedTransaction, result: TransactionResult| {
+            PipelineTransactionDetailsResponse {
+                hash: transaction.hash_as_entrypoint().to_string(),
+                transaction: CommittedTransaction {
+                    block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                        b"rejection report test",
+                    )),
+                    entrypoint_hash: transaction.hash_as_entrypoint(),
+                    entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    entrypoint: TransactionEntrypoint::External(transaction),
+                    result_hash: result.hash(),
+                    result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    result,
+                    merge_inclusion: None,
+                },
+                trigger_completions: Vec::new(),
+            }
+        };
+        let details = make_details(transaction.clone(), TransactionResult::new(Err(reason)));
+        let retained = retain_rejected_details(&transaction, Ok(details.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            json::to_value(&retained).unwrap(),
+            json::to_value(&details).unwrap()
+        );
+        let mut phase = pending_observation();
+        phase.phase = "catalog".into();
+        phase.state = "failed".into();
+        phase.transaction_hash = Some(prepared.transaction_hash.clone());
+        phase.signed_transaction_wire_sha256 = digest(&transaction.encode_wire_v1().unwrap());
+        phase.global_status = Some(PipelineTransactionStatusResponse {
+            hash: prepared.transaction_hash.clone(),
+            scope: "global".into(),
+            resolved_from: "state".into(),
+            status: PipelineTransactionStatus {
+                kind: "Rejected".into(),
+                block_height: Some(10),
+            },
+        });
+        phase.committed = Some(retained);
+        let report = phase_report(&plan, vec![phase]);
+        let error = print_saved_report(&report, true, |_| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(marker));
+        assert!(
+            error.contains("Validation failed: Instruction execution failed: Conversion Error:")
+        );
+        assert!(error.contains(&prepared.transaction_hash));
+        assert!(!error.contains(&prepared.signed_transaction_wire_hex));
+        assert!(!error.contains("completion receipt"));
+        // The native instruction error owns an instruction, but its Display/source
+        // rendering must expose the reason without dumping that instruction.
+        let private_payload = "instruction-payload-must-not-be-printed";
+        let safe = TransactionRejectionReason::InstructionExecution(InstructionExecutionFail {
+            instruction: iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                private_payload.into(),
+            )
+            .into(),
+            reason: marker.into(),
+        });
+        let summary = rejection_error_chain(&safe);
+        assert!(summary.contains(marker));
+        assert!(!summary.contains(private_payload));
+        let long =
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted("é".repeat(5000)));
+        let bounded = rejection_error_chain(&long);
+        assert!(bounded.ends_with(" [truncated]"));
+        assert_eq!(bounded.chars().count(), 4096 + " [truncated]".len());
+        let absent = iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ));
+        assert!(
+            retain_rejected_details(&transaction, Err(absent))
+                .unwrap()
+                .is_none()
+        );
+        for error in [
+            iroha::query::QueryError::Validation(ValidationFail::NotPermitted(
+                "not authorized".into(),
+            )),
+            iroha::query::QueryError::Other(eyre!("malformed or mismatched exact details")),
+        ] {
+            assert!(retain_rejected_details(&transaction, Err(error)).is_err());
+        }
+        let success = make_details(
+            transaction.clone(),
+            TransactionResult::new(Ok(DataTriggerSequence::default())),
+        );
+        assert!(
+            retain_rejected_details(&transaction, Ok(success))
+                .unwrap_err()
+                .to_string()
+                .contains("successful")
+        );
+        let other = TransactionBuilder::new(
+            plan.manifest.network_id,
+            plan.manifest.owner.clone(),
+            prepared.fee_quote.intent.clone(),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "different transaction".into(),
+        )])
+        .try_sign(key().private_key())
+        .unwrap();
+        let mut wrong = details;
+        wrong.hash = other.hash_as_entrypoint().to_string();
+        wrong.transaction.entrypoint_hash = other.hash_as_entrypoint();
+        wrong.transaction.entrypoint = TransactionEntrypoint::External(other);
+        assert!(
+            retain_rejected_details(&transaction, Ok(wrong))
+                .unwrap_err()
+                .to_string()
+                .contains("exact signed transaction")
+        );
     }
 
     #[test]

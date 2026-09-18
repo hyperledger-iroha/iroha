@@ -3,20 +3,26 @@
 use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::release_identity::BuildIdentity;
-use iroha_crypto::{Hash, PublicKey};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     alias_setup::{AliasDataspaceBootstrapGrantV1, AliasPlanDispositionV1, AliasTransactionPlanV1},
-    isi::SetParameter,
+    isi::{
+        RegisterBox, SetParameter,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
     nexus::{
         LaneCatalog, LaneLifecycleParameterV1, LaneLifecycleStatusV1, NexusCatalogTransitionV1,
     },
     parameter::Parameter,
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::{codec::Encode as _, json::JsonSerialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 const CHAIN: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const OPERATION: &str = "clean-client-dpn";
@@ -81,9 +87,20 @@ struct Trust {
     peers: Vec<TrustPeer>,
 }
 
+/// Serialize the same independently selected public authority for native operator workflows.
+pub(super) fn write_fixture_trust(fixture: &PaidDeploymentFixture<'_>, path: &Path) -> Result<()> {
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    let owner = iroha::config::Config::load_file(fixture.config)
+        .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
+    let (trust, _, _) = fixture_trust(fixture, &owner, fixture.build_identity)?;
+    write_private(path, &json::to_vec(&trust)?)
+}
+
 /// Exact fresh fixture inputs supplied after native beacon installation.
 pub(super) struct PaidDeploymentFixture<'a> {
     pub binary: &'a Path,
+    /// Exact immutable harness identity admitted before the shared custody ceremony.
+    pub build_identity: BuildIdentity,
     pub config: &'a Path,
     pub operator: &'a Path,
     pub root: &'a Path,
@@ -98,7 +115,7 @@ fn fixture_trust(
     fixture: &PaidDeploymentFixture<'_>,
     owner: &iroha::config::Config,
     build: BuildIdentity,
-) -> Result<(Trust, LaneCatalog)> {
+) -> Result<(Trust, LaneCatalog, BTreeMap<PeerId, AccountId>)> {
     let (_, metadata) = iroha_core::release_identity::genesis_identity(
         fixture.genesis_wire,
         fixture.genesis_public_key,
@@ -164,6 +181,16 @@ fn fixture_trust(
             config_fingerprint: shared.fingerprint(),
         });
     }
+    let authorities = genesis_validator_authorities(
+        genesis
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions),
+                _ => None,
+            })
+            .flat_map(|instructions| instructions.iter()),
+        &selected,
+    )?;
     Ok((
         Trust {
             genesis_public_key: fixture.genesis_public_key.clone(),
@@ -171,7 +198,124 @@ fn fixture_trust(
             peers,
         },
         baseline.ok_or_else(|| eyre!("fixture catalog is absent"))?,
+        authorities,
     ))
+}
+
+// Native Taira genesis binds runtime authority accounts to distinct BLS peers.
+// The authenticated core-lane registration, not a key-derived account guess,
+// selects the authority reused by the new restricted lane.
+fn genesis_validator_authorities<'a>(
+    instructions: impl Iterator<Item = &'a InstructionBox>,
+    peers: &BTreeSet<PeerId>,
+) -> Result<BTreeMap<PeerId, AccountId>> {
+    let mut registered = BTreeSet::new();
+    let mut activated = BTreeSet::new();
+    let mut all_bindings = BTreeMap::new();
+    let mut core_bindings = BTreeMap::new();
+    for instruction in instructions {
+        if let Some(RegisterBox::Account(account)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            registered.insert(account.object.id.clone());
+        }
+        if let Some(activation) = instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+        {
+            if activation.lane_id == LaneId::SINGLE {
+                ensure!(
+                    activated.insert(activation.validator.clone()),
+                    "duplicate signed core-lane activation"
+                );
+            }
+        }
+        if let Some(binding) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            ensure!(
+                peers.contains(&binding.peer_id),
+                "signed validator binding names a peer outside the trusted roster"
+            );
+            if let Some(previous) =
+                all_bindings.insert(binding.peer_id.clone(), binding.validator.clone())
+            {
+                ensure!(
+                    previous == binding.validator,
+                    "signed cross-lane validator authority conflicts"
+                );
+            }
+            if binding.lane_id == LaneId::SINGLE {
+                ensure!(
+                    core_bindings
+                        .insert(binding.peer_id.clone(), binding.validator.clone())
+                        .is_none(),
+                    "duplicate signed core-lane validator binding"
+                );
+            }
+        }
+    }
+    let accounts = core_bindings.values().cloned().collect::<BTreeSet<_>>();
+    ensure!(
+        peers.len() == 4
+            && core_bindings.keys().cloned().collect::<BTreeSet<_>>() == *peers
+            && accounts.len() == peers.len(),
+        "signed core-lane authorities must bind all four peers distinctly"
+    );
+    ensure!(
+        accounts.iter().all(|account| registered.contains(account)) && activated == accounts,
+        "signed core-lane authorities must be registered and activated accounts"
+    );
+    Ok(core_bindings)
+}
+
+// Only public status fields may enter failure diagnostics. Never include phase
+// instructions, prepared wire, aliases, or authenticated committed payloads.
+fn public_phase_summary(report: Option<&Value>) -> Vec<Value> {
+    report
+        .and_then(|report| report.get("verification"))
+        .and_then(|verification| verification.get("transactions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|phase| {
+            let status = |name| {
+                let observation = phase.get(name);
+                let details = observation.and_then(|value| value.get("status"));
+                let kind = details
+                    .and_then(|value| value.get("kind"))
+                    .and_then(Value::as_str);
+                let block_height = details
+                    .and_then(|value| value.get("block_height"))
+                    .and_then(Value::as_u64);
+                let scope = observation
+                    .and_then(|value| value.get("scope"))
+                    .and_then(Value::as_str);
+                let resolved_from = observation
+                    .and_then(|value| value.get("resolved_from"))
+                    .and_then(Value::as_str);
+                norito::json!({
+                    "kind": kind,
+                    "block_height": block_height,
+                    "scope": scope,
+                    "resolved_from": resolved_from
+                })
+            };
+            let phase_name = phase.get("phase").and_then(Value::as_str);
+            let state = phase.get("state").and_then(Value::as_str);
+            let transaction_hash = phase.get("transaction_hash").and_then(Value::as_str);
+            let global_status = status("global_status");
+            let peer_status = status("peer_status");
+            norito::json!({
+                "phase": phase_name,
+                "state": state,
+                "transaction_hash": transaction_hash,
+                "global_status": global_status,
+                "peer_status": peer_status
+            })
+        })
+        .collect()
 }
 
 struct Cli {
@@ -222,12 +366,13 @@ impl Cli {
             .wrap_err("native CLI did not return its typed JSON report");
         ensure!(
             output.status.success(),
-            "native CLI {operation} failed: state={:?}, verification_error={:?} (stderr is retained in the fixture log)",
+            "native CLI {operation} failed: state={:?}, verification_error={:?}, phases={:?} (stderr is retained in the fixture log)",
             report.as_ref().ok().and_then(|value| value.get("state")),
             report
                 .as_ref()
                 .ok()
-                .and_then(|value| value.get("verification_error"))
+                .and_then(|value| value.get("verification_error")),
+            public_phase_summary(report.as_ref().ok())
         );
         report
     }
@@ -421,10 +566,11 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
         text_field(report, "state")? == "completed"
             && field(report, "deployment_complete")?.as_bool() == Some(true)
             && field(report, "verification_error")?.is_null(),
-        "native deployment did not complete: state={:?}, deployment_complete={:?}, verification_error={:?}",
+        "native deployment did not complete: state={:?}, deployment_complete={:?}, verification_error={:?}, phases={:?}",
         report.get("state"),
         report.get("deployment_complete"),
-        report.get("verification_error")
+        report.get("verification_error"),
+        public_phase_summary(Some(report))
     );
     let receipt = text_field(report, "completion_receipt")?;
     ensure!(
@@ -463,7 +609,9 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
     Ok(())
 }
 
-pub(super) async fn run_paid_deployment(fixture: PaidDeploymentFixture<'_>) -> Result<()> {
+pub(super) async fn run_paid_deployment(
+    fixture: PaidDeploymentFixture<'_>,
+) -> Result<HashOf<TransactionEntrypoint>> {
     use std::os::unix::fs::PermissionsExt as _;
     init_instruction_registry();
     ensure!(
@@ -472,8 +620,8 @@ pub(super) async fn run_paid_deployment(fixture: PaidDeploymentFixture<'_>) -> R
     );
     let owner = iroha::config::Config::load_file(fixture.config)
         .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
-    let (trust, expected_catalog) =
-        fixture_trust(&fixture, &owner, iroha_core::compiled_build_identity!()?)?;
+    let (trust, expected_catalog, authorities) =
+        fixture_trust(&fixture, &owner, fixture.build_identity)?;
     let root = fixture.root;
     fs::create_dir(root)?;
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
@@ -490,8 +638,10 @@ pub(super) async fn run_paid_deployment(fixture: PaidDeploymentFixture<'_>) -> R
     write_private(&trust_path, &json::to_vec(&trust)?)?;
     let mut validators = Vec::new();
     for peer in &trust.peers {
-        let validator =
-            AccountId::new(peer.peer_id.public_key().clone()).to_i105_for_discriminant(369)?;
+        let validator = authorities
+            .get(&peer.peer_id)
+            .ok_or_else(|| eyre!("trusted peer lacks its authenticated validator authority"))?
+            .to_i105_for_discriminant(369)?;
         let peer_id = peer.peer_id.to_string();
         validators.push(norito::json!({"validator": validator, "peer_id": peer_id}));
     }
@@ -609,5 +759,115 @@ pub(super) async fn run_paid_deployment(fixture: PaidDeploymentFixture<'_>) -> R
     eprintln!(
         "clean client completed three paid deployment phases on all four peers; repeats and idle remained unchanged"
     );
-    Ok(())
+    // Return the exact catalog identity already checked against owner, network,
+    // instructions, dispatch claim and all-four authenticated completion above.
+    let catalog: Value = json::from_slice(&retained["catalog.prepared.json"])?;
+    let wire = unhex(text_field(&catalog, "signed_transaction_wire_hex")?)?;
+    Ok(SignedTransaction::decode_all_versioned(&wire)?.hash_as_entrypoint())
+}
+
+#[test]
+fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{account::Account, isi::Register};
+    let mut instructions = Vec::<InstructionBox>::new();
+    let mut peers = BTreeSet::new();
+    let mut expected = BTreeMap::new();
+    for marker in 1_u8..=4 {
+        let peer = PeerId::new(
+            KeyPair::from_seed(vec![marker; 32], Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![marker + 10; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert_ne!(account, AccountId::new(peer.public_key().clone()));
+        instructions.push(Register::account(Account::new(account.clone())).into());
+        for lane in [LaneId::SINGLE, LaneId::new(3)] {
+            instructions.push(
+                RegisterPublicLaneValidator::new(
+                    lane,
+                    account.clone(),
+                    peer.clone(),
+                    account.clone(),
+                    100_u32.into(),
+                    Metadata::default(),
+                )
+                .into(),
+            );
+        }
+        instructions.push(
+            ActivatePublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator: account.clone(),
+            }
+            .into(),
+        );
+        peers.insert(peer.clone());
+        expected.insert(peer, account);
+    }
+    assert_eq!(
+        genesis_validator_authorities(instructions.iter(), &peers).unwrap(),
+        expected
+    );
+    // Consistent bindings on another public lane are valid; every failure below
+    // changes one prerequisite while keeping the remaining native bindings.
+    for omitted in [0, 1, 3] {
+        let mut missing = instructions.clone();
+        missing.remove(omitted);
+        assert!(genesis_validator_authorities(missing.iter(), &peers).is_err());
+    }
+    let mut duplicate = instructions.clone();
+    duplicate.push(instructions[1].clone());
+    assert!(genesis_validator_authorities(duplicate.iter(), &peers).is_err());
+    let mut conflict = instructions.clone();
+    let binding = instructions[2]
+        .as_any()
+        .downcast_ref::<RegisterPublicLaneValidator>()
+        .unwrap();
+    let mut changed = binding.clone();
+    changed.validator = AccountId::new(changed.peer_id.public_key().clone());
+    conflict[2] = changed.into();
+    assert!(genesis_validator_authorities(conflict.iter(), &peers).is_err());
+}
+
+#[test]
+fn phase_failure_summary_excludes_signed_payloads() {
+    let report = norito::json!({"verification": {"transactions": [{
+        "phase": "catalog", "state": "failed", "transaction_hash": "public-hash",
+        "instructions": ["do-not-log-instructions"], "signed_transaction_wire_hex": "do-not-log-wire",
+        "committed": {"transaction": "do-not-log-committed"},
+        "alias_plan": "do-not-log-aliases",
+        "global_status": {"scope": "global", "resolved_from": "state", "status": {"kind": "Rejected", "block_height": 10, "extra": "do-not-log-extra"}},
+        "peer_status": {"scope": "local", "resolved_from": "state", "status": {"kind": "Rejected", "block_height": 10}}
+    }]}});
+    let summary = public_phase_summary(Some(&report));
+    assert_eq!(summary.len(), 1);
+    assert_eq!(
+        summary[0].get("phase").and_then(Value::as_str),
+        Some("catalog")
+    );
+    assert_eq!(
+        summary[0]
+            .get("global_status")
+            .and_then(|v| v.get("kind"))
+            .and_then(Value::as_str),
+        Some("Rejected")
+    );
+    assert_eq!(
+        summary[0]
+            .get("peer_status")
+            .and_then(|v| v.get("block_height"))
+            .and_then(Value::as_u64),
+        Some(10)
+    );
+    assert!(
+        !String::from_utf8(json::to_vec(&summary).unwrap())
+            .unwrap()
+            .contains("do-not-log")
+    );
+    assert!(public_phase_summary(None).is_empty());
 }

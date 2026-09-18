@@ -5,6 +5,72 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## September 15 certified-fetch registry stack overflow
+
+Both `cold_ready_fetch` regressions aborted independently on the default
+libtest stack. The debugger identified cumulative stack use from large inline
+owners across admission and cold recovery. The B-tree stored 26,000-byte
+`ConcreteLifecycleWork` values inline, amplifying stack use across tree
+operations and nested admission results. The cold-recovery census also held
+every authenticated carrier variant inline, producing a 547,336-byte frame
+above canonical replay-authority decoding in the unoptimized Linux build.
+
+Registry rows, installation failures and publication failures now retain boxed
+work. Keeping error results boxed also removes full-carrier temporaries from
+the nested publication frames while they validate the canonical ledger.
+The shared fixture keeps its production owners on the heap across handoffs.
+Live successor transitions reuse their parent allocation or consume storage
+reserved before durable publication;
+rollback retains the complete move-only incumbent. Cold reconstruction retains
+heap ownership through authenticated Fetch-to-Store-to-Validate conversions and
+the complete census, prepared-work handoff and registry construction, preserving
+all authentication checks and durable schemas.
+The storage regressions check the actual installed B-tree value size,
+error-result size and both recovery entry sizes; a fixture layout guard prevents
+aggregate ownership copies from returning. Source contracts
+require transfer of the existing Validate parent allocation into Sign work.
+The original cold-fetch rejection and replay assertions remain unchanged.
+The terminal ingress drain also passes its configured control-queue capacity
+to the current lane-output interface, fixing a missing-argument build error.
+Its ordinary lane fixture derives the required ingress capacity from the
+frozen roster and explicitly opens the configured ingress before enqueueing.
+
+Comparing stack-frame prologues in the original and repaired unoptimized
+Linux test binaries gives these scoped measurements:
+
+| Frame | Original bytes | Repaired bytes |
+| --- | ---: | ---: |
+| Authenticated body recovery census | 547,336 | 6,744 |
+| Recovered body registry installation | 338,808 | 712 |
+| Exact registry installation | 312,952 | 1,032 |
+| Reported failing test | 362,824 | 28,856 |
+
+Validation passes on the default libtest stack with no stack-size override:
+387 distinct Rust tests covering all 34 certified-body fence cases, registry
+and admission transactions, authenticated replay and ledger recovery, all 55
+source contracts, ingress planning, and lane output ordering/backpressure.
+The existing incident-frame inspection test remains ignored because it needs
+external diagnostic inputs. All six source-contract asset tests and the
+retired-codec dependency guard pass. Full workspace tests were not run.
+
+The focused build used the same test feature graph as the reported binary:
+
+```sh
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
+  cold_ready_fetch -- --nocapture
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
+  ordinary_lane_consumer_ -- --test-threads=4
+python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
+scripts/check_no_legacy_codec.sh
+```
+
+The broader focused suites ran directly from the resulting test executable
+with four test threads. Source-contract guards now explicitly require parent
+allocation reuse, exact obsolete-owner retirement, and authenticated CompleteTip
+repair publication ordering.
+
 ## September 15 block-construction stack overflow
 
 The default-stack `merge_entrypoints_commit_in_canonical_carrier_membership`

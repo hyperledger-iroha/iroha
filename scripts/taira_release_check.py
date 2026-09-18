@@ -85,6 +85,9 @@ STAGES = (
         "taira_public_reset::host::tests::retained_proof_required_pending_report_accepts_only_live_state_classes",
     )),
     ("complete prepared canary transport lifecycle", (
+        "tests::authorized_transaction_lifetime_uses_exact_creation_and_preserves_shorter_ttl",
+        "tests::authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl",
+        "taira::tests::final_canary_expired_window_rejects_before_fee_quote_or_dispatch",
         "taira::tests::final_canary_submit_uses_original_deadline_after_initial_read_and_post",
         "taira::tests::final_canary_submit_verifies_exact_proof_without_replaying_post",
         "taira::tests::faucet_preparation_deadline_stops_http_and_cpu_work_before_dispatch",
@@ -312,6 +315,13 @@ STAGES = (
         "taira::tests::prepared_server_confirmation_preserves_configured_timeout_errors",
         "taira::tests::prepared_server_confirmation_preserves_other_transport_errors",
         "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
+    )),
+    ("signed stopped occupied predecessor", (
+        'taira_public_reset::executor_model::tests::occupied_service_state_is_explicit_strict_and_signed',
+        'taira_public_reset::executor_model::tests::stopped_state_identity_survives_archive_restore_and_rejects_substitution',
+        'taira_public_reset::host::tests::stopped_predecessor_absence_checks_cgroup_and_escaped_references',
+        'taira_public_reset::host::tests::prior_service_state_never_restarts_stopped_or_falls_back_from_running',
+        'taira_public_reset::host::occupied::tests::stopped_unit_admission_requires_the_exact_prior_or_durable_successor',
     )),
     ("stopped owner runtime cleanup", (
         "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_all_four_units_and_failed_installed_runtime",
@@ -961,6 +971,15 @@ CORE_ADMISSION_STARTUP_STAGES += (("finite closed ingress and fresh finalized ha
     "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
 )), )
 
+CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters", (
+    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
+    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
+    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
+    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
+    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
+    'zk::debug_backend_tests::halo2_ivm_execution_rejects_relabelled_demo_verifying_key',
+)), )
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1094,7 +1113,10 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
 )),)
 
-NETWORK_OBSERVATION_STAGES = (("inherited native deployment deadline", (
+NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure observation", (
+    'dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts',
+    'dataspace_deploy_cli::phase_failure_summary_excludes_signed_payloads',
+)), ("inherited native deployment deadline", (
     "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
 )), ("complete bounded effective permission observation", (
     "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
@@ -1106,21 +1128,23 @@ NETWORK_OBSERVATION_STAGES = (("inherited native deployment deadline", (
     "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
 )), ("private production beacon fixture root admission", (
     "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
+)), ("exact retained-height replay observation", (
+    "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )),)
-BEACON_NETWORK_STAGES = (("fresh production beacon custody, mandatory pulse and paid deployment", (
+BEACON_NETWORK_STAGES = (("fresh beacon custody, paid deployment, catalog replay and both route snapshot sequences", (
     "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
 )),)
 
-# Prove catalog admission and both recovery paths before spending another
-# four-peer fixture on narrower transaction sequences.
-BASIC_NETWORK_STAGES = NETWORK_OBSERVATION_STAGES + (("four-validator additive catalog with retained history and replay", (
-    "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
-)),) + BEACON_NETWORK_STAGES + (("four-validator universal-route commit and signed snapshot restart", (
-    "four_peer_universal_public_transaction_sequence_reaches_applied",
+NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
+    'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
+    'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
 )),)
-NETWORK_STAGES = BASIC_NETWORK_STAGES + (("four-validator multi-route commit and signed snapshot restart", (
-    "four_peer_multiroute_public_transaction_sequence_reaches_applied",
-)),)
+
+# One genuine custody ceremony owns every retained network assertion: paid
+# deployment, additive catalog/full replay, and both public routing sequences.
+# Independent read/permission/root contracts still run before any peer starts.
+BASIC_NETWORK_STAGES = NETWORK_OBSERVATION_STAGES + BEACON_NETWORK_STAGES
+NETWORK_STAGES = BASIC_NETWORK_STAGES
 
 # Four peers use the shared test-network 1 GiB/node cap. Keep another 4 GiB
 # available for fixture logs, temporary files and concurrent build output.
@@ -1336,8 +1360,31 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 )),)
 
 
+KAGAMI_STAGES += (("native epoch derivation and bounded public maintenance schedule", (
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::derived_parameter_matches_core_and_binds_network_epoch_and_order',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::public_context_rejects_malformed_network_epoch_count_order_and_duplicates',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::parser_exposes_only_public_arguments_and_numeric_pipe_descriptor',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::seed_reader_enforces_exact_bound_and_wipes_success_rejections_and_unwind',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::read_errors_are_redacted_and_partial_seeds_are_wiped',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::buffered_output_failures_are_returned',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::inherited_descriptor_ownership_is_closed',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json',
+    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap',
+)),)
+
+
 # Production beacon setup must fail before unrelated tests and network fixtures.
 CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
+    'state::tests::autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once',
+    'state::tests::autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift',
+    'sumeragi::v2_candidate::tests::proposal_work_gate_rejects_beacon_pulse_only',
+    'sumeragi::v2_candidate::tests::proposal_work_gate_preserves_non_beacon_effects',
+    'sumeragi::v2_candidate::tests::mandatory_beacon_wait_requires_independent_work',
+    'sumeragi::v2_candidate::tests::mandatory_beacon_wait_releases_same_queue_prefix_for_retry',
+    'beacon::tests::threshold_beacon_deferred_mandatory_height_stays_idle_until_real_work',
+    'beacon::tests::threshold_beacon_live_v2_producer_is_bound_restartable_and_persists_effect',
     'beacon::tests::runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing',
     'beacon::readiness::tests::readiness_authenticates_exact_session_once_without_signing_on_http_checks',
     'beacon::readiness::tests::readiness_reuses_only_exact_authenticated_transcripts_across_heights',
@@ -1373,9 +1420,21 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'beacon_bootstrap::tests::bootstrap_phase_eof_and_deadline_abort_without_fabricated_height',
     'beacon_bootstrap::tests::bootstrap_output_custody_is_exclusive_and_lifecycle_key_is_consumed',
     'beacon_bootstrap::tests::bootstrap_config_descriptor_uses_only_exact_native_consensus_identity',
+    'beacon_bootstrap::tests::bootstrap_records_observed_height_jumps_and_rejects_pulse_collision',
 )), )
 TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open', (
     'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
+)), )
+STAGES += (("exact-height native lifecycle installation", (
+    'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+    'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
+    'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
+)), )
+TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
+    'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
+    'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+    'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
+    'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
 )), )
 CORE_STARTUP_STAGES = CORE_BEACON_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CORE_BEACON_STAGES + CORE_ADMISSION_STARTUP_STAGES
@@ -1485,6 +1544,34 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
         raise CheckError("shipping native coverage audit failed: " + str(error)) from error
 
 
+STAGES += (("native beacon reset authority, bounded recovery and public input assembly", (
+    'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
+    'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
+    'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
+    'taira_public_reset::host::beacon::tests::beacon_owned_child_deadline_retains_private_attempt',
+    'taira_public_reset::host::tests::beacon_activation_barrier_preserves_pre_ready_bootstrap_and_blocks_later_mutations',
+    'taira_public_reset::executor_model::tests::beacon_submitted_continuation_retains_exact_host_cursor_and_excludes_ledger_work',
+    'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
+    'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
+    'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
+    'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',
+    'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+    'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
+    'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file',
+    'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
+    'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
+)), )
+
+STAGES += (('native epoch maintenance and authenticated current height', (
+    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_schedule_rejects_wrong_epoch_network_and_membership',
+    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_waits_for_actual_epoch_and_preserves_carrier_deadline',
+    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_preparation_binds_single_parameter_fee_and_original_lifetime',
+    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_journal_preserves_one_dispatch_across_schedule_renewal',
+    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_staking_preflight_rejects_fallback_and_changed_tenure',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
+)),)
+
 QUALIFICATION_SCOPES = ("basic", "full")
 
 
@@ -1503,7 +1590,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
     }
     if qualification_scope == "basic":
-        # These affected startup regressions and the real universal-route network
+        # These affected startup regressions and the consolidated real-custody network
         # exercise admission/restart. Advanced storage/fault matrices remain
         # selectable with full. Crypto, proof bounds and custody stay mandatory.
         selected["core"] = CORE_ADMISSION_STARTUP_STAGES
@@ -2530,8 +2617,8 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         }
         print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
         # Keep independent observation failures aggregated. Expensive consensus
-        # stages depend on that boundary and on the earlier catalog recovery
-        # result; a failure must stop later peer startups without changing the
+        # stage depends on that boundary; a failure must stop peer startup
+        # without changing the
         # independent library/CLI aggregation or its exact-pass checkpoint.
         observations = tuple(stage for stage in stages if stage in NETWORK_OBSERVATION_STAGES)
         if observations:

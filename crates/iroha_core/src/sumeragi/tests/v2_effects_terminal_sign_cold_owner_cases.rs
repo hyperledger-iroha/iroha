@@ -105,10 +105,10 @@ fn ordinary_view_one_validate_fixture() -> (ReadyBodyFixture, u128, FakeServices
     planner_io
         .install_output_guard_for_test(&mut services, Arc::clone(&transport.executor.output_guard));
     let mut fixture = ReadyBodyFixture {
-        transport,
-        owner,
-        planner_io,
-        services,
+        transport: Box::new(transport),
+        owner: Box::new(owner),
+        planner_io: Box::new(planner_io),
+        services: Box::new(services),
         _owner_directory: directory,
         certificate,
         ordinal: 0,

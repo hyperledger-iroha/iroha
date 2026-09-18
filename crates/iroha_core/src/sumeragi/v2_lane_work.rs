@@ -6275,6 +6275,13 @@ impl V2LaneWorkAdapter {
             block_hash,
             payload_hash: Hash::new(&canonical_wire),
         };
+        let empty_merge_body = block.external_entrypoints_cloned().next().is_none()
+            && block.execution_context().is_some_and(|bundle| {
+                bundle.merge_entry.is_some()
+                    && bundle.lane_payload_ownerships.is_empty()
+                    && bundle.autonomous_lane_payloads.is_empty()
+                    && bundle.queue_plan_admissions().is_empty()
+            });
         let canonical_decided = matches!(origin, LockedGlobalBodyOrigin::CanonicalDecided);
         let origin_matches = match origin {
             LockedGlobalBodyOrigin::AuthenticatedHeaderAtOrBeforeLock => {
@@ -6325,6 +6332,19 @@ impl V2LaneWorkAdapter {
             }
         };
         if !origin_matches || block.header().height().get() != self.context.height {
+            if empty_merge_body {
+                iroha_logger::warn!(
+                    context_height = self.context.height,
+                    body_height = block.header().height().get(),
+                    body_view = block.header().view_change_index(),
+                    ?subject,
+                    global_lock = ?self.globally_locked_body,
+                    retained_carrier = ?self.retained_merge_carrier_state,
+                    canonical_decided,
+                    origin_matches,
+                    "rejected empty merge carrier at locked-body origin/header check"
+                );
+            }
             return V2LaneIngressOutcome::Rejected;
         }
         if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some() {
@@ -6349,9 +6369,27 @@ impl V2LaneWorkAdapter {
                     true,
                 )?))
         })();
-        let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {
-            return V2LaneIngressOutcome::Rejected;
+        let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                if empty_merge_body {
+                    iroha_logger::warn!(
+                        ?subject,
+                        ?error,
+                        "rejected empty merge carrier after canonical Kura read"
+                    );
+                }
+                return V2LaneIngressOutcome::Rejected;
+            }
         };
+        if empty_merge_body {
+            iroha_logger::debug!(
+                ?subject,
+                canonical_recovery,
+                canonical_decided,
+                "checked empty merge carrier canonical recovery"
+            );
+        }
         if canonical_decided && !canonical_recovery {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -6394,6 +6432,13 @@ impl V2LaneWorkAdapter {
             ) {
                 Ok(expected) => expected,
                 Err(error) => {
+                    if empty_merge_body {
+                        iroha_logger::warn!(
+                            ?subject,
+                            ?error,
+                            "rejected empty merge carrier in production lane planning"
+                        );
+                    }
                     if error.is_storage_error() {
                         self.output_guard.close_admission_for_restart();
                     }
@@ -6421,6 +6466,13 @@ impl V2LaneWorkAdapter {
                 ) {
                     Ok(recovered) => recovered,
                     Err(error) => {
+                        if empty_merge_body {
+                            iroha_logger::warn!(
+                                ?subject,
+                                ?error,
+                                "rejected empty merge carrier in validation lane planning"
+                            );
+                        }
                         if error.is_storage_error() {
                             self.output_guard.close_admission_for_restart();
                         }
@@ -6428,6 +6480,15 @@ impl V2LaneWorkAdapter {
                     }
                 };
                 if !recovered.unavailable_indices.is_empty() || recovered.ownerships != ownerships {
+                    if empty_merge_body {
+                        iroha_logger::warn!(
+                            ?subject,
+                            unavailable_count = recovered.unavailable_indices.len(),
+                            expected_ownership_count = recovered.ownerships.len(),
+                            body_ownership_count = ownerships.len(),
+                            "rejected empty merge carrier after validation plan comparison"
+                        );
+                    }
                     return V2LaneIngressOutcome::Rejected;
                 }
             }
@@ -6465,6 +6526,14 @@ impl V2LaneWorkAdapter {
         }
         let local = self.pending_local_lane_proposals.get(&block_hash).cloned();
         if local.as_ref().is_some_and(|planned| planned != &proposals) {
+            if empty_merge_body {
+                iroha_logger::warn!(
+                    ?subject,
+                    local_proposal_count = local.as_ref().map_or(0, Vec::len),
+                    bound_proposal_count = proposals.len(),
+                    "rejected empty merge carrier with conflicting local production plan"
+                );
+            }
             return V2LaneIngressOutcome::Rejected;
         }
         let global_hint = LaneBlockProposalPayloadHintV1 {
@@ -32113,5 +32182,4 @@ pub(super) mod tests {
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
     include!("tests/v2_lane_work_ordinary_dispatch.rs");
-
 }

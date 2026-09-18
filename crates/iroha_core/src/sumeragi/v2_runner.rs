@@ -1305,7 +1305,7 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_beacon: &V2GlobalBeaconLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
@@ -1461,14 +1461,6 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
-    if npos_beacon.pulse_requested()
-        && npos_beacon.pulse_required_for_consensus()
-        && npos_beacon
-            .finalized_pulse(directive.tag().view())
-            .is_none()
-    {
-        return Ok(());
-    }
     if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -1570,6 +1562,21 @@ fn schedule_local_proposal(
         })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
+                // The complete bounded snapshot found independently useful
+                // work. Its lease has been released without consuming work;
+                // retry selection after the exact-view pulse is reconstructed.
+                npos_beacon
+                    .activate()
+                    .and_then(|()| npos_beacon.begin_round(directive.tag().view()))
+                    .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+                broadcast_npos_beacon_messages(
+                    npos_beacon.take_outbound(),
+                    output_guard,
+                    services,
+                )?;
+                return Ok(());
+            }
             CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
                 proposal_state.defer_candidate_snapshot(owner, Instant::now());
                 iroha_logger::debug!(
@@ -2800,13 +2807,24 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
-    npos_beacon
-        .attach_candidate_effects(view, &mut effects)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let required_beacon_pulse_pending =
+        npos_beacon.pulse_required_for_consensus() && npos_beacon.finalized_pulse(view).is_none();
+    if !required_beacon_pulse_pending {
+        npos_beacon
+            .attach_candidate_effects(view, &mut effects)
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    }
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-    let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
+    // A pulse (including a pending mandatory one) can accompany real merge work
+    // through the block validator's two-stage native authorization. Other NPoS
+    // effects retain the control-only boundary and never borrow that authority.
+    let merge_selection = certified_merge_selection_for_npos(
+        npos_consensus_effects.as_ref().is_some_and(|effects| {
+            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()
+        }),
+    );
     if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
         iroha_logger::debug!(
             height = context.height,
@@ -2851,6 +2869,7 @@ fn candidate_attachments(
         time_trigger_clock_progress_required: state
             .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects,
+        required_beacon_pulse_pending,
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())

@@ -1563,6 +1563,7 @@ fn generate_localnet_inner<T: Write>(
             npos_bootstrap,
             taira,
             operator_account: &operator_account_literal,
+            operator_public_key: &client_identity.public_key,
             operator_private_key_file: &runtime_bundle.operator_signer_key,
             onboarding_account: &onboarding_account_literal,
             onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
@@ -1651,6 +1652,7 @@ fn generate_localnet_inner<T: Write>(
                 npos_bootstrap,
                 taira,
                 operator_account: &operator_account_literal,
+                operator_public_key: &client_identity.public_key,
                 operator_private_key_file: &runtime_bundle.operator_signer_key,
                 onboarding_account: &onboarding_account_literal,
                 onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
@@ -2362,6 +2364,7 @@ struct RenderPeerFeatures<'a> {
     npos_bootstrap: bool,
     taira: bool,
     operator_account: &'a str,
+    operator_public_key: &'a iroha_crypto::PublicKey,
     operator_private_key_file: &'a Path,
     onboarding_account: &'a str,
     onboarding_private_key_file: &'a Path,
@@ -2406,6 +2409,7 @@ fn render_peer_config(
         npos_bootstrap,
         taira,
         operator_account,
+        operator_public_key,
         operator_private_key_file,
         onboarding_account,
         onboarding_private_key_file,
@@ -3170,6 +3174,18 @@ fn render_peer_config(
     }
     root.insert("network".into(), Value::Table(network));
     let mut torii = Table::new();
+    // The runtime operator sidecar is generated from this same identity. Bind
+    // its public key on every peer while retaining node-key and replay guards.
+    let mut operator_signatures = Table::new();
+    operator_signatures.insert("enabled".into(), Value::Boolean(true));
+    operator_signatures.insert(
+        "allowed_public_keys".into(),
+        Value::Array(vec![Value::String(operator_public_key.to_string())]),
+    );
+    torii.insert(
+        "operator_signatures".into(),
+        Value::Table(operator_signatures),
+    );
     torii.insert(
         "address".into(),
         Value::String(bind_host.addr_literal(peer.api_port)),
@@ -6685,6 +6701,13 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert!(parsed.torii.operator_signatures.enabled);
+            assert!(parsed.torii.operator_signatures.allow_node_key);
+            assert_eq!(
+                parsed.torii.operator_signatures.allowed_public_keys,
+                vec![operator_identity.public_key.clone()],
+                "each validator must authorize exactly the generated runtime operator"
+            );
             assert!(parsed.nexus.governance.default_module.is_none());
             assert!(
                 parsed
@@ -10315,6 +10338,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(operator_mint_permissions, vec![expected_permission]);
+        for peer_index in 0..opts.peers.get() {
+            let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
+                .expect("read generated permissioned peer config");
+            let parsed = actual::Root::from_toml_source(source)
+                .expect("parse generated permissioned peer config");
+            assert!(parsed.torii.operator_signatures.enabled);
+            assert!(parsed.torii.operator_signatures.allow_node_key);
+            assert_eq!(
+                parsed.torii.operator_signatures.allowed_public_keys,
+                vec![operator.public_key.clone()],
+                "generic localnet must authorize exactly its generated runtime operator"
+            );
+        }
     }
     #[test]
     fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {

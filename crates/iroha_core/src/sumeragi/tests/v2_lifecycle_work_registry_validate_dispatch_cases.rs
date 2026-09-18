@@ -193,7 +193,7 @@ fn prospective_startup_census_rejects_extra_valid_carrier_before_publication() {
     let address = ConcreteWorkAddress::new(owner, 1, slot).expect("exact extra address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, digest, work)
+        .install(address, digest, Box::new(work))
         .expect("install internally valid but extraneous startup carrier");
     let coordinator = super::super::LifecycleCoordinator::new(
         LifecycleContext::new(LifecycleDigest::new([0x62; 32]), 7),
@@ -598,7 +598,7 @@ fn durable_store_fixture_with_views_and_phase(
     assert_eq!(work.effect(), &effect);
     assert_eq!(work.causal_root(), owner.causal_root());
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-    assert!(registry.entries.insert(address, work).is_none());
+    assert!(registry.entries.insert(address, Box::new(work)).is_none());
     DurableStoreFixture {
         registry,
         verified,
@@ -834,7 +834,7 @@ fn durable_validate_fixture_from_material(
     assert_eq!(work.effect(), &effect);
     assert_eq!(work.causal_root(), owner.causal_root());
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-    assert!(registry.entries.insert(address, work).is_none());
+    assert!(registry.entries.insert(address, Box::new(work)).is_none());
     DurableValidateFixture {
         registry,
         verified,
@@ -1069,7 +1069,13 @@ fn durable_local_validate_store_fixture_at_view(
     };
     assert!(work.validate_exact());
     assert!(work.validates_at(address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     fixture.address = address;
     fixture.slot = slot;
     fixture.lease.owner = owner;
@@ -1238,7 +1244,13 @@ fn persist_durable_validate_fixture_into_store(
     fixture.lease.physical_slots = physical_slots;
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     (fixture, durable)
 }
 
@@ -1361,7 +1373,13 @@ fn durable_validate_store_fixture_from_existing(
     fixture.lease.physical_slots = physical_slots;
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     (fixture, directory, store, durable)
 }
 

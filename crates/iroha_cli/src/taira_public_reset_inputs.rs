@@ -5,6 +5,94 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use norito::codec::Encode as _;
 use zeroize::Zeroizing;
 
+/// The unsigned topology/intent contract omits generated beacon authority.
+/// Unknown fields, including a caller-supplied beacon_bootstrap, are rejected.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UnsignedInventoryDraftV1 {
+    schema: String,
+    qualification_scope: QualificationScopeV1,
+    deployment_id: String,
+    chain_id: String,
+    chain_discriminant: u16,
+    previous_genesis_hash: String,
+    next_genesis_hash: String,
+    authorization_nonce: String,
+    revision: RevisionV1,
+    validators: Vec<ValidatorV1>,
+    validator_clients: Vec<ValidatorClientV1>,
+    /// Dedicated public operator identity accepted by every candidate validator.
+    operator_public_key: String,
+    edge: EdgeV1,
+    #[norito(required)]
+    inrou_canary: Option<InrouCanaryV1>,
+    canary_onboarding_request: AccountOnboardingPlanRequestV1,
+    faucet_policy: FaucetPolicyV1,
+    fee_intent: FeeIntentV1,
+    cleanup: CleanupV1,
+    timeouts: TimeoutsV1,
+    artifact_closure_sha256: String,
+    runtime_client_config_sha256: String,
+    onboarding_token_sha256: String,
+    validator_client_configs_sha256: String,
+    #[norito(required)]
+    inrou_stage_tree_sha256: Option<String>,
+}
+
+impl UnsignedInventoryDraftV1 {
+    fn into_inventory(self, beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1) -> InventoryV1 {
+        InventoryV1 {
+            schema: self.schema,
+            qualification_scope: self.qualification_scope,
+            deployment_id: self.deployment_id,
+            chain_id: self.chain_id,
+            chain_discriminant: self.chain_discriminant,
+            previous_genesis_hash: self.previous_genesis_hash,
+            next_genesis_hash: self.next_genesis_hash,
+            authorization_nonce: self.authorization_nonce,
+            revision: self.revision,
+            validators: self.validators,
+            validator_clients: self.validator_clients,
+            operator_public_key: self.operator_public_key,
+            edge: self.edge,
+            inrou_canary: self.inrou_canary,
+            canary_onboarding_request: self.canary_onboarding_request,
+            faucet_policy: self.faucet_policy,
+            fee_intent: self.fee_intent,
+            cleanup: self.cleanup,
+            timeouts: self.timeouts,
+            artifact_closure_sha256: self.artifact_closure_sha256,
+            runtime_client_config_sha256: self.runtime_client_config_sha256,
+            onboarding_token_sha256: self.onboarding_token_sha256,
+            validator_client_configs_sha256: self.validator_client_configs_sha256,
+            inrou_stage_tree_sha256: self.inrou_stage_tree_sha256,
+            beacon_bootstrap,
+        }
+    }
+}
+
+fn decode_inventory_draft(
+    bytes: &[u8],
+) -> Result<(UnsignedInventoryDraftV1, ChainDiscriminantGuard)> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_JSON_BYTES {
+        return Err(eyre!(
+            "unsigned inventory draft exceeds its exact JSON bound"
+        ));
+    }
+    let guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let draft: UnsignedInventoryDraftV1 = json::from_slice(bytes)
+        .map_err(|_| eyre!("unsigned inventory draft is not the exact native contract; generated beacon_bootstrap is forbidden"))?;
+    if draft.chain_id != CHAIN_ID || draft.chain_discriminant != CHAIN_DISCRIMINANT {
+        return Err(eyre!("unsigned inventory draft targets another chain"));
+    }
+    Ok((draft, guard))
+}
+
+pub(super) fn draft_canary_request(bytes: &[u8]) -> Result<AccountOnboardingPlanRequestV1> {
+    let (draft, _guard) = decode_inventory_draft(bytes)?;
+    Ok(draft.canary_onboarding_request)
+}
+
 /// Actual local inputs whose derived identities are written into the inventory.
 #[derive(clap::Args, Debug)]
 pub(super) struct LocalInputs {
@@ -25,6 +113,12 @@ pub(super) struct LocalInputs {
     /// Four exact local systemd units in validator order.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_unit: Vec<PathBuf>,
+    /// Native public request and seat map produced by prepare-beacon-inputs.
+    #[arg(long, value_name = "PATH")]
+    beacon_inputs: PathBuf,
+    /// Four pre-rendered FD200 units using --config-file beacon.toml, in validator order.
+    #[arg(long, value_name = "PATH", num_args = 4)]
+    beacon_validator_unit: Vec<PathBuf>,
     /// Exact local edge systemd unit.
     #[arg(long, value_name = "PATH")]
     edge_unit: PathBuf,
@@ -35,7 +129,7 @@ pub(super) struct LocalInputs {
 
 #[derive(clap::Args, Debug)]
 pub(super) struct Assemble {
-    /// Existing InventoryV1 layout with explicit approved topology, occupancy and intent.
+    /// Unsigned topology, occupancy and intent; generated beacon_bootstrap must be absent.
     /// Derived hashes, sizes, modes, source/stage identity and fingerprints are replaced.
     #[arg(long, value_name = "PATH")]
     inventory_draft: PathBuf,
@@ -65,10 +159,72 @@ pub(super) struct Authorize {
     output: PathBuf,
 }
 
+/// Derive public beacon request and renderer seat paths from authenticated genesis.
+#[derive(clap::Args, Debug)]
+pub(super) struct PrepareBeaconInputs {
+    #[arg(long, value_name = "PATH")]
+    inventory_draft: PathBuf,
+    #[arg(long, value_name = "DIR")]
+    public_inputs: PathBuf,
+    /// New owner-private public result; never replaced.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+pub(super) fn prepare_beacon_inputs(args: &PrepareBeaconInputs) -> Result<()> {
+    let input = pin_owner_private_file(&args.inventory_draft, "unsigned inventory draft")?;
+    let (draft, _guard) = decode_inventory_draft(&pinned_bytes(&input, MAX_JSON_BYTES)?)?;
+    let public = public_inputs::load(&args.public_inputs)?;
+    let read = |path: &Path, label| -> Result<Vec<u8>> {
+        let (file, snapshot) = open_pinned_regular(path, label)?;
+        read_pinned_bytes(path, label, file, &snapshot, MAX_JSON_BYTES)
+    };
+    let wire = read(
+        &args.public_inputs.join("genesis.signed.nrt"),
+        "prepared signed genesis",
+    )?;
+    if sha256_hex(&wire) != public.signed_genesis_sha256 {
+        return Err(eyre!(
+            "prepared beacon genesis changed after native public-input validation"
+        ));
+    }
+    let manifest = read(
+        &args.public_inputs.join("genesis.json"),
+        "public raw genesis manifest",
+    )?;
+    if sha256_hex(&manifest) != public.raw_manifest_sha256 {
+        return Err(eyre!(
+            "public raw genesis manifest changed after bundle validation"
+        ));
+    }
+    let prepared = host::beacon::prepare_public_beacon_inputs(
+        &wire,
+        &manifest,
+        &public.genesis_public_key,
+        public.genesis_hash.parse()?,
+        &draft.authorization_nonce,
+        &draft.validators,
+        &draft.validator_clients,
+    )?;
+    revalidate_pinned(&input, "unsigned inventory draft")?;
+    write_new_private(&args.output, &canonical_bytes(&prepared)?)
+}
+
 pub(super) fn assemble(args: &Assemble) -> Result<()> {
     let input = pin_owner_private_file(&args.inventory_draft, "inventory draft")?;
     let bytes = pinned_bytes(&input, MAX_JSON_BYTES)?;
-    let (mut inventory, _guard) = decode_inventory(&bytes, "inventory draft")?;
+    let (draft, _guard) = decode_inventory_draft(&bytes)?;
+    validate_timeouts(&draft.timeouts)?;
+    execution_lifetime_for_inputs(&draft.timeouts, &draft.validators)?;
+    let public = public_inputs::load(&args.local.public_inputs)?;
+    let plan = host::beacon::load_plan(
+        &draft.validators,
+        &args.local.beacon_inputs,
+        &args.local.public_inputs.join("genesis.json"),
+        &args.local.beacon_validator_unit,
+        &public.genesis_public_key,
+    )?;
+    let mut inventory = draft.into_inventory(plan);
     derive_inventory(&mut inventory, &args.local)?;
     revalidate_pinned(&input, "inventory draft")?;
     write_new_private(&args.output, &assembled_inventory_bytes(&inventory)?)
@@ -130,6 +286,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
         || inventory.validator_clients.len() != 4
         || inputs.validator_client_config.len() != 4
         || inputs.validator_unit.len() != 4
+        || inputs.beacon_validator_unit.len() != 4
     {
         return Err(eyre!(
             "assembly requires exactly four ordered validator inputs"
@@ -204,6 +361,13 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     }
     inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
     derive_validator_identities(inventory, build_identity)?;
+    host::beacon::derive_plan(
+        inventory,
+        &inputs.beacon_inputs,
+        &inputs.public_inputs.join("genesis.json"),
+        &inputs.beacon_validator_unit,
+        &public.genesis_public_key,
+    )?;
     derive_runtime_stage(inventory, inputs)?;
     let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);

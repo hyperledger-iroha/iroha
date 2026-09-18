@@ -196,9 +196,9 @@ fn reopen_body_owner_fixture(
     (
         ReadyBodyFixture {
             transport,
-            owner,
-            planner_io,
-            services,
+            owner: Box::new(owner),
+            planner_io: Box::new(planner_io),
+            services: Box::new(services),
             _owner_directory: directory,
             certificate,
             ordinal,

@@ -56,6 +56,9 @@ pub(crate) struct AuthenticatedHeightObserverV1 {
 }
 
 trait HeightReads: Sync {
+    fn transport_pending(&self, _: &eyre::Report) -> bool {
+        false
+    }
     fn tip(&self, peer: usize) -> Result<u64>;
     fn attest(
         &self,
@@ -74,9 +77,13 @@ trait HeightReads: Sync {
 
 struct NativeReads {
     clients: [Client; VERIFICATION_PEERS],
+    transport_progress: bool,
 }
 
 impl HeightReads for NativeReads {
+    fn transport_pending(&self, error: &eyre::Report) -> bool {
+        self.transport_progress && crate::taira::observation_transport_unavailable(error)
+    }
     fn tip(&self, peer: usize) -> Result<u64> {
         Ok(self.clients[peer]
             .get_sumeragi_status()?
@@ -104,6 +111,38 @@ impl HeightReads for NativeReads {
 }
 
 impl AuthenticatedHeightObserverV1 {
+    /// Anchor an operator observer in the same independently validated public trust profile.
+    pub(crate) fn from_trust(trust: &TrustV1, network: NetworkId) -> Result<Self> {
+        Ok(Self {
+            authority: trust.authority(network)?,
+            peers: trust.peers.clone(),
+            verifier: None,
+            proofs: Vec::new(),
+            emitted_height: 0,
+        })
+    }
+
+    /// Return fresh same-height evidence as well as advances; transport interruption is progress.
+    /// Fixed peer identity, proof, authorization and codec failures retain their strict errors.
+    pub(crate) fn observe_current(
+        &mut self,
+        clients: &[Client; VERIFICATION_PEERS],
+        discriminant: u16,
+        deadline: Instant,
+    ) -> Result<HeightObservationV1> {
+        let readers = NativeReads {
+            clients: std::array::from_fn(|index| clients[index].with_request_deadline(deadline)),
+            transport_progress: true,
+        };
+        self.observe_with_policy(
+            &readers,
+            discriminant,
+            deadline,
+            rand::random(),
+            rand::random(),
+            true,
+        )
+    }
     /// The opaque bundle can only be obtained through native signed-manifest validation.
     pub(crate) fn new(
         genesis: &iroha_genesis::ValidatedGenesisBundle,
@@ -156,6 +195,7 @@ impl AuthenticatedHeightObserverV1 {
         require_operation_budget(deadline, "starting authenticated height observation")?;
         let readers = NativeReads {
             clients: std::array::from_fn(|index| clients[index].with_request_deadline(deadline)),
+            transport_progress: false,
         };
         self.observe_with(
             &readers,
@@ -175,7 +215,12 @@ impl AuthenticatedHeightObserverV1 {
     ) -> Result<Vec<PeerRead<BridgeFinalityAttestationV1>>> {
         read_four_peers(&self.peers, discriminant, |index, peer| {
             require_operation_budget(deadline, "reading authenticated validator height")?;
-            let Some(height) = NonZeroU64::new(reads.tip(index)?) else {
+            let tip = match reads.tip(index) {
+                Ok(tip) => tip,
+                Err(error) if reads.transport_pending(&error) => return Ok(PeerRead::Pending),
+                Err(error) => return Err(error),
+            };
+            let Some(height) = NonZeroU64::new(tip) else {
                 return Ok(PeerRead::Pending);
             };
             require_operation_budget(deadline, "challenging validator finality")?;
@@ -189,6 +234,7 @@ impl AuthenticatedHeightObserverV1 {
                     require_operation_budget(deadline, "validator finality tip is moving")?;
                     return Ok(PeerRead::Pending);
                 }
+                Err(error) if reads.transport_pending(&error) => return Ok(PeerRead::Pending),
                 Err(error) => return Err(error),
             };
             validate_attestation(&self.authority, peer, challenge, &attestation)?;
@@ -211,6 +257,25 @@ impl AuthenticatedHeightObserverV1 {
         before_challenge: [u8; 32],
         after_challenge: [u8; 32],
     ) -> Result<HeightObservationV1> {
+        self.observe_with_policy(
+            reads,
+            discriminant,
+            deadline,
+            before_challenge,
+            after_challenge,
+            false,
+        )
+    }
+
+    fn observe_with_policy(
+        &mut self,
+        reads: &impl HeightReads,
+        discriminant: u16,
+        deadline: Instant,
+        before_challenge: [u8; 32],
+        after_challenge: [u8; 32],
+        repeat_current: bool,
+    ) -> Result<HeightObservationV1> {
         require_operation_budget(deadline, "starting authenticated height observation")?;
         require(
             before_challenge != [0; 32]
@@ -232,6 +297,17 @@ impl AuthenticatedHeightObserverV1 {
             return Ok(HeightObservationV1::Pending);
         };
         let target_height = source.body.finality_proof.block_header.height();
+        // A disconnected suffix source must not hide a conflict in already authenticated history.
+        if repeat_current {
+            for read in &before {
+                if let PeerRead::Verified(attestation) = read
+                    && usize::try_from(attestation.body.finality_proof.block_header.height().get())?
+                        <= self.proofs.len()
+                {
+                    self.require_chain_tip(attestation)?;
+                }
+            }
+        }
         let mut new_proofs = 0;
         if !self.synchronize(reads, source_index, source, deadline, &mut new_proofs)? {
             return Ok(HeightObservationV1::Pending);
@@ -254,12 +330,23 @@ impl AuthenticatedHeightObserverV1 {
         };
         if before.iter().any(|attestation| {
             attestation.body.finality_proof.block_header.height() != target_height
-        }) || target_height.get() <= self.emitted_height
+        }) || target_height.get() < self.emitted_height
+            || (!repeat_current && target_height.get() == self.emitted_height)
         {
             return Ok(HeightObservationV1::Pending);
         }
         let after = self.capture(reads, discriminant, deadline, after_challenge)?;
         require_operation_budget(deadline, "rechecked authenticated validator heights")?;
+        if repeat_current {
+            for read in &after {
+                if let PeerRead::Verified(attestation) = read
+                    && usize::try_from(attestation.body.finality_proof.block_header.height().get())?
+                        <= self.proofs.len()
+                {
+                    self.require_chain_tip(attestation)?;
+                }
+            }
+        }
         if let Some((index, tip)) = after
             .iter()
             .enumerate()
@@ -351,7 +438,11 @@ impl AuthenticatedHeightObserverV1 {
                     .verifier
                     .clone()
                     .ok_or_else(|| eyre!("missing genesis verifier"))?;
-                let proof = reads.next_proof(source_index, next, &mut verifier)?;
+                let proof = match reads.next_proof(source_index, next, &mut verifier) {
+                    Ok(proof) => proof,
+                    Err(error) if reads.transport_pending(&error) => return Ok(false),
+                    Err(error) => return Err(error),
+                };
                 (proof, verifier)
             };
             require(

@@ -6445,6 +6445,37 @@ pub(crate) mod valid {
         axt_snapshot_mismatch: bool,
         has_native_participant_frontiers: bool,
     }
+    /// Move-only permission minted solely by strict parent-state block validation.
+    /// The consumer cannot substitute a local pulse, roster, pruning plan or carrier.
+    pub(crate) struct VerifiedMergeBeaconPulse {
+        header: BlockHeader,
+        network_id: NetworkId,
+        effects: iroha_data_model::consensus::NposConsensusEffects,
+        prune_keys: Vec<Hash>,
+        roster: Vec<PeerId>,
+        parent_surface: Hash,
+    }
+    impl VerifiedMergeBeaconPulse {
+        pub(crate) fn into_parts(
+            self,
+        ) -> (
+            BlockHeader,
+            NetworkId,
+            iroha_data_model::consensus::NposConsensusEffects,
+            Vec<Hash>,
+            Vec<PeerId>,
+            Hash,
+        ) {
+            (
+                self.header,
+                self.network_id,
+                self.effects,
+                self.prune_keys,
+                self.roster,
+                self.parent_surface,
+            )
+        }
+    }
     impl ValidBlock {
         fn autonomous_merge_carrier_has_da_effect(block: &SignedBlock) -> bool {
             // Every valid block carries the exact active proof-policy bundle.
@@ -6477,7 +6508,12 @@ pub(crate) mod valid {
             block: &SignedBlock,
             reference: &CertifiedMergeLedgerReference,
         ) -> Result<(), BlockValidationError> {
-            if block.npos_consensus_effects().is_some() && reference.execution_batch_hash.is_some()
+            if reference.execution_batch_hash.is_some()
+                && block.npos_consensus_effects().is_some_and(|effects| {
+                    effects.finalized_global_beacon_pulse.is_none()
+                        || !effects.v2_evidence_admissions.is_empty()
+                        || !effects.penalty_actions.is_empty()
+                })
             {
                 return Err(Self::execution_context_error(
                     "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
@@ -7382,6 +7418,28 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
+        /// Test-only entry into the production native staging and capability path.
+        #[cfg(test)]
+        pub(crate) fn state_block_for_execution_for_test<'state>(
+            block: &SignedBlock,
+            state: &'state State,
+            context: &iroha_data_model::block::consensus_v2::HeightContext,
+        ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
+            Self::validate_npos_effects_with_state(
+                block,
+                state,
+                Some(context.mode),
+                Some(context),
+            )?;
+            Self::state_block_for_execution(
+                block,
+                state,
+                false,
+                Some(context.mode),
+                Some(context),
+                None,
+            )
+        }
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
@@ -7456,6 +7514,35 @@ pub(crate) mod valid {
             if let Some(reference) = merge_reference {
                 Self::validate_npos_merge_composition(block, reference)?;
             }
+            let merge_beacon = if merge_reference
+                .is_some_and(|reference| reference.execution_batch_hash.is_some())
+                && prepared_npos.is_some()
+            {
+                Self::validate_npos_effects_with_state(
+                    block,
+                    state,
+                    authoritative_mode,
+                    authenticated_height_context,
+                )?;
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "merge beacon composition requires an authenticated height context",
+                    )
+                })?;
+                let (effects, prune_keys, _, roster) = prepared_npos.as_ref().ok_or_else(|| {
+                    Self::npos_effects_error("merge beacon composition lacks effects")
+                })?;
+                Some(VerifiedMergeBeaconPulse {
+                    header: block.header(),
+                    network_id: context.network_id,
+                    effects: (*effects).clone(),
+                    prune_keys: prune_keys.clone(),
+                    roster: roster.clone(),
+                    parent_surface: crate::state::merge_beacon_parent_surface(&state.world_view()),
+                })
+            } else {
+                None
+            };
             let queue_plan_admissions = execution_context
                 .map(|bundle| bundle.queue_plan_admissions())
                 .unwrap_or_default();
@@ -7497,11 +7584,18 @@ pub(crate) mod valid {
                 return state
                     .block_with_pristine_stage(block.header(), |state_block| {
                         let stage = match replay {
-                            Some(authority) => state_block.stage_certified_merge_reference_for_verified_replay(reference, frozen_mode, authority),
-                            None => state_block.stage_certified_merge_reference(reference, frozen_mode),
+                            Some(authority) => state_block
+                                .stage_certified_merge_reference_for_verified_replay(
+                                    reference,
+                                    frozen_mode,
+                                    authority,
+                                ),
+                            None => {
+                                state_block.stage_certified_merge_reference(reference, frozen_mode)
+                            }
                         };
                         stage.map_err(|error| {
-                                match error {
+                            match error {
                                 crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
                                     entry_hash,
                                 } => BlockValidationError::MissingCertifiedMergeSidecar {
@@ -7511,17 +7605,18 @@ pub(crate) mod valid {
                                     "certified merge entry could not be staged: {other}"
                                 )),
                             }
-                            })?;
-                        if prepared_npos.is_some()
-                            && state_block
-                                .staged_merge_entry()
-                                .is_some_and(|entry| entry.execution_batch.is_some())
-                        {
-                            return Err(Self::execution_context_error(
-                                "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
-                            ));
+                        })?;
+                        if let Some(capability) = merge_beacon {
+                            state_block
+                                .apply_verified_merge_beacon_pulse(capability)
+                                .map_err(|error| {
+                                    Self::npos_effects_error(format!(
+                                        "certified merge beacon composition failed: {error}"
+                                    ))
+                                })
+                        } else {
+                            apply_npos(state_block)
                         }
-                        apply_npos(state_block)
                     })
                     .map(Box::new);
             }
@@ -7629,7 +7724,8 @@ pub(crate) mod valid {
                     autonomous_lane_payloads: context.autonomous_lane_payloads.len(),
                     lane_payload_ownerships: context.lane_payload_ownerships.len(),
                     has_da_effect: Self::autonomous_merge_carrier_has_da_effect(block),
-                    has_npos: block.npos_consensus_effects().is_some(),
+                    has_npos: block.npos_consensus_effects().is_some()
+                        && !state_block.has_verified_merge_beacon_composition(block),
                     has_axt_envelopes: block
                         .axt_envelopes()
                         .is_some_and(|envelopes| !envelopes.is_empty()),

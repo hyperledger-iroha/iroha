@@ -16,6 +16,7 @@ const UNIT_BACKUP: &str = "validator-unit.before";
 
 pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Result<()> {
     let prior = validator.admitted_release()?;
+    prior.service_state.validate()?;
     if prior.artifacts.len() != VALIDATOR_ARTIFACT_ROLES.len() {
         return Err(eyre!(
             "occupied runtime requires exactly seven artifact roles"
@@ -181,6 +182,13 @@ pub(super) fn process_binding(
             .join("releases")
             .join(&admitted.inventory.revision.commit);
         let stable = Path::new(&validator.service_root).join("current");
+        let active = beacon::active_binding(admitted, validator)?;
+        let initial_config = artifact(&validator.artifacts, "config")?;
+        let config_name = if active.is_some() {
+            "beacon.toml"
+        } else {
+            "config.toml"
+        };
         Ok(ProcessBinding {
             release_root: root.clone(),
             executable: root.join("bin/iroha3d_taira"),
@@ -191,16 +199,25 @@ pub(super) fn process_binding(
                     .into_owned(),
                 "--config".to_owned(),
                 stable
-                    .join("config/config.toml")
+                    .join("config")
+                    .join(config_name)
                     .to_string_lossy()
                     .into_owned(),
                 "--sora".to_owned(),
             ],
-            config: PathBuf::from(&artifact(&validator.artifacts, "config")?.remote_path),
-            config_sha256: artifact(&validator.artifacts, "config")?.sha256.clone(),
+            config: active
+                .as_ref()
+                .map(|binding| binding.config.clone())
+                .unwrap_or_else(|| PathBuf::from(&initial_config.remote_path)),
+            config_sha256: active
+                .as_ref()
+                .map(|binding| binding.config_sha256.clone())
+                .unwrap_or_else(|| initial_config.sha256.clone()),
             genesis: PathBuf::from(&artifact(&validator.artifacts, "genesis")?.remote_path),
             genesis_sha256: artifact(&validator.artifacts, "genesis")?.sha256.clone(),
-            unit_sha256: validator.systemd_unit_sha256.clone(),
+            unit_sha256: active
+                .map(|binding| binding.unit_sha256)
+                .unwrap_or_else(|| validator.systemd_unit_sha256.clone()),
         })
     } else {
         validate_occupied_binding(validator)?;
@@ -368,10 +385,66 @@ pub(super) fn verify_unit_fragment(path: &Path, expected_sha256: &str) -> Result
     Ok(())
 }
 
+/// Bind the loaded unit during stopped-owner cleanup to its exact admitted publication phase.
+/// The prior fragment is valid before Install; a successor requires its retained native intent.
+pub(super) fn stopped_unit_hash(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<String> {
+    let destination = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
+    let actual = current_unit_hash(&destination)?;
+    let prior = if validator.is_vacant() {
+        None
+    } else {
+        Some(validator.admitted_release()?.artifact("validator_unit")?)
+    };
+    admit_stopped_unit_hash(
+        &actual,
+        prior.map(|entry| entry.sha256.as_str()),
+        &validator.systemd_unit_sha256,
+        || {
+            let prior = prior.ok_or_else(|| eyre!("vacant unit has no prior transition"))?;
+            let directory = Path::new(&validator.reset_guard)
+                .join("rollback")
+                .join(&admitted.inventory.authorization_nonce);
+            require_root_directory(&directory, true, "retained validator unit transition")?;
+            verify_generated_marker(&directory, admitted, "rollback")?;
+            load_unit_intent(&directory, &unit_intent(admitted, validator, false)?)?;
+            verify_occupied_artifact_at(prior, &directory.join(UNIT_BACKUP), 0o600)
+        },
+        || beacon::prepared_unit_hash(admitted, validator),
+    )?;
+    Ok(actual)
+}
+
+fn admit_stopped_unit_hash(
+    actual: &str,
+    prior: Option<&str>,
+    initial: &str,
+    verify_forward: impl FnOnce() -> Result<()>,
+    verified_beacon: impl FnOnce() -> Result<Option<String>>,
+) -> Result<()> {
+    if actual == prior.unwrap_or(initial) {
+        return Ok(());
+    }
+    if prior.is_some() {
+        verify_forward()?;
+        if actual == initial {
+            return Ok(());
+        }
+    }
+    if verified_beacon()?.as_deref() != Some(actual) {
+        return Err(eyre!(
+            "stopped validator unit is outside its exact admitted publication phases"
+        ));
+    }
+    Ok(())
+}
+
 /// Publish one exact unit while retaining both source and destination descriptors
 /// through the final rename. The caller has authenticated the phase intent and
 /// root-owned parents; this function also rejects intervening inode/byte drift.
-fn publish_unit_bytes_with(
+pub(super) fn publish_unit_bytes_with(
     source: &Path,
     destination: &Path,
     desired: &ArtifactV1,
@@ -512,7 +585,19 @@ pub(super) fn restore_validator_unit(admitted: &HostAdmission) -> Result<()> {
     verify_occupied_artifact_at(prior, &backup, 0o600)?;
     require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
     publish_unit_intent(&directory, &unit_intent(admitted, validator, true)?)?;
-    let published = classify_unit_publication(&current_unit_hash(destination)?, &forward)?;
+    let current_hash = current_unit_hash(destination)?;
+    let published =
+        if current_hash == forward.prior_sha256 || current_hash == forward.candidate_sha256 {
+            classify_unit_publication(&current_hash, &forward)?
+        } else if beacon::prepared_unit_hash(admitted, validator)?.as_deref()
+            == Some(current_hash.as_str())
+        {
+            true
+        } else {
+            return Err(eyre!(
+                "rollback unit is outside both exact signed publication phases"
+            ));
+        };
     if published {
         let restored = ArtifactV1 {
             role: prior.role.clone(),
@@ -528,7 +613,7 @@ pub(super) fn restore_validator_unit(admitted: &HostAdmission) -> Result<()> {
             &backup,
             destination,
             &restored,
-            &validator.systemd_unit_sha256,
+            &current_hash,
             true,
             || ensure_action_deadline(admitted),
             sync_directory,
@@ -776,6 +861,72 @@ mod tests {
                 "/srv/taira/taira-validator-1/releases/ffffffffffffffffffffffffffffffffffffffff"
             )
         ));
+    }
+
+    #[test]
+    fn stopped_unit_admission_requires_the_exact_prior_or_durable_successor() {
+        let prior = "1".repeat(64);
+        let initial = "2".repeat(64);
+        let beacon = "3".repeat(64);
+        admit_stopped_unit_hash(
+            &prior,
+            Some(&prior),
+            &initial,
+            || panic!("old unit before Install requires no candidate transition"),
+            || panic!("old unit must not require a new beacon"),
+        )
+        .unwrap();
+        admit_stopped_unit_hash(
+            &initial,
+            None,
+            &initial,
+            || panic!("vacant target has no previous unit"),
+            || panic!("initial vacant unit needs no beacon"),
+        )
+        .unwrap();
+        assert!(
+            admit_stopped_unit_hash(
+                &initial,
+                Some(&prior),
+                &initial,
+                || Err(eyre!("missing exact forward intent or prior backup")),
+                || panic!("failed transition cannot fall back to a beacon")
+            )
+            .is_err()
+        );
+        let authenticated = std::cell::Cell::new(false);
+        admit_stopped_unit_hash(
+            &initial,
+            Some(&prior),
+            &initial,
+            || {
+                authenticated.set(true);
+                Ok(())
+            },
+            || panic!("initial candidate is not a beacon unit"),
+        )
+        .unwrap();
+        assert!(authenticated.get());
+        admit_stopped_unit_hash(
+            &beacon,
+            Some(&prior),
+            &initial,
+            || Ok(()),
+            || Ok(Some(beacon.clone())),
+        )
+        .unwrap();
+        for observed in [None, Some(initial.clone()), Some("4".repeat(64))] {
+            assert!(
+                admit_stopped_unit_hash(
+                    &beacon,
+                    Some(&prior),
+                    &initial,
+                    || Ok(()),
+                    || Ok(observed)
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

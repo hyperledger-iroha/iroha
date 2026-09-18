@@ -6,15 +6,24 @@ fn exercise_final_canary_deadline(applied: bool) {
         query::CommittedTransaction,
         transaction::{DataTriggerSequence, TransactionPayload, TransactionResult},
     };
+    use iroha_torii_shared::{
+        ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+        PipelineTransactionStatusNotFoundV1,
+    };
     let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let retained = Arc::new(Mutex::new(None::<SignedTransaction>));
     let server_transaction = Arc::clone(&retained);
+    let quoted = Arc::new(Mutex::new(None::<TransactionPayload>));
+    let server_quoted = Arc::clone(&quoted);
     let observations = AtomicUsize::new(0);
     let server = spawn_mock_http(32, move |request| match path_only(&request.path) {
         "/v1/fees/quote" => {
             let body: Value = json::from_str(&request.body).unwrap();
             let payload: TransactionPayload =
                 json::from_value(body.get("payload").unwrap().clone()).unwrap();
+            *server_quoted.lock().unwrap() = Some(payload.clone());
+            // Fee latency must not create a new timestamp or extend the quoted lifetime.
+            thread::sleep(Duration::from_millis(100));
             let quote = FeeQuoteResponse {
                 intent: payload.fee_payment_intent().clone(),
                 observation: iroha_torii_shared::FeeQuoteObservation {
@@ -43,23 +52,28 @@ fn exercise_final_canary_deadline(applied: bool) {
         ),
         "/v1/pipeline/transactions/status" => {
             let transaction = server_transaction.lock().unwrap().clone().unwrap();
-            assert!(request.path.contains(&transaction.hash().to_string()));
+            assert_eq!(request.method, "GET");
+            assert_eq!(
+                request.path,
+                format!(
+                    "/v1/pipeline/transactions/status?hash={}&scope=global",
+                    transaction.hash()
+                )
+            );
             if observations.fetch_add(1, Ordering::SeqCst) == 0 {
                 thread::sleep(Duration::from_millis(100));
-                let envelope = iroha_torii_shared::ErrorEnvelope::new(
-                    iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                // Only Torii's exact hash-and-scope absence permits the initial POST.
+                let absence = ErrorEnvelope::new(
+                    PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
                     "Missing status.",
                 )
-                .with_details(iroha_torii_shared::ErrorDetails {
+                .with_details(ErrorDetails {
                     pipeline_transaction_status_not_found: Some(
-                        iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
-                            &transaction.hash(),
-                            "global",
-                        ),
+                        PipelineTransactionStatusNotFoundV1::new(&transaction.hash(), "global"),
                     ),
-                    ..iroha_torii_shared::ErrorDetails::default()
+                    ..ErrorDetails::default()
                 });
-                MockResponse::json(404, json::to_value(&envelope).unwrap())
+                MockResponse::json(404, json::to_value(&absence).unwrap())
             } else {
                 prepared_status_response(
                     &transaction,
@@ -120,6 +134,8 @@ fn exercise_final_canary_deadline(applied: bool) {
     let mut args = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
     args.public_root = server.base_url.clone();
     args.timeout_secs = 3;
+    // Reproduce a later operation with less than the default 120-second TTL left.
+    args.execution_expires_at_unix_ms = current_unix_ms().unwrap() + 10_000;
     let binding = args.binding().unwrap();
     let fee = FeePaymentIntent::authority(Vec::new(), None);
     let envelope = prepare_final_canary_operation(
@@ -143,6 +159,13 @@ fn exercise_final_canary_deadline(applied: bool) {
         PreparedLifetimeCheck::LiveForward,
     )
     .unwrap();
+    let quoted = quoted.lock().unwrap().clone().unwrap();
+    assert_eq!(validated.transaction().unwrap().payload(), &quoted);
+    assert_eq!(
+        quoted.creation_time_ms + quoted.time_to_live_ms.unwrap().get(),
+        binding.execution_expires_at_unix_ms,
+    );
+    assert!(quoted.time_to_live_ms.unwrap().get() < DEFAULT_WRITE_TTL_MS);
     *retained.lock().unwrap() = Some(validated.transaction().unwrap().clone());
     let budget = if applied {
         Duration::from_secs(2)
@@ -217,6 +240,33 @@ fn final_canary_submit_uses_original_deadline_after_initial_read_and_post() {
 #[test]
 fn final_canary_submit_verifies_exact_proof_without_replaying_post() {
     exercise_final_canary_deadline(true);
+}
+
+#[test]
+fn final_canary_expired_window_rejects_before_fee_quote_or_dispatch() {
+    let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+    let server = spawn_mock_http(1, |_| panic!("expired authorization must not reach HTTP"));
+    let mut config = crate::fallback_config();
+    config.chain = DEFAULT_CHAIN_ID.into();
+    config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT;
+    config.account = AccountId::new(config.key_pair.public_key().clone());
+    config.torii_api_url = Url::parse(&server.base_url).unwrap();
+    let mut args = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
+    args.public_root = server.base_url.clone();
+    args.execution_expires_at_unix_ms = 1;
+    let binding = args.binding().unwrap();
+    let error = prepare_final_canary_operation(
+        &config,
+        &args,
+        &server.base_url,
+        &binding,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Instant::now() + Duration::from_secs(10),
+    )
+    .err()
+    .expect("expired signed window must reject preparation");
+    assert!(format!("{error:#}").contains("no remaining signed execution window"));
+    assert!(finish_mock(server).is_empty());
 }
 
 #[test]

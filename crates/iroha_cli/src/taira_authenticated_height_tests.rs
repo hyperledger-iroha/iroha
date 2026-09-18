@@ -586,3 +586,146 @@ fn authenticated_height_deadline_prevents_dispatch_and_late_completion() {
     );
     assert_eq!(observer.emitted_height, 0);
 }
+
+#[test]
+fn authenticated_height_repeat_current_preserves_freshness_and_advancing_contract() {
+    let fixture = Fixture::new();
+    let mut observer = fixture.observer();
+    let first = Reads::new(&fixture, 2);
+    assert!(matches!(
+        poll(&mut observer, &first).unwrap(),
+        HeightObservationV1::Verified(_)
+    ));
+    let repeat = Reads::new(&fixture, 2);
+    let HeightObservationV1::Verified(evidence) = observer
+        .observe_with_policy(
+            &repeat,
+            369,
+            Instant::now() + Duration::from_secs(10),
+            [3; 32],
+            [4; 32],
+            true,
+        )
+        .unwrap()
+    else {
+        panic!("same height must have fresh evidence");
+    };
+    assert_eq!(evidence.proofs, fixture.proofs[..2]);
+    assert!(repeat.proof_calls.lock().unwrap().is_empty());
+    for peer in &evidence.peers {
+        assert_eq!(peer.before.body.challenge, [3; 32]);
+        assert_eq!(peer.after.body.challenge, [4; 32]);
+        peer.before.verify().unwrap();
+        peer.after.verify().unwrap();
+    }
+    assert!(
+        repeat
+            .attest_calls
+            .iter()
+            .all(|calls| calls.load(Ordering::Relaxed) == 2)
+    );
+    assert!(
+        matches!(
+            poll(&mut observer, &Reads::new(&fixture, 2)).unwrap(),
+            HeightObservationV1::Pending
+        ),
+        "original API remains strictly advancing"
+    );
+    assert!(
+        matches!(
+            observer
+                .observe_with_policy(
+                    &Reads::new(&fixture, 1),
+                    369,
+                    Instant::now() + Duration::from_secs(10),
+                    [5; 32],
+                    [6; 32],
+                    true
+                )
+                .unwrap(),
+            HeightObservationV1::Pending
+        ),
+        "fresh-current cannot regress"
+    );
+}
+
+struct RestartReads<'a>(Reads<'a>);
+impl HeightReads for RestartReads<'_> {
+    fn transport_pending(&self, error: &eyre::Report) -> bool {
+        crate::taira::observation_transport_unavailable(error)
+    }
+    fn tip(&self, peer: usize) -> Result<u64> {
+        if peer == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into());
+        }
+        self.0.tip(peer)
+    }
+    fn attest(
+        &self,
+        peer: usize,
+        height: NonZeroU64,
+        challenge: [u8; 32],
+        identity: &PeerId,
+    ) -> Result<BridgeFinalityAttestationV1> {
+        self.0.attest(peer, height, challenge, identity)
+    }
+    fn next_proof(
+        &self,
+        peer: usize,
+        height: NonZeroU64,
+        verifier: &mut BridgeFinalityVerifier,
+    ) -> Result<BridgeFinalityProof> {
+        self.0.next_proof(peer, height, verifier)
+    }
+}
+
+#[test]
+fn authenticated_height_restart_transport_never_masks_fixed_peer_identity() {
+    let fixture = Fixture::new();
+    let mut observer = fixture.observer();
+    let reads = RestartReads(Reads::new(&fixture, 2));
+    assert!(matches!(
+        observer
+            .observe_with_policy(
+                &reads,
+                369,
+                Instant::now() + Duration::from_secs(10),
+                [7; 32],
+                [8; 32],
+                true
+            )
+            .unwrap(),
+        HeightObservationV1::Pending
+    ));
+    let mut reads = RestartReads(Reads::new(&fixture, 2));
+    reads.0.fault = Fault::WrongIdentity;
+    assert!(
+        observer
+            .observe_with_policy(
+                &reads,
+                369,
+                Instant::now() + Duration::from_secs(10),
+                [9; 32],
+                [10; 32],
+                true
+            )
+            .is_err(),
+        "a disconnected peer cannot mask another peer's substituted identity"
+    );
+    assert!(
+        matches!(
+            observer
+                .observe_with_policy(
+                    &Reads::new(&fixture, 2),
+                    369,
+                    Instant::now() + Duration::from_secs(10),
+                    [11; 32],
+                    [12; 32],
+                    true
+                )
+                .unwrap(),
+            HeightObservationV1::Verified(_)
+        ),
+        "reconnect resumes the authenticated prefix without a write"
+    );
+}
