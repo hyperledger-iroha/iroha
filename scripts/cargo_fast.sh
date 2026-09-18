@@ -33,6 +33,8 @@ Options:
   --target-slot NAME      Reuse <repo>/target/cargo-fast/NAME
   --jobs N                Set CARGO_BUILD_JOBS=N (default: Cargo jobserver)
   --preserve-build-limits Keep an inherited local single-worker build fingerprint
+  --cargo-zigbuild        Use installed cargo-zigbuild for an explicit build command
+                          Ownership checks still use native Cargo build semantics
   --no-sccache            Do not auto-enable sccache
   --sccache-dir DIR       Set SCCACHE_DIR; otherwise use sccache's default
   --incremental           Set CARGO_INCREMENTAL=1; suppress configured sccache
@@ -71,6 +73,7 @@ stable_local_metadata=false
 linker_mode="off"
 zero_debug=false
 print_env_only=false
+cargo_driver="cargo"
 
 declare -a cargo_args
 cargo_args=()
@@ -108,6 +111,9 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--preserve-build-limits)
 			preserve_build_limits=true
+			;;
+		--cargo-zigbuild)
+			cargo_driver="cargo-zigbuild"
 			;;
 		--no-sccache)
 			auto_sccache=false
@@ -172,6 +178,13 @@ done
 if [[ ${#cargo_args[@]} -eq 0 ]]; then
 	echo "error: missing cargo arguments" >&2
 	usage >&2
+	exit 1
+fi
+
+# This closed driver mode never asks Cargo to resolve an external command or
+# alias. The unchanged ownership guard receives the actual built-in build argv.
+if [[ "${cargo_driver}" == "cargo-zigbuild" && "${cargo_args[0]}" != build ]]; then
+	echo "error: --cargo-zigbuild requires an explicit build command without aliases or prefixes" >&2
 	exit 1
 fi
 
@@ -574,7 +587,15 @@ if [[ "${print_env_only}" == true ]]; then
 	exit 0
 fi
 
-echo "[cargo-fast] running: cargo ${cargo_args[*]}"
+# Keep print-env a metadata-only operation: discover the optional driver only
+# after the early return above, and execute it directly to exclude Cargo aliases.
+if ! command -v "${cargo_driver}" >/dev/null 2>&1; then
+	echo "error: ${cargo_driver} not found on PATH" >&2
+	exit 1
+fi
+printf '[cargo-fast] running:'
+printf ' %q' "${cargo_driver}" "${cargo_args[@]}"
+printf '\n'
 # Replace this shell so it never rereads a changed script after a long build.
 cd -- "${REPO_ROOT}"
-exec cargo "${cargo_args[@]}"
+exec "${cargo_driver}" "${cargo_args[@]}"

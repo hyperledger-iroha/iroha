@@ -25,7 +25,10 @@ use std::{
     fs,
     io::Write as _,
     num::NonZeroU64,
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    os::{
+        fd::AsRawFd as _,
+        unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    },
     path::{Path, PathBuf},
     process::Stdio,
     str::FromStr as _,
@@ -274,11 +277,82 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
     Ok(())
 }
 
+// Exercise the real generator-to-reset contract before fixture overlays change the source.
+// These outputs remain unused private evidence; the four running peers keep the local layout.
+async fn materialize_generated_validator_configs(
+    root: &Path,
+    directory: &Path,
+    cli: &Path,
+    deadline: Instant,
+) -> Result<()> {
+    let network: NetworkId = fs::read_to_string(directory.join("genesis.expected_hash"))?
+        .trim()
+        .parse()?;
+    let deployment = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)?;
+    let output_dir = root.join("materialized-validator-configs");
+    fs::create_dir(&output_dir)?;
+    fs::set_permissions(&output_dir, fs::Permissions::from_mode(0o700))?;
+    for peer in 0..4 {
+        let role = format!("taira-validator-{}", peer + 1);
+        let source = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(directory.join(format!("peer{peer}.toml")))?;
+        let output = output_dir.join(format!("{role}.toml"));
+        let mut command = Command::new(cli);
+        command
+            .args([
+                "taira",
+                "public-reset",
+                "materialize-validator-config",
+                "--config-fd",
+                "198",
+            ])
+            .arg("--localnet-dir")
+            .arg(directory)
+            .arg("--validator")
+            .arg(&role)
+            .arg("--network-id")
+            .arg(network.to_string())
+            .arg("--genesis-file")
+            .arg(format!("/srv/taira/{role}/genesis.json"))
+            .arg("--operator-public-key")
+            .arg(deployment.public_key().to_string())
+            .arg("--output")
+            .arg(&output);
+        super::inherit(&mut command, &[(source.as_raw_fd(), 198)])?;
+        run(
+            &mut command,
+            &root.join(format!("prepare-materialize-{role}")),
+            deadline,
+            "generated validator reset materialization",
+        )
+        .await?;
+        let metadata = fs::symlink_metadata(&output)?;
+        ensure!(
+            metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.permissions().mode() & 0o7777 == 0o600,
+            "materialized validator must remain a direct private file"
+        );
+        // Native test code alone reads the fixture-owned private output. Never emit its body.
+        let projected: toml::Table = toml::from_str(&fs::read_to_string(&output)?)
+            .map_err(|_| eyre!("materialized validator is not TOML"))?;
+        ensure!(
+            projected["torii"]["operator_signatures"]["allowed_public_keys"]
+                == toml::Value::Array(vec![deployment.public_key().to_string().into()]),
+            "materialized validator omitted the explicit deployment key"
+        );
+    }
+    Ok(())
+}
+
 /// Materialize fresh fixture keys only through Kagami, then sign and independently
 /// validate the exact short-epoch genesis before constructing its public request.
 pub(super) async fn prepare(
     root: &Path,
     kagami: &Path,
+    cli: &Path,
     api_base: u16,
     p2p_base: u16,
     deadline: Instant,
@@ -331,6 +405,7 @@ pub(super) async fn prepare(
         "fresh native localnet",
     )
     .await?;
+    materialize_generated_validator_configs(root, &directory, cli, deadline).await?;
     iroha_genesis::init_instruction_registry();
     // A changed manifest defines a different network. Kagami correctly refuses
     // to replace a published identity, so all final outputs have fresh paths.

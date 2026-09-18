@@ -433,15 +433,9 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
     );
 
     let draft = root.join("draft.json");
-    // Preserve Taira account encoding from the guarded native inventory writer.
-    let mut unsigned: json::Value =
-        json::from_slice(&canonical_inventory_bytes(&inventory).unwrap()).unwrap();
-    unsigned.as_object_mut().unwrap().remove("beacon_bootstrap");
-    unsigned.as_object_mut().unwrap().remove("epoch_supervisor");
-    let draft_bytes = canonical_bytes(&unsigned).unwrap();
-    let _ =
-        decode_inventory_draft(&draft_bytes).expect("exact unsigned fixture before budget checks");
-    write_new_private(&draft, &draft_bytes).expect("private unsigned draft");
+    let topology = ResetTopologyIntentV1::from(&inventory);
+    let draft_bytes = canonical_bytes(&topology).unwrap();
+    write_new_private(&draft, &draft_bytes).expect("private topology intent");
     let signed_inventory = root.join("signed-inventory.json");
     write_new_private(
         &signed_inventory,
@@ -451,7 +445,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
     let output = root.join("inventory.json");
     assert_eq!(
         assemble(&Assemble {
-            inventory_draft: draft.clone(),
+            intent: draft.clone(),
             local: local(),
             output: output.clone(),
         })
@@ -604,30 +598,65 @@ fn candidate_runtime_scope_requires_disabled_core_and_exact_full_owner() {
 }
 
 #[test]
-fn unsigned_inventory_draft_forbids_generated_beacon_authority() {
+fn topology_intent_forbids_generated_pins_and_plans() {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
     let inventory = sample_inventory_fixture();
     let signed = canonical_inventory_bytes(&inventory).unwrap();
-    assert!(decode_inventory_draft(&signed).is_err());
-    // Preserve the Taira-scoped wire AccountIds from the canonical inventory.
-    let mut value: json::Value = json::from_slice(&signed).unwrap();
-    value.as_object_mut().unwrap().remove("beacon_bootstrap");
-    value.as_object_mut().unwrap().remove("epoch_supervisor");
-    let bytes = canonical_bytes(&value).unwrap();
-    let (draft, _guard) = decode_inventory_draft(&bytes).unwrap();
-    let reconstructed = draft.into_inventory(
-        inventory.beacon_bootstrap.clone(),
-        inventory.epoch_supervisor.clone(),
-    );
-    assert_eq!(canonical_inventory_bytes(&reconstructed).unwrap(), signed);
-    assert!(
-        decode_inventory(&bytes, "unsigned draft").is_err(),
-        "unsigned input never admits as signed inventory"
-    );
-    value
-        .as_object_mut()
-        .unwrap()
-        .insert("beacon_bootstrap".into(), json::Value::Null);
-    assert!(decode_inventory_draft(&canonical_bytes(&value).unwrap()).is_err());
+    assert!(decode_reset_topology_intent(&signed).is_err());
+    let topology = ResetTopologyIntentV1::from(&inventory);
+    let bytes = canonical_bytes(&topology).unwrap();
+    let (decoded, _guard) = decode_reset_topology_intent(&bytes).unwrap();
+    assert_eq!(canonical_bytes(&decoded).unwrap(), bytes);
+    assert!(decode_inventory(&bytes, "topology intent").is_err());
+    for field in [
+        "beacon_bootstrap",
+        "epoch_supervisor",
+        "maintenance_admin_identity",
+        "maintenance_admin_config_sha256",
+        "operator_public_key",
+        "runtime_client_config_sha256",
+        "next_genesis_hash",
+    ] {
+        let mut value: json::Value = json::from_slice(&bytes).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json::Value::Null);
+        assert!(
+            decode_reset_topology_intent(&canonical_bytes(&value).unwrap()).is_err(),
+            "{field}"
+        );
+    }
+    for field in [
+        "commit",
+        "tree",
+        "cargo_lock_sha256",
+        "source_manifest_sha256",
+    ] {
+        let mut value: json::Value = json::from_slice(&bytes).unwrap();
+        value
+            .get_mut("revision")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json::Value::Null);
+        assert!(
+            decode_reset_topology_intent(&canonical_bytes(&value).unwrap()).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn topology_context_checks_scope_and_budget_before_custody() {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let inventory = sample_inventory_fixture();
+    let mut intent = ResetTopologyIntentV1::from(&inventory);
+    intent.validators.pop();
+    assert!(reset_context::validate_topology_intent(&intent).is_err());
+    intent = ResetTopologyIntentV1::from(&inventory);
+    intent.validators.swap(0, 1);
+    assert!(reset_context::validate_topology_intent(&intent).is_err());
 }
 
 #[test]
@@ -708,5 +737,34 @@ fn ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry()
             1_000_000
         )
         .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_context_rejects_scope_before_opening_actual_inputs() {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let inventory = sample_inventory_fixture();
+    let mut intent = ResetTopologyIntentV1::from(&inventory);
+    intent.qualification_scope = QualificationScopeV1::CoreTestnet;
+    let path = PathBuf::from("/absent-reset-context-inputs");
+    let inputs = ResetContextInputs {
+        public_inputs: path.clone(),
+        runtime_client_config: path.clone(),
+        maintenance_admin_config: path.clone(),
+        validator_client_config: vec![path.clone(); 4],
+        onboarding_token: path.clone(),
+        validator_operator_key: path.clone(),
+        inrou_stage_dir: Some(path.clone()),
+        validator_unit: vec![path.clone(); 4],
+        edge_unit: path.clone(),
+        known_hosts: path,
+    };
+    let error = derive_reset_context(&intent, &inputs)
+        .err()
+        .expect("scope rejected before source/custody reads");
+    assert!(
+        error.to_string().contains("inrou") || error.to_string().contains("Inrou"),
+        "{error}"
     );
 }

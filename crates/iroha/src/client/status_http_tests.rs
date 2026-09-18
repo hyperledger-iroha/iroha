@@ -253,6 +253,7 @@ async fn status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retrie
         StatusFailureReason::MailboxUnavailable,
         StatusFailureReason::ActorClosed,
         StatusFailureReason::DeadlineElapsed,
+        StatusFailureReason::StateBusy,
         StatusFailureReason::StateUnavailable,
         StatusFailureReason::CheckpointChanged,
         StatusFailureReason::MissingBlock,
@@ -300,9 +301,17 @@ async fn status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retrie
 fn status_unavailable_rejects_missing_unknown_invalid_and_duplicate_reason_headers() {
     use http::HeaderValue;
     let known = HeaderValue::from_static("status_state_unavailable");
+    let busy = HeaderValue::from_static("status_state_busy");
     let cases = [
         Vec::new(),
         vec![HeaderValue::from_static("DO_NOT_LOG_UNKNOWN_HEADER")],
+        vec![HeaderValue::from_static(" status_state_busy")],
+        vec![HeaderValue::from_static("STATUS_STATE_BUSY")],
+        vec![HeaderValue::from_static(
+            "status_state_busy,status_state_busy",
+        )],
+        vec![busy.clone(), busy.clone()],
+        vec![busy, known.clone()],
         vec![HeaderValue::from_static(" status_state_unavailable")],
         vec![HeaderValue::from_static("STATUS_STATE_UNAVAILABLE")],
         vec![HeaderValue::from_static(

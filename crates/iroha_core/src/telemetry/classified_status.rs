@@ -4,7 +4,8 @@ use super::{
     Actor, BlockCommitReport, block_counts_as_non_empty, reconcile_last_reported_block_with_kura,
 };
 use crate::state::{
-    TelemetryStatusTarget, write_telemetry_journal_prefix, write_telemetry_journal_row,
+    TelemetryStatusSourceError, TelemetryStatusTarget, write_telemetry_journal_prefix,
+    write_telemetry_journal_row,
 };
 use iroha_crypto::Hash;
 use std::num::NonZeroUsize;
@@ -41,7 +42,10 @@ pub enum StatusSnapshotError {
     /// The original service deadline expired; no late response is accepted.
     #[error("telemetry status deadline elapsed")]
     DeadlineElapsed,
-    /// State publication was busy or no longer retained the captured prefix.
+    /// State publication or a journal read was busy; no snapshot was published.
+    #[error("State publication is busy")]
+    StateBusy,
+    /// The captured journal target, position, or witness could not be used.
     #[error("State journal snapshot is unavailable")]
     StateUnavailable,
     /// A previously classified State checkpoint changed.
@@ -59,6 +63,17 @@ pub enum StatusSnapshotError {
     /// The shared metric counters are not the actor's committed prefix.
     #[error("classified status counters differ from the owned prefix")]
     CounterMismatch,
+}
+
+impl From<TelemetryStatusSourceError> for StatusSnapshotError {
+    fn from(error: TelemetryStatusSourceError) -> Self {
+        match error {
+            TelemetryStatusSourceError::Busy => Self::StateBusy,
+            TelemetryStatusSourceError::TargetChanged
+            | TelemetryStatusSourceError::InvalidPosition
+            | TelemetryStatusSourceError::Encoding => Self::StateUnavailable,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -88,7 +103,7 @@ impl Actor {
             let chunk = self
                 .state
                 .telemetry_journal_chunk(target, self.last_sync_block)
-                .map_err(|_| StatusSnapshotError::StateUnavailable)?;
+                .map_err(StatusSnapshotError::from)?;
             if chunk.checkpoint != self.last_sync_hash {
                 return Err(StatusSnapshotError::CheckpointChanged);
             }

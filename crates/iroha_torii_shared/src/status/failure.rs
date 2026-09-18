@@ -14,7 +14,9 @@ pub enum StatusFailureReason {
     ActorClosed,
     /// The whole status service deadline elapsed; this does not name a lock timeout.
     DeadlineElapsed,
-    /// State target or journal capture was unavailable; several causes share this reason.
+    /// State publication or a journal read was busy; no snapshot was published.
+    StateBusy,
+    /// The captured journal target, position, or witness could not be used.
     StateUnavailable,
     /// The classified State journal checkpoint changed.
     CheckpointChanged,
@@ -41,6 +43,7 @@ impl StatusFailureReason {
             Self::MailboxUnavailable => "status_mailbox_unavailable",
             Self::ActorClosed => "status_actor_closed",
             Self::DeadlineElapsed => "status_deadline_elapsed",
+            Self::StateBusy => "status_state_busy",
             Self::StateUnavailable => "status_state_unavailable",
             Self::CheckpointChanged => "status_checkpoint_changed",
             Self::MissingBlock => "status_missing_block",
@@ -60,6 +63,7 @@ impl StatusFailureReason {
             "status_mailbox_unavailable" => Some(Self::MailboxUnavailable),
             "status_actor_closed" => Some(Self::ActorClosed),
             "status_deadline_elapsed" => Some(Self::DeadlineElapsed),
+            "status_state_busy" => Some(Self::StateBusy),
             "status_state_unavailable" => Some(Self::StateUnavailable),
             "status_checkpoint_changed" => Some(Self::CheckpointChanged),
             "status_missing_block" => Some(Self::MissingBlock),
@@ -90,6 +94,7 @@ mod tests {
                 StatusFailureReason::DeadlineElapsed,
                 "status_deadline_elapsed",
             ),
+            (StatusFailureReason::StateBusy, "status_state_busy"),
             (
                 StatusFailureReason::StateUnavailable,
                 "status_state_unavailable",
@@ -130,6 +135,10 @@ mod tests {
             "",
             "unclassified",
             "status_metrics_unavailable",
+            " status_state_busy",
+            "status_state_busy ",
+            "STATUS_STATE_BUSY",
+            "status_state_busy,status_state_busy",
             " status_state_unavailable",
             "status_state_unavailable ",
             "STATUS_STATE_UNAVAILABLE",

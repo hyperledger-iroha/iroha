@@ -630,6 +630,7 @@ const LOCALNET_ALIAS_SETUP_PAYER_BALANCE: u64 = 10;
 const LOCALNET_ALIAS_SETUP_POLICY_VERSION: u16 = 1;
 const LOCALNET_RUNTIME_DIRECTORY: &str = "runtime";
 const LOCALNET_OPERATOR_SIGNER_KEY_FILE: &str = "operator-signer.key";
+const LOCALNET_LEDGER_SIGNER_KEY_FILE: &str = "ledger-signer.key";
 const LOCALNET_ONBOARDING_SIGNER_KEY_FILE: &str = "onboarding-signer.key";
 const LOCALNET_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
 const LOCALNET_FAUCET_AMOUNT: &str = "25000";
@@ -1392,9 +1393,14 @@ fn generate_localnet_inner<T: Write>(
         taira,
     )?;
     let client_identity = localnet_ephemeral_identity(seed_bytes, b"operator-root")?;
+    let http_operator_identity = localnet_ephemeral_identity(seed_bytes, b"http-operator-root")?;
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
-    let runtime_bundle =
-        write_localnet_runtime_bundle(&out_dir, &client_identity, &onboarding_identity)?;
+    let runtime_bundle = write_localnet_runtime_bundle(
+        &out_dir,
+        &client_identity,
+        &http_operator_identity,
+        &onboarding_identity,
+    )?;
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
         write_mint_finality_seeds(&out_dir, &peers)?;
@@ -1562,8 +1568,8 @@ fn generate_localnet_inner<T: Write>(
             npos_bootstrap,
             taira,
             operator_account: &operator_account_literal,
-            operator_public_key: &client_identity.public_key,
-            operator_private_key_file: &runtime_bundle.operator_signer_key,
+            operator_public_key: &http_operator_identity.public_key,
+            ledger_private_key_file: &runtime_bundle.ledger_signer_key,
             onboarding_account: &onboarding_account_literal,
             onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
             onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
@@ -1651,8 +1657,8 @@ fn generate_localnet_inner<T: Write>(
                 npos_bootstrap,
                 taira,
                 operator_account: &operator_account_literal,
-                operator_public_key: &client_identity.public_key,
-                operator_private_key_file: &runtime_bundle.operator_signer_key,
+                operator_public_key: &http_operator_identity.public_key,
+                ledger_private_key_file: &runtime_bundle.ledger_signer_key,
                 onboarding_account: &onboarding_account_literal,
                 onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
                 onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
@@ -1772,6 +1778,11 @@ fn generate_localnet_inner<T: Write>(
         writer,
         "operator_signer_key: {}",
         runtime_bundle.operator_signer_key.display()
+    )?;
+    writeln!(
+        writer,
+        "ledger_signer_key: {}",
+        runtime_bundle.ledger_signer_key.display()
     )?;
     writeln!(
         writer,
@@ -2364,7 +2375,7 @@ struct RenderPeerFeatures<'a> {
     taira: bool,
     operator_account: &'a str,
     operator_public_key: &'a iroha_crypto::PublicKey,
-    operator_private_key_file: &'a Path,
+    ledger_private_key_file: &'a Path,
     onboarding_account: &'a str,
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
@@ -2409,7 +2420,7 @@ fn render_peer_config(
         taira,
         operator_account,
         operator_public_key,
-        operator_private_key_file,
+        ledger_private_key_file,
         onboarding_account,
         onboarding_private_key_file,
         onboarding_token_hash,
@@ -3342,7 +3353,7 @@ fn render_peer_config(
     );
     faucet.insert(
         "private_key_file".into(),
-        Value::String(operator_private_key_file.to_string_lossy().into_owned()),
+        Value::String(ledger_private_key_file.to_string_lossy().into_owned()),
     );
     faucet.insert(
         "asset_definition_id".into(),
@@ -6075,6 +6086,7 @@ impl LocalnetClientIdentity {
     }
 }
 struct LocalnetRuntimeBundle {
+    ledger_signer_key: PathBuf,
     operator_signer_key: PathBuf,
     onboarding_signer_key: PathBuf,
     onboarding_token_file: PathBuf,
@@ -6100,16 +6112,25 @@ fn write_private_key_sidecar(path: &Path, private_key: &str) -> Result<()> {
 }
 fn write_localnet_runtime_bundle(
     out_dir: &Path,
-    operator: &LocalnetClientIdentity,
+    ledger: &LocalnetClientIdentity,
+    http_operator: &LocalnetClientIdentity,
     onboarding: &LocalnetClientIdentity,
 ) -> Result<LocalnetRuntimeBundle> {
+    ensure!(
+        ledger.public_key != http_operator.public_key
+            && ledger.public_key != onboarding.public_key
+            && http_operator.public_key != onboarding.public_key,
+        "localnet ledger, HTTP operator and onboarding signers must be distinct"
+    );
     let runtime_dir = out_dir.join(LOCALNET_RUNTIME_DIRECTORY);
     let runtime_dir = crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
         .wrap_err("prepare localnet runtime credential directory")?;
+    let ledger_signer_key = runtime_dir.join(LOCALNET_LEDGER_SIGNER_KEY_FILE);
     let operator_signer_key = runtime_dir.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE);
     let onboarding_signer_key = runtime_dir.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE);
     let onboarding_token_file = runtime_dir.join(LOCALNET_ONBOARDING_TOKEN_FILE);
-    write_private_key_sidecar(&operator_signer_key, operator.private_key.as_str())?;
+    write_private_key_sidecar(&ledger_signer_key, ledger.private_key.as_str())?;
+    write_private_key_sidecar(&operator_signer_key, http_operator.private_key.as_str())?;
     write_private_key_sidecar(&onboarding_signer_key, onboarding.private_key.as_str())?;
     let mut token_entropy = [0_u8; 32];
     OsRng
@@ -6121,6 +6142,7 @@ fn write_localnet_runtime_bundle(
     crate::secure_fs::write_private_file_atomic(&onboarding_token_file, token.as_bytes())
         .wrap_err("write localnet onboarding token")?;
     Ok(LocalnetRuntimeBundle {
+        ledger_signer_key,
         operator_signer_key,
         onboarding_signer_key,
         onboarding_token_file,
@@ -6302,9 +6324,10 @@ fn write_localnet_readme(
             "- KAGEMUSHA V1 asset alias: `{kagemusha_alias}`\n",
             "- Initial KAGEMUSHA asset reserve: `{kagemusha_quantity}`\n",
             "{taira_catalog_note}",
-            "- Ephemeral operator authority: `{operator_account_id}`\n",
+            "- Ephemeral ledger administrator: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
-            "- Operator signer sidecar: `{operator_signer_key}`\n",
+            "- Ledger/faucet signer sidecar: `{ledger_signer_key}`\n",
+            "- Dedicated HTTP operator signer sidecar: `{operator_signer_key}`\n",
             "- Onboarding signer sidecar: `{onboarding_signer_key}`\n",
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
@@ -6344,6 +6367,7 @@ fn write_localnet_readme(
         taira_catalog_note = taira_catalog_note,
         operator_account_id = operator_account_id,
         onboarding_account_id = onboarding_account_id,
+        ledger_signer_key = runtime_bundle.ledger_signer_key.display(),
         operator_signer_key = runtime_bundle.operator_signer_key.display(),
         onboarding_signer_key = runtime_bundle.onboarding_signer_key.display(),
         onboarding_token_file = runtime_bundle.onboarding_token_file.display(),
@@ -6455,6 +6479,34 @@ mod tests {
         let operator_identity =
             localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
                 .expect("rebuild deterministic operator identity");
+        let http_operator_identity = localnet_ephemeral_identity(
+            opts.seed.as_deref().map(str::as_bytes),
+            b"http-operator-root",
+        )
+        .expect("rebuild deterministic HTTP operator identity");
+        let client: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("generated client"),
+        )
+        .expect("parse generated client");
+        let client_key = client["account"]["private_key"]
+            .as_str()
+            .expect("client private key")
+            .parse::<ExposedPrivateKey>()
+            .expect("decode client key");
+        let client_key = KeyPair::from_private_key(client_key.0).expect("derive client public key");
+        let http_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
+        );
+        assert_eq!(client_key.public_key(), &operator_identity.public_key);
+        assert_eq!(
+            client["account"]["public_key"].as_str(),
+            Some(client_key.public_key().to_string().as_str())
+        );
+        assert_eq!(http_key.public_key(), &http_operator_identity.public_key);
+        assert_ne!(client_key.public_key(), http_key.public_key());
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
         let definitions = manifest
@@ -6668,6 +6720,11 @@ mod tests {
                     !fixture_accounts.contains(grant.destination()),
                     "public fixture received a Taira permission"
                 );
+                assert_ne!(
+                    grant.destination(),
+                    &http_operator_identity.account_id,
+                    "HTTP authentication must not acquire ledger administration grants"
+                );
             }
             if let Some(RegisterBox::Domain(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
@@ -6760,8 +6817,30 @@ mod tests {
             assert!(parsed.torii.operator_signatures.allow_node_key);
             assert_eq!(
                 parsed.torii.operator_signatures.allowed_public_keys,
-                vec![operator_identity.public_key.clone()],
-                "each validator must authorize exactly the generated runtime operator"
+                vec![http_operator_identity.public_key.clone()],
+                "each validator must authorize exactly the dedicated HTTP operator"
+            );
+            assert!(
+                !parsed
+                    .torii
+                    .operator_signatures
+                    .allowed_public_keys
+                    .contains(client_key.public_key())
+            );
+            let faucet = parsed
+                .torii
+                .faucet
+                .as_ref()
+                .expect("native faucet admission");
+            assert_eq!(faucet.authority, operator_identity.account_id);
+            assert_eq!(faucet.signer.public_key(), client_key.public_key());
+            assert_ne!(faucet.signer.public_key(), http_key.public_key());
+            assert_eq!(
+                faucet
+                    .private_key_file
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some(LOCALNET_LEDGER_SIGNER_KEY_FILE)
             );
             assert!(parsed.nexus.governance.default_module.is_none());
             assert!(
@@ -10567,9 +10646,32 @@ mod tests {
             assert!(parsed.torii.operator_signatures.allow_node_key);
             assert_eq!(
                 parsed.torii.operator_signatures.allowed_public_keys,
-                vec![operator.public_key.clone()],
-                "generic localnet must authorize exactly its generated runtime operator"
+                vec![
+                    localnet_test_sidecar_key(
+                        &temp
+                            .path()
+                            .join(LOCALNET_RUNTIME_DIRECTORY)
+                            .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE)
+                    )
+                    .public_key()
+                    .clone()
+                ],
+                "generic localnet must authorize exactly its dedicated HTTP operator"
             );
+            assert!(
+                !parsed
+                    .torii
+                    .operator_signatures
+                    .allowed_public_keys
+                    .contains(&operator.public_key)
+            );
+            let faucet = parsed
+                .torii
+                .faucet
+                .as_ref()
+                .expect("native faucet admission");
+            assert_eq!(faucet.authority, operator.account_id);
+            assert_eq!(faucet.signer.public_key(), &operator.public_key);
         }
     }
     #[test]
@@ -10726,7 +10828,24 @@ mod tests {
             faucet.get("enabled").and_then(toml::Value::as_bool),
             Some(true)
         );
-        let expected_authority = localnet_client_account_literal(None);
+        let ledger =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("generated ledger identity");
+        let expected_authority = ledger.account_literal(None);
+        let http_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
+        );
+        let ledger_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
+        );
+        assert_eq!(ledger_key.public_key(), &ledger.public_key);
+        assert_ne!(ledger_key.public_key(), http_key.public_key());
         let expected_fee_asset = localnet_fee_asset_literal();
         assert_eq!(
             faucet.get("authority").and_then(toml::Value::as_str),
@@ -10743,7 +10862,7 @@ mod tests {
                     .canonicalize()
                     .expect("canonical localnet root")
                     .join(LOCALNET_RUNTIME_DIRECTORY)
-                    .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE)
+                    .join(LOCALNET_LEDGER_SIGNER_KEY_FILE)
             )
         );
         assert_eq!(
@@ -10946,6 +11065,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
+            ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
             onboarding_token_file: tmp.path().join(LOCALNET_ONBOARDING_TOKEN_FILE),
@@ -10984,7 +11104,9 @@ mod tests {
         assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
         assert!(!contents.contains("IROHA_GENESIS_EXPECTED_HASH_FILE"));
         assert!(!contents.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
-        assert!(contents.contains("- Ephemeral operator authority: `"));
+        assert!(contents.contains("- Ephemeral ledger administrator: `"));
+        assert!(contents.contains("- Ledger/faucet signer sidecar: `"));
+        assert!(contents.contains("- Dedicated HTTP operator signer sidecar: `"));
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
             contents.contains(
@@ -10998,6 +11120,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
+            ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
             onboarding_token_file: tmp.path().join(LOCALNET_ONBOARDING_TOKEN_FILE),
@@ -11078,6 +11201,70 @@ mod tests {
             b"do not overwrite"
         );
     }
+    fn localnet_test_sidecar_key(path: &Path) -> KeyPair {
+        let record = Zeroizing::new(fs::read_to_string(path).expect("read fixture signer sidecar"));
+        let private = record
+            .trim()
+            .parse::<ExposedPrivateKey>()
+            .expect("decode fixture signer");
+        KeyPair::from_private_key(private.0).expect("derive fixture signer public key")
+    }
+
+    #[test]
+    fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
+        let seed = Some(b"localnet-separated-custody".as_slice());
+        let ledger = localnet_ephemeral_identity(seed, b"operator-root").expect("ledger identity");
+        let http = localnet_ephemeral_identity(seed, b"http-operator-root").expect("HTTP identity");
+        let onboarding =
+            localnet_ephemeral_identity(seed, b"onboarding-root").expect("onboarding identity");
+        assert_eq!(
+            http.public_key,
+            localnet_ephemeral_identity(seed, b"http-operator-root")
+                .unwrap()
+                .public_key
+        );
+        assert_ne!(ledger.public_key, http.public_key);
+        let root = tempfile::tempdir().expect("runtime bundle parent");
+        let bundle = write_localnet_runtime_bundle(root.path(), &ledger, &http, &onboarding)
+            .expect("write separated runtime bundle");
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.ledger_signer_key).public_key(),
+            &ledger.public_key
+        );
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.operator_signer_key).public_key(),
+            &http.public_key
+        );
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.onboarding_signer_key).public_key(),
+            &onboarding.public_key
+        );
+        for path in [
+            &bundle.ledger_signer_key,
+            &bundle.operator_signer_key,
+            &bundle.onboarding_signer_key,
+        ] {
+            assert!(path.is_file());
+            #[cfg(unix)]
+            {
+                let metadata = fs::symlink_metadata(path).expect("signer custody metadata");
+                assert_eq!(metadata.mode() & 0o777, 0o600);
+                assert_eq!(metadata.nlink(), 1);
+            }
+        }
+        for (ledger, http, onboarding) in [
+            (&ledger, &ledger, &onboarding),
+            (&ledger, &http, &ledger),
+            (&ledger, &http, &http),
+        ] {
+            let rejected = tempfile::tempdir().expect("rejected bundle parent");
+            assert!(
+                write_localnet_runtime_bundle(rejected.path(), ledger, http, onboarding).is_err()
+            );
+            assert!(!rejected.path().join(LOCALNET_RUNTIME_DIRECTORY).exists());
+        }
+    }
+
     #[test]
     fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         let operator = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"operator-root")
@@ -11087,10 +11274,15 @@ mod tests {
                 .expect("derive onboarding identity");
         let first = tempfile::tempdir().expect("first runtime parent");
         let second = tempfile::tempdir().expect("second runtime parent");
-        let first_bundle = write_localnet_runtime_bundle(first.path(), &operator, &onboarding)
-            .expect("write first runtime bundle");
-        let second_bundle = write_localnet_runtime_bundle(second.path(), &operator, &onboarding)
-            .expect("write second runtime bundle");
+        let http_operator =
+            localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"http-operator-root")
+                .expect("derive HTTP operator identity");
+        let first_bundle =
+            write_localnet_runtime_bundle(first.path(), &operator, &http_operator, &onboarding)
+                .expect("write first runtime bundle");
+        let second_bundle =
+            write_localnet_runtime_bundle(second.path(), &operator, &http_operator, &onboarding)
+                .expect("write second runtime bundle");
         assert_ne!(
             first_bundle.onboarding_token_hash, second_bundle.onboarding_token_hash,
             "a reproducible key seed must never make API tokens reproducible"

@@ -19,7 +19,8 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
     prior.service_state.validate()?;
     if prior.artifacts.len() != VALIDATOR_ARTIFACT_ROLES.len() {
         return Err(eyre!(
-            "occupied runtime requires exactly seven artifact roles"
+            "occupied runtime requires exactly {} artifact roles",
+            VALIDATOR_ARTIFACT_ROLES.len()
         ));
     }
     let mut paths = BTreeSet::new();
@@ -41,10 +42,11 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
             return Err(eyre!("occupied artifact size or mode violates its role"));
         }
         match role {
-            "iroha3d" | "iroha_cli" | "sorafs_node" => {
+            "iroha3d" | "iroha_cli" | "kagami" | "sorafs_node" => {
                 let basename = match role {
                     "iroha3d" => "iroha3d_taira",
                     "iroha_cli" => "iroha",
+                    "kagami" => "kagami",
                     _ => "sorafs-node",
                 };
                 let path = Path::new(&entry.path);
@@ -666,17 +668,18 @@ mod tests {
         let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
             unreachable!()
         };
-        for role in ["iroha3d", "iroha_cli"] {
+        for (role, revision) in [("iroha3d", "5"), ("iroha_cli", "5"), ("kagami", "8")] {
             let entry = prior
                 .artifacts
                 .iter_mut()
                 .find(|entry| entry.role == role)
                 .unwrap();
-            entry.source_commit = "5".repeat(40);
-            let basename = if role == "iroha3d" {
-                "iroha3d_taira"
-            } else {
-                "iroha"
+            entry.source_commit = revision.repeat(40);
+            let basename = match role {
+                "iroha3d" => "iroha3d_taira",
+                "iroha_cli" => "iroha",
+                "kagami" => "kagami",
+                _ => unreachable!("fixture executable roles"),
             };
             entry.path = format!(
                 "/private/runtime/taira-public-reset/release-{}-update-0123456789abcdef/bin/{basename}",
@@ -705,6 +708,9 @@ mod tests {
     #[test]
     fn occupied_runtime_accepts_split_source_and_configuration_binding() {
         let inventory = sample_inventory_fixture();
+        // Admit all current occupied roles in a single release before checking
+        // independent executable and configuration source revisions.
+        validate_occupied_binding(&inventory.validators[0]).unwrap();
         let validator = split_validator();
         validate_validator(
             &validator,
@@ -714,6 +720,22 @@ mod tests {
         )
         .unwrap();
         let prior = validator.admitted_release().unwrap();
+        assert_eq!(
+            prior
+                .artifacts
+                .iter()
+                .map(|entry| entry.role.as_str())
+                .collect::<Vec<_>>(),
+            VALIDATOR_ARTIFACT_ROLES
+        );
+        assert_ne!(
+            prior.artifact("kagami").unwrap().source_commit,
+            prior.commit
+        );
+        assert_ne!(
+            prior.artifact("kagami").unwrap().source_commit,
+            prior.artifact("iroha3d").unwrap().source_commit
+        );
         assert_ne!(
             prior.artifact("iroha3d").unwrap().source_commit,
             prior.commit
@@ -740,37 +762,69 @@ mod tests {
 
     #[test]
     fn occupied_runtime_rejects_incomplete_or_foreign_artifact_custody() {
-        for change in 0..14 {
+        for change in 0..17 {
             let mut validator = split_validator();
             let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state
             else {
                 unreachable!()
             };
+            let role_index = |role: &str| {
+                prior
+                    .artifacts
+                    .iter()
+                    .position(|entry| entry.role == role)
+                    .unwrap()
+            };
+            let daemon = role_index("iroha3d");
+            let cli = role_index("iroha_cli");
+            let config = role_index("config");
+            let unit = role_index("validator_unit");
+            let genesis = role_index("genesis");
+            let kagami = role_index("kagami");
             match change {
                 0 => {
                     prior.artifacts.pop();
                 }
-                1 => prior.artifacts.swap(0, 1),
-                2 => prior.artifacts[0].role = "iroha_cli".to_owned(),
-                3 => prior.artifacts[0].source_commit = "7".repeat(40),
-                4 => prior.artifacts[0].path = prior.artifacts[1].path.clone(),
-                5 => prior.artifacts[0].sha256 = "xyz".to_owned(),
-                6 => prior.artifacts[0].size = 0,
-                7 => prior.artifacts[3].mode = 0o644,
-                8 => prior.artifacts[3].source_commit = "7".repeat(40),
-                9 => prior.artifacts[6].path = "/etc/systemd/system/foreign.service".to_owned(),
+                1 => prior.artifacts.swap(daemon, cli),
+                2 => prior.artifacts[daemon].role = "iroha_cli".to_owned(),
+                3 => prior.artifacts[daemon].source_commit = "7".repeat(40),
+                4 => prior.artifacts[daemon].path = prior.artifacts[cli].path.clone(),
+                5 => prior.artifacts[daemon].sha256 = "xyz".to_owned(),
+                6 => prior.artifacts[daemon].size = 0,
+                7 => prior.artifacts[config].mode = 0o644,
+                8 => prior.artifacts[config].source_commit = "7".repeat(40),
+                9 => prior.artifacts[unit].path = "/etc/systemd/system/foreign.service".to_owned(),
                 10 => {
                     prior.argv[0] = format!("{}/current/bin/iroha3d_taira", validator.service_root)
                 }
                 11 => prior.argv[2] = prior.artifact("config").unwrap().path.clone(),
                 12 => prior.argv.push("--extra".to_owned()),
-                13 => prior.artifacts[4].path = "/tmp/genesis.json".to_owned(),
+                13 => prior.artifacts[genesis].path = "/tmp/genesis.json".to_owned(),
+                14 => {
+                    prior.artifacts[kagami].path = Path::new(&prior.artifacts[kagami].path)
+                        .with_file_name("iroha")
+                        .to_string_lossy()
+                        .into_owned();
+                }
+                15 => prior.artifacts[kagami].source_commit = prior.commit.clone(),
+                16 => prior.artifacts[kagami].role = "sorafs_node".to_owned(),
                 _ => unreachable!(),
             }
-            assert!(
-                validate_occupied_binding(&validator).is_err(),
+            let error = validate_occupied_binding(&validator).expect_err(&format!(
                 "change {change} escaped the native occupied closure"
-            );
+            ));
+            let expected = match change {
+                14 => Some("occupied executable has the wrong role basename"),
+                15 => Some("occupied executable path does not bind its exact role source revision"),
+                16 => Some("occupied artifact roles/paths are not exact, ordered and unique"),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                assert!(
+                    error.to_string().contains(expected),
+                    "change {change}: {error}"
+                );
+            }
         }
     }
 

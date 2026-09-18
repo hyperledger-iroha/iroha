@@ -118,6 +118,13 @@ struct PreparedBeaconUnitV1 {
     config_file: String,
 }
 
+/// The only topology field needed before release fingerprints and unit hashes exist.
+/// This is a borrowed native view, not a serialized alternative validator contract.
+pub(in super::super) struct BeaconValidatorSlot<'a> {
+    pub(in super::super) slug: &'a str,
+}
+
+#[cfg(test)]
 pub(in super::super) fn prepare_public_beacon_inputs(
     wire: &[u8],
     manifest_bytes: &[u8],
@@ -127,6 +134,32 @@ pub(in super::super) fn prepare_public_beacon_inputs(
     validators: &[ValidatorV1],
     clients: &[reset::ValidatorClientV1],
 ) -> Result<PreparedBeaconInputsV1> {
+    let slots = validators
+        .iter()
+        .map(|validator| BeaconValidatorSlot {
+            slug: &validator.slug,
+        })
+        .collect::<Vec<_>>();
+    prepare_public_beacon_inputs_from_slots(
+        wire,
+        manifest_bytes,
+        public_key,
+        expected_hash,
+        nonce,
+        &slots,
+        clients,
+    )
+}
+
+pub(in super::super) fn prepare_public_beacon_inputs_from_slots(
+    wire: &[u8],
+    manifest_bytes: &[u8],
+    public_key: &PublicKey,
+    expected_hash: HashOf<BlockHeader>,
+    nonce: &str,
+    validators: &[BeaconValidatorSlot<'_>],
+    clients: &[reset::ValidatorClientV1],
+) -> Result<PreparedBeaconInputsV1> {
     let manifest = json::from_slice(manifest_bytes)?;
     let genesis = iroha_genesis::validate_prepared_genesis_bundle(
         wire,
@@ -134,7 +167,7 @@ pub(in super::super) fn prepare_public_beacon_inputs(
         public_key,
         expected_hash,
     )?;
-    derive_public_beacon_inputs(&genesis, &manifest, nonce, validators, clients)
+    derive_public_beacon_inputs_from_slots(&genesis, &manifest, nonce, validators, clients)
 }
 
 fn derive_public_beacon_inputs(
@@ -142,6 +175,22 @@ fn derive_public_beacon_inputs(
     manifest: &iroha_genesis::RawGenesisTransaction,
     nonce: &str,
     validators: &[ValidatorV1],
+    clients: &[reset::ValidatorClientV1],
+) -> Result<PreparedBeaconInputsV1> {
+    let slots = validators
+        .iter()
+        .map(|validator| BeaconValidatorSlot {
+            slug: &validator.slug,
+        })
+        .collect::<Vec<_>>();
+    derive_public_beacon_inputs_from_slots(genesis, manifest, nonce, &slots, clients)
+}
+
+fn derive_public_beacon_inputs_from_slots(
+    genesis: &iroha_genesis::ValidatedGenesisBundle,
+    manifest: &iroha_genesis::RawGenesisTransaction,
+    nonce: &str,
+    validators: &[BeaconValidatorSlot<'_>],
     clients: &[reset::ValidatorClientV1],
 ) -> Result<PreparedBeaconInputsV1> {
     use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiNposParameters};
@@ -187,7 +236,7 @@ fn derive_public_beacon_inputs(
     if selected.iter().collect::<BTreeSet<_>>() != roster.iter().collect()
         || validators
             .iter()
-            .map(|validator| &validator.slug)
+            .map(|validator| validator.slug)
             .collect::<BTreeSet<_>>()
             .len()
             != 4
@@ -229,14 +278,14 @@ fn derive_public_beacon_inputs(
     .map_err(|error| eyre!("native fresh beacon request is invalid: {error:?}"))?;
     let mut final_units = Vec::new();
     for (validator, peer) in validators.iter().zip(selected) {
-        reset::validate_slug("beacon validator role", &validator.slug)?;
+        reset::validate_slug("beacon validator role", validator.slug)?;
         let seat = roster
             .iter()
             .position(|candidate| candidate == &peer)
             .ok_or_else(|| eyre!("validator has no native voting seat"))?
             + 1;
         final_units.push(PreparedBeaconUnitV1 {
-            validator: validator.slug.clone(), signer_index: u16::try_from(seat)?,
+            validator: validator.slug.to_owned(), signer_index: u16::try_from(seat)?,
             credential_path: format!("/var/lib/taira/.public-reset-control-v1/beacon/{nonce}/ceremony/seat-{seat}/{CREDENTIAL_FILE}"),
             config_file: "beacon.toml".into(),
         });

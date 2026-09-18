@@ -110,7 +110,7 @@ pub(super) fn start(
         },
         "release_source_commit":(build_identity.release_source_commit()?),
         "iroha_sha256":(binary_digest(binary)?),
-        "kagami":{"path":kagami,"sha256":(binary_digest(kagami)?)},
+        "kagami":{"path":(kagami.to_str().ok_or_else(|| eyre!("Kagami fixture path is not UTF-8"))?),"sha256":(binary_digest(kagami)?)},
         "observation_trust_sha256":(hex(&iroha_crypto::sha256(fs::read(&trust)?))),
         "provision_timeout_ms":180000
     });
@@ -130,8 +130,8 @@ pub(super) fn start(
             "duplicate fixture validator custody"
         );
     }
-    let custody = norito::json!({"schema_version":1,"seeds":(seeds.iter().map(|(validator,path)|
-        norito::json!({"validator":validator,"path":path})).collect::<Vec<_>>())});
+    let custody = norito::json!({"schema_version":1,"seeds":(seeds.iter().map(|(validator,path)| -> Result<Value> {
+        Ok(norito::json!({"validator":validator,"path":(path.to_str().ok_or_else(|| eyre!("fixture seed path is not UTF-8"))?)}))}).collect::<Result<Vec<_>>>()?)});
     let policy_bytes = json::to_vec(&policy)?;
     let state = Supervisor {
         policy: journal.join("fixture-policy.json"),
@@ -417,8 +417,8 @@ pub(super) async fn restart(maintenance: &mut Maintenance, deadline: Instant) ->
             .join("supervisor-restart-verification.json"),
         &json::to_vec(
             &norito::json!({"schema_version":1,"first":first_status,"restarted":restarted_status,
-            "stopped_identity_rejected":true,"original_public_files":(retained.iter().map(|(path,bytes)|
-                norito::json!({"path":path,"sha256":(hex(&iroha_crypto::sha256(bytes)))})).collect::<Vec<_>>())}),
+            "stopped_identity_rejected":true,"original_public_files":(retained.iter().map(|(path,bytes)| -> Result<Value> {
+                Ok(norito::json!({"path":(path.to_str().ok_or_else(|| eyre!("fixture evidence path is not UTF-8"))?),"sha256":(hex(&iroha_crypto::sha256(bytes)))}))}).collect::<Result<Vec<_>>>()?)}),
         )?,
     )?;
     state.original_files = retained;

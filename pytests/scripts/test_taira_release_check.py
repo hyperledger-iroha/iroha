@@ -19,7 +19,11 @@ from unittest.mock import MagicMock, patch
 
 
 # Existing Mac census 852/1030, plus eight inspector, nine supervisor, five quiescence,
-# seven generation-admission, nineteen reset integration and two PendingKura controls. Linux additionally
+# seven generation-admission, nineteen reset integration, two PendingKura and one
+# public-admission boundary control, 22 producer controls after two renames, and one
+# early supervisor build-identity control, six typed status contention controls,
+# and three generated ledger/HTTP operator custody controls.
+# Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
@@ -27,8 +31,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -66,6 +70,47 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_status_contention_controls_are_exact_required_and_focused_on_both_platforms(self):
+        required = {
+            'core': (
+                'state::telemetry_status::tests::status_source_busy_is_distinct_from_changed_or_invalid_journal',
+            ),
+            'torii-shared': (
+                'status::failure::tests::status_failure_codes_are_exact_and_distinct',
+                'status::failure::tests::status_failure_codes_do_not_accept_unclassified_input_as_a_reason',
+            ),
+            'torii-unit': (
+                'routing::status_failure_reason_tests::snapshot_failure_reasons_match_json_norito_and_header',
+            ),
+            'client': (
+                'client::status_http_tests::status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retries',
+                'client::status_http_tests::status_unavailable_rejects_missing_unknown_invalid_and_duplicate_reason_headers',
+            ),
+        }
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("status_platform_gate", gate.__file__)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                selected = selected_gate.qualification_stages(scope)
+                for harness, regressions in required.items():
+                    names = [name for _, tests in selected[harness] for name in tests]
+                    for regression in regressions:
+                        with self.subTest(platform=platform, scope=scope, harness=harness, regression=regression):
+                            self.assertEqual(names.count(regression), 1)
+                            focused = selected_gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                            self.assertEqual(tuple(focused), (harness,))
+                            self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+                            listing = "\n".join(name + ": test" for name in names if name != regression)
+                            with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                                selected_gate.require_tests(listing, selected[harness])
+                            if harness == "core":
+                                startup = [name for _, tests in selected_gate.CORE_STARTUP_STAGES for name in tests]
+                                self.assertEqual(startup.count(regression), 1)
+
     def test_paid_genesis_authority_and_public_failure_controls_precede_network_in_both_scopes(self):
         required = (
             'dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts',
@@ -165,10 +210,10 @@ class BeaconGateTests(unittest.TestCase):
             'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
             'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
             'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
-            'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',
+            'taira_public_reset::inputs::tests::topology_intent_forbids_generated_pins_and_plans',
             'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
             'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
-            'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file',
+            'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_topology_intent_without_key_file',
             'taira_public_reset::host::tests::host_receipt_names_cover_every_action_and_artifact_role',
             'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
             'taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan',
@@ -480,6 +525,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
             ),
             "network": (
+                'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
             ),
@@ -551,6 +597,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies',
             ),
             "cli": (
+                'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_and_missing_genesis_grant',
@@ -624,14 +671,77 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                         with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
                             selected_gate.focused_regression_stages(scope, ("cli=" + regression,))
 
+    def test_public_producer_controls_replace_stale_names_and_remain_required(self):
+        required = (
+            'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
+            'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_incomplete_or_changed_build_and_operation',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_preserves_original_intent_separately_from_installed_state',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_closed_preparation_has_no_implicit_state_or_receipt',
+            'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_output_is_atomic_private_and_never_replaced',
+            'taira_public_reset::inputs::tests::topology_intent_forbids_generated_pins_and_plans',
+            'taira_public_reset::inputs::tests::topology_context_checks_scope_and_budget_before_custody',
+            'taira_public_reset::inputs::tests::native_context_rejects_scope_before_opening_actual_inputs',
+            'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_topology_intent_without_key_file',
+            'taira_public_reset::public_inputs::tests::cli_public_input_preparation_never_accepts_private_credentials',
+            'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export',
+            'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors',
+            'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
+            'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
+            'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
+            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+            'taira_public_reset::host::epoch_generation::completed_wrapper_tests::materialization_output_is_complete_closed_update_input',
+            'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_keeps_original_intent_and_actual_installed_state_distinct',
+            'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_rejects_foreign_receipt_and_network',
+        )
+        stale = (
+            'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',
+            'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file',
+        )
+        retained = (
+            'tests::taira_public_reset_local_inputs_require_a_dedicated_operator_key',
+            'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
+        )
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("producer_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                selected = selected_gate.qualification_stages(scope)
+                names = [name for _, tests in selected["cli"] for name in tests]
+                for regression in required + retained:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(names.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("cli=" + regression,))
+                        self.assertEqual(tuple(focused), ("cli",))
+                        self.assertEqual([name for _, tests in focused["cli"] for name in tests], [regression])
+                        listing = "\n".join(name + ": test" for name in names if name != regression)
+                        # A historical spelling cannot stand in for a current required test.
+                        listing += "\n" + "\n".join(name + ": test" for name in stale)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, selected["cli"])
+                for regression in stale:
+                    self.assertNotIn(regression, names)
+                    with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
+                        selected_gate.focused_regression_stages(scope, ("cli=" + regression,))
+
     def test_epoch_supervisor_platform_census_and_exact_network_fixture(self):
+        preflight = 'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup'
         linux_identity = 'taira_public_reset::host::epoch_worker_process_identity_binds_current_kernel_incarnation'
         openssh = "taira_public_reset::host::tests::openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network"
         fixtures = {
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (902, 1080)), ("linux", (907, 1085))):
+        for platform, counts in (("darwin", (935, 1113)), ("linux", (940, 1118))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)
@@ -649,6 +759,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     other = fixtures["linux" if platform == "darwin" else "darwin"]
                     self.assertNotIn(other, network)
                     self.assertEqual(network[-1], fixtures[platform])
+                    self.assertEqual(network.count(preflight), 1)
+                    self.assertLess(network.index(preflight), network.index(fixtures[platform]))
+                    focused_preflight = selected_gate.focused_regression_stages(scope, ("network=" + preflight,))
+                    self.assertEqual([name for _, tests in focused_preflight["network"] for name in tests], [preflight])
+                    without_preflight = "\n".join(name + ": test" for name in network if name != preflight)
+                    with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                        selected_gate.require_tests(without_preflight, selected["network"])
                     focus = selected_gate.focused_regression_stages(scope, ("network=" + fixtures[platform],))
                     self.assertEqual([name for _, tests in focus["network"] for name in tests], expensive)
                     with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
@@ -774,6 +891,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
             "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
             "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+            'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
             EXPECTED_BEACON_NETWORK_TEST,
@@ -924,6 +1042,46 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertEqual(gate.HARNESS_TARGETS["client"][3], ["-p", "iroha", "--lib"])
         self.assertEqual(gate.HARNESS_TARGETS["data-model"][3], ["-p", "iroha_data_model", "--lib"])
 
+    def test_generated_identity_custody_controls_are_required_and_focused(self):
+        required = {
+            "kagami": (
+                "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+                "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+                "localnet::tests::generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission",
+                "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+            ),
+            "cli": (
+                "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
+                "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
+            ),
+        }
+        stale = "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_existing_bindings"
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("generated_identity_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            self.assertEqual(selected_gate.HARNESS_TARGETS["kagami"][3],
+                             ["-p", "iroha_kagami", "--bin", "kagami"])
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                for harness, regressions in required.items():
+                    stages = selected_gate.qualification_stages(scope)[harness]
+                    names = [name for _, tests in stages for name in tests]
+                    for regression in regressions:
+                        with self.subTest(platform=platform, scope=scope, harness=harness, regression=regression):
+                            self.assertEqual(names.count(regression), 1)
+                            focused = selected_gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                            self.assertEqual(tuple(focused), (harness,))
+                            self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+                            listing = "\n".join(name + ": test" for name in names if name != regression)
+                            listing += "\n" + stale + ": test"
+                            with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                                selected_gate.require_tests(listing, stages)
+                cli_names = [name for _, tests in selected_gate.qualification_stages(scope)["cli"] for name in tests]
+                self.assertNotIn(stale, cli_names)
+                with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
+                    selected_gate.focused_regression_stages(scope, ("cli=" + stale,))
+
     def test_both_scopes_require_generated_genesis_and_occupied_reset_contracts(self):
         required = {
             "cli": (
@@ -932,7 +1090,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "address::tests::public_key_output_rejects_malformed_and_wrong_prefix",
                 "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
                 "taira_public_reset::validator_config::tests::materialization_rejects_changed_missing_and_wrong_peer_state_paths",
-                "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_existing_bindings",
+                "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
                 "taira_public_reset::validator_config::tests::materialization_requires_exact_public_genesis_identity_bytes",
                 "taira_public_reset::validator_config::tests::materialization_cli_requires_explicit_custody_and_canonical_identities",
                 "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_split_source_and_configuration_binding",

@@ -175,7 +175,7 @@ STAGES = (
     ("generated validator reset layout", (
         "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
         "taira_public_reset::validator_config::tests::materialization_rejects_changed_missing_and_wrong_peer_state_paths",
-        "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_existing_bindings",
+        "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
         "taira_public_reset::validator_config::tests::materialization_requires_exact_public_genesis_identity_bytes",
         "taira_public_reset::validator_config::tests::materialization_cli_requires_explicit_custody_and_canonical_identities",
     )),
@@ -986,6 +986,11 @@ CORE_ADMISSION_STARTUP_STAGES += (("standalone Apply recovery across retained Ku
 )), )
 
 
+CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
+    'state::telemetry_status::tests::status_source_busy_is_distinct_from_changed_or_invalid_journal',
+)), )
+
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1150,6 +1155,7 @@ BEACON_NETWORK_STAGES = (("fresh beacon custody, paid deployment, catalog replay
 )),)
 
 NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
+    'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
 )),)
@@ -1368,6 +1374,9 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
     "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+    "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+    "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+    "localnet::tests::generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission",
     "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
@@ -1579,10 +1588,10 @@ STAGES += (("native beacon reset authority, bounded recovery and public input as
     'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
     'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
     'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
-    'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',
+    'taira_public_reset::inputs::tests::topology_intent_forbids_generated_pins_and_plans',
     'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
     'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
-    'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file',
+    'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_topology_intent_without_key_file',
     'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
     'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
 )), )
@@ -1670,6 +1679,54 @@ if sys.platform == "linux":
         'taira_public_reset::host::epoch_generation::linux::tests::generation_binding_rejects_alternate_cli_and_private_path',
         'taira_public_reset::host::epoch_generation::linux::tests::service_intent_never_infers_activation_from_original_absence',
     )), )
+
+
+STAGES += (("native epoch public admission restores caller profile", (
+    'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
+)), )
+
+
+STAGES += (("native public reset and epoch input producer closure", (
+    'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
+    'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
+    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
+    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
+    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution',
+    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
+    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_incomplete_or_changed_build_and_operation',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_preserves_original_intent_separately_from_installed_state',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_closed_preparation_has_no_implicit_state_or_receipt',
+    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_output_is_atomic_private_and_never_replaced',
+    'taira_public_reset::inputs::tests::topology_context_checks_scope_and_budget_before_custody',
+    'taira_public_reset::inputs::tests::native_context_rejects_scope_before_opening_actual_inputs',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors',
+    'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
+    'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
+    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::materialization_output_is_complete_closed_update_input',
+    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_keeps_original_intent_and_actual_installed_state_distinct',
+    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_rejects_foreign_receipt_and_network',
+)), )
+
+
+TORII_SHARED_STAGES += (('exact public status failure reason codes', (
+    'status::failure::tests::status_failure_codes_are_exact_and_distinct',
+    'status::failure::tests::status_failure_codes_do_not_accept_unclassified_input_as_a_reason',
+)), )
+
+
+TORII_UNIT_STAGES += (('typed status producer HTTP failure projection', (
+    'routing::status_failure_reason_tests::snapshot_failure_reasons_match_json_norito_and_header',
+)), )
+
+
+CLIENT_STAGES += (('typed status failure SDK decoding without implicit retries', (
+    'client::status_http_tests::status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retries',
+    'client::status_http_tests::status_unavailable_rejects_missing_unknown_invalid_and_duplicate_reason_headers',
+)), )
 
 
 QUALIFICATION_SCOPES = ("basic", "full")

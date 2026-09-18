@@ -181,7 +181,7 @@ impl Fixture {
         PreparePublicInputs {
             localnet_dir: localnet,
             canary_public_key: Some(canary_public_key),
-            inventory_draft: None,
+            intent: None,
             output_dir: root.join("public-inputs"),
         }
     }
@@ -548,7 +548,7 @@ fn cli_public_input_preparation_never_accepts_private_credentials() {
         "prepare-public-inputs",
         "--localnet-dir",
         "/localnet",
-        "--inventory-draft",
+        "--intent",
         "/unsigned.json",
         "--output-dir",
         "/output",
@@ -563,7 +563,7 @@ fn cli_public_input_preparation_never_accepts_private_credentials() {
             "taira",
             "public-reset",
             "prepare-beacon-inputs",
-            "--inventory-draft",
+            "--intent",
             "/unsigned.json",
             "--public-inputs",
             "/public-inputs",
@@ -772,20 +772,19 @@ fn public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback(
 
 #[cfg(unix)]
 #[test]
-fn public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file() {
+fn public_bundle_derives_canary_from_topology_intent_without_key_file() {
+    let _chain_guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
     let directory = private_custody_test_dir("public-draft-canary-");
     let fixture = Fixture::new();
     let mut args = fixture.write(directory.path());
     let mut inventory = sample_inventory_fixture();
     inventory.canary_onboarding_request = fixture.derive().unwrap().canary_onboarding_request;
-    let mut value: json::Value =
-        json::from_slice(&canonical_inventory_bytes(&inventory).unwrap()).unwrap();
-    value.as_object_mut().unwrap().remove("beacon_bootstrap");
-    let draft = directory.path().join("unsigned.json");
+    let mut value = json::to_value(&inputs::ResetTopologyIntentV1::from(&inventory)).unwrap();
+    let draft = directory.path().join("intent.json");
     inputs::write_new_private(&draft, &json_line(&value).unwrap()).unwrap();
     let key_path = args.canary_public_key.take().unwrap();
     fs::remove_file(key_path).unwrap();
-    args.inventory_draft = Some(draft.clone());
+    args.intent = Some(draft.clone());
     prepare(&args, &mut Vec::new()).unwrap();
     assert_eq!(
         load(&args.output_dir).unwrap().canary_public_key,

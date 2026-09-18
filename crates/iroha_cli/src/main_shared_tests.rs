@@ -1034,6 +1034,15 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     let local = [
         "--runtime-client-config",
         "/private/runtime/client.toml",
+        "--maintenance-admin-config",
+        "/private/runtime/administrator.toml",
+        "--epoch-supervisor-plan",
+        "/private/runtime/supervisor-plan.json",
+        "--epoch-seed-sources",
+        "/private/runtime/epoch-seed-1",
+        "/private/runtime/epoch-seed-2",
+        "/private/runtime/epoch-seed-3",
+        "/private/runtime/epoch-seed-4",
         "--validator-client-config",
         "/private/runtime/client-1.toml",
         "/private/runtime/client-2.toml",
@@ -1065,7 +1074,7 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     for subcommand in ["assemble", "authorize"] {
         let mut argv = vec!["iroha", "taira", "public-reset", subcommand];
         if subcommand == "assemble" {
-            argv.extend(["--inventory-draft", "/private/runtime/inventory-draft.json"]);
+            argv.extend(["--intent", "/private/runtime/intent.json"]);
         } else {
             argv.extend([
                 "--inventory",

@@ -34,12 +34,12 @@ use tokio::{
     process::{Child, Command},
 };
 
+#[path = "production_epoch_maintenance.rs"]
+mod epoch_maintenance;
 #[path = "production_beacon_prepare.rs"]
 mod prepare;
 #[path = "public_transaction_sequence.rs"]
 mod public_sequence;
-#[path = "production_epoch_maintenance.rs"]
-mod epoch_maintenance;
 
 const CHAIN: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CREDENTIAL: &str = "iroha-global-beacon-partial-signer-v1.norito";
@@ -913,7 +913,10 @@ fn verify_pulse(
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
     let epoch_length = npos.epoch_length_blocks().get();
-    ensure!(epoch_length == 11, "fixture must exercise real maintenance merge at mandatory height 10");
+    ensure!(
+        epoch_length == 11,
+        "fixture must exercise real maintenance merge at mandatory height 10"
+    );
     let maintenance_tree: MerkleTree<TransactionEntrypoint> =
         [maintenance_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
@@ -946,10 +949,12 @@ fn verify_pulse(
         // transaction as Applied on all four peers. Bind it to the sole leaf of
         // the execution-bearing merge at the mandatory pulse height, excluding
         // unrelated transactions, QueuePlan admissions and anchor padding.
-        let context = block.execution_context()
+        let context = block
+            .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let reference = context.merge_entry.as_ref()
-            .ok_or_else(|| eyre!("first maintenance transaction did not execute on the mandatory pulse carrier"))?;
+        let reference = context.merge_entry.as_ref().ok_or_else(|| {
+            eyre!("first maintenance transaction did not execute on the mandatory pulse carrier")
+        })?;
         ensure!(
             reference.execution_batch_hash.is_some()
                 && reference.entrypoint_count == Some(1)
@@ -1403,10 +1408,13 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
 async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Result<()> {
     // Validate the same immutable identity used by the paid trust helper before
     // artifact reads, custody creation, genesis generation, or child startup.
-    // Explicit development identity remains valid for diagnostic runs; signed
-    // source and artifact qualification belong to the maintained outer gate.
-    let build_identity = iroha_core::compiled_build_identity!()
-        .wrap_err("production beacon fixture has invalid compiled build metadata")?;
+    // Development identity is sufficient only for the finite driver. Supervised
+    // renewal must satisfy release-source admission before this expensive setup;
+    // signed source/artifact qualification still belongs to the outer gate.
+    let build_identity = driver.admit_build_identity(
+        iroha_core::compiled_build_identity!()
+            .wrap_err("production beacon fixture has invalid compiled build metadata")?,
+    )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let daemon = binary(
@@ -1427,17 +1435,25 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         "beacon fixture preparing fresh genesis: budget={:.3}s",
         PHASE_BUDGET.as_secs_f64()
     );
-    let prepared =
-        match prepare::prepare(workspace.path(), &kagami, api, p2p, preparation_deadline).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                eprintln!(
-                    "beacon fixture preparation retained at {}",
-                    workspace.keep().display()
-                );
-                return Err(error);
-            }
-        };
+    let prepared = match prepare::prepare(
+        workspace.path(),
+        &kagami,
+        &cli,
+        api,
+        p2p,
+        preparation_deadline,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!(
+                "beacon fixture preparation retained at {}",
+                workspace.keep().display()
+            );
+            return Err(error);
+        }
+    };
     eprintln!(
         "beacon fixture fresh genesis prepared: elapsed={:.3}s",
         preparation_started.elapsed().as_secs_f64()
@@ -1471,8 +1487,8 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         .map_err(|_| eyre!("faucet policy length"))?;
     drop(table);
     drop(reservations);
-    // Native genesis generation is a separate bounded phase. Each daemon must
-    // authenticate and execute that genesis before its public listener starts.
+    // Native genesis generation is a separate bounded phase. Listener availability
+    // and exact committed genesis are separate observations under one startup deadline.
     let startup_started = Instant::now();
     let startup = startup_started + PHASE_BUDGET;
     eprintln!(
@@ -1593,8 +1609,12 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         Ok(())
     }.await;
     if let Some(operator) = &mut maintenance {
-        let stopped = operator.stop(Instant::now() + Duration::from_secs(30)).await;
-        if outcome.is_ok() { stopped?; }
+        let stopped = operator
+            .stop(Instant::now() + Duration::from_secs(30))
+            .await;
+        if outcome.is_ok() {
+            stopped?;
+        }
     }
     if !peers.children.is_empty() {
         let stopped = peers.stop(Instant::now() + Duration::from_secs(30)).await;
