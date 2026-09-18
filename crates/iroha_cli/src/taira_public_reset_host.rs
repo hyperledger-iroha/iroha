@@ -21452,7 +21452,19 @@ mod tests {
             .iter()
             .position(|key| key.action == HostAction::Restart.label())
             .unwrap();
-        assert_eq!(restart - activation, 4);
+        assert_eq!(
+            plan[activation..restart]
+                .iter()
+                .map(|key| (key.host_slug.as_str(), key.action.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("taira-validator-1", HostAction::BeaconActivate.label()),
+                ("taira-validator-2", HostAction::BeaconActivate.label()),
+                ("taira-validator-3", HostAction::BeaconActivate.label()),
+                ("taira-validator-4", HostAction::BeaconActivate.label()),
+                ("taira-validator-1", HostAction::EpochSupervisorStart.label()),
+            ]
+        );
         assert!(
             plan[..activation]
                 .iter()
@@ -25155,9 +25167,18 @@ time.sleep(30)
                 .position(|key| key.action == HostAction::BeaconActivate.label())
                 .expect("first provider activation");
             assert_eq!(plan[first_beacon - 1].action, HostAction::Start.label());
-            assert_eq!(first_restart, first_beacon + 4);
+            let supervisor_start = first_beacon + 4;
+            assert_eq!(first_restart, supervisor_start + 1);
             assert_eq!(
-                plan[first_beacon..first_restart]
+                plan[supervisor_start],
+                HostActionKeyV1 {
+                    host_slug: admitted.inventory.epoch_supervisor.host_slug.clone(),
+                    action: HostAction::EpochSupervisorStart.label().to_owned(),
+                    artifact_role: String::new(),
+                }
+            );
+            assert_eq!(
+                plan[first_beacon..supervisor_start]
                     .iter()
                     .map(|key| (key.action.as_str(), key.host_slug.as_str()))
                     .collect::<Vec<_>>(),

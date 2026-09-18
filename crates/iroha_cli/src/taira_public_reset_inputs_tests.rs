@@ -164,7 +164,7 @@ fn authorization_cannot_extend_the_bounded_plan() {
     .expect("the maximum install timeout fits within the complete execution budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        33_870_000,
+        36_270_000,
     );
 
     // One physical host requires exactly 42,000 action seconds, plus the
@@ -178,10 +178,10 @@ fn authorization_cannot_extend_the_bounded_plan() {
         preseed_secs: 3_599,
         start_secs: 1,
         convergence_secs: 1,
-        canary_secs: 258,
+        canary_secs: 193,
         restart_secs: 1,
         edge_secs: 1,
-        cleanup_secs: 2,
+        cleanup_secs: 3,
         rollback_secs: 1,
     };
     validate_timeouts(&inventory.timeouts).expect("every individual timeout is legal");
@@ -331,33 +331,49 @@ fn taira_accepts_signed_npos_mode_and_rejects_permissioned_mode() {
     assert!(validate_taira_genesis_mode(SumeragiConsensusMode::Permissioned).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
+    let directory = private_custody_test_dir("taira-incomplete-topology-");
+    let absent = directory.path().join("absent");
     let mut inventory = sample_inventory_fixture();
     inventory.validators.pop();
     let inputs = LocalInputs {
-        public_inputs: PathBuf::from("/missing"),
-        beacon_inputs: PathBuf::from("/missing"),
-        beacon_validator_unit: vec![],
-        runtime_client_config: PathBuf::from("/missing"),
-        maintenance_admin_config: PathBuf::from("/missing"),
-        epoch_seed_sources: Vec::new(),
-        epoch_supervisor_plan: PathBuf::from("/missing"),
-        validator_client_config: vec![],
-        onboarding_token: PathBuf::from("/missing"),
-        validator_operator_key: PathBuf::from("/missing"),
-        inrou_stage_dir: Some(PathBuf::from("/missing")),
-        validator_unit: vec![],
-        edge_unit: PathBuf::from("/missing"),
-        known_hosts: PathBuf::from("/missing"),
+        public_inputs: absent.join("public-inputs"),
+        beacon_inputs: absent.join("beacon-inputs.json"),
+        beacon_validator_unit: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.beacon.service")))
+            .collect(),
+        runtime_client_config: absent.join("runtime-client.toml"),
+        maintenance_admin_config: absent.join("maintenance-admin.toml"),
+        epoch_seed_sources: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.seed")))
+            .collect(),
+        epoch_supervisor_plan: absent.join("epoch-supervisor.json"),
+        validator_client_config: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.toml")))
+            .collect(),
+        onboarding_token: absent.join("onboarding-token"),
+        validator_operator_key: absent.join("operator.key"),
+        inrou_stage_dir: Some(absent.join("stage")),
+        validator_unit: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.service")))
+            .collect(),
+        edge_unit: absent.join("edge.service"),
+        known_hosts: absent.join("known-hosts"),
     };
     let error = derive_inventory(&mut inventory, &inputs)
-        .unwrap_err()
+        .expect_err("incomplete topology must fail before opening absent runtime inputs")
         .to_string();
     assert_eq!(
         error,
-        "assembly requires exactly four ordered validator inputs"
+        "native reset context requires four exact validator inputs"
     );
+    assert!(!absent.exists());
 }
 
 #[cfg(unix)]
@@ -418,7 +434,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         edge_unit: absent.join("edge.service"),
         known_hosts: absent.join("known-hosts"),
     };
-    let expected = "bounded execution plan requires 83400 seconds (actions: 82200 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 40200 seconds";
+    let expected = "bounded execution plan requires 85800 seconds (actions: 84600 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 42600 seconds";
     assert_eq!(
         derive_inventory(&mut inventory, &local())
             .expect_err("budget must fail before opening the absent source manifest")
@@ -491,7 +507,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("deployment defaults pass structural admission");
     assert_eq!(
         execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
-        17_460_000,
+        17_820_000,
     );
     let (key, trusted) = owner();
     let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
@@ -500,7 +516,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("admitted defaults are signable under the same budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        17_460_000,
+        17_820_000,
     );
 
     inventory.timeouts.stop_secs = 0;

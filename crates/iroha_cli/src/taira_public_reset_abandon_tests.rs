@@ -21,6 +21,14 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
         "retained target fixture",
     )
     .unwrap();
+    // Embedded policy/unit bytes have their own digests and generation paths;
+    // changing the outer JSON revision cannot rebind that public closure.
+    inventory.epoch_supervisor = host::epoch_supervisor::fixture_plan(
+        &inventory.validators,
+        &inventory.validator_clients,
+        &inventory.revision,
+        &inventory.maintenance_admin_identity,
+    );
     let host_key =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRhaXJhLWZpeHR1cmUtaG9zdC1rZXktMDAwMDAwMDAw";
     let mut known_hosts = String::new();
@@ -39,6 +47,12 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
     inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
     validate_inventory_structure(&inventory)
         .expect("original target keeps the full first-release structural contract");
+    let mut wrong_policy = inventory.clone();
+    wrong_policy.epoch_supervisor = fixture.epoch_supervisor;
+    assert!(
+        validate_inventory_structure(&wrong_policy).is_err(),
+        "original target must reject a supervisor policy from another revision"
+    );
     let Some(compiled) = compiled else {
         for admission in [
             ControllerAdmission::CurrentExecutable,

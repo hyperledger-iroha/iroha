@@ -45,8 +45,11 @@ action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
 
 Reset input validation checks the complete action timeout budget before scanning
-artifacts or reading signing custody. Prepared Inrou stage files use mode0600;
-retained runtime snapshots use mode0400. Both remain owner-only, direct,
+artifacts or reading signing custody. The install budget counts every required
+artifact upload, including `kagami`, plus each validator's stage and install
+actions. All four beacon providers activate before the epoch supervisor starts;
+restart qualification follows that required barrier. Prepared Inrou stage files
+use mode0600; retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 
 Journal admission holds one exclusive lock through classification and execution.

@@ -1492,15 +1492,22 @@ mod tests {
 
     #[test]
     fn epoch_supervisor_custody_rejects_changed_shared_and_wrong_length_seed_files() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let path = directory.path().canonicalize().unwrap().join("seed");
+        let directory = crate::taira_public_reset::private_custody_test_dir("epoch-seed-");
+        let path = directory.path().join("seed");
         fs::write(&path, [7_u8; 32]).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let mut input = PinnedFile::open(&path, true).unwrap();
         let mut output = Vec::new();
         input.copy_seed(&mut output).unwrap();
         assert_eq!(output, vec![7_u8; 32]);
+        for mode in [0o720, 0o702, 0o1777] {
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(mode)).unwrap();
+            assert!(
+                PinnedFile::open(&path, true).is_err(),
+                "a private seed cannot admit a writable ancestor, including a sticky directory"
+            );
+        }
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(&path, [9_u8; 32]).unwrap();
         assert!(input.copy_seed(&mut Vec::new()).is_err());
         fs::write(&path, [1_u8; 31]).unwrap();
@@ -1516,8 +1523,7 @@ mod tests {
 
     #[test]
     fn epoch_supervisor_worker_lock_and_cursor_preserve_exclusive_restart_state() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = crate::taira_public_reset::private_custody_test_dir("epoch-worker-");
         let path = directory.path().join("worker");
         let worker = Journal::open(&path, true).unwrap();
         assert!(Journal::open(&path, false).is_err());

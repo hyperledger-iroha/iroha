@@ -658,7 +658,7 @@ fn sample_inventory_fixture() -> InventoryV1 {
 
 /// Create a disposable fixture with the same ancestor custody as operator inputs.
 #[cfg(test)]
-fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
+pub(crate) fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
     // A private leaf below a shared temporary directory does not satisfy the
     // public-reset custody policy. Keep fixtures beneath the owned workspace.
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
@@ -1742,19 +1742,26 @@ fn execution_lifetime_for_host_identities<'a>(
     let physical_validator_hosts = identities.into_iter().collect::<BTreeSet<_>>().len();
     let physical_validator_hosts = u64::try_from(physical_validator_hosts)
         .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
+    let validator_count = u64::try_from(VALIDATOR_SLUGS.len())
+        .map_err(|_| eyre!("validator count does not fit u64"))?;
+    let validator_artifact_count = u64::try_from(VALIDATOR_ARTIFACT_ROLES.len())
+        .map_err(|_| eyre!("validator artifact count does not fit u64"))?;
+    // Each validator has one preflight, every canonical artifact upload, one
+    // stage verification, and one install. Add the edge preflight and one
+    // canonical Inrou stage upload per physical validator host.
+    let install_action_count = validator_artifact_count
+        .checked_add(3)
+        .and_then(|count| count.checked_mul(validator_count))
+        .and_then(|count| count.checked_add(1))
+        .and_then(|count| count.checked_add(physical_validator_hosts))
+        .ok_or_else(|| eyre!("install action count overflow"))?;
     // This conservative maximum covers both explicit qualification scopes. Core
     // omits Inrou execution and additional restart waves without shortening
     // custody leases; unused budget never introduces a wait. Keep each timeout class
     // independently bounded for the closed four-validator/one-edge plan.
     let seconds = timeouts
         .install_secs
-        // Five preflights, thirty-two validator stage actions, four installs,
-        // and one canonical Inrou stage upload per physical validator host.
-        .checked_mul(
-            41_u64
-                .checked_add(physical_validator_hosts)
-                .ok_or_else(|| eyre!("install action count overflow"))?,
-        )
+        .checked_mul(install_action_count)
         .and_then(|value| value.checked_add(timeouts.epoch_supervisor_pause_secs))
         .and_then(|value| value.checked_add(timeouts.epoch_supervisor_start_secs))
         .and_then(|value| value.checked_add(timeouts.stop_secs.checked_mul(4)?))
@@ -1856,7 +1863,6 @@ fn validate_inventory_with_revision(
     inventory.validate_inrou_scope()?;
     host::beacon::validate_plan(inventory)?;
     validate_maintenance_admin_identity(inventory)?;
-    host::epoch_supervisor::validate_plan(inventory)?;
     for (label, value) in [
         (
             "previous genesis hash",
@@ -1986,6 +1992,8 @@ fn validate_inventory_with_revision(
             "public-reset V1 requires all four validators and the edge on one authenticated SSH host identity"
         ));
     }
+    // Admit the complete host topology before checking its supervisor policy.
+    host::epoch_supervisor::validate_plan(inventory)?;
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -7445,7 +7453,7 @@ mod executor_model {
             let inventory = sample_inventory();
             let base = execution_lifetime_ms(&inventory).expect("base lifetime");
             let timeouts = &inventory.timeouts;
-            let action_seconds = 42 * timeouts.install_secs
+            let action_seconds = 46 * timeouts.install_secs
                 + timeouts.epoch_supervisor_pause_secs
                 + timeouts.epoch_supervisor_start_secs
                 + 4 * timeouts.stop_secs
@@ -7474,7 +7482,7 @@ mod executor_model {
                     );
                 }};
             }
-            assert_delta!(install_secs, 42);
+            assert_delta!(install_secs, 46);
             assert_delta!(epoch_supervisor_pause_secs, 1);
             assert_delta!(epoch_supervisor_start_secs, 1);
             assert_delta!(stop_secs, 4);
@@ -7499,7 +7507,7 @@ mod executor_model {
                 preseed_secs: 3_600,
                 start_secs: 1,
                 convergence_secs: 1,
-                canary_secs: 258,
+                canary_secs: 193,
                 restart_secs: 1,
                 edge_secs: 1,
                 cleanup_secs: 1,
@@ -7507,9 +7515,9 @@ mod executor_model {
             };
             assert_eq!(
                 execution_lifetime_ms(&boundary).expect("last bounded lifetime"),
-                43_192_000
+                43_187_000
             );
-            boundary.timeouts.canary_secs = 259;
+            boundary.timeouts.canary_secs = 194;
             let _ = execution_lifetime_ms(&boundary)
                 .expect_err("next exact action quantum exceeds twelve hours");
 
@@ -7527,7 +7535,7 @@ mod executor_model {
             assert_eq!(
                 execution_lifetime_ms(&multi_host).expect("four-host install delta")
                     - multi_host_lifetime,
-                41_000
+                49_000
             );
         }
 
