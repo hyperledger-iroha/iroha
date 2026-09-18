@@ -3916,7 +3916,6 @@ pub(crate) mod tests {
             core::num::NonZeroU64::new(context.height).expect("nonzero pulse height"),
             Some(parent_hash),
             None,
-            None,
             0,
             0,
         );

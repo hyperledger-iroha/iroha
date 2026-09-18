@@ -538,10 +538,8 @@ async fn canonical_execution(
             committed.verify_certified_merge_inclusion(reference),
             "exact transaction/result proofs are not bound to the certified merge reference"
         );
-        let catalog = client.get_lane_lifecycle_status()?.validate()?;
-        let log = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog)
-            .primary()
-            .merge_log_path(&store);
+        client.get_lane_lifecycle_status()?.validate()?;
+        let log = iroha_core::kura::Kura::canonical_storage_paths(&store).1;
         let entry = committed_merge_entry(&log, reference)?;
         let batch = entry
             .execution_batch

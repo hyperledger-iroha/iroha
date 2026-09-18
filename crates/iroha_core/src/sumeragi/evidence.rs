@@ -1629,9 +1629,26 @@ mod tests {
         .commit_unchecked()
         .unpack(|_| {});
         let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
-        executed_block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach deterministic v2 evidence fixture results");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &executed_block,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            executed_block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach deterministic v2 evidence fixture results");
         let block = std::sync::Arc::new(executed_block);
         state
             .kura()
@@ -1758,7 +1775,6 @@ mod tests {
             core::num::NonZeroU64::new(height).expect("non-zero test height"),
             None,
             None,
-            None,
             now_ms,
             view,
         );
@@ -1793,7 +1809,6 @@ mod tests {
     fn penalty_header(height: u64) -> BlockHeader {
         BlockHeader::new(
             core::num::NonZeroU64::new(height).expect("non-zero penalty test height"),
-            None,
             None,
             None,
             height.saturating_mul(1_000),
@@ -2538,7 +2553,6 @@ mod tests {
             core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
             None,
             None,
-            None,
             30,
             0,
         );
@@ -2633,7 +2647,6 @@ mod tests {
 
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
-            None,
             None,
             None,
             30,

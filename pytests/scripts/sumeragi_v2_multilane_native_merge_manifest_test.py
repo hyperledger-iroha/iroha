@@ -583,8 +583,8 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     support.replace_once_after(
         fixture_path,
         "fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle(",
-        "Self::new_with_options_and_network(false, false, true, true, true)",
-        "Self::new_with_options_and_network(false, false, true, true, false)",
+        "Self::new_with_options(false, false, true, true)",
+        "Self::new_with_options(false, false, true, false)",
     )
     errors = support.validate_native_prepublication_fixture(
         tmp_path, module, models
@@ -712,11 +712,11 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
             "canonical_native_amx_application_sources",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_apply.rs",
-            "pub(crate) fn validate_candidate(",
-            "            state_block.staged_merge_entry(),\n",
-            "            None,\n",
-            "V2ApplyService::validate_candidate",
+            "crates/iroha_core/src/state/carrier_preparation.rs",
+            "pub(crate) fn prepare(",
+            "                    state.staged_merge_entry(),\n",
+            "                    None,\n",
+            "PreparedCarrier::prepare",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -754,11 +754,11 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
             "replay_blocks_from_kura_range_inner",
         ),
         (
-            "crates/iroha_core/src/kura/lane_artifact_budget.rs",
-            "fn lane_artifact_required_bytes_for_block(",
-            "            block,\n            merge_entry,\n        )",
-            "            block,\n            None,\n        )",
-            "lane_artifact_required_bytes_for_block",
+            "crates/iroha_core/src/kura/native_amx_publication_capacity.rs",
+            "fn native_amx_publication_plan_for_storage_under_prune_and_canonical_guards(",
+            "from_result_bearing_block_and_merge_entry(block, merge_entry)",
+            "from_result_bearing_block_and_merge_entry(block, None)",
+            "Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards",
         ),
         (
             "crates/iroha_core/src/kura/lane_artifact_budget.rs",

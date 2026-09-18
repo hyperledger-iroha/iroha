@@ -209,7 +209,7 @@ fn block_height_sysvar_uses_attached_transaction_context() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-    let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(9_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let tx = block.transaction();
     let mut host = CoreHostImpl::new(authority);

@@ -9,7 +9,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -110,7 +109,6 @@ fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -199,7 +197,6 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
-        None,
         None,
         None,
         0,
@@ -304,7 +301,6 @@ fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -403,7 +399,6 @@ fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
-        None,
         None,
         None,
         0,
@@ -541,7 +536,6 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -642,7 +636,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(10).expect("nonzero block height"),
-        None,
         None,
         None,
         0,
@@ -749,7 +742,6 @@ fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
         std::num::NonZeroU64::new(5).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -854,7 +846,6 @@ fn accepting_an_expired_invitation_fails_without_mutating_it() {
         std::num::NonZeroU64::new(10).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -945,7 +936,6 @@ fn identical_alias_replay_requires_current_package_owner_authorization() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1019,7 +1009,6 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
-        None,
         None,
         None,
         0,
@@ -1109,7 +1098,6 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
-        None,
         None,
         None,
         0,
@@ -1361,7 +1349,6 @@ fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
         std::num::NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1385,7 +1372,6 @@ fn parliament_consumption_records_server_execution_height() {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
             .expect("nonzero governance fixture height"),
-        None,
         None,
         None,
         0,
@@ -1423,7 +1409,6 @@ fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
             .expect("nonzero governance fixture height"),
-        None,
         None,
         None,
         0,
@@ -1487,7 +1472,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
             .expect("nonzero governance fixture height"),
-        None,
         None,
         None,
         0,
@@ -1592,7 +1576,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(GOVERNANCE_EXECUTION_HEIGHT)
             .expect("nonzero governance fixture height"),
-        None,
         None,
         None,
         0,

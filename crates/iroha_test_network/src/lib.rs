@@ -6934,7 +6934,6 @@ fn normalize_genesis_consensus_handshake(
         .collect();
     let mut header = source.0.header();
     header.merkle_root = external_merkle.root();
-    header.result_merkle_root = None;
     let da_proof_policies = da_proof_policies
         .cloned()
         .or_else(|| source.0.da_proof_policies().cloned());
@@ -10947,22 +10946,21 @@ impl BlockHeight {
     }
 }
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let mut hashes_height: Option<u64> = None;
-    if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
-        for entry in entries.flatten() {
-            let hashes_path = entry.path().join("blocks.hashes");
-            if let Ok(meta) = fs::metadata(&hashes_path) {
-                let blocks = meta.len() / 32;
-                hashes_height = Some(hashes_height.map_or(blocks, |prev| prev.max(blocks)));
-            }
-        }
+    let hashes_path = iroha_core::kura::Kura::canonical_storage_paths(storage_dir)
+        .0
+        .join("blocks.hashes");
+    let metadata = fs::metadata(hashes_path).ok()?;
+    let hash_bytes = u64::try_from(CryptoHash::LENGTH).ok()?;
+    if !metadata.is_file() || metadata.len() % hash_bytes != 0 {
+        return None;
     }
+    let hashes_height = metadata.len() / hash_bytes;
     // Pipeline recovery sidecars are written before consensus finality and their compact index
     // contains a fixed header in addition to entry records.  They are useful diagnostics, but
     // neither their presence nor their byte length proves that a block was applied. Only Kura's
     // canonical hash journal proves durable storage height; applied readiness must additionally
     // pass Torii's authoritative `/status` height barrier.
-    let max_height = hashes_height.unwrap_or(0);
+    let max_height = hashes_height;
     if max_height > current_total {
         Some(BlockHeight {
             total: max_height,
@@ -11490,7 +11488,7 @@ mod tests {
     #[tokio::test]
     async fn once_block_falls_back_to_storage_snapshot() {
         let dir = tempdir().expect("tempdir");
-        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        let lane_dir = dir.path().join("storage/blocks/canonical");
         fs::create_dir_all(&lane_dir).expect("lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64]).expect("committed block hashes");
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
@@ -11548,7 +11546,7 @@ mod tests {
     #[tokio::test]
     async fn wait_for_block_1_with_watchdog_rejects_kura_without_applied_status() {
         let dir = tempdir().expect("tempdir");
-        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        let lane_dir = dir.path().join("storage/blocks/canonical");
         fs::create_dir_all(&lane_dir).expect("lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
             .expect("durable Kura hash journal");
@@ -12238,7 +12236,7 @@ mod tests {
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default");
+            .join("canonical");
         let pipeline_dir = lane_dir.join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create modern pipeline dir");
         write_sidecar_index(&pipeline_dir, 1);
@@ -12263,7 +12261,7 @@ mod tests {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
         let custom_storage_dir = peer.dir.join("custom-storage");
-        let lane_dir = custom_storage_dir.join("blocks").join("lane_000_default");
+        let lane_dir = custom_storage_dir.join("blocks").join("canonical");
         fs::create_dir_all(&lane_dir).expect("create custom lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
             .expect("write custom canonical hash journal");
@@ -12294,7 +12292,7 @@ mod tests {
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default")
+            .join("canonical")
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
@@ -12307,11 +12305,7 @@ mod tests {
     fn detect_block_height_prefers_block_hashes_over_pipeline() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-        let lane_dir = peer
-            .dir
-            .join("storage")
-            .join("blocks")
-            .join("lane_000_default");
+        let lane_dir = peer.dir.join("storage").join("blocks").join("canonical");
         let pipeline_dir = lane_dir.join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
@@ -12322,14 +12316,39 @@ mod tests {
         assert_eq!(height.non_empty, 1);
     }
     #[test]
+    fn detect_block_height_never_uses_lane_alias_hash_journals() {
+        let directory = tempdir().expect("storage fixture");
+        let alias = directory.path().join("blocks/lane_000_default");
+        fs::create_dir_all(&alias).unwrap();
+        fs::write(alias.join("blocks.hashes"), vec![0u8; 32 * 20]).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("blocks.hashes"), vec![0u8; 32 * 2]).unwrap();
+        assert_eq!(
+            detect_block_height_from_storage(directory.path(), 0)
+                .expect("canonical durable height")
+                .total,
+            2
+        );
+        assert!(detect_block_height_from_storage(directory.path(), 2).is_none());
+    }
+    #[test]
+    fn detect_block_height_rejects_partial_canonical_hash_journal() {
+        let directory = tempdir().expect("storage fixture");
+        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("blocks.hashes"), vec![0u8; 33]).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+        fs::remove_file(canonical.join("blocks.hashes")).unwrap();
+        fs::create_dir(canonical.join("blocks.hashes")).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+    }
+    #[test]
     fn best_effort_block_height_uses_storage_without_status() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-        let lane_dir = peer
-            .dir
-            .join("storage")
-            .join("blocks")
-            .join("lane_000_default");
+        let lane_dir = peer.dir.join("storage").join("blocks").join("canonical");
         fs::create_dir_all(&lane_dir).expect("create lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64])
             .expect("write canonical hash journal");
@@ -16943,7 +16962,7 @@ mod tests {
         );
         let produced = network.genesis();
         assert!(
-            produced.0.results().all(|result| result.as_ref().is_ok()),
+            produced.0.output_results().all(|result| result.as_ref().is_ok()),
             "deferred dataspace-scoped genesis transactions must pre-execute under the final catalog"
         );
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();

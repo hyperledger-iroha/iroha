@@ -203,7 +203,7 @@ mod tests {
         height: NonZeroU64,
         da_hash: Option<HashOf<DaCommitmentBundle>>,
     ) -> BlockHeader {
-        let mut header = BlockHeader::new(height, None, None, None, 1_700_000_000_000, 0);
+        let mut header = BlockHeader::new(height, None, None, 1_700_000_000_000, 0);
         header.set_da_commitments_hash(da_hash);
         header
     }

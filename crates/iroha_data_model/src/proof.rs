@@ -4598,59 +4598,43 @@ mod tests {
     }
     #[test]
     fn proofed_committed_tx_roundtrip() {
-        use crate::query::CommittedTransaction;
-        use iroha_crypto::{Hash, HashOf};
-        // Minimal dummy CommittedTransaction with empty merkle items.
-        let empty: [u8; 32] = [0; 32];
-        let h_block =
-            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(empty));
-        let h_entry = HashOf::<crate::transaction::TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed(empty),
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x39; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let entrypoint = crate::transaction::TransactionEntrypoint::External(
+            crate::transaction::TransactionBuilder::new_genesis(
+                crate::account::AccountId::new(key.public_key().clone()),
+                crate::transaction::FeePaymentIntent::authority(vec![], None),
+            )
+            .sign(key.private_key()),
         );
-        let h_result = HashOf::<crate::transaction::TransactionResult>::from_untyped_unchecked(
-            Hash::prehashed(empty),
-        );
-        let tree: iroha_crypto::MerkleTree<[u8; 32]> = [].into_iter().collect();
-        let entry_proof: iroha_crypto::MerkleProof<crate::transaction::TransactionEntrypoint> =
-            iroha_crypto::MerkleProof::from_audit_path(0, vec![]);
-        let result_proof: iroha_crypto::MerkleProof<crate::transaction::TransactionResult> =
-            iroha_crypto::MerkleProof::from_audit_path(0, vec![]);
-        // Construct a minimal time-triggered entrypoint and a rejected result
-        let authority = crate::account::AccountId::parse_encoded(
-            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        )
-        .expect("valid account id");
-        let trigger_id: crate::trigger::TriggerId = "test_trigger".parse().expect("trigger id");
-        let time_entry = crate::trigger::TimeTriggerEntrypoint {
-            id: trigger_id,
-            instructions: crate::transaction::ExecutionStep(
-                Vec::<crate::isi::InstructionBox>::new().into(),
-            ),
-            authority,
-        };
-        let base = CommittedTransaction {
-            block_hash: h_block,
-            entrypoint_hash: h_entry,
-            entrypoint_proof: entry_proof,
-            entrypoint: crate::transaction::TransactionEntrypoint::Time(time_entry),
-            result_hash: h_result,
-            result_proof,
-            result: crate::transaction::TransactionResult::from(Err(
+        let output = crate::block::output_test_support::network(
+            0,
+            Err(
                 crate::transaction::error::TransactionRejectionReason::Validation(
                     crate::ValidationFail::NotPermitted("not permitted".into()),
                 ),
+            ),
+        );
+        let base = crate::query::CommittedTransaction {
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"carrier",
             )),
-            merge_inclusion: None,
+            entrypoint_hash: entrypoint.hash(),
+            entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+            entrypoint,
+            output_hash: iroha_crypto::HashOf::new(&output),
+            output_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+            output,
         };
         let pct = ProofedCommittedTransaction::new(
             base,
             Some(ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 4])),
         );
-        let enc = norito::to_bytes(&pct).expect("encode");
-        let arch = norito::from_bytes::<ProofedCommittedTransaction>(&enc).expect("archived");
-        let dec: ProofedCommittedTransaction = norito::core::DeserializePayload::deserialize(arch);
+        let enc = norito::to_bytes(&pct).unwrap();
+        let dec: ProofedCommittedTransaction = norito::decode_from_bytes(&enc).unwrap();
+        assert_eq!(dec, pct);
         assert!(dec.proof.is_some());
-        let _ = tree; // silence unused
     }
     #[test]
     fn proof_record_roundtrip() {

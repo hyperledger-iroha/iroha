@@ -76,9 +76,7 @@ fn native_coordinator_successor_waits_for_missing_applied_half_without_losing_ow
 
         let artifact_dir = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual participant storage route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts");
@@ -263,9 +261,7 @@ fn shared_lane_predecessor_rejects_corrupt_native_application_evidence() {
         );
         let corrupt_path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual participant storage route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -313,7 +309,8 @@ fn complete_applied_ordinary_lane_sessions(
     let bundle = block
         .execution_context()
         .expect("applied ownership context");
-    let before = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let before = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     assert!(adapter.pending_committed_lanes.is_empty());
     for ownership in &bundle.lane_payload_ownerships {
         let proposal = proposal_from_ownership(ownership, block.hash())
@@ -351,7 +348,8 @@ fn complete_applied_ordinary_lane_sessions(
     );
     assert!(adapter.pending_committed_lanes.is_empty());
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         before,
         "lane completion must not execute the already applied economic effects again"
     );
@@ -463,10 +461,7 @@ fn native_body_recovery_adapter_with_kura(
         .entry(participant_lane)
         .expect("participant lane storage entry")
         .clone();
-    adapter
-        .kura
-        .reconcile_lane_segments_for_testing(&[&entry], &[], &[])
-        .expect("provision participant lane storage");
+    adapter.state.install_active_lane_markers_for_tests();
     let incarnation = adapter
         .state
         .lane_incarnation_at_height(participant_lane, adapter.context.height)
@@ -684,7 +679,6 @@ fn native_apply_candidate_body(
     let mut header = BlockHeader::new(
         NonZeroU64::new(adapter.context.height).expect("non-zero candidate height"),
         Some(parent.hash()),
-        None,
         None,
         creation_time_ms,
         0,
@@ -1219,9 +1213,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
             }
             let directory = fixture
                 .state
-                .nexus_snapshot()
-                .lane_config
-                .entry(participant_lane)
+                .lane_storage_identity(participant_lane)
                 .expect("actual Native route")
                 .blocks_dir(fixture.kura.store_root())
                 .join("lane_artifacts");
@@ -1265,7 +1257,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
         assert!(committed.has_results());
         assert_eq!(committed.hash(), body.hash());
         let rejections = committed
-            .errors()
+            .failed_outputs()
             .map(|(index, error)| (index, format!("{error:?}")))
             .collect::<Vec<_>>();
         assert!(
@@ -1406,7 +1398,8 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
                     "producer admission must reject a snapshot behind the retained current tip"
                 )
             );
-            let before = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let before = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot");
             let exact_history = history
                 .entries()
                 .map(|(height, value)| (height, value.clone()))
@@ -1416,7 +1409,8 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
                 .execute(&context, &mut store, &task)
                 .expect("exact completed Apply replay is idempotent");
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before
             );
             assert_eq!(
@@ -1469,9 +1463,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
     assert_eq!(adapter.context.height, 7);
     let directory = fixture
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(participant_lane)
+        .lane_storage_identity(participant_lane)
         .expect("actual future Native route")
         .blocks_dir(fixture.kura.store_root())
         .join("lane_artifacts");
@@ -1503,14 +1495,16 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
 fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation() {
     let positive = grouped_native_candidate_fixture(None);
     let positive_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let commitment = positive
         .service
         .validate_candidate(&positive.context, &positive.body)
         .expect("default evidence budget admits the exact grouped Native candidate");
     assert_eq!(commitment.native_amx_application_manifest_count, 1);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         positive_state_hash,
         "positive pre-vote validation must discard its WSV overlay"
     );
@@ -1527,7 +1521,8 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
             .expect("read exact pre-vote durable height"),
         3
     );
-    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref());
+    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref())
+        .expect("stable valid fixture snapshot");
     let candidate_height = NonZeroUsize::new(
         usize::try_from(negative.context.height).expect("candidate height fits usize"),
     )
@@ -1589,7 +1584,8 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
         3
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         state_hash_before,
         "undersized pre-vote rejection must discard its WSV overlay"
     );
@@ -1722,7 +1718,6 @@ fn native_body_recovery_carrier(
         NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
         Some(parent_hash),
         None,
-        None,
         adapter.context.height,
         0,
     );
@@ -1749,13 +1744,26 @@ fn native_body_recovery_carrier(
         )
         .with_native_amx_receipt(payload.receipt.clone()),
     ])));
-    carrier
-        .set_transaction_results(
-            Vec::new(),
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &carrier,
             &[payload.entrypoint_hash],
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        carrier.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
-        .expect("attach exact Native carrier result");
+    }
+    .expect("attach exact Native carrier result");
     let final_signature =
         SignatureOf::try_from_hash(keys[leader_index].private_key(), carrier.header().hash())
             .expect("sign finalized Native carrier");
@@ -1876,7 +1884,8 @@ fn persist_and_evict_native_body(
     assert_eq!(finality_receipt.block_hash(), carrier.hash());
     let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     adapter
         .kura
         .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
@@ -2255,9 +2264,26 @@ fn merge_native_projection_entry_and_carrier(
             iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry),
         ),
     ));
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("empty merge carrier has a complete result-bearing execution record");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
+            &[],
+            Vec::new(),
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("empty merge carrier has a complete result-bearing execution record");
     assert!(block.has_results());
     (block, entry)
 }
@@ -2278,7 +2304,7 @@ fn merge_native_projection_fixture(
     let entrypoints = ordinary_block
         .external_entrypoints_cloned()
         .collect::<Vec<_>>();
-    let results = ordinary_block.results().cloned().collect::<Vec<_>>();
+    let results = ordinary_block.output_results().cloned().collect::<Vec<_>>();
     let mut receipts = ordinary_block
         .execution_context()
         .expect("ordinary Native projection execution context")
@@ -2303,7 +2329,6 @@ fn merge_native_projection_fixture(
     let application_block_header = BlockHeader::new(
         NonZeroU64::new(application_height).expect("non-zero projection fixture height"),
         Some(parent_hash),
-        None,
         None,
         application_height,
         ordinary_block.header().view_change_index(),
@@ -2788,9 +2813,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
         let half = damage.split_once(' ').expect("named fault shape").1;
         let path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual Native route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -3051,9 +3074,7 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
     let descriptor = &ordinary.proposal.descriptor;
     let artifact_dir = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(descriptor.lane_id)
+        .lane_storage_identity(descriptor.lane_id)
         .expect("actual historical ordinary route")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts");
@@ -3062,7 +3083,8 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
         .read_lane_completion_certificate(descriptor.lane_id, descriptor.lane_block_height)
         .expect("read actual historical certificate")
         .expect("retained ordinary certificate");
-    let state_hash = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     assert!(
         !adapter
             .state
@@ -3134,7 +3156,8 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
             Some(&certificate)
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             state_hash
         );
         assert!(!adapter.output_guard.restart_required());
@@ -3296,9 +3319,7 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
         );
         let artifact_path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(participant_lane)
+            .lane_storage_identity(participant_lane)
             .unwrap()
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -3463,9 +3484,7 @@ fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repa
     );
     let receipt_path = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .unwrap()
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts")

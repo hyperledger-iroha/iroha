@@ -11,21 +11,19 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let block_key =
         Name::from_str("sequential_rejected_block_pipeline_trigger").expect("metadata key");
     let wrong_block_status_key =
-        Name::from_str("sequential_wrong_committed_block_pipeline_trigger")
-            .expect("metadata key");
+        Name::from_str("sequential_wrong_committed_block_pipeline_trigger").expect("metadata key");
     let rejected_key =
         Name::from_str("sequential_rejected_tx_pipeline_trigger").expect("metadata key");
     let approved_key =
         Name::from_str("sequential_wrong_approved_tx_pipeline_trigger").expect("metadata key");
     let wrong_rejected_key =
         Name::from_str("sequential_wrong_rejected_tx_pipeline_trigger").expect("metadata key");
-    let wrong_hash_key = Name::from_str("sequential_wrong_hash_rejected_tx_pipeline_trigger")
+    let wrong_hash_key =
+        Name::from_str("sequential_wrong_hash_rejected_tx_pipeline_trigger").expect("metadata key");
+    let wrong_height_key = Name::from_str("sequential_wrong_height_rejected_tx_pipeline_trigger")
         .expect("metadata key");
-    let wrong_height_key =
-        Name::from_str("sequential_wrong_height_rejected_tx_pipeline_trigger")
-            .expect("metadata key");
-    let wrong_lane_key = Name::from_str("sequential_wrong_lane_rejected_tx_pipeline_trigger")
-        .expect("metadata key");
+    let wrong_lane_key =
+        Name::from_str("sequential_wrong_lane_rejected_tx_pipeline_trigger").expect("metadata key");
     let wrong_dataspace_key =
         Name::from_str("sequential_wrong_dataspace_rejected_tx_pipeline_trigger")
             .expect("metadata key");
@@ -53,9 +51,9 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         )
         .expect("probe state must accept its explicit network id");
         install_test_lane_manifests(&probe_state);
-        let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(
-            Cow::Owned(external_signed.clone()),
-        )])
+        let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            external_signed.clone(),
+        ))])
         .chain(0, probe_state.view().latest_block().as_deref())
         .sign(keypair.private_key())
         .unpack(|_| {});
@@ -65,7 +63,18 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
             .unpack(|_| {});
         valid_probe
             .as_ref()
-            .entrypoint_results()
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, output) = valid_probe
+                    .as_ref()
+                    .network_output_at(
+                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    )
+                    .expect("every queried input has its explicit Network output");
+                assert_eq!(usize::try_from(output_index).unwrap(), index);
+                (index, entrypoint, &output.result)
+            })
             .next()
             .expect("probe result")
             .2
@@ -86,9 +95,7 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         &authority,
         "sequential_rejected_block_wrong_committed",
         wrong_block_status_key.clone(),
-        PipelineEventFilterBox::from(
-            BlockEventFilter::new().for_status(BlockStatus::Committed),
-        ),
+        PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Committed)),
     );
     add_pipeline_metadata_trigger(
         &mut world,
@@ -199,7 +206,19 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let valid_block = block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-    let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+    let results: Vec<_> = valid_block
+        .as_ref()
+        .network_entrypoints()
+        .enumerate()
+        .map(|(index, entrypoint)| {
+            let (output_index, output) = valid_block
+                .as_ref()
+                .network_output_at(u32::try_from(index).expect("fixture Network index fits u32"))
+                .expect("every queried input has its explicit Network output");
+            assert_eq!(usize::try_from(output_index).unwrap(), index);
+            (index, entrypoint, &output.result)
+        })
+        .collect();
     assert!(
         results.iter().any(|(_, _, result)| result.0.is_err()),
         "mixed sequential block should record the failing external transaction"

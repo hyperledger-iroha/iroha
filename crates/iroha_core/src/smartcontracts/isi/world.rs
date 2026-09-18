@@ -20667,6 +20667,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
+            state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -20992,6 +20993,8 @@ pub mod isi {
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
+                Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
+                Block(block.execution_output) => BlockParameter::ExecutionOutput,
                 Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
                 Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
@@ -25003,7 +25006,6 @@ pub mod isi {
                     NonZeroU64::new(1).unwrap(),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -25079,7 +25081,6 @@ pub mod isi {
                 let $state = blank_test_state();
                 let header = BlockHeader::new(
                     NonZeroU64::new(2).expect("nonzero height"),
-                    None,
                     None,
                     None,
                     0,
@@ -25193,7 +25194,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(62).expect("nonzero lifecycle height"),
-                None,
                 None,
                 None,
                 0,
@@ -25327,7 +25327,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
-                None,
                 None,
                 None,
                 0,
@@ -25566,19 +25565,11 @@ pub mod isi {
         });
 
         fn first_test_block_header() -> iroha_data_model::block::BlockHeader {
-            iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            )
+            iroha_data_model::block::BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0)
         }
         fn first_test_block_header_with_checked_height() -> iroha_data_model::block::BlockHeader {
             iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).expect("nonzero height"),
-                None,
                 None,
                 None,
                 0,
@@ -28764,7 +28755,6 @@ pub mod isi {
                     NonZeroU64::new(1).expect("nonzero height"),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -28973,7 +28963,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(6).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -29453,7 +29442,6 @@ pub mod isi {
                 NonZeroU64::new(finality.finality_artifact.height + 1).expect("successor height"),
                 Some(finality.block_header.hash()),
                 None,
-                None,
                 u64::try_from(finality.block_header.creation_time().as_millis())
                     .expect("fixture time fits u64") + 1,
                 0,
@@ -29722,7 +29710,6 @@ pub mod isi {
                 NonZeroU64::new(8).expect("nonzero fixture height"),
                 None,
                 None,
-                None,
                 observation.masterchain.gen_utime_ms(),
                 0,
             );
@@ -29953,7 +29940,6 @@ pub mod isi {
                 NonZeroU64::new(2).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -29990,7 +29976,6 @@ pub mod isi {
             }
             let replay_header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(2).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30131,7 +30116,6 @@ seiyaku GovernanceLifecycle {
                 NonZeroU64::new(1).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             ));
@@ -30189,7 +30173,6 @@ seiyaku GovernanceLifecycle {
             let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30258,7 +30241,6 @@ seiyaku GovernanceLifecycle {
             let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30706,7 +30688,7 @@ seiyaku GovernanceLifecycle {
             let role = Role::new(role_id.clone(), authority.clone()).build(&authority);
             world.roles.insert(role_id.clone(), role);
             let state = State::new(world, kura, query_handle);
-            let header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, None, 0, 0);
+            let header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, 0, 0);
             let mut state_block = state.block(header);
             let mut stx = state_block.transaction();
             let perm = Permission::new("can_read_all_accounts".to_string(), Json::new(()));
@@ -32215,8 +32197,7 @@ seiyaku GovernanceLifecycle {
             let mut provisional_header = BlockHeader::new(
                 template_header.height(),
                 template_header.prev_block_hash(),
-                None,
-                None,
+                iroha_crypto::MerkleTree::root_from_typed_leaves([entry_hash]),
                 u64::try_from(template_header.creation_time().as_millis())
                     .expect("fixture creation time fits u64"),
                 template_header.view_change_index(),
@@ -32229,13 +32210,36 @@ seiyaku GovernanceLifecycle {
             );
             let mut block =
                 SignedBlock::presigned(signature, provisional_header, vec![transaction]);
-            block
-                .set_transaction_results(
-                    Vec::new(),
+            block.validate_proposal_commitments().expect(
+                "exact SCCP proposal commits to its authenticated transaction before outputs",
+            );
+            let signed_proposal_hash = block.hash();
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &block,
                     &[entry_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach successful exact SCCP transaction result");
+            }
+            .expect("attach successful exact SCCP transaction result");
+            assert_eq!(
+                block.hash(),
+                signed_proposal_hash,
+                "installing SCCP outputs must preserve the signed proposal header"
+            );
             assert!(
                 provisional_finality
                     .finality_artifact
@@ -37068,7 +37072,6 @@ seiyaku GovernanceLifecycle {
                     NonZeroU64::new(1).unwrap(),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -39311,7 +39314,6 @@ seiyaku GovernanceLifecycle {
                 NonZeroU64::new(3).expect("nonzero height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -41531,7 +41533,6 @@ seiyaku GovernanceLifecycle {
                 NonZeroU64::new(5).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -41557,7 +41558,6 @@ seiyaku GovernanceLifecycle {
                 BTreeSet::from([kp_a.public_key().clone(), kp_b.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(7).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -41609,7 +41609,6 @@ seiyaku GovernanceLifecycle {
                 BTreeSet::from([kp.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(9).unwrap(),
-                None,
                 None,
                 None,
                 0,

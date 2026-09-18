@@ -2001,7 +2001,6 @@ fn seed_hosted_http_public_lane_validator(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );

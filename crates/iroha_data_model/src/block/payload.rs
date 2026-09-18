@@ -1,17 +1,22 @@
-use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
+use super::{
+    SignedBlock,
+    execution_context::BlockExecutionContextBundle,
+    execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+    header::BlockHeader,
+};
 use crate::{
     consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    events::{data::prelude::AssetBatchTransferOutcome, trigger_completed::TriggerCompletedEvent},
+    events::data::prelude::AssetBatchTransferOutcome,
     fastpq::TransferTranscript,
     transaction::{
         error::TransactionRejectionReason,
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
-    trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+    trigger::DataTriggerSequence,
 };
 use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model_derive::model;
@@ -73,15 +78,12 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
+    #[norito(deny_unknown_fields)]
     pub struct BlockResult {
-        /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
-        pub time_triggers: Vec<TimeTriggerEntrypoint>,
-        /// Merkle tree over the ordinary or native network-input prefix followed by Time entries.
-        pub merkle: MerkleTree<TransactionEntrypoint>,
-        /// Merkle tree over the transaction results, with indices aligned to the entrypoint Merkle tree.
-        pub result_merkle: MerkleTree<TransactionResult>,
-        /// Transaction execution results, with indices aligned to the entrypoint Merkle tree.
-        pub transaction_results: Vec<TransactionResult>,
+        /// One full typed output per executed network input or internal invocation.
+        pub outputs: Vec<ExecutionOutputV1>,
+        /// Checked cache over complete typed output hashes, including source descriptors.
+        pub output_merkle: MerkleTree<ExecutionOutputV1>,
         /// Number of successful execution fragments committed while executing this block.
         ///
         /// This includes network inputs, time triggers, and deterministic internal
@@ -91,8 +93,6 @@ mod model {
         pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         /// Completed AXT envelopes recorded while executing the block.
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-        /// Trigger completion events recorded while executing the block.
-        pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
         /// Dataspaces whose AXT authorization changed at least once during execution.
@@ -153,17 +153,7 @@ impl Ord for BlockPayload {
 }
 impl PartialEq for BlockResult {
     fn eq(&self, other: &Self) -> bool {
-        self.time_triggers == other.time_triggers
-            && self.merkle == other.merkle
-            && self.result_merkle == other.result_merkle
-            && self.transaction_results == other.transaction_results
-            && self.committed_fragment_count == other.committed_fragment_count
-            && self.fastpq_transcripts == other.fastpq_transcripts
-            && self.axt_envelopes == other.axt_envelopes
-            && self.lane_finality_statements == other.lane_finality_statements
-            && self.trigger_completions == other.trigger_completions
-            && self.axt_policy_snapshot == other.axt_policy_snapshot
-            && self.axt_transitioned_dataspaces == other.axt_transitioned_dataspaces
+        self.cmp(other).is_eq()
     }
 }
 impl Eq for BlockResult {}
@@ -175,28 +165,22 @@ impl PartialOrd for BlockResult {
 impl Ord for BlockResult {
     fn cmp(&self, other: &Self) -> Ordering {
         (
-            &self.time_triggers,
-            &self.merkle,
-            &self.result_merkle,
-            &self.transaction_results,
+            &self.outputs,
+            &self.output_merkle,
             &self.committed_fragment_count,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
             &self.lane_finality_statements,
-            &self.trigger_completions,
             &self.axt_policy_snapshot,
             &self.axt_transitioned_dataspaces,
         )
             .cmp(&(
-                &other.time_triggers,
-                &other.merkle,
-                &other.result_merkle,
-                &other.transaction_results,
+                &other.outputs,
+                &other.output_merkle,
                 &other.committed_fragment_count,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
                 &other.lane_finality_statements,
-                &other.trigger_completions,
                 &other.axt_policy_snapshot,
                 &other.axt_transitioned_dataspaces,
             ))
@@ -223,7 +207,7 @@ impl SignedBlock {
     pub fn external_entrypoint_count(&self) -> usize {
         self.payload.external_entrypoints.len()
     }
-    /// Borrow the canonical network-input prefix before Time entries.
+    /// Borrow complete canonical network inputs.
     /// A valid carrier uses ordinary external inputs OR its sole native source.
     /// Invalid mixed carriers expose both here and fail native shape validation.
     pub fn network_entrypoints(
@@ -231,7 +215,7 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = &TransactionEntrypoint> + DoubleEndedIterator {
         NetworkEntrypointIterator::new(self)
     }
-    /// Number of ordinary/native input entries before Time entries.
+    /// Number of complete ordinary/native input entries.
     pub fn network_entrypoint_count(&self) -> usize {
         self.network_entrypoints().len()
     }
@@ -249,12 +233,12 @@ impl SignedBlock {
             .get(index.checked_sub(self.payload.external_entrypoints.len())?)
             .map(|group| &group.payload.input.entrypoint)
     }
-    /// Return error for the transaction index
-    pub fn error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
+    /// Return error for an OUTPUT index.
+    pub fn output_error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
         self.result
             .as_ref()
-            .and_then(|result| result.transaction_results.get(tx))
-            .and_then(|result| result.as_ref().err())
+            .and_then(|result| result.outputs.get(tx))
+            .and_then(|output| output.result().as_ref().err())
     }
     /// Block payload. Used for tests
     #[cfg(feature = "transparent_api")]
@@ -290,7 +274,7 @@ impl SignedBlock {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+            TransactionEntrypoint::SealedCommitment(_) => {
                 return None;
             }
         };
@@ -305,7 +289,7 @@ impl SignedBlock {
         match self.payload.external_entrypoints.get(index)? {
             TransactionEntrypoint::External(transaction) => Some(transaction),
             TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
     /// Durable execution context embedded in this block, if any.
@@ -316,28 +300,12 @@ impl SignedBlock {
     /// Set or clear durable execution context and update the header hash accordingly.
     pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
         let context = context.filter(|bundle| !bundle.is_empty());
-        let native_changed = self.payload.execution_context != context
-            && (self
-                .payload
-                .execution_context
-                .as_ref()
-                .is_some_and(|old| old.native_lane_decisions.is_some())
-                || context
-                    .as_ref()
-                    .is_some_and(|new| new.native_lane_decisions.is_some()));
+        if self.payload.execution_context != context {
+            self.result = None;
+        }
         let hash = context.as_ref().map(HashOf::new);
         self.payload.execution_context = context;
         self.payload.header.set_execution_context_hash(hash);
-        if native_changed {
-            self.result = None;
-            self.payload.header.result_merkle_root = None;
-            self.payload.header.merkle_root = self
-                .external_entrypoints_slice()
-                .iter()
-                .map(TransactionEntrypoint::hash)
-                .collect::<MerkleTree<_>>()
-                .root();
-        }
     }
     /// Optional DA commitment bundle embedded in this block.
     #[inline]
@@ -355,12 +323,18 @@ impl SignedBlock {
         let hash = commitments
             .as_ref()
             .and_then(DaCommitmentBundle::merkle_commitment);
+        if self.payload.da_commitments != commitments {
+            self.result = None;
+        }
         self.payload.da_commitments = commitments;
         self.payload.header.set_da_commitments_hash(hash);
     }
     /// Set or clear the DA proof policy bundle and update the header hash accordingly.
     pub fn set_da_proof_policies(&mut self, policies: Option<DaProofPolicyBundle>) {
         let hash = policies.as_ref().map(HashOf::new);
+        if self.payload.da_proof_policies != policies {
+            self.result = None;
+        }
         self.payload.da_proof_policies = policies;
         self.payload.header.set_da_proof_policies_hash(hash);
     }
@@ -375,6 +349,9 @@ impl SignedBlock {
         let hash = intents
             .as_ref()
             .and_then(DaPinIntentBundle::merkle_commitment);
+        if self.payload.da_pin_intents != intents {
+            self.result = None;
+        }
         self.payload.da_pin_intents = intents;
         self.payload.header.set_da_pin_intents_hash(hash);
     }
@@ -387,53 +364,29 @@ impl SignedBlock {
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         let effects = effects.filter(|bundle| !bundle.is_empty());
         let hash = effects.as_ref().map(HashOf::new);
+        if self.payload.npos_consensus_effects != effects {
+            self.result = None;
+        }
         self.payload.npos_consensus_effects = effects;
         self.payload.header.set_npos_effects_hash(hash);
     }
     /// Set or clear the SCCP commitment root finalized in this block.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        if self.payload.header.sccp_commitment_root() != root {
+            self.result = None;
+        }
         self.payload.header.set_sccp_commitment_root(root);
     }
     /// Replace the ordered external entrypoints and update Merkle material accordingly.
     pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
-        if self
-            .payload
-            .execution_context
-            .as_ref()
-            .is_some_and(|context| context.native_lane_decisions.is_some())
-        {
-            if self.payload.external_entrypoints != entrypoints {
-                self.result = None;
-                self.payload.header.result_merkle_root = None;
-            }
-            self.payload.external_entrypoints = entrypoints;
-            self.payload.header.merkle_root = self
-                .external_entrypoints_slice()
-                .iter()
-                .map(TransactionEntrypoint::hash)
-                .collect::<MerkleTree<_>>()
-                .root();
-            return;
+        if self.payload.external_entrypoints != entrypoints {
+            self.result = None;
         }
-        let merkle = entrypoints
+        self.payload.header.merkle_root = entrypoints
             .iter()
             .map(TransactionEntrypoint::hash)
-            .collect::<MerkleTree<TransactionEntrypoint>>();
-        self.payload.header.merkle_root = merkle.root();
-        if let Some(result) = self.result.as_mut() {
-            result.merkle = entrypoints
-                .iter()
-                .map(TransactionEntrypoint::hash)
-                .chain(
-                    result
-                        .time_triggers
-                        .iter()
-                        .cloned()
-                        .map(TransactionEntrypoint::from)
-                        .map(|entrypoint| entrypoint.hash()),
-                )
-                .collect();
-        }
+            .collect::<MerkleTree<_>>()
+            .root();
         self.payload.external_entrypoints = entrypoints;
     }
     /// Check whether the block has entrypoints or deterministic artifacts.
@@ -445,7 +398,7 @@ impl SignedBlock {
         if self
             .result
             .as_ref()
-            .is_some_and(|result| !result.time_triggers.is_empty())
+            .is_some_and(|result| !result.outputs.is_empty())
         {
             return false;
         }
@@ -486,181 +439,80 @@ impl SignedBlock {
         }
         true
     }
-    /// Time-triggered entrypoints in execution order, following the network-input prefix.
-    /// Indices offset by [`Self::network_entrypoint_count`] align with canonical entrypoints.
-    #[inline]
-    pub fn time_triggers(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &TimeTriggerEntrypoint> + DoubleEndedIterator {
-        self.result_ref().time_triggers.iter()
-    }
-    /// Hashes of each ordinary/native network input and Time entry in canonical order.
-    /// Indices align with those of the entrypoints.
-    #[inline]
-    pub fn entrypoint_hashes(
+    /// Hashes of complete ordinary/native network inputs. Internal invocations are not inputs.
+    pub fn network_input_hashes(
         &self,
     ) -> impl ExactSizeIterator<Item = HashOf<TransactionEntrypoint>> + DoubleEndedIterator + '_
     {
-        self.entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
+        self.network_entrypoints().map(TransactionEntrypoint::hash)
     }
-    /// Merkle root over the network-input prefix followed by Time entries.
-    #[inline]
-    pub fn full_entry_merkle_root(&self) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
-        self.result.as_ref().and_then(|result| result.merkle.root())
+    /// Recompute the complete network-input tree from its sole proposal source.
+    pub fn network_input_merkle_tree(&self) -> MerkleTree<TransactionEntrypoint> {
+        self.network_input_hashes().collect()
     }
-    /// Root and exact leaf count over network inputs and Time entries.
-    #[inline]
-    pub fn full_entry_merkle_commitment(
+    /// Complete network-input root/count; unlike the physical-external header root this includes native inputs.
+    pub fn network_input_merkle_commitment(
         &self,
     ) -> Option<MerkleTreeCommitment<TransactionEntrypoint>> {
+        self.network_input_merkle_tree().commitment()
+    }
+    /// Proof for one complete network-input position; no internal invocation has an input leaf.
+    pub fn network_input_proof(&self, index: u32) -> Option<MerkleProof<TransactionEntrypoint>> {
+        self.network_input_merkle_tree().get_proof(index)
+    }
+    /// Borrow all full typed outputs in canonical phase order. A proposal has no outputs.
+    pub fn execution_outputs(&self) -> &[ExecutionOutputV1] {
         self.result
             .as_ref()
-            .and_then(|result| result.merkle.commitment())
+            .map_or(&[], |result| result.outputs.as_slice())
     }
-    /// Validate the retained entrypoint Merkle cache against this block's entries.
-    ///
-    /// The validation walks the retained tree in place and does not rebuild an
-    /// entry-sized node vector.
-    ///
+    /// Full typed-output root/count, authenticated only by actual global execution finality.
+    pub fn output_merkle_commitment(&self) -> Option<MerkleTreeCommitment<ExecutionOutputV1>> {
+        self.result.as_ref()?.output_merkle.commitment()
+    }
+    /// Validate all output structure and the retained tree, without claiming execution authenticity.
     /// # Errors
-    ///
-    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
-    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
-    /// hash or leaf count differs from the canonical entrypoints.
-    pub fn validate_entrypoint_merkle_cache(&self) -> Result<(), MerkleError> {
-        let result = self.result.as_ref().ok_or_else(|| {
-            MerkleError::InvalidLayout("block transaction results are missing".to_owned())
-        })?;
-        result.merkle.validate_leaves(self.entrypoint_hashes())
-    }
-    /// Merkle proofs for each ordinary/native network input and Time entry in canonical order.
-    /// Indices align with those of the entrypoints.
-    pub fn entrypoint_proofs(
-        &self,
-    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionEntrypoint>> + DoubleEndedIterator + '_
-    {
-        let n_leaves: u32 = self
-            .result_ref()
-            .merkle
-            .leaf_count()
-            .try_into()
-            .expect("bug: leaf count exceeded u32::MAX");
-        (0..n_leaves).map(|i| {
-            self.result_ref()
-                .merkle
-                .get_proof(i)
-                .expect("bug: missing Merkle proof at valid index")
-        })
-    }
-    /// Return the retained Merkle proof for one canonical entrypoint index.
-    #[inline]
-    pub fn entrypoint_proof(&self, index: u32) -> Option<MerkleProof<TransactionEntrypoint>> {
-        self.result.as_ref()?.merkle.get_proof(index)
-    }
-    /// Ordinary/native network inputs followed by Time entries in canonical order.
-    #[inline]
-    pub fn entrypoints_cloned(
-        &self,
-    ) -> impl ExactSizeIterator<Item = TransactionEntrypoint> + DoubleEndedIterator + '_ {
-        EntrypointIterator::new(self)
-    }
-    /// Clone one transaction entrypoint by its canonical execution index.
-    ///
-    /// External entrypoints precede time-triggered entrypoints. This lookup is
-    /// constant-time and clones only the selected entrypoint.
-    #[inline]
-    pub fn entrypoint_cloned_at(&self, index: usize) -> Option<TransactionEntrypoint> {
-        let external_count = self.network_entrypoint_count();
-        if index < external_count {
-            return self.network_entrypoint_at(index).cloned();
-        }
-        self.result
-            .as_ref()?
-            .time_triggers
-            .get(index.checked_sub(external_count)?)
-            .cloned()
-            .map(TransactionEntrypoint::from)
-    }
-    /// Hashes of each transaction result (trigger sequence or rejection reason) in execution order.
-    /// Indices align with those of the entrypoints.
-    #[inline]
-    pub fn result_hashes(
-        &self,
-    ) -> impl ExactSizeIterator<Item = HashOf<TransactionResult>> + DoubleEndedIterator + '_ {
-        self.result_ref()
-            .transaction_results
-            .iter()
-            .map(TransactionResult::hash)
-    }
-    /// Root and exact leaf count over transaction execution results.
-    #[inline]
-    pub fn result_merkle_commitment(&self) -> Option<MerkleTreeCommitment<TransactionResult>> {
-        self.result
+    /// Rejects missing results, malformed ownership, or any altered cached node/leaf.
+    pub fn validate_output_merkle_cache(&self) -> Result<(), MerkleError> {
+        let result = self
+            .result
             .as_ref()
-            .and_then(|result| result.result_merkle.commitment())
-    }
-    /// Validate the retained result Merkle cache against this block's results.
-    ///
-    /// The validation walks the retained tree in place and does not rebuild a
-    /// result-sized node vector.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
-    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
-    /// hash or leaf count differs from the canonical transaction results.
-    pub fn validate_result_merkle_cache(&self) -> Result<(), MerkleError> {
-        let result = self.result.as_ref().ok_or_else(|| {
-            MerkleError::InvalidLayout("block transaction results are missing".to_owned())
-        })?;
-        self.validate_native_lane_results()
+            .ok_or_else(|| MerkleError::InvalidLayout("block outputs are missing".into()))?;
+        self.validate_execution_result_structure()
             .map_err(MerkleError::InvalidLayout)?;
-        result.result_merkle.validate_leaves(self.result_hashes())
+        result
+            .output_merkle
+            .validate_leaves(result.outputs.iter().map(HashOf::new))
     }
-    /// Merkle proofs for each transaction result in execution order.
-    /// Indices align with those of the entrypoints.
-    pub fn result_proofs(
+    /// Proof for one typed output position, independently of network-input positions.
+    pub fn output_proof(&self, index: u32) -> Option<MerkleProof<ExecutionOutputV1>> {
+        self.result.as_ref()?.output_merkle.get_proof(index)
+    }
+    /// Locate the explicit Network source join, never infer it from a result index.
+    pub fn network_output_at(&self, input_index: u32) -> Option<(u32, &NetworkExecutionOutputV1)> {
+        let output = self
+            .execution_outputs()
+            .get(usize::try_from(input_index).ok()?)?;
+        match output {
+            ExecutionOutputV1::Network(row) if row.input_index == input_index => {
+                Some((input_index, row))
+            }
+            _ => None,
+        }
+    }
+    /// Canonical full typed-output hashes, independently of the network-input tree.
+    pub fn output_hashes(
         &self,
-    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionResult>> + DoubleEndedIterator + '_
-    {
-        let n_leaves: u32 = self
-            .result_ref()
-            .result_merkle
-            .leaf_count()
-            .try_into()
-            .expect("bug: leaf count exceeded u32::MAX");
-        (0..n_leaves).map(|i| {
-            self.result_ref()
-                .result_merkle
-                .get_proof(i)
-                .expect("bug: missing Merkle proof at valid index")
-        })
+    ) -> impl ExactSizeIterator<Item = HashOf<ExecutionOutputV1>> + DoubleEndedIterator + '_ {
+        self.execution_outputs().iter().map(HashOf::new)
     }
-    /// Return the retained Merkle proof for one canonical result index.
-    #[inline]
-    pub fn result_proof(&self, index: u32) -> Option<MerkleProof<TransactionResult>> {
-        self.result.as_ref()?.result_merkle.get_proof(index)
-    }
-    /// Actual transaction results (trigger sequence or rejection reason) in execution order.
-    /// Indices align with those of the entrypoints.
-    #[inline]
-    pub fn results(
+    /// Full transaction results projected from the one output owner. Indices are OUTPUT indices.
+    pub fn output_results(
         &self,
     ) -> impl ExactSizeIterator<Item = &TransactionResult> + DoubleEndedIterator {
-        self.result_ref().transaction_results.iter()
-    }
-    /// Transaction entrypoints paired with their execution results.
-    ///
-    /// The returned index is the canonical entrypoint/result index in the block.
-    #[inline]
-    pub fn entrypoint_results(
-        &self,
-    ) -> impl Iterator<Item = (usize, TransactionEntrypoint, &TransactionResult)> + '_ {
-        self.entrypoints_cloned()
-            .zip(self.results())
-            .enumerate()
-            .map(|(index, (entrypoint, result))| (index, entrypoint, result))
+        self.execution_outputs()
+            .iter()
+            .map(ExecutionOutputV1::result)
     }
     /// FASTPQ transfer transcripts grouped by exact execution-call hash.
     #[inline]
@@ -674,25 +526,16 @@ impl SignedBlock {
             .as_ref()
             .map(|result| result.axt_envelopes.as_slice())
     }
-    /// Trigger completion events recorded while executing the block.
-    #[inline]
-    pub fn trigger_completions(&self) -> Option<&[TriggerCompletedEvent]> {
-        self.result
-            .as_ref()
-            .map(|result| result.trigger_completions.as_slice())
-    }
-    /// Durable independent-batch outcomes for one transaction entrypoint.
-    #[inline]
+    /// Independent-batch receipts for an exact network input's explicit output join.
     pub fn batch_transfer_outcomes_for(
         &self,
         entrypoint_hash: &HashOf<TransactionEntrypoint>,
     ) -> &[AssetBatchTransferOutcome] {
-        self.entrypoint_hashes()
-            .zip(self.results())
-            .find_map(|(hash, result)| {
-                (hash == *entrypoint_hash).then(|| result.batch_transfer_outcomes())
-            })
-            .unwrap_or(&[])
+        self.network_input_hashes()
+            .position(|hash| hash == *entrypoint_hash)
+            .and_then(|index| u32::try_from(index).ok())
+            .and_then(|index| self.network_output_at(index))
+            .map_or(&[], |(_, output)| output.result.batch_transfer_outcomes())
     }
     /// AXT policy snapshot captured during execution, when results are present.
     #[inline]
@@ -710,15 +553,15 @@ impl SignedBlock {
             .as_ref()
             .map(|result| &result.axt_transitioned_dataspaces)
     }
-    /// Successful transaction indices and data trigger sequences.
-    pub fn successes(&self) -> impl Iterator<Item = (u64, &DataTriggerSequence)> {
-        self.results()
+    /// Successful OUTPUT indices and data trigger sequences.
+    pub fn successful_outputs(&self) -> impl Iterator<Item = (u64, &DataTriggerSequence)> {
+        self.output_results()
             .enumerate()
             .filter_map(|(i, result)| result.as_ref().ok().map(|ok| (i as u64, ok)))
     }
-    /// Failed transaction indices and rejection reasons.
-    pub fn errors(&self) -> impl Iterator<Item = (u64, &TransactionRejectionReason)> {
-        self.results()
+    /// Failed OUTPUT indices and rejection reasons.
+    pub fn failed_outputs(&self) -> impl Iterator<Item = (u64, &TransactionRejectionReason)> {
+        self.output_results()
             .enumerate()
             .filter_map(|(i, result)| result.as_ref().err().map(|err| (i as u64, err)))
     }
@@ -752,7 +595,7 @@ impl<'a> ExternalTransactionIterator<'a> {
         match self.entrypoints.get(index)? {
             TransactionEntrypoint::External(transaction) => Some(transaction),
             TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
 }
@@ -787,60 +630,6 @@ impl ExactSizeIterator for ExternalTransactionIterator<'_> {
         self.remaining
     }
 }
-struct EntrypointIterator<'a> {
-    external: core::iter::Cloned<NetworkEntrypointIterator<'a>>,
-    time_triggers: Option<std::slice::Iter<'a, TimeTriggerEntrypoint>>,
-}
-impl Iterator for EntrypointIterator<'_> {
-    type Item = TransactionEntrypoint;
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(entrypoint) = self.external.next() {
-            return Some(entrypoint);
-        }
-        self.time_triggers
-            .as_mut()?
-            .next()
-            .cloned()
-            .map(TransactionEntrypoint::from)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.len();
-        (remaining, Some(remaining))
-    }
-}
-impl DoubleEndedIterator for EntrypointIterator<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if let Some(entrypoint) = self
-            .time_triggers
-            .as_mut()
-            .and_then(DoubleEndedIterator::next_back)
-        {
-            return Some(TransactionEntrypoint::from(entrypoint.clone()));
-        }
-        self.external.next_back()
-    }
-}
-impl ExactSizeIterator for EntrypointIterator<'_> {
-    fn len(&self) -> usize {
-        self.external.len()
-            + self
-                .time_triggers
-                .as_ref()
-                .map_or(0, ExactSizeIterator::len)
-    }
-}
-impl<'a> EntrypointIterator<'a> {
-    fn new(block: &'a SignedBlock) -> Self {
-        Self {
-            external: NetworkEntrypointIterator::new(block).cloned(),
-            time_triggers: block
-                .result
-                .as_ref()
-                .map(|result| result.time_triggers.iter()),
-        }
-    }
-}
-
 /// Allocation-free canonical prefix iterator; all forward/backward operations
 /// share exact remaining indices, including alternating consumption.
 struct NetworkEntrypointIterator<'a> {

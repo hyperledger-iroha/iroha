@@ -1024,7 +1024,7 @@ impl Kura {
     }
     fn complete_native_amx_publication_route_capacity_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         namespace: &BoundProgressNamespace,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> Result<()> {
@@ -1975,7 +1975,7 @@ impl Kura {
     /// before those sibling mutations. Caller holds prune/canonical/geometry/sidecar.
     fn validate_native_amx_startup_completed_pair_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         namespace: &BoundProgressNamespace,
         admitted: &NativeAmxEvidenceInventory,
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,

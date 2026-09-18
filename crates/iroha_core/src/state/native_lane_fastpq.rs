@@ -46,6 +46,43 @@ fn native_row_hash(
 }
 
 impl StateBlock<'_> {
+    /// Join every native input, including zero-transcript rejections, to the
+    /// common producer's exact ordered source inventory and captured prefix.
+    pub(super) fn verify_native_owned_fastpq_output_join(
+        &self,
+        sources: &super::output_capacity::OwnedExecutionSources,
+    ) -> Result<(), String> {
+        let Some((batch, _)) = self
+            .native_lane_stage_for_inventory()
+            .map_err(|error| error.to_string())?
+        else {
+            return Err("native owned inventory has no actual stage".into());
+        };
+        if !sources.is_native()
+            || sources.proposal() != self._curr_block.hash()
+            || sources.network_routes().len() != batch.groups.len()
+            || sources.entries().len() < batch.groups.len()
+        {
+            return Err("native owned inventory lost its exact input positions".into());
+        }
+        for ((group, source), route) in batch
+            .groups
+            .iter()
+            .zip(sources.entries())
+            .zip(sources.network_routes())
+        {
+            let input = &group.payload.input;
+            if source.call() != Hash::from(input.entrypoint.execution_call_hash())
+                || *route != input.routing_plan()?.coordinator_route()
+                || source.lane() != Some(route.lane_id)
+                || source.dataspace() != route.dataspace_id
+            {
+                return Err("native owned inventory substituted a source or route".into());
+            }
+        }
+        self.verify_native_lane_fastpq_output_join(&[], &[])
+    }
+
     /// Finalize and snapshot selected native outputs without draining either owner.
     /// All binding/capture/digest checks precede the only mutation (digest completion).
     pub(super) fn retain_native_lane_fastpq_outputs(

@@ -5,6 +5,7 @@
 enum NativeEconomicCase {
     Transfer(u32),
     RegisterAssetDefinition,
+    CallbackTransfer,
     BadSignature,
     ExpiredAtAdmission,
     MissingRuntimeGas,
@@ -294,6 +295,8 @@ fn native_economic_fixture_with_world_initializer(
                     ))
                     .into(),
                 ]
+            } else if matches!(case, NativeEconomicCase::CallbackTransfer) {
+                vec![ExecuteTrigger::new("native_sized_callback".parse().unwrap()).into()]
             } else {
                 vec![
                     Transfer::asset_quantity(source.clone(), amount, destination_account.clone())
@@ -407,7 +410,6 @@ fn native_economic_fixture_with_world_initializer(
                                 NonZeroU64::new(height - 1).unwrap(),
                                 None,
                                 None,
-                                None,
                                 parent.header().creation_time_ms,
                                 0,
                             )
@@ -483,6 +485,34 @@ fn native_economic_fixture_with_world_initializer(
     let mut execution = block.execution_context().cloned().unwrap_or_default();
     execution.queue_plan_admissions = controls.clone();
     block.set_execution_context(Some(execution));
+    // These are admission controls only: their signed complete inputs are not
+    // yet Network execution sources. Replacing proposal controls deliberately
+    // invalidates any older results, so bind an explicit empty structural result
+    // to the final proposal before the admission/finality metadata fixture uses it.
+    assert_eq!(block.network_entrypoint_count(), 0);
+    block
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            BTreeMap::new(),
+            Vec::new(),
+            AxtPolicySnapshot::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("admission-only fixture binds its exact empty Network result");
+    let carrier_key = merge_carrier_finality_fixture_keypair();
+    block
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(carrier_key.private_key(), block.hash()),
+            ),
+        ]))
+        .unwrap();
+    block.validate_proposal_commitments().unwrap();
+    block.validate_execution_result_structure().unwrap();
     let opening = if let Some(layout) = genesis_layout {
         // Choose geometry before any signed finality or frozen lane instance.
         // Native historical recovery tests exercise the real enclosing batch,
@@ -520,6 +550,9 @@ fn native_economic_fixture_with_world_initializer(
     overlay
         .capture_lane_consensus_contexts(&mut witness)
         .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .expect("admission-only fixture retains its exact runtime predecessor");
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
@@ -629,7 +662,7 @@ state_test! { sync native_economic_executor_transfers_once_across_shared_roles_a
     let fixture=native_economic_fixture(&[NativeEconomicCase::Transfer(25)],true);
     let state=&fixture.native.state;let groups=native_economic_groups(&fixture);
     assert_eq!(groups.len(),1);assert_eq!(groups[0].body().payload().descriptor.slots.len(),2);
-    let before=crate::snapshot::canonical_state_snapshot_hash(state);
+    let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let header=empty_global_block_after(Some(&fixture.native.block)).header();
     let (overlay,executions)=state.preexecute_lane_decision_groups(header,&groups).unwrap();
     assert_eq!(executions.len(),1);assert!(executions[0].result.is_ok(),"{:?}",executions[0].result);
@@ -641,23 +674,54 @@ state_test! { sync native_economic_executor_transfers_once_across_shared_roles_a
     assert_native_fastpq_retained_for_test(&overlay,&executions);
     for transcript in &executions[0].fastpq_transcripts {assert_eq!(transcript.entry_hash,Hash::from(groups[0].body().payload().input.entrypoint.hash()));}
     drop(overlay);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before,"successful scratch execution is not global publication");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before,"successful scratch execution is not global publication");
     let (repeated,again)=state.preexecute_lane_decision_groups(header,&groups).unwrap();
     assert_eq!(again[0].result,executions[0].result);assert_eq!(again[0].settlement_commitment,executions[0].settlement_commitment);assert_eq!(again[0].fastpq_transcripts,executions[0].fastpq_transcripts);
-    drop(repeated);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before);
+    drop(repeated);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
+}
+
+state_test! { sync native_economic_execution_retains_its_owner_across_manifest_cache_refresh
+    let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], true);
+    let state = &fixture.native.state;
+    let groups = native_economic_groups(&fixture);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let header = empty_global_block_after(Some(&fixture.native.block)).header();
+    let (baseline, expected) = state.preexecute_lane_decision_groups(header, &groups).unwrap();
+    drop(baseline);
+    let generation = state.state_view_generation();
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let (overlay, actual) = state.with_native_lane_execution(header, &groups, |overlay, executions| {
+        state.install_lane_manifests(&overlay.lane_manifests);
+        assert_ne!(state.state_view_generation(), generation,
+            "exercise the real cache publication, not a manually changed counter");
+        Ok(executions)
+    }).expect("cache refresh cannot replace the retained execution owner");
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(&expected) {
+        assert_eq!(actual.result, expected.result);
+        assert_eq!(actual.settlement_commitment, expected.settlement_commitment);
+        assert_eq!(actual.fastpq_transcripts, expected.fastpq_transcripts);
+    }
+    assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(75u32));
+    assert_eq!(overlay.world.assets.get(&fixture.destination).unwrap().0, Quantity::from(25u32));
+    assert_native_economic_terminal(&overlay, &groups[0], header.height().get());
+    assert_native_fastpq_retained_for_test(&overlay, &actual);
+    drop(overlay);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before,
+        "a successful scratch transition still cannot publish global State");
 }
 
 state_test! { sync native_economic_executor_rejection_settles_exact_heads_without_charging_or_mutating_assets
     for case in [NativeEconomicCase::Transfer(101),NativeEconomicCase::BadSignature,NativeEconomicCase::ExpiredAtAdmission,NativeEconomicCase::MissingRuntimeGas,NativeEconomicCase::RevealExpired] {
         let fixture=native_economic_fixture(&[case],true);let state=&fixture.native.state;let groups=native_economic_groups(&fixture);
-        let before=crate::snapshot::canonical_state_snapshot_hash(state);let header=empty_global_block_after(Some(&fixture.native.block)).header();
+        let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");let header=empty_global_block_after(Some(&fixture.native.block)).header();
         let (overlay,executions)=state.preexecute_lane_decision_groups(header,&groups).unwrap();
         assert!(executions[0].result.is_err());assert_native_economic_terminal(&overlay,&groups[0],header.height().get());
         assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0,Quantity::from(100u32));assert!(overlay.world.assets.get(&fixture.destination).is_none());
         assert!(executions[0].authenticated_signed_replay_alias.is_none());
         assert!(executions[0].settlement_commitment.receipts.is_empty());assert!(executions[0].settlement_commitment.nexus_fee_receipts.is_empty());assert!(executions[0].fastpq_transcripts.is_empty());
         if !matches!(case,NativeEconomicCase::Transfer(_)|NativeEconomicCase::RevealExpired) {assert_eq!(overlay.gas_used_in_block,0,"non-executable input never invokes the stateful fee/execution path");}
-        drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before);
+        drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
     }
 }
 
@@ -681,10 +745,10 @@ state_test! { sync native_economic_executor_distinguishes_single_oversize_from_a
     let maximum=*costs.iter().max().unwrap();assert!(maximum>1);
     // This fixture changes real governed execution policy after admission; the
     // immutable native source remains the same. No signing uses this raw edit.
-    set_native_economic_gas_limit(state,maximum);let before=crate::snapshot::canonical_state_snapshot_hash(state);
+    set_native_economic_gas_limit(state,maximum);let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let header=empty_global_block_after(Some(&fixture.native.block)).header();
     assert!(matches!(state.preexecute_lane_decision_groups(header,&groups),Err(MergeLedgerCommitError::ExecutionBatchFull{fitting_prefix:1,..})));
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before,"aggregate refusal commits no economics/pending/frontier changes");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before,"aggregate refusal commits no economics/pending/frontier changes");
     let (prefix,output)=state.preexecute_lane_decision_groups(header,&groups[..1]).unwrap();assert!(output[0].result.is_ok());
     assert_native_economic_terminal(&prefix,&groups[0],header.height().get());
     let later=&groups[1].body().payload().input;
@@ -698,10 +762,10 @@ state_test! { sync native_economic_executor_refuses_duplicate_sealed_commitments
     let fixture=native_economic_fixture(&[NativeEconomicCase::Reveal(0),NativeEconomicCase::Reveal(1)],false);
     let state=&fixture.native.state;let groups=native_economic_groups(&fixture);
     assert_eq!(groups.len(),2);assert_ne!(groups[0].body().payload().input.entrypoint.hash(),groups[1].body().payload().input.entrypoint.hash());
-    let before=crate::snapshot::canonical_state_snapshot_hash(state);
+    let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let error=match state.preexecute_lane_decision_groups(empty_global_block_after(Some(&fixture.native.block)).header(),&groups) {Err(error)=>error,Ok(_)=>panic!("duplicate sealed commitment must fail before economics")};
     assert!(error.to_string().contains("repeats a sealed commitment"),"{error}");
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
 }
 
 state_test! { sync native_economic_executor_sealed_alias_uses_authenticated_preblock_record_after_removal
@@ -709,7 +773,7 @@ state_test! { sync native_economic_executor_sealed_alias_uses_authenticated_preb
     let state=&fixture.native.state;let groups=native_economic_groups(&fixture);
     let entrypoint=&groups[0].body().payload().input.entrypoint;
     let header=empty_global_block_after(Some(&fixture.native.block)).header();
-    let before=crate::snapshot::canonical_state_snapshot_hash(state);
+    let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let (overlay,outputs)=state.preexecute_lane_decision_groups(header,&groups).unwrap();
     assert!(outputs[0].result.is_ok(),"{:?}",outputs[0].result);
     let alias=crate::tx::exact_signed_transaction_hash(entrypoint).unwrap();
@@ -717,7 +781,7 @@ state_test! { sync native_economic_executor_sealed_alias_uses_authenticated_preb
     assert_eq!(crate::tx::authenticated_signed_replay_alias(&overlay,entrypoint).map(Hash::from),Some(Hash::from(alias)),"successful removal does not erase pre-block authentication");
     assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0,Quantity::from(75u32));
     assert_native_economic_terminal(&overlay,&groups[0],header.height().get());
-    drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before);
+    drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
 }
 
 state_test! { sync native_economic_executor_preserves_sealed_commitment_order_and_original_result_slots
@@ -732,7 +796,7 @@ state_test! { sync native_economic_executor_preserves_sealed_commitment_order_an
         }).collect::<Vec<_>>();
         assert!(keys[0]>keys[1],"actual earlier commitment is later in canonical admission source order");
     }
-    let before=crate::snapshot::canonical_state_snapshot_hash(state);
+    let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let (overlay,outputs)=state.preexecute_lane_decision_groups(header,&groups).unwrap();
     assert!(outputs[0].result.is_err(),"newer 40-unit reveal must execute after earlier 80-unit reveal");
     assert!(outputs[1].result.is_ok(),"earlier commitment wins the actual insufficient-balance conflict");
@@ -741,5 +805,88 @@ state_test! { sync native_economic_executor_preserves_sealed_commitment_order_an
     assert_eq!(overlay.world.assets.get(&fixture.destination).unwrap().0,Quantity::from(80u32));
     for group in &groups {assert_native_economic_terminal(&overlay,group,header.height().get());}
     assert!(outputs.iter().all(|output|output.authenticated_signed_replay_alias.is_some()),"both exact commitments authenticate aliases even when stateful execution rejects one");
-    drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state),before);
+    drop(overlay);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
+}
+
+state_test! { sync native_common_owner_output_limit_rolls_back_callback_but_settles_exact_heads
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    let fixture = native_economic_fixture_with_world_initializer(
+        &[NativeEconomicCase::CallbackTransfer], true, None, None, |world| {
+            let source_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
+            let destination_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).unwrap();
+            let authority = AccountId::new(source_key.public_key().clone());
+            let destination = AccountId::new(destination_key.public_key().clone());
+            let domain = DomainId::try_new("native-economics", "universal").unwrap();
+            let definition = AssetDefinitionId::derive_from_components(domain, "coin".parse().unwrap());
+            let trigger_id: TriggerId = "native_sized_callback".parse().unwrap();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
+            metadata.insert("__registered_block_height".parse::<Name>().unwrap(), Json::new(0u64));
+            let trigger = Trigger::new(trigger_id.clone(), Action::new(
+                vec![
+                    InstructionBox::from(Transfer::asset_quantity(AssetId::new(definition, authority.clone()), 25u32, destination)),
+                    InstructionBox::from(Log::new(Level::INFO, "x".repeat(64 * 1024))),
+                ],
+                Repeats::Exactly(1), authority.clone(), ExecuteTriggerEventFilter::new().for_trigger(trigger_id).under_authority(authority),
+            ).unwrap().with_metadata(metadata));
+            let mut block = world.triggers.block();
+            let mut transaction = block.transaction();
+            assert!(transaction.add_by_call_trigger(trigger.try_into().unwrap()).unwrap());
+            transaction.apply();
+            block.commit();
+        },
+    );
+    let state = &fixture.native.state;
+    // Exercise an applying output ceiling after the admitted input has already
+    // been authenticated. No carrier or result is signed by this fixture edit.
+    {
+        let mut parameters = state.world.parameters.block();
+        let mut policy = parameters.get().block().execution_output();
+        policy.max_output_bytes = 16 * 1024;
+        policy.validate().unwrap();
+        parameters.get_mut().set_parameter(iroha_data_model::parameter::Parameter::Block(
+            iroha_data_model::parameter::BlockParameter::ExecutionOutput(policy),
+        ));
+        parameters.commit();
+    }
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
+    let groups = native_economic_groups(&fixture);
+    let header = empty_global_block_after(Some(&fixture.native.block)).header();
+    let (overlay, executions) = state.preexecute_lane_decision_groups(header, &groups).unwrap();
+    let rows = overlay.retained_execution_outputs_for_test().unwrap();
+    assert!(matches!(rows, [ExecutionOutputV1::Network(_)]));
+    assert!(rows[0].is_output_limit_rejection());
+    assert_eq!(executions[0].result, *rows[0].result());
+    assert!(rows[0].completions().is_empty());
+    assert!(executions[0].fastpq_transcripts.is_empty());
+    assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(100u32));
+    assert!(overlay.world.assets.get(&fixture.destination).is_none());
+    assert!(overlay.world.triggers.by_call_triggers().get(&"native_sized_callback".parse().unwrap()).is_some());
+    assert_native_economic_terminal(&overlay, &groups[0], header.height().get());
+    assert!(overlay.gas_used_in_block > 0, "actual attempted work is retained despite business rollback");
+    drop(overlay);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
+}
+
+state_test! { sync native_admission_fixture_binds_final_controls_results_signature_and_body
+    let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let state = &fixture.native.state;
+    let block = &fixture.native.block;
+    assert_eq!(block.execution_context().unwrap().queue_plan_admissions.len(), 1);
+    assert_eq!(block.network_entrypoint_count(), 0, "admission does not execute its input");
+    assert!(block.has_results());
+    assert!(block.execution_outputs().is_empty());
+    block.validate_proposal_commitments().unwrap();
+    block.validate_execution_result_structure().unwrap();
+    let key = merge_carrier_finality_fixture_keypair();
+    block.signatures().next().unwrap().signature().verify_hash(key.public_key(), block.hash()).unwrap();
+    let retained = state.kura.get_block(NonZeroUsize::new(block.header().height().get() as usize).unwrap()).unwrap();
+    assert_eq!(retained.encode_wire().unwrap(), block.encode_wire().unwrap());
+    assert_eq!(state.world.assets.view().get(&fixture.source).unwrap().0, Quantity::from(100u32));
+    assert!(state.world.assets.view().get(&fixture.destination).is_none());
+    let groups = native_economic_groups(&fixture);
+    let input = &groups[0].body().payload().input;
+    assert!(State::pending_queue_plan_binding_for_execution(
+        &state.view(), &input.entrypoint, &input.routing_plan().unwrap(),
+        block.header().height().get() + 1,
+    ).unwrap().is_some(), "the exact admitted input remains pending economic execution");
 }

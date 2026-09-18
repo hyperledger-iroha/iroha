@@ -73,6 +73,11 @@ impl DaPinStore {
         self.by_location.insert(location_key, stored);
         true
     }
+    /// Install the exact authoritative alias projection after a cold WSV rebuild.
+    /// Historical record aliases need not remain bound after retirement or rebinding.
+    pub(crate) fn replace_alias_bindings(&mut self, aliases: BTreeMap<String, StorageTicketId>) {
+        self.by_alias = aliases;
+    }
     /// Lookup by storage ticket.
     #[must_use]
     pub fn get_by_ticket(&self, ticket: &StorageTicketId) -> Option<&DaPinIntentWithLocation> {
@@ -157,6 +162,12 @@ impl DaPinStore {
             }
             rebuilt.insert_with_location(entry.clone());
         }
+        rebuilt.by_alias = self
+            .by_alias
+            .iter()
+            .filter(|(_, ticket)| rebuilt.by_ticket.contains_key(ticket))
+            .map(|(alias, ticket)| (alias.clone(), *ticket))
+            .collect();
         *self = rebuilt;
     }
 }
@@ -201,6 +212,26 @@ mod tests {
                 index_in_bundle: idx,
             },
         }
+    }
+    #[test]
+    fn alias_projection_preserves_unbinding_and_pruning_does_not_restore_old_owner() {
+        let older = located(sample_intent(0, 1, Some("shared")), 1, 0);
+        let newer = located(sample_intent(1, 2, Some("shared")), 2, 0);
+        let mut store = DaPinStore::from_intents(&[older.clone(), newer]);
+        store.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
+        assert!(store.get_by_ticket(&older.intent.storage_ticket).is_some());
+        assert!(store.get_by_alias("shared").is_none());
+        store.replace_alias_bindings(BTreeMap::from([(
+            "shared".into(),
+            older.intent.storage_ticket,
+        )]));
+        assert_eq!(
+            store.get_by_alias("shared").unwrap().0,
+            &older.intent.storage_ticket
+        );
+        store.replace_alias_bindings(BTreeMap::new());
+        assert!(store.get_by_alias("shared").is_none());
+        assert_eq!(store.len(), 1);
     }
     #[test]
     fn inserts_and_overwrites_alias() {

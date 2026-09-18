@@ -189,7 +189,7 @@ impl Kura {
     }
     fn validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         process_generation: Option<&AutonomousLifecycleProcessGenerationRecordV1>,
         path: &Path,
         kind: &str,
@@ -245,8 +245,7 @@ impl Kura {
         Ok(())
     }
     fn validate_autonomous_lifecycle_bootstrap_quarantine_domain(
-        store_root: &Path,
-        lane_config: &LaneConfig,
+        &self,
         process_generation: Option<&AutonomousLifecycleProcessGenerationRecordV1>,
         path: &Path,
         bytes: &[u8],
@@ -254,15 +253,16 @@ impl Kura {
         let raw = norito::decode_canonical::<AutonomousLifecycleBootstrapV1>(bytes)
             .map_err(Error::NoritoFrame)?;
         let descriptor = &raw.body.executable_payload.origin_proposal.descriptor;
-        let entry = lane_config.entry(descriptor.lane_id).ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "bootstrap quarantine targets an unconfigured lane",
-            )
-        })?;
+        let entry = self.retained_lane_storage_entry_for_route_under_geometry_guard(
+            raw.body.executable_payload.network_id,
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+            descriptor.proposal_height,
+        )?;
         Self::validate_autonomous_lifecycle_bootstrap_quarantine_for_entry(
-            store_root,
-            entry,
+            &self.store_root,
+            &entry,
             process_generation,
             path,
             bytes,
@@ -271,7 +271,7 @@ impl Kura {
     }
     fn validate_autonomous_lifecycle_bootstrap_quarantine_for_entry(
         store_root: &Path,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         process_generation: Option<&AutonomousLifecycleProcessGenerationRecordV1>,
         path: &Path,
         bytes: &[u8],
@@ -1020,11 +1020,15 @@ impl Kura {
     /// lifecycle cursor. Recovery therefore accepts only one canonical signed
     /// temporary whose exact stable target, payload, and cursor are all absent.
     fn recover_autonomous_lifecycle_bootstrap_atomic_temporary_on_startup(
-        store_root: &Path,
-        lane_config: &LaneConfig,
-        _store_root_lock_file: &std::fs::File,
+        &self,
         allow_recovery_mutation: bool,
     ) -> Result<()> {
+        // The constructor retains the exclusive store-root lock. These guards
+        // keep exact journal references and original namespaces stable through
+        // validation and quarantine; no active producer capability is installed.
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let store_root = &self.store_root;
         let process_generation =
             Self::read_autonomous_lifecycle_process_generation_record_for(store_root)?
                 .map(|(record, _)| record);
@@ -1090,10 +1094,8 @@ impl Kura {
                         AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
                         "bootstrap quarantine",
                     )?;
-                    let bootstrap =
-                        Self::validate_autonomous_lifecycle_bootstrap_quarantine_domain(
-                            store_root,
-                            lane_config,
+                    let bootstrap = self
+                        .validate_autonomous_lifecycle_bootstrap_quarantine_domain(
                             process_generation.as_ref(),
                             &path,
                             &bytes,
@@ -1168,12 +1170,13 @@ impl Kura {
             },
         )?;
         let descriptor = &raw.body.executable_payload.origin_proposal.descriptor;
-        let lane_entry = lane_config.entry(descriptor.lane_id).ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                temporary_path.clone(),
-                "bootstrap atomic temporary targets an unconfigured lane",
-            )
-        })?;
+        let lane_entry = self.retained_lane_storage_entry_for_route_under_geometry_guard(
+            raw.body.executable_payload.network_id,
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+            descriptor.proposal_height,
+        )?;
         let expected_parent = Self::lane_artifact_dir(&lane_entry.blocks_dir(store_root));
         if lane_entry.dataspace_id != descriptor.dataspace_id || parent != expected_parent {
             return Err(Self::invalid_lane_artifact_error(

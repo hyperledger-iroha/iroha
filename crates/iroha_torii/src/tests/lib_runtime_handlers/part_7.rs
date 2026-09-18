@@ -2576,7 +2576,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2654,7 +2653,6 @@ fn install_two_peer_npos_roster(
     }
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -2753,7 +2751,6 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
     {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
-            None,
             None,
             None,
             0,
@@ -3123,7 +3120,6 @@ async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activatio
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -3138,7 +3134,6 @@ async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activatio
     app.state
         .update_latest_block_header_cache_for_tests(BlockHeader::new(
             NonZeroU64::new(7).expect("non-zero height"),
-            None,
             None,
             None,
             0,

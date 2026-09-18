@@ -2449,3 +2449,34 @@ Frozen773 passes six-crate lib/bin test compilation774 and396/399 exact Core con
 Frozen773 passes six-crate lib/bin test compilation774 and396/399 exact Core controls775 on20,682 unchanged inputs and a retained unchanged executable. Captured policy770 and authoritative DA fixture772 pass; three failures still expose unfinished State publication and competing native/ordinary execution ownership. Unified prepend747 with bindings778 passes indexed gate779 and57 structural controls781; composed782 compilation783 fails11 diagnostics, corrected by source789. Detached MV780 and membership785/787 retain exact original identities and release writers, without granting publication; checker correction791 retains full consuming relations. Frozen792=782+780+785+787+789+791 is compiling in793; indexed gate795 and membership controls796 are running. Block-hash detachment790 is parallel work. Complete journal/resource custody, prepared-State publication, carrier proofs, historical work authority, unused instance-journal removal and real four/seven-validator qualification remain open. No liveness goal is complete.
 
 Qualify frozen792 across complete MV tests and exact Core carrier/receipt/geometry controls. Compilation774 and runtime775 establish396/399 passes only on773;779/781 establish separate structural evidence for773+747+778. Preserve783 compilation failures and786/788 checker failures alongside their789/791 corrections. Complete detached World/runtime/hash/archive owners, predecision resource admission and the sole consuming State publisher. Resolve the three retained publication/execution-owner failures, carrier proof custody and historical work authority, remove unused instance journals, and integrate the shared lane reducer. Qualify one unchanged four/seven-validator fault/restart/final-transaction candidate before closing any liveness goal.
+
+## Work consolidated on optimizations, September 18
+
+The user directed all further work to `/Users/takemiyamakoto/dev/iroha` on
+`optimizations`. Existing task changes were imported into that working tree from
+their retained source, with overlapping MAIN changes reviewed and the Git index
+unchanged. Independent beacon composition, lifecycle-certificate admission and
+telemetry changes remain. This composition is new; earlier isolated passes do
+not qualify it. Import review and local command logs live under ignored
+`dist/sumeragi-main-work/` in this checkout.
+
+All 88 MV tests pass, including fifteen consuming-publication controls for actual
+Cell/Storage changes, replacement undo, existing readers, stale/foreign owners,
+writer contention, abort/retry, admission-before-copy and resource-guard custody.
+The retired-codec guard passes. The combined Core/Torii/test-network/Kagami/daemon
+test compilation is in progress. Actual aggregate State publication, complete
+resource accounting and Validate-to-Apply custody remain unfinished. Parallel
+lane work must connect the existing shared reducer through one process-lived
+transport/Decision/candidate owner before retiring the old fresh signer.
+
+The previous isolated819 runtime821 finished597/601 with unchanged sources and
+executables: all new World/trigger/carrier controls passed, while the same three
+State ownership failures and authenticated interrupted-receipt retry failed.
+The receipt fix815 and archive custody823–825 are now in the main working tree;
+they still require qualification on this combined branch. No goal is complete.
+
+Superseded current-status and roadmap text, retained verbatim:
+
+Frozen800 passes six-crate lib/bin test compilation801 on 20,686 unchanged inputs. Runtime809 passes 524 of 528 exact tests: all 73 MV tests and 451 of 455 Core controls, with unchanged source and retained executables. Three State publication/native ownership failures persist. One new failure identifies a receipt writer that rejects its own authenticated interrupted append before reaching recovery; source815 is in progress. Membership bindings795 and all 49 controls796 pass; exact800+803+805 source gate806 passes. World capture807 and actual carrier integration808 retain all 278 original World journals and four runtime cells after one admission; review correction816 makes the reservation outlive originals on early errors. Frozen810 contains these changes and is compiling in811; source gate813 is running. Archive writers, aggregate pre-vote resource ownership, the consuming publisher and real four/seven-validator qualification remain open. Direct receipt window exhaustion also lacks pre-vote admission and can reach fail-stop after commitment. [Scoped evidence](docs/history/2026-09-16/sumeragi-lane-context-foundation.md#complete-world-capture-and-retained-failures-798816) does not qualify MAIN or close L1–L6.
+
+The next Sumeragi cutover must carry exact prepared State/resource ownership through validation, cached/recovered markers, voting and Apply; returning only the execution hash drops that owner. Acquire bounded descriptor/capacity resources before voting and preserve typed local deferral with a reachable retry. Prototype530 was withdrawn for post-finality descriptor growth. Retain historical Native authority, stable canonical storage and immutable incarnation directories. Replace mandatory per-route application files with one authenticated carrier proof bundle and bounded complete history references; preserve exact merge-source/finality/WSV joins before source release, and charge whole bundles while any route retains them. Defer physical GC with release, snapshot/recovery pins and an instance-local deletion fence. Preserve cross-route closure and drain/signing fences. Remove the post-finality local Queue veto only with the complete consuming path. Qualify frozen810 across complete MV/TriggerSet suites and retained Core carrier/receipt/geometry controls. Frozen800 passes compilation801 and 524/528 tests809; preserve all four failures. Complete receipt-owned interrupted append recovery815 without weakening passive authentication, and remove the Direct/Merge post-commit capacity refusal through complete pre-vote resource ownership or the planned carrier proof design. Complete archive logical reservations, aggregate admission and the sole consuming prepared-State publisher; the detached World/runtime/hash/membership owners now need that actual Validate-to-Apply custody. Preserve scoped source passes795/796/806 and qualify807/808/816 together. Resolve the three State publication/native ownership failures, carrier proof custody and historical work authority, remove unused instance journals, and integrate the shared lane reducer. Qualify one unchanged four/seven-validator fault/restart/final-transaction candidate before closing any liveness goal.

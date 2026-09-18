@@ -1,6 +1,6 @@
 // Exercise the production Initial dispatcher without genesis-only admission.
 fn initial_sorafs_block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 5_000, 0)
+    iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 5_000, 0)
 }
 
 fn execute_initial_sorafs(

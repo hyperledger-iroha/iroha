@@ -257,12 +257,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Compare results order and kinds
     let seq_ok: Vec<_> = vb_seq
         .as_ref()
-        .results()
+        .output_results()
         .map(|r| r.as_ref().is_ok())
         .collect();
     let par_ok: Vec<_> = vb_par
         .as_ref()
-        .results()
+        .output_results()
         .map(|r| r.as_ref().is_ok())
         .collect();
     assert_eq!(seq_ok, par_ok, "approval/rejection sequence must match");
@@ -372,7 +372,7 @@ fn run_block_and_events(
     // Execute and commit
     let mut sb = state.block(block.header());
     let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
-    let errors: Vec<_> = vb.as_ref().errors().collect();
+    let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
     assert!(
         errors.is_empty(),
         "parity fixture transactions failed: {errors:?}"

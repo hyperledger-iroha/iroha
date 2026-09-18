@@ -782,7 +782,6 @@ mod tests {
                 std::num::NonZeroU64::new(1).expect("height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             );

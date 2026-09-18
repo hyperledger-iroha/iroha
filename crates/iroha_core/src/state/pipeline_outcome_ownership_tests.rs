@@ -1,5 +1,5 @@
-// Executable counterexamples for the currently open internal-result owner gap.
-// No native activation, synthetic invocation hash or fabricated source capture.
+// Actual common-driver regressions for direct and nested Pipeline receipt ownership.
+// These overlays do not authorize native or State publication.
 
 #[inline(never)]
 fn pipeline_receipt_fixture(nested: bool) -> (Box<NativeEconomicFixture>, TriggerId, TriggerId) {
@@ -80,7 +80,7 @@ fn pipeline_receipt_carrier(fixture: &NativeEconomicFixture) -> SignedBlock {
         fixture.source.account().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-    transaction.set_creation_time(base.header().creation_time());
+    transaction.set_creation_time(base.header().creation_time() - Duration::from_millis(1));
     let signed = transaction
         .with_instructions([Log::new(
             Level::INFO,
@@ -100,222 +100,94 @@ fn pipeline_receipt_carrier(fixture: &NativeEconomicFixture) -> SignedBlock {
 }
 
 #[inline(never)]
-fn pipeline_receipt_execute_prefix(
-    overlay: &mut StateBlock<'_>,
-    block: &SignedBlock,
-) -> iroha_data_model::transaction::signed::TransactionResult {
-    let entry = block.external_entrypoints_slice()[0].clone();
-    let accepted = crate::tx::AcceptedTransaction::accept_entrypoint_at_time(
-        entry.clone(),
-        &overlay.network_id,
-        overlay.world.parameters().sumeragi().max_clock_drift(),
-        overlay.world.parameters().transaction(),
-        overlay.crypto.as_ref(),
-        block.header().creation_time(),
-    )
-    .unwrap();
-    let (hash, result) = overlay.validate_transaction_with_entrypoint_index_and_routing_context(
-        accepted,
-        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
-        0,
-        crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-    );
-    assert_eq!(hash, entry.hash());
-    assert!(result.is_ok(), "actual signed ordinary prefix: {result:?}");
-    assert!(overlay.batch_transfer_outcomes.is_empty());
-    result.into()
-}
-
-#[inline(never)]
-fn pipeline_receipt_probe(
-    fixture: &NativeEconomicFixture,
-    carrier: &SignedBlock,
-    parent: &TriggerId,
-    child: &TriggerId,
-) -> HashOf<TransactionEntrypoint> {
-    use iroha_data_model::events::data::prelude::AssetBatchTransferLegStatus;
-    use iroha_data_model::events::pipeline::{BlockEvent, BlockStatus, PipelineEventBox};
-    use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
-    let header = carrier.header();
-    let mut overlay = pipeline_receipt_owned_block(&fixture.native.state, header);
-    let _prefix = pipeline_receipt_execute_prefix(&mut overlay, carrier);
-    let fragments_before = overlay.committed_fragment_count();
-    let outcomes =
-        overlay.execute_pipeline_triggers_isolated([PipelineEventBox::from(BlockEvent {
-            header,
-            status: BlockStatus::Approved,
-        })]);
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(&outcomes[0].0, parent);
-    assert!(
-        outcomes[0].1.is_ok(),
-        "healthy nested callback: {:?}",
-        outcomes[0].1
-    );
-    assert_eq!(
-        overlay.committed_fragment_count(),
-        fragments_before + 1,
-        "actual callback applied exactly once"
-    );
-    assert_eq!(
-        overlay.world.assets.get(&fixture.source).unwrap().0,
-        Quantity::from(97u32)
-    );
-    assert_eq!(
-        overlay.world.assets.get(&fixture.destination).unwrap().0,
-        Quantity::from(3u32)
-    );
-    assert!(overlay.world.triggers.ids().get(parent).is_none());
-    assert!(overlay.world.triggers.ids().get(child).is_none());
-    assert_eq!(overlay.batch_transfer_outcomes.len(), 1);
-    let (&call, receipts) = overlay.batch_transfer_outcomes.iter().next().unwrap();
-    assert_eq!(receipts.len(), 2);
-    assert_eq!(receipts[0].leg_id, "applied");
-    assert!(matches!(
-        receipts[0].status,
-        AssetBatchTransferLegStatus::Applied
-    ));
-    assert_eq!(receipts[1].leg_id, "rejected");
-    assert!(matches!(
-        receipts[1].status,
-        AssetBatchTransferLegStatus::Rejected(_)
-    ));
-    assert_eq!(overlay.fastpq_transcripts.len(), 1);
-    assert!(overlay.fastpq_transcripts.contains_key(&Hash::from(call)));
-    assert!(
-        overlay
-            .captured_fastpq_transcript_sources()
-            .unwrap()
-            .contains_key(&Hash::from(call))
-    );
-
-    let completions = overlay.world.trigger_completions();
-    assert_eq!(completions.len(), 2);
-    assert!(
-        completions
-            .iter()
-            .all(|event| event.outcome() == &TriggerCompletedOutcome::Success)
-    );
-    assert!(completions.iter().any(|event| event.trigger_id() == parent));
-    assert!(completions.iter().any(|event| event.trigger_id() == child));
-    assert!(
-        completions
-            .iter()
-            .all(|event| *event.trigger_execution_hash() != call),
-        "completion display hashes are not the real receipt owner"
-    );
-
-    // Applied captures already support this internal execution call. The failure
-    // below is result/receipt ownership, not absence of a real FASTPQ source.
-    let tx_set = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-        carrier.external_entrypoints_slice().iter(),
-    )
-    .unwrap();
-    overlay.set_fastpq_tx_set_hash(tx_set.into());
-    overlay
-        .finalize_fastpq_source_inventory(
-            carrier.external_entrypoints_slice(),
-            &[crate::queue::RoutingDecision::new(
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-            )],
-            &[],
-        )
-        .unwrap();
-    let inventory = overlay.fastpq_source_inventory().unwrap().unwrap();
-    assert_eq!(inventory.entries().len(), 2);
-    assert_eq!(
-        inventory.entries()[0].entry_hash,
-        Hash::from(carrier.external_entrypoints_slice()[0].execution_call_hash())
-    );
-    assert_eq!(inventory.entries()[1].entry_hash, Hash::from(call));
-    drop(overlay);
-    let _ = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
-    call
-}
-
-state_test! { sync nested_pipeline_independent_batch_applies_but_common_tail_has_no_result_owner
-    use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
-    let (fixture, parent, child) = pipeline_receipt_fixture(true);
+fn assert_pipeline_receipt_has_canonical_owner(nested: bool) {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    use iroha_data_model::events::{
+        data::prelude::AssetBatchTransferLegStatus, trigger_completed::TriggerCompletedOutcome,
+    };
+    let (fixture, parent, child) = pipeline_receipt_fixture(nested);
     let state = &fixture.native.state;
     let carrier = pipeline_receipt_carrier(&fixture);
-    assert_eq!(carrier.external_entrypoints_slice().len(), 1);
-    assert!(carrier.execution_context().is_none_or(|bundle| bundle.native_lane_decisions.is_none()));
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
-    let actual_call = pipeline_receipt_probe(&fixture, &carrier, &parent, &child);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
-    let unexecuted = carrier.encode_wire().unwrap();
-    for _attempt in 0..2 {
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+    let before = crate::snapshot::canonical_state_snapshot_hash(state)
+        .expect("stable valid fixture snapshot");
+    let mut expected_wire = None;
+    for _ in 0..2 {
         let mut attempt = carrier.clone();
         let mut overlay = pipeline_receipt_owned_block(state, attempt.header());
-        let prefix = pipeline_receipt_execute_prefix(&mut overlay, &attempt);
-        let fragments_before = overlay.committed_fragment_count();
-        let error = crate::block::valid::finish_ordinary_tail_for_test(
-            &mut attempt, &mut overlay, vec![prefix],
-            &[crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)],
-        ).expect_err("current tail has no canonical result slot for the actual nested call");
-        assert!(matches!(error, crate::block::BlockValidationError::MerkleRootMismatch), "{error:?}");
-        // These assertions place the refusal strictly AFTER healthy callback
-        // apply, not in setup, admission, permission, gas or source capture.
-        assert_eq!(overlay.committed_fragment_count(), fragments_before + 1);
-        assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(97u32));
-        assert_eq!(overlay.world.assets.get(&fixture.destination).unwrap().0, Quantity::from(3u32));
+        crate::block::ValidBlock::execute_block_outputs_for_test(&mut attempt, &mut overlay, None)
+            .unwrap();
+        assert_eq!(attempt.execution_outputs().len(), 2);
+        assert!(
+            matches!(&attempt.execution_outputs()[0], ExecutionOutputV1::Network(row) if row.result.is_ok())
+        );
+        let output = &attempt.execution_outputs()[1];
+        let ExecutionOutputV1::Pipeline(row) = output else {
+            panic!("actual callback must own a Pipeline row")
+        };
+        assert_eq!(row.invocation.trigger.trigger_id, parent);
+        assert!(row.result.is_ok(), "{:?}", row.result);
+        let receipts = row.result.batch_transfer_outcomes();
+        assert_eq!(receipts.len(), 2);
+        assert!(matches!(
+            receipts[0].status,
+            AssetBatchTransferLegStatus::Applied
+        ));
+        assert!(matches!(
+            receipts[1].status,
+            AssetBatchTransferLegStatus::Rejected(_)
+        ));
+        let call = output
+            .execution_call_hash(attempt.hash(), &attempt)
+            .unwrap();
+        assert_eq!(
+            overlay.world.assets.get(&fixture.source).unwrap().0,
+            Quantity::from(97u32)
+        );
+        assert_eq!(
+            overlay.world.assets.get(&fixture.destination).unwrap().0,
+            Quantity::from(3u32)
+        );
         assert!(overlay.world.triggers.ids().get(&parent).is_none());
-        assert!(overlay.world.triggers.ids().get(&child).is_none());
-        assert!(overlay.fastpq_transcripts.contains_key(&Hash::from(actual_call)));
-        let completions = overlay.world.trigger_completions();
-        assert_eq!(completions.len(), 2);
-        assert!(completions.iter().all(|event| event.outcome() == &TriggerCompletedOutcome::Success));
-        assert_eq!(attempt.encode_wire().unwrap(), unexecuted, "no partial canonical result publication");
+        assert_eq!(overlay.world.triggers.ids().get(&child).is_none(), nested);
+        assert!(attempt.fastpq_transcripts().contains_key(&call));
+        assert!(
+            overlay
+                .captured_fastpq_transcript_sources()
+                .unwrap()
+                .contains_key(&call)
+        );
+        assert!(overlay.batch_transfer_outcomes.is_empty());
+        assert_eq!(row.completions.len(), if nested { 2 } else { 1 });
+        assert!(
+            row.completions
+                .iter()
+                .all(|completion| completion.outcome == TriggerCompletedOutcome::Success)
+        );
+        assert!(attempt.output_proof(1).unwrap().verify(
+            &HashOf::new(output),
+            &attempt.output_merkle_commitment().unwrap()
+        ));
+        overlay.verify_execution_output_seal(&attempt).unwrap();
+        let wire = attempt.encode_wire().unwrap();
+        if let Some(expected) = &expected_wire {
+            assert_eq!(&wire, expected);
+        } else {
+            expected_wire = Some(wire);
+        }
         drop(overlay);
-        let _ = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
-        assert!(state.world.triggers.view().ids().get(&parent).is_some(),
-            "refusal leaves the same callback eligible on the next attempted block");
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(state)
+                .expect("stable valid fixture snapshot"),
+            before
+        );
+        assert!(state.world.triggers.view().ids().get(&parent).is_some());
     }
 }
 
-state_test! { sync direct_pipeline_independent_batch_is_quarantined_before_any_call_owned_output
-    use iroha_data_model::events::pipeline::{BlockEvent, BlockStatus, PipelineEventBox};
-    use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
-    let (fixture, parent, child) = pipeline_receipt_fixture(false);
-    let state = &fixture.native.state;
-    let header = empty_global_block_after(Some(&fixture.native.block)).header();
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
-    let mut overlay = pipeline_receipt_owned_block(state, header);
-    let outcomes = overlay.execute_pipeline_triggers_isolated([
-        PipelineEventBox::from(BlockEvent { header, status: BlockStatus::Approved }),
-    ]);
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(&outcomes[0].0, &parent);
-    let error = outcomes[0].1.as_ref().expect_err("direct pipeline body has no call identity");
-    assert!(matches!(error,
-        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
-        )) if message.as_ref() == "independent asset transfer batch requires a transaction call_hash before balance or transcript mutation"
-    ), "expected the exact typed missing-call rejection, got {error:?}");
-    assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(100u32));
-    assert!(overlay.world.assets.get(&fixture.destination).is_none());
-    assert!(overlay.batch_transfer_outcomes.is_empty());
-    assert!(overlay.fastpq_transcripts.is_empty());
-    assert!(overlay.captured_fastpq_transcript_sources().unwrap().is_empty());
-    let retained = overlay.world.triggers.pipeline_triggers().get(&parent).unwrap();
-    assert_eq!(retained.repeats(), &Repeats::Exactly(1));
-    assert!(!crate::smartcontracts::isi::triggers::trigger_is_enabled(retained.metadata()));
-    assert!(overlay.world.triggers.active_pipeline_trigger_ids().get(&parent).is_none());
-    assert!(overlay.world.triggers.ids().get(&child).is_some(), "uncalled child stays intact");
-    let completions = overlay.world.trigger_completions();
-    assert_eq!(completions.len(), 1);
-    assert!(matches!(completions[0].outcome(), TriggerCompletedOutcome::Failure(message)
-        if message == &error.to_string()),
-        "the retained completion uses the actual public rejection display");
-    drop(overlay);
-    let _ = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+state_test! { sync nested_pipeline_independent_batch_has_one_canonical_receipt_owner
+    assert_pipeline_receipt_has_canonical_owner(true);
+}
+
+state_test! { sync direct_pipeline_independent_batch_has_one_canonical_receipt_owner
+    assert_pipeline_receipt_has_canonical_owner(false);
 }

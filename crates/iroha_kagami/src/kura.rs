@@ -424,7 +424,7 @@ mod tests {
         // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
         let lane_config = LaneConfig::default();
-        let block_store_path = lane_config.primary().blocks_dir(temp.path());
+        let block_store_path = Kura::canonical_storage_paths(temp.path()).0;
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,

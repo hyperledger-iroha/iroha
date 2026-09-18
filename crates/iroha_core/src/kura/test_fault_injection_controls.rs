@@ -26,8 +26,9 @@ fn fail_next_indexed_sidecar_dir_sync_for_tests() {
 fn fail_next_bound_progress_intent_file_sync_for_tests() {
     FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.set(true));
 }
+/// Fail the next indexed append data sync after its payload write in recovery tests.
 #[cfg(test)]
-fn fail_next_bound_progress_append_data_sync_for_tests() {
+pub(crate) fn fail_next_bound_progress_append_data_sync_for_tests() {
     FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.set(true));
 }
 #[cfg(test)]

@@ -39,10 +39,10 @@ impl VerifiedLaneContext {
         )))
     }
 
-    // Only the Kura-backed reader below may construct this type. The artifact
-    // has already passed the native finality reader, including canonical-chain,
-    // complete wire, aggregate signature and proof-of-possession checks.
-    fn from_verified_opening(
+    // Only authenticated State readers and the bounded offline evidence sibling
+    // may construct this type. Both verify the anchored exact opening and its
+    // context-set witness first; the offline owner never exports this capability.
+    pub(super) fn from_verified_opening(
         frozen: FrozenLaneConsensusContextV1,
         opening: &wire::finality::V2FinalityArtifact,
         expected_block_hash: HashOf<BlockHeader>,

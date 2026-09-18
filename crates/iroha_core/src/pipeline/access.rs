@@ -3067,7 +3067,6 @@ mod tests {
             core::num::NonZeroU64::new(1).expect("genesis height"),
             None,
             None,
-            None,
             0,
             0,
         )
@@ -5136,8 +5135,7 @@ seiyaku DynamicAccessCounter {
         let (prog, code_hash, manifest) =
             test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
         let manifest = manifest.signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world
@@ -5263,8 +5261,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_a);
@@ -5300,8 +5297,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest_b);
@@ -5347,8 +5343,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world.contract_manifests.insert(code_hash, manifest);
@@ -5447,8 +5442,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world
@@ -5532,8 +5526,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world
@@ -5619,8 +5612,7 @@ seiyaku DynamicAccessCounter {
             provenance: None,
         }
         .signed(&kp);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let mut stx = st_block.transaction();
         stx.world
@@ -5727,8 +5719,7 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
@@ -5811,8 +5802,7 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
@@ -5874,8 +5864,7 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let (code_hash, trigger_id, hints) = {
             let mut stx = st_block.transaction();
@@ -5995,8 +5984,7 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let alice = iroha_test_samples::ALICE_ID.clone();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut st_block = state.block(header);
         let (code_hash, trigger_id, hints) = {
             let mut stx = st_block.transaction();

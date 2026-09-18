@@ -386,8 +386,7 @@ mod tests {
     async fn list_and_count_filter_by_tag_and_status() {
         let state = blank_state();
         let backend = "halo2/ipa";
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let id_verified = ProofId {
@@ -456,8 +455,7 @@ mod tests {
     async fn list_filters_respect_height_ranges() {
         let state = blank_state();
         let backend = "halo2/ipa";
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         // Proof with verified height 10
@@ -592,8 +590,7 @@ mod tests {
         use iroha_data_model::proof::{ProofBox, ProofStatus};
         let state = blank_state();
         let backend = "bridge/test";
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let payload = BridgeProofPayload::TransparentZk(BridgeTransparentProof {
@@ -667,8 +664,7 @@ mod tests {
     #[tokio::test]
     async fn list_pagination_keeps_the_requested_ordered_prefix() {
         let state = blank_state();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         for height in 1_u8..=4 {

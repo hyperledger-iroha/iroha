@@ -81,7 +81,7 @@ state_test! { sync confidential_registry_delta_cap_limits_transitions
     let query = LiveQueryStore::start_test();
     let mut state = State::new(world, kura, query);
     state.zk.registry_max_delta_per_block = 1;
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let block = state.block(header);
     let_row! { alpha_status = block .world .verifying_keys .get(&ids[0]) .map(|rec| rec.status) .expect("alpha vk present") };
     let_row! { beta_status = block .world .verifying_keys .get(&ids[1]) .map(|rec| rec.status) .expect("beta vk present") };
@@ -101,16 +101,17 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
     let mut block = ValidBlock::new_dummy_and_modify_header(&leader_private_key, f);
     block
         .as_mut()
-        .set_transaction_results_with_transcripts(
+        .set_execution_outputs(
             Vec::new(),
-            &[],
-            Vec::new(),
+            0,
             BTreeMap::new(),
             Vec::new(),
             AxtPolicySnapshot::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("empty fixture block has complete execution metadata");
-    block.as_mut().set_committed_fragment_count(0);
     let signature = iroha_data_model::block::BlockSignature::new(
         0,
         SignatureOf::from_hash(&leader_private_key, block.as_ref().hash()),
@@ -143,7 +144,7 @@ fn dummy_merge_qc() -> MergeQuorumCertificate {
 }
 state_test! { sync malformed_merge_execution_batch_rejects_empty_lane_set
     let state = blank_test_state();
-    let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let_row! { batch = MergeExecutionBatch { version: 1, base_state_height: 0, base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"execution-base")), application_block_header, execution_root: Hash::new(b"execution-root"), lanes: Vec::new(), entrypoint_count: 0, entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-entrypoints")), result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-results")), application_write_set_root: Hash::new(b"application-write-set"), write_set_root: Hash::new(b"write-set"), expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"post-state")), batch_hash: Hash::new(b"batch"), } };
     assert!(matches!(
         state.validate_merge_execution_batch(
@@ -394,10 +395,8 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         return;
     }
     let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
-    parent
-        .as_mut()
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("attach canonical empty execution results to merge-carrier parent");
+    assert!(parent.as_ref().execution_outputs().is_empty());
+    assert_eq!(parent.as_ref().committed_fragment_count(), Some(0));
     let parent_hash = parent.as_ref().hash();
     state
         .kura
@@ -667,6 +666,11 @@ fn certified_merge_carrier_after(previous: &SignedBlock, entry: &MergeLedgerEntr
 }
 fn commit_block_metadata_to_state(state: &State, block: &SignedBlock) {
     let mut state_block = state.block(block.header().clone());
+    // Structural history still owns an exact height/hash sample and its actual
+    // predecessor. Do not reconstruct earlier runtime policy at snapshot time.
+    state_block
+        .stage_autoscale_sample_record_for_count(block, 0)
+        .expect("empty metadata carrier retains its runtime sample");
     state_block.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut state_block, block);
     state_block

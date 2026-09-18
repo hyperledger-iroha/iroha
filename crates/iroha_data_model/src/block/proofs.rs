@@ -1,26 +1,29 @@
-//! Stable wrappers for Merkle proofs over block entrypoints and execution results.
+//! Finality-authenticated proofs over distinct network-input and typed-output trees.
 //!
 //! These types bundle the carrier identity, leaf hash, canonical audit path, and exact root/count
 //! commitments required to verify inclusion without depending on internal structures. Block proof
-//! responses use the full executed-entrypoint tree, including scheduled entrypoints, so entry and
-//! result indices share one execution order. A fully verified Sumeragi-v2 `CommitQC` authenticates
-//! the exact executed block wire and therefore that tree. `BlockHeader::merkle_root` is checked as
+//! responses use distinct complete network-input and typed-output trees. Internal invocations have
+//! no synthetic input leaves. A fully verified Sumeragi-v2 `CommitQC` authenticates
+//! the exact executed block wire and therefore both trees and their explicit source join. `BlockHeader::merkle_root` is checked as
 //! proposal metadata, but is never selected as the entry-proof anchor.
+#[cfg(test)]
+use crate::block::consensus_v2::ExecutionCommitment;
 use crate::{
+    block::execution_output::ExecutionOutputV1,
     block::{
         BlockHeader, SignedBlock,
         consensus_v2::{
-            ExecutionCommitment,
+            HeightContextId,
             finality::{
                 V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
             },
         },
     },
     fastpq::TransferTranscript,
-    transaction::signed::{TransactionEntrypoint, TransactionResult},
+    transaction::signed::TransactionEntrypoint,
 };
 use core::num::NonZeroU64;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTreeCommitment};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeMap;
@@ -79,8 +82,8 @@ impl BlockReceiptProof {
             && self.proof.verify(&self.leaf, commitment)
     }
 }
-/// Merkle inclusion proof for a transaction execution result referenced by
-/// `BlockHeader::result_merkle_root`.
+/// Full typed output and its audit path under the sole `BlockResult` output tree.
+/// Use a finality-authenticated anchor to establish the commitment's authority.
 #[derive(
     Debug,
     Clone,
@@ -95,38 +98,39 @@ impl BlockReceiptProof {
 )]
 #[norito_schema(name = "iroha_data_model::block::proofs::ExecutionReceiptProof")]
 pub struct ExecutionReceiptProof {
-    /// Hash of the execution result proven to be part of the block.
-    leaf: HashOf<TransactionResult>,
-    /// Canonical audit path leading to the result Merkle root.
-    proof: MerkleProof<TransactionResult>,
+    /// Exact source descriptor, result, receipts, and completions covered by the proof.
+    output: ExecutionOutputV1,
+    /// Canonical audit path leading to the output Merkle root.
+    proof: MerkleProof<ExecutionOutputV1>,
 }
 impl ExecutionReceiptProof {
-    /// Construct a new proof from a result hash and its audit path.
+    /// Construct a proof from the full typed output and its audit path.
     #[must_use]
-    pub const fn new(
-        leaf: HashOf<TransactionResult>,
-        proof: MerkleProof<TransactionResult>,
-    ) -> Self {
-        Self { leaf, proof }
+    pub const fn new(output: ExecutionOutputV1, proof: MerkleProof<ExecutionOutputV1>) -> Self {
+        Self { output, proof }
     }
-    /// Returns the hashed execution result covered by this proof.
+    /// Hash the full typed output covered by this proof.
     #[must_use]
-    pub const fn leaf(&self) -> &HashOf<TransactionResult> {
-        &self.leaf
+    pub fn leaf(&self) -> HashOf<ExecutionOutputV1> {
+        HashOf::new(&self.output)
+    }
+    /// Borrow the exact typed source/result row authenticated by this proof.
+    pub const fn output(&self) -> &ExecutionOutputV1 {
+        &self.output
     }
     /// Returns the underlying Merkle proof.
     #[must_use]
-    pub const fn proof(&self) -> &MerkleProof<TransactionResult> {
+    pub const fn proof(&self) -> &MerkleProof<ExecutionOutputV1> {
         &self.proof
     }
     /// Verify the proof against the supplied root-and-leaf-count commitment.
     #[must_use]
-    pub fn verify(&self, commitment: &MerkleTreeCommitment<TransactionResult>) -> bool {
+    pub fn verify(&self, commitment: &MerkleTreeCommitment<ExecutionOutputV1>) -> bool {
         commitment.leaf_count().get() <= BLOCK_MERKLE_MAX_LEAF_COUNT
-            && self.proof.verify(&self.leaf, commitment)
+            && self.proof.verify(&self.leaf(), commitment)
     }
 }
-/// Combined entrypoint/result proofs for a transaction included in a block.
+/// Complete network-input proof joined to a distinct full typed-output proof.
 #[derive(
     Debug,
     Clone,
@@ -154,9 +158,9 @@ pub struct BlockProofs {
     /// Merkle proof under the full executed-entrypoint commitment.
     pub entry_proof: BlockReceiptProof,
     /// Claimed Merkle root and exact leaf count used to verify the execution proof.
-    pub result_commitment: MerkleTreeCommitment<TransactionResult>,
-    /// Execution result proof under `BlockHeader::result_merkle_root`.
-    pub result_proof: ExecutionReceiptProof,
+    pub output_commitment: MerkleTreeCommitment<ExecutionOutputV1>,
+    /// Full typed output proof; its Network.input_index explicitly joins the input proof.
+    pub output_proof: ExecutionReceiptProof,
     /// Claimed FASTPQ transfer transcripts grouped by exact execution-call hash.
     pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
 }
@@ -164,8 +168,9 @@ pub struct BlockProofs {
 /// [`BlockProofs`].
 ///
 /// This capability is intentionally not serializable and its fields are private. Its public
-/// constructor verifies untrusted Sumeragi-v2 finality, exact header association, and executed-wire
-/// binding before recomputing the Merkle commitments.
+/// constructor requires an independently trusted target height context and verifies untrusted
+/// Sumeragi-v2 finality, exact header association, and executed-wire binding before recomputing
+/// the Merkle commitments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedBlockProofAnchor {
     block_height: NonZeroU64,
@@ -173,13 +178,23 @@ pub struct TrustedBlockProofAnchor {
     executed_block_wire_hash: Hash,
     entry_hash: HashOf<TransactionEntrypoint>,
     entry_index: u32,
+    output_index: u32,
+    output_hash: HashOf<ExecutionOutputV1>,
     entry_commitment: MerkleTreeCommitment<TransactionEntrypoint>,
-    result_commitment: MerkleTreeCommitment<TransactionResult>,
+    output_commitment: MerkleTreeCommitment<ExecutionOutputV1>,
     fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
 }
 /// Failure to derive a trusted proof anchor from authenticated block metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TrustedBlockProofAnchorError {
+    /// The artifact's complete context differs from the independently trusted target context.
+    #[error("finality context {got:?} differs from independently trusted target {expected:?}")]
+    UnexpectedContext {
+        /// Independently selected context of the target height, after any verified chain transition.
+        expected: HeightContextId,
+        /// Complete context identity recomputed from the untrusted artifact.
+        got: HeightContextId,
+    },
     /// The supplied finality artifact failed structural, roster, proof-of-possession, or
     /// aggregate-signature verification.
     #[error("untrusted finality artifact failed cryptographic verification: {0}")]
@@ -205,12 +220,21 @@ pub enum TrustedBlockProofAnchorError {
     /// The authenticated entrypoint tree exceeds the block-proof index space.
     #[error("authenticated block entrypoint count exceeds the u32 proof index space")]
     TooManyEntrypoints,
-    /// An executed entrypoint proof anchor requires an aligned result tree.
-    #[error("authenticated block has no execution results")]
+    /// An output anchor requires a non-empty executed output tree.
+    #[error("authenticated block has no execution outputs")]
     MissingResults,
-    /// Entrypoint and result leaf counts are not aligned one-for-one.
-    #[error("authenticated entrypoint and result counts are misaligned")]
-    MisalignedLeafCounts,
+    /// A submitted input has no typed Network output carrying its input index.
+    #[error("authenticated input has no matching Network output")]
+    MissingNetworkOutput,
+    /// The requested output index is outside the authenticated output tree.
+    #[error("requested output index {output_index} is absent from the authenticated block")]
+    OutputNotFound {
+        /// Output index requested by the proof consumer.
+        output_index: u32,
+    },
+    /// The authenticated output tree exceeds the block-proof index space.
+    #[error("authenticated block output count exceeds the u32 proof index space")]
+    TooManyOutputs,
     /// Stored Merkle material disagrees with the authenticated block contents.
     #[error("authenticated block carries inconsistent Merkle material")]
     InconsistentMerkleMaterial,
@@ -218,103 +242,62 @@ pub enum TrustedBlockProofAnchorError {
 impl TrustedBlockProofAnchor {
     /// Derive a target-specific anchor from an untrusted finality artifact.
     ///
-    /// This first verifies the artifact's complete frozen-roster, proof-of-possession, and
+    /// `expected_context_id` must be independently trusted for this exact target height, either
+    /// pinned directly or obtained after authenticated chain verification. Deriving it from an
+    /// unverified artifact is circular and does not establish trust. A chain's initial predecessor
+    /// pin is not the target context after a height transition.
+    ///
+    /// This first compares the complete context with that expectation, then verifies the
+    /// artifact's complete frozen-roster, proof-of-possession, and
     /// `CommitQC` cryptography, then validates its exact association with `block.header()`. Only
     /// after both checks succeed does it use the `CommitQC`'s execution commitment to authenticate
-    /// the exact executed block wire. It validates the retained entrypoint/result caches in place,
-    /// checks their exact count alignment, locates `entry_hash` in authenticated block order, and
-    /// retains the exact FASTPQ transcript map bound by that wire. Every target binds the full
-    /// executed-entrypoint tree so its index is identical to the corresponding result index. The
+    /// the exact executed block wire hash and length. It validates the output cache in place,
+    /// locates `entry_hash` in authenticated network-input order, and
+    /// retains the exact FASTPQ transcript map bound by that wire. Input and output positions join
+    /// only through the authenticated Network.input_index; internal outputs have no input leaf. The
     /// external-only header root is checked with a logarithmic-memory accumulator.
     ///
     /// # Errors
-    /// Returns [`TrustedBlockProofAnchorError`] when finality verification or header association
+    /// Returns [`TrustedBlockProofAnchorError`] when the independently trusted context differs,
+    /// finality verification or header association
     /// fails, the exact block wire is not the `CommitQC`-authenticated wire, or Merkle material is
     /// missing or inconsistent.
     pub fn from_untrusted_finality_artifact(
         block: &SignedBlock,
         artifact: &V2FinalityArtifact,
+        expected_context_id: HeightContextId,
         entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        artifact
-            .verify()
-            .map_err(TrustedBlockProofAnchorError::FinalityVerification)?;
-        artifact
-            .validate_for_header(&block.header())
-            .map_err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)?;
-        Self::from_authenticated_execution(
-            block,
-            &artifact.commit_qc.execution_commitment,
-            entry_hash,
-        )
-    }
-    fn from_authenticated_execution(
-        block: &SignedBlock,
-        execution_commitment: &ExecutionCommitment,
-        entry_hash: &HashOf<TransactionEntrypoint>,
-    ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
-            .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
-        if executed_block_wire_hash != execution_commitment.executed_block_wire_hash {
-            return Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch);
-        }
-        if !block.has_results() {
-            return Err(TrustedBlockProofAnchorError::MissingResults);
-        }
-        block
-            .validate_entrypoint_merkle_cache()
-            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
-        block
-            .validate_result_merkle_cache()
-            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
+        let (executed_block_wire_hash, output_commitment) =
+            authenticate_execution_outputs(block, artifact, expected_context_id)?;
         let full_entry_commitment = block
-            .full_entry_merkle_commitment()
+            .network_input_merkle_commitment()
             .ok_or(TrustedBlockProofAnchorError::MissingEntrypoints)?;
-        let result_commitment = block
-            .result_merkle_commitment()
-            .ok_or(TrustedBlockProofAnchorError::MissingResults)?;
-        if full_entry_commitment.leaf_count() != result_commitment.leaf_count() {
-            return Err(TrustedBlockProofAnchorError::MisalignedLeafCounts);
-        }
         if full_entry_commitment.leaf_count().get() > BLOCK_MERKLE_MAX_LEAF_COUNT {
             return Err(TrustedBlockProofAnchorError::TooManyEntrypoints);
         }
-        let external_count = u64::try_from(block.external_entrypoint_count())
-            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
-        if external_count > full_entry_commitment.leaf_count().get() {
-            return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
-        }
-        let external_root = MerkleTree::root_from_typed_leaves(
-            block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash()),
-        );
-        if block.header().merkle_root() != external_root {
-            return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
-        }
-        if block.full_entry_merkle_commitment() != Some(full_entry_commitment)
-            || block.result_merkle_commitment() != Some(result_commitment)
-            || block.header().result_merkle_root() != Some(*result_commitment.root())
-        {
-            return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
-        }
-        let entry_index_usize = block
-            .entrypoint_hashes()
+        let entry_index = block
+            .network_input_hashes()
             .position(|candidate| &candidate == entry_hash)
             .ok_or(TrustedBlockProofAnchorError::EntrypointNotFound {
                 entry_hash: *entry_hash,
             })?;
-        let entry_index = u32::try_from(entry_index_usize)
+        let entry_index = u32::try_from(entry_index)
             .map_err(|_| TrustedBlockProofAnchorError::TooManyEntrypoints)?;
+        let (output_index, _) = block
+            .network_output_at(entry_index)
+            .ok_or(TrustedBlockProofAnchorError::MissingNetworkOutput)?;
+        let output_hash = HashOf::new(&block.execution_outputs()[output_index as usize]);
         Ok(Self {
             block_height: block.header().height(),
             block_hash: block.hash(),
             executed_block_wire_hash,
             entry_hash: *entry_hash,
             entry_index,
+            output_index,
+            output_hash,
             entry_commitment: full_entry_commitment,
-            result_commitment,
+            output_commitment,
             fastpq_transcripts: block.fastpq_transcripts().clone(),
         })
     }
@@ -348,10 +331,10 @@ impl TrustedBlockProofAnchor {
     pub const fn entry_commitment(&self) -> MerkleTreeCommitment<TransactionEntrypoint> {
         self.entry_commitment
     }
-    /// Return the anchored result-tree commitment.
+    /// Return the anchored output-tree commitment, whose count may exceed the input count.
     #[must_use]
-    pub const fn result_commitment(&self) -> MerkleTreeCommitment<TransactionResult> {
-        self.result_commitment
+    pub const fn output_commitment(&self) -> MerkleTreeCommitment<ExecutionOutputV1> {
+        self.output_commitment
     }
     /// Return the exact FASTPQ transcript projection authenticated by the executed block wire.
     #[must_use]
@@ -359,6 +342,131 @@ impl TrustedBlockProofAnchor {
         &self.fastpq_transcripts
     }
 }
+/// Target-specific authority for any typed output, including Pipeline and Time invocations.
+///
+/// This non-serializable capability has no input proof or synthetic transaction identity.
+/// Its constructor requires an independently trusted target context, then verifies finality,
+/// the exact executed wire, and all output cache material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedExecutionOutputAnchor {
+    block_height: NonZeroU64,
+    block_hash: HashOf<BlockHeader>,
+    executed_block_wire_hash: Hash,
+    output_index: u32,
+    output_hash: HashOf<ExecutionOutputV1>,
+    output_commitment: MerkleTreeCommitment<ExecutionOutputV1>,
+}
+
+impl TrustedExecutionOutputAnchor {
+    /// Authenticate the output at `output_index` with a fully verified CommitQC under an
+    /// independently trusted target height context.
+    ///
+    /// Pin `expected_context_id` independently, or obtain the exact target context after verifying
+    /// its chain from an external pin. Never derive this expectation from an unverified artifact.
+    /// A verified successor's context differs from the chain's initial predecessor pin.
+    ///
+    /// # Errors
+    /// Returns an error for a different trusted context, invalid finality, wire or cache mismatches,
+    /// or an absent output.
+    pub fn from_untrusted_finality_artifact(
+        block: &SignedBlock,
+        artifact: &V2FinalityArtifact,
+        expected_context_id: HeightContextId,
+        output_index: u32,
+    ) -> Result<Self, TrustedBlockProofAnchorError> {
+        let (executed_block_wire_hash, output_commitment) =
+            authenticate_execution_outputs(block, artifact, expected_context_id)?;
+        let output = block
+            .execution_outputs()
+            .get(output_index as usize)
+            .ok_or(TrustedBlockProofAnchorError::OutputNotFound { output_index })?;
+        Ok(Self {
+            block_height: block.header().height(),
+            block_hash: block.hash(),
+            executed_block_wire_hash,
+            output_index,
+            output_hash: HashOf::new(output),
+            output_commitment,
+        })
+    }
+
+    /// Return the finalized block height.
+    #[must_use]
+    pub const fn block_height(&self) -> NonZeroU64 {
+        self.block_height
+    }
+    /// Return the finalized proposal header hash.
+    #[must_use]
+    pub const fn block_hash(&self) -> HashOf<BlockHeader> {
+        self.block_hash
+    }
+    /// Return the finalized exact executed-wire hash.
+    #[must_use]
+    pub const fn executed_block_wire_hash(&self) -> Hash {
+        self.executed_block_wire_hash
+    }
+    /// Return the target's position in the complete typed-output sequence.
+    #[must_use]
+    pub const fn output_index(&self) -> u32 {
+        self.output_index
+    }
+    /// Return the finalized output root and exact count.
+    #[must_use]
+    pub const fn output_commitment(&self) -> MerkleTreeCommitment<ExecutionOutputV1> {
+        self.output_commitment
+    }
+    /// Verify a full output and audit path for this exact target.
+    #[must_use]
+    pub fn verify(&self, proof: &ExecutionReceiptProof) -> bool {
+        proof.proof().leaf_index() == self.output_index
+            && proof.leaf() == self.output_hash
+            && proof.verify(&self.output_commitment)
+    }
+}
+
+fn authenticate_execution_outputs(
+    block: &SignedBlock,
+    artifact: &V2FinalityArtifact,
+    expected_context_id: HeightContextId,
+) -> Result<(Hash, MerkleTreeCommitment<ExecutionOutputV1>), TrustedBlockProofAnchorError> {
+    let got = artifact.context_id();
+    if got != expected_context_id {
+        return Err(TrustedBlockProofAnchorError::UnexpectedContext {
+            expected: expected_context_id,
+            got,
+        });
+    }
+    artifact
+        .verify()
+        .map_err(TrustedBlockProofAnchorError::FinalityVerification)?;
+    artifact
+        .validate_for_header(&block.header())
+        .map_err(TrustedBlockProofAnchorError::FinalityHeaderMismatch)?;
+    let wire = block
+        .canonical_wire()
+        .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
+    let executed_block_wire_hash = Hash::new(wire.as_framed());
+    let commitment = &artifact.commit_qc.execution_commitment;
+    if executed_block_wire_hash != commitment.executed_block_wire_hash
+        || u64::try_from(wire.as_framed().len()).ok() != Some(commitment.executed_block_wire_len)
+    {
+        return Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch);
+    }
+    if !block.has_results() {
+        return Err(TrustedBlockProofAnchorError::MissingResults);
+    }
+    block
+        .validate_output_merkle_cache()
+        .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
+    let outputs = block
+        .output_merkle_commitment()
+        .ok_or(TrustedBlockProofAnchorError::MissingResults)?;
+    if outputs.leaf_count().get() > BLOCK_MERKLE_MAX_LEAF_COUNT {
+        return Err(TrustedBlockProofAnchorError::TooManyOutputs);
+    }
+    Ok((executed_block_wire_hash, outputs))
+}
+
 impl BlockProofs {
     /// Verify all proof fields against a separately authenticated anchor.
     #[must_use]
@@ -369,12 +477,13 @@ impl BlockProofs {
             || self.entry_hash != anchor.entry_hash
             || self.entry_proof.proof().leaf_index() != anchor.entry_index
             || self.entry_commitment != anchor.entry_commitment
-            || self.entry_commitment.leaf_count() != self.result_commitment.leaf_count()
             || self.entry_hash != *self.entry_proof.leaf()
             || !self.entry_proof.verify(&anchor.entry_commitment)
-            || self.result_commitment != anchor.result_commitment
-            || self.entry_proof.proof().leaf_index() != self.result_proof.proof().leaf_index()
-            || !self.result_proof.verify(&anchor.result_commitment)
+            || self.output_commitment != anchor.output_commitment
+            || self.output_proof.proof().leaf_index() != anchor.output_index
+            || self.output_proof.leaf() != anchor.output_hash
+            || !matches!(self.output_proof.output(), ExecutionOutputV1::Network(row) if row.input_index == anchor.entry_index)
+            || !self.output_proof.verify(&anchor.output_commitment)
             || self.fastpq_transcripts != anchor.fastpq_transcripts
         {
             return false;
@@ -385,36 +494,30 @@ impl BlockProofs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "transparent_api")]
+    use crate::block::consensus_v2::{
+        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+        GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+        ValidatorPower, Vote,
+    };
     use crate::{
         account::AccountId,
-        transaction::{
-            TransactionResultInner,
-            signed::{TransactionBuilder, TransactionResult},
-        },
+        transaction::{TransactionResultInner, signed::TransactionBuilder},
     };
     #[cfg(feature = "transparent_api")]
-    use crate::{
-        block::{
-            BlockSignature,
-            consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-                ValidatorPower, Vote,
-            },
-        },
-        transaction::ExecutionStep,
-        trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-    };
-    #[cfg(feature = "transparent_api")]
-    use iroha_crypto::{Algorithm, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Signature};
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
     use iroha_model_base::domain::DomainId;
     #[cfg(feature = "transparent_api")]
     use iroha_model_base::peer::PeerId;
-    #[cfg(feature = "transparent_api")]
-    use iroha_primitives::const_vec::ConstVec;
     use norito::codec::DecodeAll as _;
     use std::iter::FromIterator;
+    fn sample_output(index: u32) -> ExecutionOutputV1 {
+        super::super::output_test_support::network(
+            index,
+            TransactionResultInner::Ok(crate::trigger::DataTriggerSequence::default()),
+        )
+    }
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -524,12 +627,11 @@ mod tests {
         );
     }
     #[test]
-    fn execution_receipt_proof_verifies_against_result_merkle_root() {
-        let sequence = TransactionResultInner::Ok(crate::trigger::DataTriggerSequence::default());
-        let result_hash = TransactionResult::hash_from_inner(&sequence);
-        let tree = MerkleTree::from_iter([result_hash]);
+    fn execution_receipt_proof_verifies_against_full_output_merkle_root() {
+        let output = sample_output(0);
+        let tree = MerkleTree::from_iter([HashOf::new(&output)]);
         let proof = tree.get_proof(0).expect("proof must exist for result leaf");
-        let execution = ExecutionReceiptProof::new(result_hash, proof);
+        let execution = ExecutionReceiptProof::new(output, proof);
         let commitment = tree.commitment().expect("commitment must exist");
         assert!(
             execution.verify(&commitment),
@@ -538,11 +640,10 @@ mod tests {
     }
     #[test]
     fn execution_receipt_proof_rejects_wrong_root() {
-        let sequence = TransactionResultInner::Ok(crate::trigger::DataTriggerSequence::default());
-        let result_hash = TransactionResult::hash_from_inner(&sequence);
-        let tree = MerkleTree::from_iter([result_hash]);
+        let output = sample_output(0);
+        let tree = MerkleTree::from_iter([HashOf::new(&output)]);
         let proof = tree.get_proof(0).expect("proof must exist for result leaf");
-        let execution = ExecutionReceiptProof::new(result_hash, proof);
+        let execution = ExecutionReceiptProof::new(output, proof);
         let commitment = tree.commitment().expect("commitment must exist");
         let wrong_root = HashOf::from_untyped_unchecked(Hash::new([0xCC; 32]));
         let wrong_commitment = MerkleTreeCommitment::new(wrong_root, commitment.leaf_count());
@@ -560,15 +661,11 @@ mod tests {
             entry_hash,
             tree.get_proof(0).expect("proof must exist for single leaf"),
         );
-        let result_hash = TransactionResult::hash_from_inner(&TransactionResultInner::Ok(
-            crate::trigger::DataTriggerSequence::default(),
-        ));
-        let result_tree = MerkleTree::from_iter([result_hash]);
-        let result_commitment = result_tree.commitment().expect("result commitment");
-        let result_proof = ExecutionReceiptProof::new(
-            result_hash,
-            result_tree.get_proof(0).expect("result proof"),
-        );
+        let output = sample_output(0);
+        let result_tree = MerkleTree::from_iter([HashOf::new(&output)]);
+        let output_commitment = result_tree.commitment().expect("result commitment");
+        let output_proof =
+            ExecutionReceiptProof::new(output, result_tree.get_proof(0).expect("result proof"));
         let proofs = BlockProofs {
             block_height: NonZeroU64::new(7).expect("block height must be non-zero"),
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"carrier block")),
@@ -576,8 +673,8 @@ mod tests {
             entry_hash,
             entry_commitment,
             entry_proof,
-            result_commitment,
-            result_proof,
+            output_commitment,
+            output_proof,
             fastpq_transcripts: BTreeMap::new(),
         };
         let encoded = proofs.encode();
@@ -727,81 +824,149 @@ mod tests {
         artifact
     }
     #[cfg(feature = "transparent_api")]
-    fn authenticated_block_with_scheduled_entry() -> (
+    fn authenticated_block_with_internal_output() -> (
         SignedBlock,
         V2FinalityArtifact,
         HashOf<TransactionEntrypoint>,
-        HashOf<TransactionEntrypoint>,
+        u32,
     ) {
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new_genesis(
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1000, 0);
+        let mut builder = crate::block::builder::BlockBuilder::new(header);
+        for index in 0..2 {
+            let mut tx = TransactionBuilder::new_genesis(
+                authority.clone(),
+                crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
+            tx.set_creation_time(std::time::Duration::from_millis(900 + index));
+            builder.push_transaction(
+                tx.try_sign(keypair.private_key())
+                    .expect("fixture transaction"),
+            );
+        }
+        let mut block = builder.build_with_signature(0, keypair.private_key());
+        let external_hash = block.network_input_hashes().next().expect("network input");
+        let timer = super::super::output_test_support::simple_time(&block, 0);
+        super::super::output_test_support::install(
+            &mut block,
+            vec![sample_output(0), sample_output(1), timer],
+            0,
         )
-        .try_sign(keypair.private_key())
-        .expect("fixture transaction signature");
-        let scheduled = TimeTriggerEntrypoint {
-            id: "anchor_schedule".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority,
-        };
-        let external_hash = transaction.hash_as_entrypoint();
-        let scheduled_hash = scheduled.hash_as_entrypoint();
-        let entry_hashes = [external_hash, scheduled_hash];
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                .expect("fixture block signature"),
-        );
-        let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
-        block
-            .set_transaction_results(
-                vec![scheduled],
-                &entry_hashes,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("fixture entrypoints and results align");
-        let executed_block_wire = block
-            .encode_wire()
-            .expect("fixture executed block wire encodes");
-        let executed_block_wire_len =
-            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
-        let executed_block_wire_hash = Hash::new(&executed_block_wire);
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        .expect("valid full outputs");
+        let wire = block.encode_wire().expect("fixture wire");
+        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"trusted proof parent state"),
             Hash::new(b"trusted proof post state"),
             Hash::new(b"trusted proof ordinary writes"),
-            executed_block_wire_len,
-            executed_block_wire_hash,
+            wire.len() as u64,
+            Hash::new(&wire),
         );
-        execution_commitment
-            .validate()
-            .expect("fixture execution commitment is valid");
-        let artifact = finalized_artifact_for_block(&block, &execution_commitment);
-        (block, artifact, external_hash, scheduled_hash)
+        commitment.validate().expect("valid execution commitment");
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        (block, artifact, external_hash, 2)
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn trusted_anchor_accepts_real_finality_and_uses_full_tree_for_external_target() {
-        let (block, artifact, external_hash, _) = authenticated_block_with_scheduled_entry();
+    fn both_anchors_reject_a_valid_alternate_roster_before_cryptography() {
+        let (block, trusted, entry_hash, output_index) = authenticated_block_with_internal_output();
+        // Pin the deployment selected by the fixture owner before handling the alternate response.
+        let expected = trusted.context_id();
+        let alternate =
+            finalized_artifact_for_block(&block, &trusted.commit_qc.execution_commitment);
+        alternate
+            .verify()
+            .expect("alternate roster has genuine three-of-four BLS finality and PoPs");
+        alternate
+            .validate_for_header(&block.header())
+            .expect("identical carrier header");
+        assert_eq!(trusted.subject, alternate.subject);
+        assert_eq!(
+            trusted.commit_qc.execution_commitment,
+            alternate.commit_qc.execution_commitment
+        );
+        assert_eq!(
+            trusted.height_context.network_id,
+            alternate.height_context.network_id
+        );
+        assert_ne!(
+            trusted.height_context.roster,
+            alternate.height_context.roster
+        );
+        assert_eq!(alternate.height_context.roster.len(), 4);
+        assert_eq!(alternate.commit_qc.signers.len(), 3);
+        assert_eq!(alternate.validator_set_pops.len(), 4);
+        assert_ne!(expected, alternate.context_id());
+        let refusal = TrustedBlockProofAnchorError::UnexpectedContext {
+            expected,
+            got: alternate.context_id(),
+        };
+        for corrupt_signature in [false, true] {
+            let mut response = alternate.clone();
+            if corrupt_signature {
+                response.commit_qc.aggregate_signature[0] ^= 0x80;
+            }
+            assert_eq!(
+                TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                    &block,
+                    &response,
+                    expected,
+                    &entry_hash,
+                ),
+                Err(refusal)
+            );
+            assert_eq!(
+                TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                    &block,
+                    &response,
+                    expected,
+                    output_index,
+                ),
+                Err(refusal)
+            );
+        }
+        // Either known deployment can be selected independently; trust is never inferred
+        // from a valid signature made by another roster for the same proposal and output wire.
+        for selected in [&trusted, &alternate] {
+            let selected_context = selected.context_id();
+            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                selected,
+                selected_context,
+                &entry_hash,
+            )
+            .expect("independently selected valid network-output authority");
+            assert!(
+                block
+                    .network_execution_proof(&entry_hash)
+                    .unwrap()
+                    .verify(&anchor)
+            );
+            let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                selected,
+                selected_context,
+                output_index,
+            )
+            .expect("independently selected valid internal-output authority");
+            assert!(anchor.verify(&ExecutionReceiptProof::new(
+                block.execution_outputs()[output_index as usize].clone(),
+                block.output_proof(output_index).unwrap(),
+            )));
+        }
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn trusted_anchor_accepts_real_finality_with_distinct_input_and_output_counts() {
+        let (block, artifact, external_hash, _) = authenticated_block_with_internal_output();
         let proofs = block
-            .proofs_for_entry_hash(&external_hash)
+            .network_execution_proof(&external_hash)
             .expect("external proof exists");
         let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
             &block,
             &artifact,
+            artifact.context_id(),
             &external_hash,
         )
         .expect("external anchor derives");
@@ -811,57 +976,83 @@ mod tests {
         assert_eq!(
             anchor.entry_commitment(),
             block
-                .full_entry_merkle_commitment()
+                .network_input_merkle_commitment()
                 .expect("full entry commitment")
         );
-        assert_ne!(
+        assert_eq!(anchor.entry_commitment().leaf_count().get(), 2);
+        assert_eq!(anchor.output_commitment().leaf_count().get(), 3);
+        assert_eq!(
             anchor.entry_commitment().root(),
-            &block.header().merkle_root().expect("external root"),
-            "the external-only header tree must not replace the executed-entry tree"
+            &block.header().merkle_root().unwrap()
         );
         assert_eq!(anchor.fastpq_transcripts(), block.fastpq_transcripts());
         assert!(proofs.verify(&anchor));
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn trusted_anchor_uses_full_tree_for_scheduled_target() {
-        let (block, artifact, _, scheduled_hash) = authenticated_block_with_scheduled_entry();
-        let proofs = block
-            .proofs_for_entry_hash(&scheduled_hash)
-            .expect("scheduled proof exists");
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+    fn trusted_anchor_authenticates_internal_output_without_an_input_leaf() {
+        let (block, artifact, _, index) = authenticated_block_with_internal_output();
+        let proof = ExecutionReceiptProof::new(
+            block.execution_outputs()[index as usize].clone(),
+            block.output_proof(index).unwrap(),
+        );
+        let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
             &block,
             &artifact,
-            &scheduled_hash,
+            artifact.context_id(),
+            index,
         )
-        .expect("scheduled anchor derives");
-        assert_eq!(anchor.entry_hash(), scheduled_hash);
-        assert_eq!(anchor.entry_index(), 1);
+        .expect("internal output anchor");
+        assert_eq!(anchor.output_index(), index);
+        assert_eq!(anchor.block_height(), block.header().height());
+        assert_eq!(anchor.block_hash(), block.hash());
         assert_eq!(
-            anchor.entry_commitment(),
-            block
-                .full_entry_merkle_commitment()
-                .expect("full entry commitment")
+            anchor.executed_block_wire_hash(),
+            block.executed_block_wire_hash().unwrap()
         );
-        assert_eq!(anchor.entry_commitment(), proofs.entry_commitment);
-        assert!(proofs.verify(&anchor));
+        assert_eq!(anchor.output_commitment().leaf_count().get(), 3);
+        assert!(matches!(proof.output(), ExecutionOutputV1::Time(_)));
+        assert!(anchor.verify(&proof));
+        let mut substituted = proof.clone();
+        if let ExecutionOutputV1::Time(row) = &mut substituted.output {
+            row.invocation.schedule_index += 1;
+        }
+        assert!(!anchor.verify(&substituted));
+        let other = ExecutionReceiptProof::new(
+            block.execution_outputs()[0].clone(),
+            block.output_proof(0).unwrap(),
+        );
+        assert!(other.verify(&anchor.output_commitment()));
+        assert!(!anchor.verify(&other));
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                3
+            ),
+            Err(TrustedBlockProofAnchorError::OutputNotFound { output_index: 3 })
+        );
+        let fake_input = HashOf::from_untyped_unchecked(proof.leaf().into());
+        assert!(block.network_execution_proof(&fake_input).is_none());
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn trusted_anchor_rejects_unknown_or_substituted_target() {
-        let (block, artifact, external_hash, scheduled_hash) =
-            authenticated_block_with_scheduled_entry();
+        let (block, artifact, external_hash, _) = authenticated_block_with_internal_output();
+        let other_input_hash = block.network_input_hashes().nth(1).unwrap();
         let external_anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
             &block,
             &artifact,
+            artifact.context_id(),
             &external_hash,
         )
         .expect("external anchor derives");
-        let scheduled_proofs = block
-            .proofs_for_entry_hash(&scheduled_hash)
-            .expect("scheduled proof exists");
+        let other_proofs = block
+            .network_execution_proof(&other_input_hash)
+            .expect("second network proof exists");
         assert!(
-            !scheduled_proofs.verify(&external_anchor),
+            !other_proofs.verify(&external_anchor),
             "a valid proof for another entrypoint in the same tree must not satisfy the target anchor"
         );
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing entrypoint"));
@@ -869,6 +1060,7 @@ mod tests {
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,
                 &artifact,
+                artifact.context_id(),
                 &missing_hash,
             ),
             Err(TrustedBlockProofAnchorError::EntrypointNotFound {
@@ -879,12 +1071,14 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn self_consistent_block_and_execution_commitment_cannot_mint_an_anchor_without_valid_qc() {
-        let (block, mut artifact, external_hash, _) = authenticated_block_with_scheduled_entry();
+        let (block, mut artifact, external_hash, _) = authenticated_block_with_internal_output();
+        let expected_context_id = artifact.context_id();
         artifact.commit_qc.aggregate_signature[0] ^= 0x80;
         assert!(matches!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,
                 &artifact,
+                expected_context_id,
                 &external_hash,
             ),
             Err(TrustedBlockProofAnchorError::FinalityVerification(
@@ -895,12 +1089,13 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn trusted_anchor_rejects_valid_finality_for_another_header() {
-        let (block, artifact, _, _) = authenticated_block_with_scheduled_entry();
-        let (other_block, _, other_external_hash, _) = authenticated_block_with_scheduled_entry();
+        let (block, artifact, _, _) = authenticated_block_with_internal_output();
+        let (other_block, _, other_external_hash, _) = authenticated_block_with_internal_output();
         assert_eq!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &other_block,
                 &artifact,
+                artifact.context_id(),
                 &other_external_hash,
             ),
             Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch(
@@ -912,7 +1107,7 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
-        let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
+        let (block, _, external_hash, _) = authenticated_block_with_internal_output();
         let wrong_executed_block_wire = b"different finalized executed block wire";
         let wrong_execution_commitment =
             ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
@@ -928,6 +1123,7 @@ mod tests {
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,
                 &artifact,
+                artifact.context_id(),
                 &external_hash,
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
@@ -936,13 +1132,14 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn real_block_proofs_reject_wrong_count_and_commitment_substitution() {
-        let (block, artifact, external_hash, _) = authenticated_block_with_scheduled_entry();
+        let (block, artifact, external_hash, _) = authenticated_block_with_internal_output();
         let proofs = block
-            .proofs_for_entry_hash(&external_hash)
+            .network_execution_proof(&external_hash)
             .expect("external proof exists");
         let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
             &block,
             &artifact,
+            artifact.context_id(),
             &external_hash,
         )
         .expect("external anchor derives");
@@ -957,79 +1154,224 @@ mod tests {
             !wrong_count.verify(&anchor),
             "the same root must not be rebound to a different entrypoint count"
         );
-        let external_tree: MerkleTree<TransactionEntrypoint> = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect();
+        let other_tree: MerkleTree<TransactionEntrypoint> = [external_hash].into_iter().collect();
         let mut substituted_commitment = proofs;
-        substituted_commitment.entry_commitment = external_tree
-            .commitment()
-            .expect("external entry commitment");
+        substituted_commitment.entry_commitment = other_tree.commitment().unwrap();
         assert!(
             !substituted_commitment.verify(&anchor),
-            "the external-only commitment must not replace the executed-entry commitment"
+            "a subset input commitment must not replace the full authenticated input tree"
         );
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn trusted_anchor_checks_full_entry_result_count_alignment_before_target_selection() {
-        let (mut block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
-        let result_state = block.result.as_mut().expect("fixture has results");
-        result_state.transaction_results.truncate(1);
-        result_state.result_merkle = result_state
-            .transaction_results
-            .iter()
-            .map(TransactionResult::hash)
-            .collect();
-        block.payload.header.result_merkle_root = result_state.result_merkle.root();
-        let executed_block_wire = block
-            .encode_wire()
-            .expect("misaligned fixture wire still encodes");
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"misaligned proof parent state"),
-            Hash::new(b"misaligned proof post state"),
-            Hash::new(b"misaligned proof ordinary writes"),
-            u64::try_from(executed_block_wire.len())
-                .expect("misaligned fixture wire length fits u64"),
-            Hash::new(&executed_block_wire),
+    fn trusted_anchor_checks_network_output_join_before_target_selection() {
+        let (mut block, _, external_hash, _) = authenticated_block_with_internal_output();
+        let result = block.result.as_mut().unwrap();
+        result.outputs.remove(1);
+        result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+        let wire = block.encode_wire().unwrap();
+        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"missing output parent"),
+            Hash::new(b"missing output post"),
+            Hash::new(b"missing output writes"),
+            wire.len() as u64,
+            Hash::new(&wire),
         );
-        let artifact = finalized_artifact_for_block(&block, &execution_commitment);
+        let artifact = finalized_artifact_for_block(&block, &commitment);
         assert_eq!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,
                 &artifact,
-                &external_hash,
+                artifact.context_id(),
+                &external_hash
             ),
-            Err(TrustedBlockProofAnchorError::MisalignedLeafCounts)
+            Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
+        );
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                0
+            ),
+            Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn trusted_anchors_require_exact_finalized_wire_length() {
+        let (block, valid, input, index) = authenticated_block_with_internal_output();
+        let mut commitment = valid.commit_qc.execution_commitment;
+        commitment.executed_block_wire_len += 1;
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        assert_eq!(
+            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                &input
+            ),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                index
+            ),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn internal_pipeline_output_has_finality_without_a_synthetic_transaction() {
+        use crate::block::execution_output::{
+            PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineInvocationV1,
+        };
+        let (mut block, _, _, index) = authenticated_block_with_internal_output();
+        let result = block.result.as_mut().unwrap();
+        let ExecutionOutputV1::Time(timer) = result.outputs[index as usize].clone() else {
+            panic!("timer fixture")
+        };
+        result.outputs[index as usize] = ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger: timer.invocation.trigger,
+            },
+            result: timer.result,
+            failure_root: timer.failure_root,
+            completions: timer.completions,
+        });
+        result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+        block
+            .validate_output_merkle_cache()
+            .expect("valid Pipeline output");
+        let wire = block.encode_wire().unwrap();
+        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"pipeline parent"),
+            Hash::new(b"pipeline post"),
+            Hash::new(b"pipeline writes"),
+            wire.len() as u64,
+            Hash::new(&wire),
+        );
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let anchor = TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+            &block,
+            &artifact,
+            artifact.context_id(),
+            index,
+        )
+        .unwrap();
+        let proof = ExecutionReceiptProof::new(
+            block.execution_outputs()[index as usize].clone(),
+            block.output_proof(index).unwrap(),
+        );
+        assert!(anchor.verify(&proof));
+        assert!(matches!(proof.output(), ExecutionOutputV1::Pipeline(_)));
+        assert_eq!(block.network_input_hashes().len(), 2);
+        assert_eq!(anchor.output_commitment().leaf_count().get(), 3);
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn both_anchor_types_reject_a_finalized_stale_output_cache() {
+        let (mut block, _, input, index) = authenticated_block_with_internal_output();
+        let result = block.result.as_mut().unwrap();
+        let ExecutionOutputV1::Time(timer) = &mut result.outputs[index as usize] else {
+            panic!("timer fixture")
+        };
+        timer.invocation.trigger.action_hash =
+            Hash::new(b"substituted action with stale output cache");
+        let wire = block.encode_wire().unwrap();
+        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"stale parent"),
+            Hash::new(b"stale post"),
+            Hash::new(b"stale writes"),
+            wire.len() as u64,
+            Hash::new(&wire),
+        );
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        assert_eq!(
+            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                &input
+            ),
+            Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
+        );
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                index
+            ),
+            Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial)
+        );
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn internal_output_anchor_requires_valid_qc_and_exact_header_and_wire() {
+        let (block, valid, _, index) = authenticated_block_with_internal_output();
+        let mut invalid = valid.clone();
+        invalid.commit_qc.aggregate_signature[0] ^= 0x80;
+        assert!(matches!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &invalid,
+                valid.context_id(),
+                index
+            ),
+            Err(TrustedBlockProofAnchorError::FinalityVerification(_))
+        ));
+        let (other, _, _, _) = authenticated_block_with_internal_output();
+        assert!(matches!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &other,
+                &valid,
+                valid.context_id(),
+                index
+            ),
+            Err(TrustedBlockProofAnchorError::FinalityHeaderMismatch(_))
+        ));
+        let mut commitment = valid.commit_qc.execution_commitment;
+        commitment.executed_block_wire_hash = Hash::new(b"another wire");
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        assert_eq!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                index
+            ),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
         );
     }
     fn aligned_block_proofs_fixture() -> (BlockProofs, TrustedBlockProofAnchor) {
         let entries = [sample_entrypoint_hash(), sample_entrypoint_hash()];
         let entry_tree: MerkleTree<TransactionEntrypoint> = entries.into_iter().collect();
-        let results = [
-            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"result zero")),
-            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"result one")),
-        ];
-        let result_tree: MerkleTree<TransactionResult> = results.into_iter().collect();
-        let block_height = NonZeroU64::new(9).expect("non-zero height");
+        let outputs = [sample_output(0), sample_output(1)];
+        let output_tree: MerkleTree<ExecutionOutputV1> = outputs.iter().map(HashOf::new).collect();
+        let block_height = NonZeroU64::new(9).unwrap();
         let block_hash = HashOf::from_untyped_unchecked(Hash::new(b"trusted carrier block"));
         let executed_block_wire_hash = Hash::new(b"trusted executed block wire");
-        let entry_commitment = entry_tree.commitment().expect("entry commitment");
-        let result_commitment = result_tree.commitment().expect("result commitment");
+        let entry_commitment = entry_tree.commitment().unwrap();
+        let output_commitment = output_tree.commitment().unwrap();
         let proofs = BlockProofs {
             block_height,
             block_hash,
             executed_block_wire_hash,
             entry_hash: entries[0],
             entry_commitment,
-            entry_proof: BlockReceiptProof::new(
-                entries[0],
-                entry_tree.get_proof(0).expect("entry proof"),
-            ),
-            result_commitment,
-            result_proof: ExecutionReceiptProof::new(
-                results[0],
-                result_tree.get_proof(0).expect("result proof"),
+            entry_proof: BlockReceiptProof::new(entries[0], entry_tree.get_proof(0).unwrap()),
+            output_commitment,
+            output_proof: ExecutionReceiptProof::new(
+                outputs[0].clone(),
+                output_tree.get_proof(0).unwrap(),
             ),
             fastpq_transcripts: BTreeMap::new(),
         };
@@ -1039,8 +1381,10 @@ mod tests {
             executed_block_wire_hash,
             entry_hash: entries[0],
             entry_index: 0,
+            output_index: 0,
+            output_hash: HashOf::new(&outputs[0]),
             entry_commitment,
-            result_commitment,
+            output_commitment,
             fastpq_transcripts: BTreeMap::new(),
         };
         (proofs, anchor)
@@ -1064,43 +1408,32 @@ mod tests {
         );
     }
     #[test]
-    fn block_proofs_require_entry_and_result_indices_to_match() {
+    fn block_proofs_require_the_anchored_network_output_index() {
         let (mut proofs, anchor) = aligned_block_proofs_fixture();
-        let result_hash =
-            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"result one"));
-        let result_tree: MerkleTree<TransactionResult> = [
-            HashOf::from_untyped_unchecked(Hash::new(b"result zero")),
-            result_hash,
-        ]
-        .into_iter()
-        .collect();
-        proofs.result_proof = ExecutionReceiptProof::new(
-            result_hash,
-            result_tree.get_proof(1).expect("result proof"),
-        );
-        assert!(proofs.result_proof.verify(&proofs.result_commitment));
+        let outputs = [sample_output(0), sample_output(1)];
+        let tree: MerkleTree<ExecutionOutputV1> = outputs.iter().map(HashOf::new).collect();
+        proofs.output_proof =
+            ExecutionReceiptProof::new(outputs[1].clone(), tree.get_proof(1).unwrap());
+        assert!(proofs.output_proof.verify(&proofs.output_commitment));
         assert!(
             !proofs.verify(&anchor),
-            "individually valid proofs for different transaction indices must be rejected"
+            "another valid Network output must not satisfy the target"
         );
     }
     #[test]
-    fn block_proofs_require_entry_and_result_counts_to_match() {
+    fn block_proofs_require_the_explicit_network_input_join() {
         let (mut proofs, mut anchor) = aligned_block_proofs_fixture();
-        let result_hash =
-            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"single result"));
-        let result_tree: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
-        let result_commitment = result_tree.commitment().expect("result commitment");
-        proofs.result_commitment = result_commitment;
-        proofs.result_proof = ExecutionReceiptProof::new(
-            result_hash,
-            result_tree.get_proof(0).expect("result proof"),
-        );
-        anchor.result_commitment = result_commitment;
-        assert!(proofs.result_proof.verify(&anchor.result_commitment));
+        let output = sample_output(1);
+        let tree: MerkleTree<ExecutionOutputV1> = [HashOf::new(&output)].into_iter().collect();
+        proofs.output_commitment = tree.commitment().unwrap();
+        proofs.output_proof =
+            ExecutionReceiptProof::new(output.clone(), tree.get_proof(0).unwrap());
+        anchor.output_commitment = proofs.output_commitment;
+        anchor.output_hash = HashOf::new(&output);
+        assert!(proofs.output_proof.verify(&anchor.output_commitment));
         assert!(
             !proofs.verify(&anchor),
-            "separately valid entry and result trees must have one aligned leaf count"
+            "row input_index must bind the independently proven input"
         );
     }
     #[test]

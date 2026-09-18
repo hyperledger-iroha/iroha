@@ -460,7 +460,7 @@ mod tests {
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA1);
@@ -538,7 +538,7 @@ mod tests {
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA2);
@@ -601,7 +601,7 @@ mod tests {
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -645,7 +645,7 @@ mod tests {
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [alice_account], [], [], [nft]);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -706,7 +706,7 @@ mod tests {
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -759,7 +759,7 @@ mod tests {
             default_role_on_create: None,
         };
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -810,7 +810,7 @@ mod tests {
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest1 = random_account_id();
@@ -867,7 +867,7 @@ mod tests {
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
@@ -943,7 +943,7 @@ mod tests {
             [],
         );
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -1011,7 +1011,7 @@ mod tests {
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(3_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -1072,7 +1072,7 @@ mod tests {
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -1137,7 +1137,7 @@ mod tests {
         };
         world.roles.insert(role_id.clone(), role);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();
@@ -1190,7 +1190,7 @@ mod tests {
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let state = test_state(world, policy);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let dest = random_account_id();

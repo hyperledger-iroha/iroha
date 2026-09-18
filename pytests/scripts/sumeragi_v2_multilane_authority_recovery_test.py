@@ -882,3 +882,32 @@ def test_exact_authority_projection_actions_reject_reviewed_full_provider_mutant
     assert any(symbol in error for error in errors)
     (tmp_path / "semantic-rejection.json").write_text(json.dumps(
         {"id": control["id"], "errors": errors, "full_provider_sha256": full_provider_sha256}))
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("v2_known_lane_tip_for_route", ".next_back()", ".next()"),
+    ("v2_known_lane_tip_for_route", ".entries()\n            .next_back()", ".entries()\n            .filter(|(_, observation)| matches!(observation, crate::kura::NativeAmxParticipantApplicationObservation::Applied(_)))\n            .next_back()"),
+    ("v2_known_lane_tip_for_route", "crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)", "crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)"),
+    ("v2_known_lane_tip_for_route", "crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)", "crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)"),
+    ("v2_known_lane_tip_for_route", "return Ok(None);", "return Ok(Some((0, None)));"),
+    ("v2_known_lane_tip_for_route", "return Ok(None);", "return Ok(Some((u64::MAX, None)));"),
+    ("v2_known_lane_tip_for_route", "latest_receipt.application_block_height >= proposal_height", "latest_receipt.application_block_height > proposal_height"),
+    ("v2_known_lane_tip_for_route", "descriptor.lane_incarnation != lane_incarnation", "false"),
+    ("v2_known_lane_tip_for_route", "descriptor.dataspace_id != dataspace_id", "false"),
+    ("V2LaneWorkAdapter::bind_locked_global_body_from_origin", "Ok(recovered) => recovered,", "Ok(_recovered) => true,"),
+    ("V2LaneWorkAdapter::bind_locked_global_body_from_origin", '"rejected empty merge carrier after canonical Kura read"\n                    );\n                }\n                return V2LaneIngressOutcome::Rejected;', '"rejected empty merge carrier after canonical Kura read"\n                    );\n                }\n                false'),
+])
+def test_native_tip_and_locked_recovery_reject_changed_authority(
+    tmp_path, symbol, old, new
+):
+    binding = next(row for row in BINDINGS if row[3] == symbol)
+    item = source_item(binding)
+    assert old in item
+    mutated = item.replace(old, new, 1)
+    changed_provider(tmp_path, binding, item, mutated)
+    _module, path, kind, symbol, _required, _ordered = binding
+    errors = []
+    actual = actual_item(tmp_path, path, kind, symbol, "mutated recovery owner", errors)
+    assert errors == [] and actual is not None
+    contract.validate_authority_recovery_item(actual, binding, errors)
+    assert errors, f"changed {symbol} authority must be rejected"

@@ -107,6 +107,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/block.rs': (
+        'block/carrier_preparation.rs',
         'block/post_execution_tail.rs',
         'block/post_execution_tail_tests.rs',
         'block/autonomous_merge_carrier_content_tests.rs',
@@ -118,6 +119,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/canonical_genesis_validation_tests.rs',
         'block/genesis_validation_regression_tests.rs',
         'block/axt_shared_budget_across_envelopes_test.rs',
+        'block/output_event_tests.rs',
         'block/scheduler_variant_tests.rs',
         'block/validation_native_amx_test_support.rs',
         'block/native_amx_receipt_regression_tests.rs',
@@ -178,7 +180,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'consensus_v2_json_tests.rs',
     ),
     'crates/iroha_core/src/kura.rs': (
+        'kura/lane_storage.rs',
         *_KURA_PRODUCTION_COMPONENT_FILES,
+        'kura/tests/canonical_network_index.rs',
+        'kura/tests/bounded_canonical_body_reads.rs',
+        'kura/tests/committed_network_proof_support.rs',
+        'kura/tests/canonical_network_query_support.rs',
         'kura/tests/resident_resource_inventory.rs',
         'kura/tests/resident_remaining_resource_inventory.rs',
         'kura/tests/00_bounded_sidecar_read_tests.rs',
@@ -253,8 +260,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'native_amx_participant_application_artifacts.rs',
     ),
     'crates/iroha_core/src/kura/lane_geometry.rs': (
+        'lane_geometry/instance_recovery.rs',
+        'lane_geometry/reference_gc.rs',
         'lane_geometry/bootstrap_path_safety.rs',
-        'lane_geometry/bootstrap_relabel.rs',
         'lane_geometry/catalog_validation.rs',
         'lane_geometry/retirement_bounds.rs',
         'lane_geometry_tests/00_support.rs',
@@ -264,6 +272,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'lane_geometry_tests/02_geometry_moves_and_journal.rs',
         'lane_geometry_tests/03_gc_and_startup.rs',
         'lane_geometry_tests/04_physical_resource_accounting.rs',
+        'lane_geometry_tests/05_prepared_journal.rs',
+        'lane_geometry_tests/06_native_observation.rs',
         'startup_replay_geometry_binding.rs',
     ),
     'crates/iroha_core/src/merge_sidecar.rs': (
@@ -316,6 +326,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
         'host/nested_contract_state_and_rollback_tests.rs',
+        'host/shared_vm_cycle_budget_tests.rs',
         'host/contract_state_namespace_tests.rs',
         'host/stream_token_custody_namespace_tests.rs',
         'host/zk_verification_tests.rs',

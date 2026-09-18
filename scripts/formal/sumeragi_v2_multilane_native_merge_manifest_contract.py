@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import sumeragi_v2_multilane_native_preparation_contract as native_preparation
+
 
 NATIVE_MERGE_MANIFEST_CONTRACT_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_multilane_native_merge_manifest_contract.py"
@@ -270,9 +272,24 @@ NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/c
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'method',
   'ApplyFixture::new_with_options_and_retention',
+  ('Self::new_with_options_and_retention_and_genesis(',
+   'include_lane_payload,', 'include_projection_policies,',
+   'include_lane_lifecycle,', 'include_native_lane,', 'blocks_in_memory,', 'false,')),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention_and_genesis',
+  ('Self::new_with_options_and_retention_and_genesis_and_archival_kura(',
+   'include_lane_payload,', 'include_projection_policies,',
+   'include_lane_lifecycle,', 'include_native_lane,', 'blocks_in_memory,',
+   'seed_genesis_domain,', 'None,')),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   ('(1_u8..=4)',
    'Algorithm::BlsNormal',
-   'if include_lane_lifecycle {',
+   'if let Some(kura) = archival_kura {',
+   'assert!(include_native_lane && include_lane_lifecycle);',
+   'else if include_lane_lifecycle {',
    'locked_lane_work_test_kura(blocks_in_memory)',
    'State::new_with_chain_and_network_id_for_testing(',
    'context.network_id,',
@@ -489,12 +506,24 @@ NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/bl
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'method',
   'ApplyFixture::new_with_options_and_retention',
-  'let kura = if include_lane_lifecycle { '
+  'Self::new_with_options_and_retention_and_genesis(include_lane_payload, '
+  'include_projection_policies, include_lane_lifecycle, include_native_lane, blocks_in_memory, false,)'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention_and_genesis',
+  'Self::new_with_options_and_retention_and_genesis_and_archival_kura(include_lane_payload, '
+  'include_projection_policies, include_lane_lifecycle, include_native_lane, blocks_in_memory, seed_genesis_domain, None,)'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
+  'let kura = if let Some(kura) = archival_kura { '
+  'assert!(include_native_lane && include_lane_lifecycle); kura '
+  '} else if include_lane_lifecycle { '
   'crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory) } else { '
   'Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory) };'),
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'method',
-  'ApplyFixture::new_with_options_and_retention',
+  'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   'install_fixture_validator_authority(&state, &context, &validator_set_pops); if '
   'include_native_lane { install_fixture_native_lane(&mut state, &mut context); }'),
  ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
@@ -748,16 +777,49 @@ NATIVE_PARTICIPANT_APPLICATION_ROLE_TOKENS = (
 )
 
 NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+     'fn',
+     'run_autonomous_merge_frontier_fixture',
+     ('ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()',
+      'lane_work.merge_execution_full_validation_checks_for_test(),\n            0',
+      'for _ in 0..4 {',
+      '.validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)',
+      '"the locally built execution candidate must not be fully reexecuted by the adapter"',
+      'lane_work.merge_execution_full_validation_checks_for_test(),\n            1',
+      'fail_next_native_amx_prepublication_for_tests',
+      '"pre-WSV Native AMX participant evidence publication"',
+      '"failed live Native prepublication must not stage WSV"',
+      'prepublish_native_amx_participant_application_evidence(',
+      'durable_carrier.as_ref(), None)',
+      '"live merge prepublication requires its exact staged witness"',
+      'durable_carrier.as_ref(),\n                Some(&entry),',
+      'live_prepublication.authenticates_state_frontiers',
+      'remove_latest_native_amx_participant_manifest_for_testing',
+      '"remove only the exact latest Native manifest"',
+      'remove_merge_carrier_record_for_testing',
+      'read_structural_native_amx_participant_application_receipt(',
+      '"manifest loss must retain the exact structural Native receipt"',
+      'read_native_amx_participant_application_receipt(',
+      '.is_none()',
+      '"the authoritative reader must reject a receipt without its manifest"',
+      'preflight_native_amx_participant_application_evidence_repair(',
+      'std::slice::from_ref(&native_marker),\n                None,',
+      '"startup Native repair requires a committed or planned association"',
+      'std::slice::from_ref(&native_marker),\n                Some(&entry),',
+      '"planned merge association authorizes exact Native startup repair"',
+      'plan_lane_application_evidence_repair(',
+      'apply_lane_application_evidence_repair(',
+      'native_carriers: 1',
+      'native_routes: 1',
+      'merge_carriers: 1',
+      '"startup repair must reproduce the exact retained receipt bytes"',
+      '"startup evidence repair must not mutate canonical WSV"',
+      'assert!(empty_plan.is_empty())')),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
         "V2ApplyService::validate_candidate",
-        (
-            "from_result_bearing_block_and_merge_entry",
-            "state_block.staged_merge_entry()",
-            "execution_commitment_from_validated_block",
-            "validate_native_amx_participant_application_evidence_byte_budget",
-        ),
+        native_preparation.CANDIDATE_TOKENS,
     ),
     (
         "crates/iroha_core/src/state.rs",
@@ -798,17 +860,7 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
         "fn",
         "lane_artifact_required_bytes_for_block",
-        (
-            "merge_entry: Option<&MergeLedgerEntry>",
-            "merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
-            "from_result_bearing_block_and_merge_entry",
-            "block,",
-            "merge_entry,",
-            "native_amx_participant_application_artifacts",
-            "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
-            "native_prune_intent_routes.insert",
-            "native_amx_evidence_prune_intent_max_bytes",
-        ),
+        native_preparation.ORDINARY_TOKENS,
     ),
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
@@ -950,9 +1002,14 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
         "V2ApplyService::validate_candidate",
-        "let native_amx_manifest = crate::sumeragi::exec::"
-        "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry( "
-        "valid.as_ref(), state_block.staged_merge_entry(), )",
+        "Ok(prepared.execution_prefix_commitment())",
+    ),
+    (
+        native_preparation.PREPARED,
+        "method",
+        "PreparedCarrier::prepare",
+        "let native_amx_manifest = exec::NativeAmxApplicationManifestV1::"
+        "from_result_bearing_block_and_merge_entry( block, state.staged_merge_entry(), )?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -995,7 +1052,13 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
         "fn",
         "lane_artifact_required_bytes_for_block",
-        "let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::"
+        "let mut total = self.merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?;",
+    ),
+    (
+        native_preparation.CAPACITY,
+        "method",
+        "Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards",
+        "let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::"
         "from_result_bearing_block_and_merge_entry( block, merge_entry, )",
     ),
     (
@@ -1166,51 +1229,15 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
     (
         NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
         "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
-        (
-            "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
-            "            0",
-            "for _ in 0..4 {",
-            ".validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)",
-            '"the locally built execution candidate must not be fully reexecuted by the adapter"',
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
-            "            1",
-            "fail_next_native_amx_prepublication_for_tests",
-            '"pre-WSV Native AMX participant evidence publication"',
-            '"failed live Native prepublication must not stage WSV"',
-            "prepublish_native_amx_participant_application_evidence(",
-            "durable_carrier.as_ref(), None)",
-            '"live merge prepublication requires its exact staged witness"',
-            "durable_carrier.as_ref(),\n                Some(&entry),",
-            "live_prepublication.authenticates_state_frontiers",
-            "remove_latest_native_amx_participant_manifest_for_testing",
-            '"remove only the exact latest Native manifest"',
-            "remove_merge_carrier_record_for_testing",
-            "read_structural_native_amx_participant_application_receipt(",
-            '"manifest loss must retain the exact structural Native receipt"',
-            "read_native_amx_participant_application_receipt(",
-            ".is_none()",
-            '"the authoritative reader must reject a receipt without its manifest"',
-            "preflight_native_amx_participant_application_evidence_repair(",
-            "std::slice::from_ref(&native_marker),\n                None,",
-            '"startup Native repair requires a committed or planned association"',
-            "std::slice::from_ref(&native_marker),\n                Some(&entry),",
-            '"planned merge association authorizes exact Native startup repair"',
-            "plan_lane_application_evidence_repair(",
-            "apply_lane_application_evidence_repair(",
-            "native_carriers: 1",
-            "native_routes: 1",
-            "merge_carriers: 1",
-            '"startup repair must reproduce the exact retained receipt bytes"',
-            '"startup evidence repair must not mutate canonical WSV"',
-            "assert!(empty_plan.is_empty())",
-        ),
+        ("run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::HistoricalRecovery);",),
     ),
 )
+NATIVE_MERGE_MANIFEST_CORRIDOR_HELPER_BINDING = NATIVE_MERGE_MANIFEST_CALLER_BINDINGS[0]
 
 NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
     NATIVE_MERGE_MANIFEST_CONTRACT_RELATIVE,
     NATIVE_MERGE_MANIFEST_TEST_RELATIVE,
+    Path("pytests/scripts/sumeragi_v2_multilane_native_fixture_delegation_test.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_native_settlement_test.py"),
     NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
     NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE,
@@ -1218,44 +1245,64 @@ NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
 )
 
 
-def _validate_native_merge_manifest_raw_tests(
-    root: Path, errors: list[str]
-) -> None:
+def _fixture_body(source: str, declaration: re.Pattern, label: str, errors: list[str]) -> str | None:
+    """Read one exact braced fixture body; comments/literals cannot change its extent."""
+    from sumeragi_v2_multilane_reviewed_rust_source import _mask_rust_comments
+
+    masked = _mask_rust_comments(source)
+    matches = list(declaration.finditer(masked))
+    if len(matches) != 1:
+        errors.append(f"{label} must occur exactly once, found {len(matches)}")
+        return None
+    start = masked.find("{", matches[0].end())
+    depth = 0
+    for index in range(start, len(masked)):
+        depth += (masked[index] == "{") - (masked[index] == "}")
+        if depth == 0:
+            return source[start:index + 1]
+    errors.append(f"{label} has no complete body")
+    return None
+
+
+def _validate_native_merge_manifest_raw_tests(root: Path, errors: list[str]) -> None:
+    from sumeragi_v2_multilane_geometry_evidence_contract import _code
+
     for relative, test_name, required_tokens in NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS:
         path = root / relative
+        label = f"{path}: Native corridor macro test {test_name}"
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"{path}: cannot read Native corridor macro test: {error}")
+            errors.append(f"{label}: cannot read source: {error}")
             continue
-        declaration = re.compile(
-            r"v2_apply_test!\(\s*" + re.escape(test_name) + r"\s*,"
-        )
-        matches = list(declaration.finditer(source))
-        if len(matches) != 1:
-            errors.append(
-                f"{path}: Native corridor macro test {test_name} must occur "
-                f"exactly once, found {len(matches)}"
-            )
+        wrapper = _fixture_body(source, re.compile(
+            r"v2_apply_test!\(\s*" + re.escape(test_name) + r"\s*,"), label, errors)
+        if wrapper is not None and _code(wrapper) != _code("{" + required_tokens[0] + "}"):
+            errors.append(f"{label} must dispatch exactly {required_tokens[0]!r}")
+        _, _, helper, helper_tokens = NATIVE_MERGE_MANIFEST_CORRIDOR_HELPER_BINDING
+        body = _fixture_body(source, re.compile(r"\bfn\s+" + helper + r"\s*\([^)]*\)"),
+                             f"{label} helper {helper}", errors)
+        if body is None:
             continue
-        start = matches[0].start()
-        next_test = re.search(r"v2_apply_test!\(", source[matches[0].end() :])
-        end = (
-            matches[0].end() + next_test.start()
-            if next_test is not None
-            else len(source)
-        )
-        item = source[start:end]
         cursor = -1
-        for token in required_tokens:
-            position = item.find(token, cursor + 1)
+        for token in helper_tokens:
+            position = body.find(token, cursor + 1)
             if position < 0:
-                errors.append(
-                    f"{path}: Native corridor macro test {test_name} is "
-                    f"missing or reorders token {token!r}"
-                )
+                errors.append(f"{label} helper {helper} is missing or reorders token {token!r}")
                 break
             cursor = position
+        code = _code(body)
+        dispatch = (
+            "let fixture = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries { "
+            "ApplyFixture::new_for_cold_merge_registry_replay() } else { "
+            "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle() };"
+        )
+        if _code(dispatch) not in code:
+            errors.append(f"{label} helper {helper} changes its exact Native fixture dispatch")
+        # HistoricalRecovery is deliberately the ordinary fallthrough. A new
+        # special branch or early return must not skip its retained assertions.
+        if "MergeFrontierFixtureCase::HistoricalRecovery" in code:
+            errors.append(f"{label} helper {helper} intercepts HistoricalRecovery fallthrough")
 
 
 def _normalize_rust_relation(source: str) -> str:

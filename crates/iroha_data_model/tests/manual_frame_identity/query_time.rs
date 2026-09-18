@@ -812,17 +812,38 @@ fn capture_values() -> Vec<Value> {
     rows
 }
 
-#[test]
-fn public_query_and_time_frames_match_capture() {
-    let evidence = norito::json!({
+fn current_identity_capture() -> Value {
+    norito::json!({
         "format_version": 1,
         "purpose": "public query and time owners before identity declaration",
         "default_encode_flags": (ncore::default_encode_flags()),
         "rows": (capture_values()),
-    });
+    })
+}
+
+#[test]
+fn public_query_and_time_frames_match_capture() {
+    let evidence = current_identity_capture();
+    // SelectorTuple carries an additional mode field under ids_projection.
+    // Retain exact generated captures for each existing wire shape.
+    #[cfg(not(feature = "ids_projection"))]
     let captured: Value = norito::json::from_json(include_str!(
         "../fixtures/query_manual_identity_frames.json"
     ))
     .expect("decode immutable pre-declaration capture");
+    #[cfg(feature = "ids_projection")]
+    let captured: Value = norito::json::from_json(include_str!(
+        "../fixtures/query_manual_ids_identity_frames.json"
+    ))
+    .expect("decode immutable pre-declaration capture");
     assert_eq!(evidence, captured);
+}
+
+#[test]
+#[ignore = "explicit first-release parameter wire fixture capture"]
+fn capture_current_query_and_time_identity_frames() {
+    eprintln!(
+        "QUERY_MANUAL_PARAMETER_CAPTURE={}",
+        norito::json::to_json(&current_identity_capture()).expect("encode current capture")
+    );
 }

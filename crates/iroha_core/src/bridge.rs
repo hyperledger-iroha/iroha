@@ -10,6 +10,7 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
         consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, SumeragiV2Status},
+        execution_output::ExecutionOutputV1,
     },
     bridge::{
         BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
@@ -694,7 +695,7 @@ fn signed_transaction_from_sccp_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(transaction) => Some(transaction),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) => None,
     }
 }
 fn entrypoint_has_successful_or_pending_result(
@@ -704,10 +705,10 @@ fn entrypoint_has_successful_or_pending_result(
     if !block.has_results() {
         return true;
     }
-    block
-        .results()
-        .nth(entrypoint_index)
-        .is_some_and(|result| result.as_ref().is_ok())
+    u32::try_from(entrypoint_index)
+        .ok()
+        .and_then(|index| block.network_output_at(index))
+        .is_some_and(|(_, row)| row.result.as_ref().is_ok())
 }
 /// Invalid route binding for a SORA-origin outbound SCCP payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1025,15 +1026,16 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
     block: &SignedBlock,
     deduplicate: bool,
 ) -> Vec<RecordedSccpMessage> {
+    // Discovery is not acceptance: malformed attached outputs produce no candidates.
+    // The committed validator below reports the exact structural refusal.
+    if validate_sccp_execution_projection(block).is_err() {
+        return Vec::new();
+    }
     let mut messages = Vec::new();
     let mut seen = BTreeSet::new();
-    for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
-        let transaction = match entrypoint {
-            TransactionEntrypoint::External(transaction) => transaction,
-            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                continue;
-            }
+    for (entrypoint_index, entrypoint) in block.network_entrypoints().enumerate() {
+        let Some(transaction) = signed_transaction_from_sccp_entrypoint(entrypoint) else {
+            continue;
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
@@ -1248,13 +1250,9 @@ fn invalid_sccp_record_instruction_in_executable(
 fn invalid_sccp_record_instruction_in_signed_block(
     block: &SignedBlock,
 ) -> Option<SccpRecordInstructionValidationError> {
-    for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
-        let transaction = match entrypoint {
-            TransactionEntrypoint::External(transaction) => transaction,
-            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                continue;
-            }
+    for (entrypoint_index, entrypoint) in block.network_entrypoints().enumerate() {
+        let Some(transaction) = signed_transaction_from_sccp_entrypoint(entrypoint) else {
+            continue;
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
@@ -1268,7 +1266,11 @@ fn invalid_sccp_record_instruction_in_signed_block(
     }
     None
 }
-/// Extract all non-replayed SCCP message records from the external transactions in a signed block.
+/// Discover direct SCCP records from successful Network sources or resultless proposal inputs.
+///
+/// Internal outputs are not network transactions. Malformed attached outputs yield no
+/// candidates; acceptance must use the strict committed validator. This is not the
+/// missing complete applied-outbox projection for callback-emitted records.
 pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<RecordedSccpMessage> {
     collect_sccp_messages_from_signed_block_with_deduplication(block, true)
 }
@@ -1294,13 +1296,8 @@ pub(crate) enum SccpCommittedBlockValidationError {
         /// Root advertised in the block header.
         actual: [u8; 32],
     },
-    /// The block has fewer committed transaction results than external entrypoints.
-    TransactionResultCountMismatch {
-        /// Number of external entrypoints in the block payload.
-        external_entrypoints: usize,
-        /// Number of committed transaction results attached to the block.
-        results: usize,
-    },
+    /// Proposal inputs, typed output ownership, or the retained output tree are malformed.
+    InvalidExecutionOutputs(String),
     /// A successful or pending entrypoint contains a malformed SCCP record instruction.
     InvalidRecordInstruction(SccpRecordInstructionValidationError),
     /// The block contains more than one successful outbound message with the same replay key.
@@ -1320,13 +1317,32 @@ pub(crate) enum SccpCommittedBlockValidationError {
         actual: Option<[u8; 32]>,
     },
 }
-fn sccp_transaction_result_count_mismatch(block: &SignedBlock) -> Option<(usize, usize)> {
-    if !block.has_results() {
-        return None;
+fn validate_sccp_execution_projection(block: &SignedBlock) -> Result<(), String> {
+    block.validate_proposal_commitments()?;
+    if block.has_results() {
+        block
+            .validate_output_merkle_cache()
+            .map_err(|error| error.to_string())?;
+        // Only directly submitted Network records have the legacy projection below.
+        // TODO: use the one authenticated applied outbox for callback-emitted records;
+        // neither a trace nor a trigger descriptor supplies its missing source authority.
+        for output in block.execution_outputs() {
+            if let Ok(steps) = output.result().as_ref()
+                && steps.iter().any(|step| {
+                    step.instructions.iter().any(|instruction| {
+                        instruction
+                            .as_any()
+                            .is::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                    })
+                })
+            {
+                return Err(
+                    "SCCP callback records require authenticated applied-outbox projection".into(),
+                );
+            }
+        }
     }
-    let external_entrypoints = block.external_entrypoint_count();
-    let results = block.results().len();
-    (results < external_entrypoints).then_some((external_entrypoints, results))
+    Ok(())
 }
 /// Validate committed SCCP records against the signed block header.
 ///
@@ -1341,14 +1357,8 @@ pub(crate) fn validate_sccp_commitment_root_for_signed_block(
     {
         return Err(SccpCommittedBlockValidationError::MissingTransactionResults { actual });
     }
-    if let Some((external_entrypoints, results)) = sccp_transaction_result_count_mismatch(block) {
-        return Err(
-            SccpCommittedBlockValidationError::TransactionResultCountMismatch {
-                external_entrypoints,
-                results,
-            },
-        );
-    }
+    validate_sccp_execution_projection(block)
+        .map_err(SccpCommittedBlockValidationError::InvalidExecutionOutputs)?;
     if let Some(error) = invalid_sccp_record_instruction_in_signed_block(block) {
         return Err(SccpCommittedBlockValidationError::InvalidRecordInstruction(
             error,
@@ -1875,13 +1885,9 @@ fn validate_local_sccp_records_against_commitment_root(
             "SCCP finality proof local block is missing committed transaction results".to_owned(),
         );
     }
-    if let Some((external_entrypoints, results)) =
-        sccp_transaction_result_count_mismatch(local_block)
-    {
-        return Err(format!(
-            "SCCP finality proof local block result count mismatch: external_entrypoints={external_entrypoints} results={results}"
-        ));
-    }
+    validate_sccp_execution_projection(local_block).map_err(|reason| {
+        format!("SCCP finality proof local block has invalid execution outputs: {reason}")
+    })?;
     if let Some(error) = invalid_sccp_record_instruction_in_signed_block(local_block) {
         return Err(format!(
             "SCCP finality proof local block contains invalid outbound SCCP record: tx_index={} instruction_index={} reason={}",
@@ -2229,9 +2235,6 @@ fn collect_initial_replay_admissions(
                 transaction.instructions(),
             )
         }
-        TransactionEntrypoint::Time(time) => {
-            collect_replay_admissions_from_instruction_step(None, time.instructions.iter(), false)
-        }
         TransactionEntrypoint::SealedCommitment(_) => Ok(Vec::new()),
     }
 }
@@ -2284,22 +2287,22 @@ fn collect_replay_admissions_from_entrypoint_result(
     Ok(admissions)
 }
 
-/// Extract replay admissions in exact consensus execution order.
+/// Extract replay admissions in persisted merge-then-canonical-output order.
 ///
 /// An authenticated merge batch is consumed before ordinary carrier
-/// entrypoints. Within either phase every entrypoint is paired one-for-one with
-/// its committed result; rejected executions contribute no mutation. Successful
-/// result payloads also expose exact time-trigger and chained data-trigger
-/// instruction steps, so no event sidecar is consulted.
+/// Network outputs. A Network row joins its exact source through `input_index`;
+/// successful Pipeline/Time rows contribute their one root-first instruction trace
+/// without becoming network inputs. Rejected executions contribute no mutation.
+/// This projector preserves the proved-overlay restriction on outbound admission;
+/// it does not supply the missing applied-outbox authority for internal records.
+/// TODO: the applied-outbox owner must authenticate execution ordering where it
+/// differs from Network source order (for example reordered sealed reveals).
 pub fn collect_sccp_replay_admissions_from_finalized_execution(
     block: &SignedBlock,
     merge_entry: Option<&iroha_data_model::merge::MergeLedgerEntry>,
 ) -> Result<Vec<SccpCommittedReplayAdmissionV1>, SccpReplayRebuildErrorV1> {
     block
-        .validate_entrypoint_merkle_cache()
-        .map_err(|_| SccpReplayRebuildErrorV1::MalformedBlock)?;
-    block
-        .validate_result_merkle_cache()
+        .validate_output_merkle_cache()
         .map_err(|_| SccpReplayRebuildErrorV1::MalformedBlock)?;
     let mut admissions = Vec::new();
     if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
@@ -2327,11 +2330,38 @@ pub fn collect_sccp_replay_admissions_from_finalized_execution(
             }
         }
     }
-    for (_, entrypoint, result) in block.entrypoint_results() {
-        admissions.extend(collect_replay_admissions_from_entrypoint_result(
-            &entrypoint,
-            result,
-        )?);
+    for output in block.execution_outputs() {
+        match output {
+            ExecutionOutputV1::Network(row) => {
+                let entrypoint = block
+                    .network_entrypoint_at(
+                        usize::try_from(row.input_index)
+                            .map_err(|_| SccpReplayRebuildErrorV1::MalformedBlock)?,
+                    )
+                    .ok_or(SccpReplayRebuildErrorV1::MalformedBlock)?;
+                admissions.extend(collect_replay_admissions_from_entrypoint_result(
+                    entrypoint,
+                    &row.result,
+                )?);
+            }
+            ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::Time(_) => {
+                let Ok(steps) = output.result().as_ref() else {
+                    continue;
+                };
+                let mut invocation = Vec::new();
+                for step in steps {
+                    invocation.extend(collect_replay_admissions_from_instruction_step(
+                        None,
+                        step.instructions.iter(),
+                        false,
+                    )?);
+                }
+                if invocation.len() > 1 {
+                    return Err(SccpReplayRebuildErrorV1::MultipleMutations);
+                }
+                admissions.extend(invocation);
+            }
+        }
     }
     Ok(admissions)
 }
@@ -2408,7 +2438,13 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
-        block::{BlockSignature, SignedBlock},
+        block::{
+            BlockSignature, SignedBlock, execution_output::*, output_budget::ExecutionOutputLimits,
+        },
+        events::{
+            time::{TimeEvent, TimeInterval},
+            trigger_completed::TriggerCompletedOutcome,
+        },
         isi::InstructionBox,
         prelude::TransactionBuilder,
         smart_contract::ContractAddress,
@@ -2417,10 +2453,33 @@ mod tests {
             SignedTransaction, TransactionEntrypoint, TransactionResultInner,
             executable::ContractInvocation,
         },
-        trigger::{TimeTriggerEntrypoint, TriggerId},
+        trigger::DataTriggerStep,
     };
     use iroha_model_base::topology::DataSpaceId;
+    use norito::codec::DecodeAll as _;
     use std::{borrow::Cow, num::NonZeroU64};
+    #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
+    #[norito_schema(name = "iroha_core::bridge::tests::MutableBridgeBlock")]
+    struct MutableBridgeBlock {
+        signatures: BTreeSet<BlockSignature>,
+        payload: iroha_data_model::block::BlockPayload,
+        result: Option<iroha_data_model::block::BlockResult>,
+    }
+
+    // Structural, deliberately untrusted decode mirrors the actual three-field
+    // block payload, without exposing a production mutation API or fixing caches.
+    fn mutate_bridge_block(
+        block: &SignedBlock,
+        mutate: impl FnOnce(&mut MutableBridgeBlock),
+    ) -> SignedBlock {
+        use norito::codec::Encode;
+        let mut encoded = MutableBridgeBlock::decode_all(&mut block.encode().as_slice())
+            .expect("decode structural bridge fixture");
+        mutate(&mut encoded);
+        SignedBlock::decode_all(&mut encoded.encode().as_slice())
+            .expect("retain adversarial bridge structure without repairing commitments")
+    }
+
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("bridge fixture key generation should succeed")
     }
@@ -2439,7 +2498,6 @@ mod tests {
             NonZeroU64::new(2).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         )
@@ -2447,7 +2505,6 @@ mod tests {
         let another_tip = BlockHeader::new(
             NonZeroU64::new(3).expect("non-zero height"),
             Some(committed_tip),
-            None,
             None,
             0,
             0,
@@ -2480,14 +2537,12 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         )
         .hash();
         let substituted_genesis = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
-            None,
             None,
             None,
             1,
@@ -3028,6 +3083,110 @@ mod tests {
             .verify_hash(signer.public_key(), block.hash())
             .expect("finalized test block signature verifies");
     }
+    fn attach_test_outputs(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
+        let header = block.header();
+        let proposal = block.canonical_resultless_proposal();
+        block
+            .validate_proposal_commitments()
+            .expect("fixture proposal commitments");
+        block
+            .set_execution_outputs(
+                outputs,
+                // Structural fixture only: no State fragments are executed by this helper.
+                0,
+                BTreeMap::new(),
+                Vec::new(),
+                iroha_data_model::nexus::AxtPolicySnapshot::default(),
+                BTreeSet::new(),
+                Vec::new(),
+                &ExecutionOutputLimits {
+                    max_outputs: 4096,
+                    max_output_bytes: 16 * 1024 * 1024,
+                    max_total_output_bytes: 64 * 1024 * 1024,
+                    max_executed_wire_bytes: 256 * 1024 * 1024,
+                },
+            )
+            .expect("fixture complete typed outputs");
+        assert_eq!(block.header(), header);
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        block
+            .validate_output_merkle_cache()
+            .expect("fixture exact output tree");
+    }
+    fn attach_test_network_results(block: &mut SignedBlock, results: Vec<TransactionResultInner>) {
+        assert_eq!(results.len(), block.network_entrypoint_count());
+        attach_test_outputs(
+            block,
+            results
+                .into_iter()
+                .enumerate()
+                .map(|(index, result)| {
+                    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                        input_index: u32::try_from(index).expect("fixture index"),
+                        result: result.into(),
+                        completions: Vec::new(),
+                    })
+                })
+                .collect(),
+        );
+    }
+    fn test_internal_output(
+        pipeline: bool,
+        instructions: Vec<InstructionBox>,
+    ) -> ExecutionOutputV1 {
+        let trigger = TriggerUseV1 {
+            trigger_id: if pipeline {
+                "bridge_pipeline"
+            } else {
+                "bridge_time"
+            }
+            .parse()
+            .unwrap(),
+            registered_at_height: 0,
+            action_hash: Hash::new(if pipeline {
+                b"pipeline".as_slice()
+            } else {
+                b"time".as_slice()
+            }),
+        };
+        let result = TransactionResult::new(Ok(vec![DataTriggerStep {
+            id: trigger.trigger_id.clone(),
+            instructions: ExecutionStep(instructions.into()),
+        }]));
+        let completions = vec![InvocationCompletionV1 {
+            callback_index: 0,
+            trigger_id: trigger.trigger_id.clone(),
+            outcome: TriggerCompletedOutcome::Success,
+        }];
+        if pipeline {
+            ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+                invocation: PipelineInvocationV1 {
+                    event: PipelineEventPositionV1::BlockApproved,
+                    candidate_index: 0,
+                    trigger,
+                },
+                result,
+                failure_root: None,
+                completions,
+            })
+        } else {
+            ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+                invocation: TimeInvocationV1 {
+                    schedule_index: 0,
+                    event: TimeEvent {
+                        interval: TimeInterval {
+                            since_ms: 1,
+                            length_ms: 1,
+                        },
+                    },
+                    trigger,
+                },
+                result,
+                failure_root: None,
+                completions,
+            })
+        }
+    }
     fn signed_block_with_transactions(
         transactions: Vec<SignedTransaction>,
         height: u64,
@@ -3040,8 +3199,11 @@ mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
-            None,
-            None,
+            iroha_crypto::MerkleTree::root_from_typed_leaves(
+                transactions
+                    .iter()
+                    .map(SignedTransaction::hash_as_entrypoint),
+            ),
             0,
             0,
         );
@@ -3055,9 +3217,7 @@ mod tests {
             std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
                 .take(entry_hashes.len())
                 .collect();
-        block
-            .set_transaction_results(Vec::new(), &entry_hashes, results)
-            .expect("test block entrypoint hashes should match payload");
+        attach_test_network_results(&mut block, results);
         replace_finalized_test_block_signature(&mut block, &keypair);
         block
     }
@@ -3069,8 +3229,11 @@ mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
-            None,
-            None,
+            iroha_crypto::MerkleTree::root_from_typed_leaves(
+                transactions
+                    .iter()
+                    .map(SignedTransaction::hash_as_entrypoint),
+            ),
             0,
             0,
         );
@@ -3104,12 +3267,10 @@ mod tests {
         )
         .with_executable(ivm_proved_with_overlay(instructions))
         .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
-            None,
-            None,
+            iroha_crypto::MerkleTree::root_from_typed_leaves([tx.hash_as_entrypoint()]),
             0,
             0,
         );
@@ -3119,14 +3280,10 @@ mod tests {
                 .expect("test block signing should succeed"),
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        let entry_hashes = [entry_hash];
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entry_hashes,
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("test block entrypoint hashes should match payload");
+        attach_test_network_results(
+            &mut block,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
         replace_finalized_test_block_signature(&mut block, &keypair);
         (block, decoded_payloads)
     }
@@ -3148,14 +3305,12 @@ mod tests {
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(instruction),
         ]));
-        let entry_hash = tx.hash_as_entrypoint();
         let block_signer = checked_keypair();
         let template_header = provisional_finality.block_header;
         let mut provisional_header = BlockHeader::new(
             template_header.height(),
             template_header.prev_block_hash(),
-            None,
-            None,
+            iroha_crypto::MerkleTree::root_from_typed_leaves([tx.hash_as_entrypoint()]),
             u64::try_from(template_header.creation_time().as_millis())
                 .expect("fixture creation time fits u64"),
             template_header.view_change_index(),
@@ -3167,13 +3322,10 @@ mod tests {
                 .expect("fixture provisional local block signature"),
         );
         let mut block = SignedBlock::presigned(signature, provisional_header, vec![tx]);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("fixture local block results");
+        attach_test_network_results(
+            &mut block,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
         assert!(
             provisional_finality
                 .finality_artifact
@@ -3496,7 +3648,9 @@ mod tests {
         let (mut block, _) = signed_block_with_sccp_payloads(&payloads, 1);
         let messages = collect_sccp_messages_from_signed_block(&block);
         let root = sccp_commitment_root_from_messages(&messages).expect("nonempty SCCP root");
+        let outputs = block.execution_outputs().to_vec();
         block.set_sccp_commitment_root(Some(root));
+        attach_test_outputs(&mut block, outputs);
         assert_eq!(
             validate_sccp_commitment_root_for_signed_block(&block),
             Err(SccpCommittedBlockValidationError::TooManyOutboundMessages {
@@ -3634,23 +3788,16 @@ mod tests {
     fn committed_replay_extraction_ignores_rejected_execution() {
         let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(304, [0x44; 20]));
         let (mut block, _) = signed_block_with_sccp_payloads(&[payload], 1);
-        let entry_hash = block
-            .external_signed_transaction_at(0)
-            .expect("fixture contains one signed transaction")
-            .0;
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Err(
-                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "rejected replay rebuild fixture".to_owned(),
-                        ),
+        attach_test_network_results(
+            &mut block,
+            vec![TransactionResultInner::Err(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(
+                        "rejected replay rebuild fixture".to_owned(),
                     ),
-                )],
-            )
-            .expect("fixture result commitment updates");
+                ),
+            )],
+        );
         assert!(
             collect_sccp_replay_admissions_from_finalized_execution(&block, None)
                 .expect("rejected execution is structurally valid")
@@ -3910,16 +4057,9 @@ mod tests {
         );
     }
     #[test]
-    fn collect_sccp_messages_from_accepted_transactions_skips_non_external_entrypoints() {
-        let keypair = checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let time_entry = TimeTriggerEntrypoint {
-            id: "bridge_tick".parse::<TriggerId>().expect("trigger id"),
-            instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
-            authority,
-        };
-        let internal_tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::Time(time_entry),
+    fn collect_sccp_messages_from_accepted_transactions_skips_sealed_commitments() {
+        let commitment_tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            sealed_commitment_entrypoint(),
         ));
         let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(6, [0x22; 20]));
         let external_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
@@ -3929,7 +4069,7 @@ mod tests {
             TransactionEntrypoint::External(external_tx),
         ));
         let messages =
-            collect_sccp_messages_from_accepted_transactions(&[internal_tx, external_tx]);
+            collect_sccp_messages_from_accepted_transactions(&[commitment_tx, external_tx]);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].tx_index, 1);
         assert_eq!(messages[0].instruction_index, 0);
@@ -4205,21 +4345,25 @@ mod tests {
         let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
-        let mut block = signed_block_with_transactions(vec![plain_tx.clone()], 9);
-        block.set_external_entrypoints(vec![
-            TransactionEntrypoint::External(plain_tx),
-            TransactionEntrypoint::External(sccp_tx),
-        ]);
+        let block = signed_block_with_transactions(vec![plain_tx, sccp_tx], 9);
+        let block = mutate_bridge_block(&block, |encoded| {
+            let result = encoded.result.as_mut().expect("fixture full result");
+            result.outputs.pop();
+            result.output_merkle = result
+                .outputs
+                .iter()
+                .map(iroha_crypto::HashOf::new)
+                .collect();
+        });
         let err = validate_sccp_commitment_root_for_signed_block(&block).expect_err(
             "committed SCCP validation must reject external entrypoints without committed results",
         );
-        assert_eq!(
+        assert!(matches!(
             err,
-            SccpCommittedBlockValidationError::TransactionResultCountMismatch {
-                external_entrypoints: 2,
-                results: 1,
-            }
-        );
+            SccpCommittedBlockValidationError::InvalidExecutionOutputs(_)
+        ));
+        assert_eq!(block.network_entrypoint_count(), 2);
+        assert_eq!(block.execution_outputs().len(), 1);
     }
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_invalid_record_payload() {
@@ -4490,7 +4634,9 @@ mod tests {
         let messages = collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         let root = sccp_commitment_root_from_messages(&messages).expect("direct record root");
+        let outputs = block.execution_outputs().to_vec();
         block.set_sccp_commitment_root(Some(root));
+        attach_test_outputs(&mut block, outputs);
         validate_sccp_commitment_root_for_signed_block(&block)
             .expect("successful direct SCCP record instruction must validate");
     }
@@ -4518,16 +4664,21 @@ mod tests {
         let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
-        let mut block = signed_block_with_transactions(vec![plain_tx.clone()], 9);
-        block.set_external_entrypoints(vec![
-            TransactionEntrypoint::External(plain_tx),
-            TransactionEntrypoint::External(sccp_tx),
-        ]);
+        let block = signed_block_with_transactions(vec![plain_tx, sccp_tx], 9);
+        let block = mutate_bridge_block(&block, |encoded| {
+            let result = encoded.result.as_mut().expect("fixture full result");
+            result.outputs.pop();
+            result.output_merkle = result
+                .outputs
+                .iter()
+                .map(iroha_crypto::HashOf::new)
+                .collect();
+        });
         let err = validate_local_sccp_records_against_commitment_root(&block, [0xAA; 32])
             .expect_err("local SCCP finality validation must reject short result vectors");
-        assert!(err.contains("result count mismatch"));
-        assert!(err.contains("external_entrypoints=2"));
-        assert!(err.contains("results=1"));
+        assert!(err.contains("invalid execution outputs"));
+        assert_eq!(block.network_entrypoint_count(), 2);
+        assert_eq!(block.execution_outputs().len(), 1);
     }
     #[test]
     fn local_sccp_finality_records_reject_resultless_matching_root() {
@@ -4556,27 +4707,20 @@ mod tests {
         let second_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(second_payload)),
         ]));
-        let entry_hashes = vec![
-            first_tx.hash_as_entrypoint(),
-            second_tx.hash_as_entrypoint(),
-        ];
         let mut block = signed_block_with_transactions(vec![first_tx, second_tx], 9);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entry_hashes,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Err(
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "failed SCCP transaction fixture".to_owned(),
-                            ),
+        attach_test_network_results(
+            &mut block,
+            vec![
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+                TransactionResultInner::Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed SCCP transaction fixture".to_owned(),
                         ),
                     ),
-                ],
-            )
-            .expect("test block entrypoint hashes should match payload");
+                ),
+            ],
+        );
         let messages = collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].tx_index, 0);
@@ -4587,39 +4731,30 @@ mod tests {
         );
     }
     #[test]
-    fn collect_sccp_messages_from_block_skips_failed_external_with_time_trigger_result() {
+    fn collect_sccp_messages_from_block_skips_failed_network_with_internal_outputs() {
         let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(12, [0x22; 20]));
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
-        let entry_hash = tx.hash_as_entrypoint();
-        let keypair = checked_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let time_entry = TimeTriggerEntrypoint {
-            id: "bridge_tick_after_failure"
-                .parse::<TriggerId>()
-                .expect("trigger id"),
-            instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
-            authority,
-        };
-        let time_hash = time_entry.hash_as_entrypoint();
         let mut block = signed_block_with_transactions(vec![tx], 10);
-        block
-            .set_transaction_results(
-                vec![time_entry],
-                &[entry_hash, time_hash],
-                vec![
-                    TransactionResultInner::Err(
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "failed SCCP transaction fixture".to_owned(),
-                            ),
+        let outputs = vec![
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: TransactionResult::new(Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed SCCP transaction fixture".to_owned(),
                         ),
                     ),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("test block entrypoint hashes should match payload");
+                )),
+                completions: Vec::new(),
+            }),
+            test_internal_output(true, Vec::new()),
+            test_internal_output(false, Vec::new()),
+        ];
+        attach_test_outputs(&mut block, outputs);
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 3);
         assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
     }
     #[test]
@@ -4628,28 +4763,23 @@ mod tests {
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
         ]));
-        let entry_hash = tx.hash_as_entrypoint();
         let sealed_entrypoint = sealed_commitment_entrypoint();
-        let sealed_hash = sealed_entrypoint.hash();
         let mut block = signed_block_with_transactions(vec![tx.clone()], 11);
         block
             .set_external_entrypoints(vec![sealed_entrypoint, TransactionEntrypoint::External(tx)]);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[sealed_hash, entry_hash],
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Err(
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(
-                                "failed SCCP transaction fixture".to_owned(),
-                            ),
+        attach_test_network_results(
+            &mut block,
+            vec![
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+                TransactionResultInner::Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed SCCP transaction fixture".to_owned(),
                         ),
                     ),
-                ],
-            )
-            .expect("test block entrypoint hashes should match payload");
+                ),
+            ],
+        );
         assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
     }
     #[test]
@@ -4658,20 +4788,13 @@ mod tests {
         let [commitment, reveal] = sealed_sccp_record_entrypoints(payload.clone());
         let mut block = signed_block_with_transactions(Vec::new(), 12);
         block.set_external_entrypoints(vec![commitment, reveal]);
-        let entry_hashes = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entry_hashes,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("test block entrypoint hashes should match payload");
+        attach_test_network_results(
+            &mut block,
+            vec![
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+                TransactionResultInner::Ok(DataTriggerSequence::default()),
+            ],
+        );
         let messages = collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         assert_eq!(
@@ -4706,5 +4829,199 @@ mod tests {
             messages[0].payload,
             iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
         );
+    }
+    #[test]
+    fn sccp_network_projection_keeps_full_internal_suffix_without_input_aliases() {
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(305, [0x45; 20]));
+        let (mut block, _) = signed_block_with_sccp_payloads(&[payload], 2);
+        let expected = collect_sccp_messages_from_signed_block(&block);
+        let source = block.network_entrypoint_at(0).unwrap().hash();
+        let proposal = block.canonical_resultless_proposal();
+        let mut outputs = block.execution_outputs().to_vec();
+        outputs.push(test_internal_output(true, Vec::new()));
+        outputs.push(test_internal_output(false, Vec::new()));
+        attach_test_outputs(&mut block, outputs);
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 3);
+        assert_eq!(block.network_entrypoint_at(0).unwrap().hash(), source);
+        assert_eq!(block.network_output_at(0).unwrap().0, 0);
+        assert!(block.network_entrypoint_at(1).is_none());
+        assert!(block.network_output_at(1).is_none());
+        assert_eq!(collect_sccp_messages_from_signed_block(&block), expected);
+        assert_eq!(
+            collect_sccp_replay_admissions_from_finalized_execution(&block, None)
+                .unwrap()
+                .len(),
+            1
+        );
+        let wire = block.canonical_wire().unwrap();
+        let decoded =
+            iroha_data_model::block::decode_framed_signed_block(wire.as_framed()).unwrap();
+        assert_eq!(decoded, block);
+    }
+
+    #[test]
+    fn sccp_projection_rejects_complete_body_corruption_before_any_message() {
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(306, [0x46; 20]));
+        let (mut original, _) = signed_block_with_sccp_payloads(&[payload], 2);
+        let mut outputs = original.execution_outputs().to_vec();
+        outputs.push(test_internal_output(true, Vec::new()));
+        outputs.push(test_internal_output(false, Vec::new()));
+        attach_test_outputs(&mut original, outputs);
+        for mutation in 0..5 {
+            let block = mutate_bridge_block(&original, |encoded| {
+                let result = encoded.result.as_mut().unwrap();
+                match mutation {
+                    0 => {
+                        // Correct row count, altered cached leaves.
+                        result.output_merkle = result
+                            .outputs
+                            .iter()
+                            .rev()
+                            .map(iroha_crypto::HashOf::new)
+                            .collect();
+                    }
+                    1 => {
+                        let ExecutionOutputV1::Network(row) = &mut result.outputs[0] else {
+                            unreachable!()
+                        };
+                        row.input_index = 1;
+                        result.output_merkle = result
+                            .outputs
+                            .iter()
+                            .map(iroha_crypto::HashOf::new)
+                            .collect();
+                    }
+                    2 => {
+                        // Internal success cannot stand in for the missing Network row.
+                        result.outputs.remove(0);
+                        result.output_merkle = result
+                            .outputs
+                            .iter()
+                            .map(iroha_crypto::HashOf::new)
+                            .collect();
+                    }
+                    3 => {
+                        let ExecutionOutputV1::Time(row) = &mut result.outputs[2] else {
+                            unreachable!()
+                        };
+                        row.invocation.trigger.registered_at_height = 2;
+                        result.output_merkle = result
+                            .outputs
+                            .iter()
+                            .map(iroha_crypto::HashOf::new)
+                            .collect();
+                    }
+                    4 => {
+                        encoded.payload.header.set_execution_context_hash(Some(
+                            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                                b"foreign bridge context",
+                            )),
+                        ));
+                    }
+                    _ => unreachable!(),
+                }
+            });
+            assert!(
+                matches!(
+                    validate_sccp_commitment_root_for_signed_block(&block),
+                    Err(SccpCommittedBlockValidationError::InvalidExecutionOutputs(
+                        _
+                    ))
+                ),
+                "mutation {mutation}"
+            );
+            assert!(
+                collect_sccp_messages_from_signed_block(&block).is_empty(),
+                "mutation {mutation} must not leak the first valid candidate"
+            );
+            assert_eq!(
+                collect_sccp_replay_admissions_from_finalized_execution(&block, None),
+                Err(SccpReplayRebuildErrorV1::MalformedBlock)
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_callback_record_requires_applied_outbox_authority() {
+        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(307, [0x47; 20]));
+        for origin in 0..3 {
+            let transactions = if origin == 0 {
+                vec![signed_transaction_with_executable(
+                    Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                )]
+            } else {
+                Vec::new()
+            };
+            let mut block = signed_block_with_transactions(transactions, 2);
+            let internal = test_internal_output(
+                origin == 1,
+                vec![crate::bridge::test_record_sccp_message(payload.clone()).into()],
+            );
+            let output = if origin == 0 {
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: internal.result().clone(),
+                    completions: Vec::new(),
+                })
+            } else {
+                internal
+            };
+            attach_test_outputs(&mut block, vec![output]);
+            assert_eq!(block.network_entrypoint_count(), usize::from(origin == 0));
+            assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
+            assert!(
+                matches!(validate_sccp_commitment_root_for_signed_block(&block), Err(SccpCommittedBlockValidationError::InvalidExecutionOutputs(reason)) if reason.contains("applied-outbox"))
+            );
+            // Full typed internal trace is examined without inventing a signed authority.
+            assert_eq!(
+                collect_sccp_replay_admissions_from_finalized_execution(&block, None),
+                Err(SccpReplayRebuildErrorV1::MalformedAdmission)
+            );
+        }
+    }
+
+    #[test]
+    fn sccp_typed_output_substitution_cannot_use_original_executed_finality() {
+        use iroha_data_model::block::proofs::{
+            TrustedBlockProofAnchor, TrustedBlockProofAnchorError,
+        };
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let block = fixture.finalized_block.block();
+        let artifact = &fixture.finalized_block.proof().finality_artifact;
+        // The exact fixture constructs/authenticates this target; this is not an untrusted
+        // transport artifact promoted to an independent production trust pin.
+        let context = artifact.context_id();
+        let source = block.network_entrypoint_at(0).unwrap().hash();
+        TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            block, artifact, context, &source,
+        )
+        .expect("real BLS CommitQC binds the complete original output wire");
+        let mut changed = block.clone();
+        let mut outputs = changed.execution_outputs().to_vec();
+        outputs[0] = ExecutionOutputV1::network_output_limit_rejection(0);
+        attach_test_outputs(&mut changed, outputs);
+        assert_eq!(changed.header(), block.header());
+        assert_eq!(changed.hash(), block.hash());
+        assert_eq!(
+            changed.canonical_resultless_proposal(),
+            block.canonical_resultless_proposal()
+        );
+        assert_ne!(
+            changed.canonical_wire().unwrap().as_framed(),
+            block.canonical_wire().unwrap().as_framed()
+        );
+        changed.validate_output_merkle_cache().unwrap();
+        assert!(matches!(
+            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &changed, artifact, context, &source
+            ),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        ));
+        assert!(matches!(
+            validate_sccp_commitment_root_for_signed_block(&changed),
+            Err(SccpCommittedBlockValidationError::CommitmentRootMismatch { .. })
+        ));
     }
 }

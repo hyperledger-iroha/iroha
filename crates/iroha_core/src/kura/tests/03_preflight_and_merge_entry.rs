@@ -56,6 +56,8 @@ fn fresh_single_lane_preflight_accepts_missing_or_empty_default_root_without_mut
     );
 }
 fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .expect("bind the configured-catalog fixture network before H0 admission");
     let lane_config = RuntimeLaneConfig::from_catalog(catalog);
     let incarnations = BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xA1; Hash::LENGTH]))]);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
@@ -74,16 +76,14 @@ fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     )
     .expect("publish configured lane catalog baseline");
 }
-fn assert_catalog_paths_absent(store_root: &Path, catalog: &LaneCatalog) {
-    let lane_config = RuntimeLaneConfig::from_catalog(catalog);
-    let primary = lane_config.primary();
+fn assert_catalog_paths_absent(store_root: &Path, _catalog: &LaneCatalog) {
     assert!(
-        !primary.blocks_dir(store_root).exists(),
-        "rejected startup must not create the attempted block-store path"
+        !store_root.join("blocks/instances").exists(),
+        "rejected startup must create no lane instance"
     );
     assert!(
-        !primary.merge_log_path(store_root).exists(),
-        "rejected startup must not create the attempted merge-ledger path"
+        !store_root.join("merge_ledger/instances").exists(),
+        "rejected startup must create no lane merge instance"
     );
 }
 #[cfg(unix)]
@@ -135,8 +135,11 @@ fn configured_primary_open_rejects_block_directory_inode_swap_before_mutation() 
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
         .expect("establish authenticated configured primary");
     publish_configured_catalog_baseline(&kura, &configured);
+    let blocks = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .unwrap()
+        .blocks_dir(kura.store_root());
     drop(kura);
-    let blocks = lane_config.primary().blocks_dir(temp.path());
     let expected = snapshot_regular_test_tree(&blocks);
     let replacement = configured_primary_open_identity_test_path(
         &blocks,
@@ -174,8 +177,11 @@ fn configured_primary_open_rejects_merge_file_inode_swap_before_mutation() {
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
         .expect("establish authenticated configured primary");
     publish_configured_catalog_baseline(&kura, &configured);
+    let merge = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .unwrap()
+        .merge_log_path(kura.store_root());
     drop(kura);
-    let merge = lane_config.primary().merge_log_path(temp.path());
     let expected = fs::read(&merge).expect("read configured-primary merge log");
     let replacement = configured_primary_open_identity_test_path(
         &merge,
@@ -206,6 +212,183 @@ fn configured_primary_open_rejects_merge_file_inode_swap_before_mutation() {
         expected
     );
 }
+#[cfg(unix)]
+#[test]
+fn canonical_storage_open_rejects_block_directory_inode_swap_before_mutation() {
+    let temp = TempDir::new().expect("temporary Kura root");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let configured = configured_primary_catalog("blocks-identity");
+    let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+    let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+        .expect("establish authenticated configured primary");
+    publish_configured_catalog_baseline(&kura, &configured);
+    drop(kura);
+    let blocks = Kura::canonical_storage_paths(temp.path()).0;
+    let expected = snapshot_regular_test_tree(&blocks);
+    let replacement = configured_primary_open_identity_test_path(
+        &blocks,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+    )
+    .expect("block replacement path");
+    copy_regular_test_tree(&blocks, &replacement);
+    let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+        .expect_err("a post-preflight block-directory replacement must fail closed");
+    assert!(matches!(
+        error,
+        Error::IO(ref source, _)
+            if source.kind() == ErrorKind::InvalidData
+                && source.to_string().contains("path identity changed")
+    ));
+    assert_eq!(
+        snapshot_regular_test_tree(&blocks),
+        expected,
+        "BlockStore must not create or rewrite files in the replacement directory"
+    );
+    let displaced = configured_primary_open_identity_test_path(
+        &blocks,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+    )
+    .expect("displaced block path");
+    assert_eq!(snapshot_regular_test_tree(&displaced), expected);
+}
+#[cfg(unix)]
+#[test]
+fn canonical_storage_open_rejects_merge_file_inode_swap_before_mutation() {
+    let temp = TempDir::new().expect("temporary Kura root");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let configured = configured_primary_catalog("merge-identity");
+    let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+    let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+        .expect("establish authenticated configured primary");
+    publish_configured_catalog_baseline(&kura, &configured);
+    drop(kura);
+    let merge = Kura::canonical_storage_paths(temp.path()).1;
+    let expected = fs::read(&merge).expect("read canonical merge log");
+    let replacement = configured_primary_open_identity_test_path(
+        &merge,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+    )
+    .expect("merge replacement path");
+    fs::copy(&merge, &replacement).expect("copy replacement merge log");
+    let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+        .expect_err("a post-preflight merge-file replacement must fail closed");
+    assert!(matches!(
+        error,
+        Error::IO(ref source, _)
+            if source.kind() == ErrorKind::InvalidData
+                && source.to_string().contains("path identity changed")
+    ));
+    assert_eq!(
+        fs::read(&merge).expect("read rejected replacement merge log"),
+        expected,
+        "MergeLedgerLog must not rewrite the replacement file"
+    );
+    let displaced = configured_primary_open_identity_test_path(
+        &merge,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+    )
+    .expect("displaced merge path");
+    assert_eq!(
+        fs::read(displaced).expect("read displaced original merge log"),
+        expected
+    );
+}
+#[cfg(unix)]
+#[test]
+fn canonical_storage_preflight_rejects_symlinks_before_external_write() {
+    use std::os::unix::fs::symlink;
+
+    for target in [
+        "directory",
+        INDEX_FILE_NAME,
+        DATA_FILE_NAME,
+        HASHES_FILE_NAME,
+        COUNT_FILE_NAME,
+        "merge",
+    ] {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let root = temp.path().join("kura");
+        let config = kura_config_for_path(&root, BLOCKS_IN_MEMORY);
+        let configured = configured_primary_catalog("canonical-symlink");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect("initialize exact configured catalog");
+        publish_configured_catalog_baseline(&kura, &configured);
+        let (blocks, merge) = Kura::canonical_storage_paths(&kura.store_root());
+        let path = match target {
+            "directory" => blocks,
+            "merge" => merge,
+            file => blocks.join(file),
+        };
+        drop(kura);
+        let outside = temp.path().join("operator-owned");
+        fs::rename(&path, &outside).expect("move exact bytes outside Kura ownership");
+        let expected = snapshot_regular_test_tree(&outside);
+        symlink(&outside, &path).expect("substitute canonical path with symlink");
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect_err("canonical symlink must be refused before recovery writes");
+        assert!(
+            matches!(error, Error::IO(ref source, _) if source.kind() == ErrorKind::InvalidData),
+            "wrong refusal for {target}: {error:?}"
+        );
+        assert!(
+            path.is_symlink(),
+            "startup replaced the symlink for {target}"
+        );
+        assert_eq!(
+            snapshot_regular_test_tree(&outside),
+            expected,
+            "startup changed externally owned bytes for {target}"
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn canonical_storage_preflight_rejects_hardlinked_files_before_mutation() {
+    for target in [
+        INDEX_FILE_NAME,
+        DATA_FILE_NAME,
+        HASHES_FILE_NAME,
+        COUNT_FILE_NAME,
+        "merge",
+    ] {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let root = temp.path().join("kura");
+        let config = kura_config_for_path(&root, BLOCKS_IN_MEMORY);
+        let configured = configured_primary_catalog("canonical-hardlink");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect("initialize exact configured catalog");
+        publish_configured_catalog_baseline(&kura, &configured);
+        let (blocks, merge) = Kura::canonical_storage_paths(&kura.store_root());
+        let path = if target == "merge" {
+            merge
+        } else {
+            blocks.join(target)
+        };
+        drop(kura);
+        let outside = temp.path().join("operator-owned");
+        fs::hard_link(&path, &outside).expect("retain an external alias of canonical file");
+        let expected_tree = snapshot_regular_test_tree(&root);
+        let expected_bytes = fs::read(&outside).expect("read external bytes");
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect_err("canonical files cannot share a mutable external inode");
+        assert!(
+            matches!(error, Error::IO(ref source, _) if source.kind() == ErrorKind::InvalidData),
+            "wrong refusal for {target}: {error:?}"
+        );
+        assert_eq!(
+            snapshot_regular_test_tree(&root),
+            expected_tree,
+            "startup mutated canonical storage before refusing {target}"
+        );
+        assert_eq!(
+            fs::read(&outside).expect("read retained external alias"),
+            expected_bytes,
+            "startup changed externally owned bytes for {target}"
+        );
+    }
+}
 #[test]
 fn configured_catalog_preflight_rejects_zero_block_reopen_before_path_mutation() {
     let dir = TempDir::new().expect("temporary Kura root");
@@ -218,6 +401,7 @@ fn configured_catalog_preflight_rejects_zero_block_reopen_before_path_mutation()
             .expect("an absent journal is an authenticated first startup");
     assert_eq!(count, 0);
     publish_configured_catalog_baseline(&kura, &configured_a);
+    let before = snapshot_regular_test_tree(dir.path());
     drop(kura);
     let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
     let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
@@ -226,7 +410,7 @@ fn configured_catalog_preflight_rejects_zero_block_reopen_before_path_mutation()
         error,
         Error::IO(ref source, _) if source.to_string().contains("baseline mismatch")
     ));
-    assert_catalog_paths_absent(dir.path(), &configured_b);
+    assert_eq!(snapshot_regular_test_tree(dir.path()), before);
     let (_, BlockCount(reopened_count)) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
             .expect("the exact configured catalog must reopen");
@@ -249,6 +433,7 @@ fn configured_catalog_preflight_rejects_drift_with_durable_genesis_and_state_zer
         .into();
     kura.store_block(Arc::new(block))
         .expect("persist genesis before State reconstruction");
+    let before = snapshot_regular_test_tree(dir.path());
     drop(kura);
     let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
     let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
@@ -257,7 +442,7 @@ fn configured_catalog_preflight_rejects_drift_with_durable_genesis_and_state_zer
         error,
         Error::IO(ref source, _) if source.to_string().contains("baseline mismatch")
     ));
-    assert_catalog_paths_absent(dir.path(), &configured_b);
+    assert_eq!(snapshot_regular_test_tree(dir.path()), before);
     let (_, BlockCount(reopened_count)) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
             .expect("the exact configured catalog must recover durable genesis");
@@ -273,6 +458,8 @@ fn configured_catalog_preflight_rejects_existing_journal_without_baseline() {
         .expect("initialize canonical fresh Kura");
     let incarnations = BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xB1; Hash::LENGTH]))]);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
     kura.mark_lane_geometry_catalog_published(
         &lane_config_a,
         &incarnations,
@@ -414,12 +601,17 @@ fn establish_dummy_store_primary_anchor(kura: &Kura) {
         .configured_lane_catalog_baseline()
         .expect("read dummy store's configured baseline")
     else {
-        // The isolated blank constructor is not a persistent startup fixture.
         return;
     };
-    let primary = kura
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("dummy store has canonical primary storage");
+    if let Ok(primary) = kura.lane_storage_entry(LaneId::SINGLE) {
+        kura.active_lane_incarnation_marker(&primary)
+            .expect("existing State-owned primary marker remains exact");
+        return;
+    }
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .expect("bind the dummy canonical fixture's explicit network");
+    let config = RuntimeLaneConfig::default();
+    let primary = config.primary();
     let incarnation = Hash::new(
         format!(
             "kura-lane-incarnation:{}:{}",
@@ -428,14 +620,8 @@ fn establish_dummy_store_primary_anchor(kura: &Kura) {
         )
         .as_bytes(),
     );
-    kura.install_lane_incarnation_marker_if_missing_for_test(&primary, incarnation, 0)
-        .expect("initialize missing dummy primary marker");
-    let (incarnation, activation) = kura
-        .active_lane_incarnation_marker(&primary)
-        .expect("authenticate existing dummy primary marker");
-    assert_eq!(activation, 0, "the physical primary is active at genesis");
-    kura.establish_or_verify_configured_primary_geometry_anchor(&primary, incarnation, baseline)
-        .expect("bind dummy blocks to the durable configured primary");
+    kura.establish_or_verify_configured_primary_geometry_anchor(primary, incarnation, baseline)
+        .expect("admit the exact fixture H0 reference before provisioning");
 }
 fn finalize_chain_through_for_eviction(kura: &Kura, height: NonZeroUsize) {
     let target_height = u64::try_from(height.get()).expect("fixture height fits u64");
@@ -485,6 +671,19 @@ fn finalize_chain_through_for_eviction(kura: &Kura, height: NonZeroUsize) {
 fn advertise_required_replicas(kura: &Kura, height: NonZeroUsize) -> (HashOf<BlockHeader>, u64) {
     finalize_chain_through_for_eviction(kura, height);
     let metadata = advertised_block_metadata(kura, height);
+    let blocks_dir = kura.block_store.lock().path_to_blockchain.clone();
+    let authority = kura
+        .verified_kura_replica_authority_for_eviction(
+            &blocks_dir,
+            u64::try_from(height.get()).unwrap(),
+            metadata.0,
+        )
+        .expect("replica fixture has valid finality and an exact retained wire record")
+        .expect("replica fixture has durable finality");
+    assert!(
+        !authority.selected_keepers.is_empty(),
+        "fixture committee has deterministic keepers"
+    );
     assert_eq!(
         kura.advertise_required_replicas_for_bench(height),
         Some(metadata.1),
@@ -1827,7 +2026,7 @@ fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
         .persist_pending_queue_plan_admission_certificate(&bytes)
         .expect("persist admission certificate before purge");
     let retired_root = directory.path().join("retired");
-    let retired_blocks = lane_config.primary().blocks_dir(&retired_root);
+    let retired_blocks = retired_root.join("blocks/unowned-purge-fixture");
     fs::create_dir_all(&retired_blocks).expect("create disposable retired blocks");
     fs::write(retired_blocks.join(DATA_FILE_NAME), b"disposable")
         .expect("write disposable retired block bytes");
@@ -2098,21 +2297,22 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
     let (fresh, _) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("open a fresh authenticated configured route");
-    let entry = fresh
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("fresh primary lane storage entry");
-    let marker_path = entry
-        .blocks_dir(&fresh.store_root)
-        .join(".lane-incarnation.norito");
+    assert!(fresh.lane_storage_entries.lock().is_empty());
     assert!(
-        !marker_path.exists(),
-        "a fresh single-lane route starts without execution geometry"
+        !fresh.store_root.join("blocks/instances").exists(),
+        "fresh canonical-only startup must not guess an incarnation"
     );
     drop(fresh);
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("a fresh route without frontier or execution may reopen");
     let _ = store_indexed_reservation_carrier(kura.as_ref(), 0x62);
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("actual committed fixture identity");
+    let marker_path = entry
+        .blocks_dir(&kura.store_root)
+        .join(".lane-incarnation.norito");
     assert!(
         kura.merge_log
             .lock()
@@ -2123,6 +2323,9 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
         marker_path.is_file(),
         "the committed-execution fixture must install its exact incarnation marker"
     );
+    let canonical_blocks = Kura::canonical_storage_paths(&kura.store_root).0;
+    let canonical_hashes = fs::read(canonical_blocks.join("blocks.hashes")).unwrap();
+    let canonical_body = fs::read(canonical_blocks.join("blocks.data")).unwrap();
     fs::remove_file(&marker_path).expect("remove exact committed-execution geometry");
     sync_dir(
         marker_path
@@ -2139,11 +2342,23 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
         matches!(
             &error,
             Error::IO(source, path)
-                if source.kind() == ErrorKind::InvalidData
-                    && source.to_string() == "unbound configured primary block store is not empty"
-                    && path == &marker_path.parent().expect("primary store directory").join("blocks.data")
+                if source.kind() == ErrorKind::NotFound
+                    && source.to_string() == "lane geometry path is missing"
+                    && path == &marker_path
         ),
-        "startup must reject committed bytes whose primary incarnation marker is missing: {error}"
+        "startup must reject the missing lane marker without treating canonical bytes as unbound lane data: {error}"
+    );
+    assert_eq!(
+        fs::read(canonical_blocks.join("blocks.hashes")).unwrap(),
+        canonical_hashes
+    );
+    assert_eq!(
+        fs::read(canonical_blocks.join("blocks.data")).unwrap(),
+        canonical_body
+    );
+    assert!(
+        !marker_path.exists(),
+        "refusal must not recreate the missing lane authority"
     );
 }
 #[test]
@@ -2220,7 +2435,13 @@ fn canonical_transaction_index_exposes_completeness_and_all_carrier_heights() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("open Kura");
-    let (entrypoint_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
+    let first = network_index_block_at(1, vec![network_index_signal_input(1)]);
+    let entrypoint = network_index_signal_input(2);
+    let entrypoint_hash = entrypoint.hash();
+    let second = network_index_block_at(2, vec![entrypoint]);
+    kura.set_transaction_entrypoint_index_entry(1, &first, 2);
+    kura.set_transaction_entrypoint_index_entry(2, &second, 2);
+    assert!(kura.transaction_entrypoint_index.lock().complete);
     kura.transaction_entrypoint_index.lock().complete = false;
     assert_eq!(
         kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
@@ -2654,7 +2875,7 @@ fn finality_authenticated_carrier_survives_body_removal_and_restart() {
     );
 }
 #[test]
-fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
+fn bodyless_finalized_execution_carrier_keeps_network_index_incomplete() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(1_usize));
     let (kura, _) =
@@ -2676,11 +2897,9 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
             .unpack(|_| {})
             .into();
-    raw_carrier
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("attach empty ordinary carrier results");
+    install_network_index_test_outputs(&mut raw_carrier, Vec::new());
     assert!(raw_carrier.header().merkle_root().is_none());
-    assert!(raw_carrier.header().result_merkle_root().is_none());
+    assert!(raw_carrier.output_merkle_commitment().is_none());
     let batch = entry
         .execution_batch
         .as_mut()
@@ -2695,13 +2914,10 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
         .proposal
         .descriptor
         .clone();
-    let lane_entry = kura
-        .lane_storage_entry(descriptor.lane_id)
-        .expect("index fixture targets an active lane");
     publish_initial_configured_lane_geometry_for_test(
         &kura,
         &RuntimeLaneConfig::default(),
-        &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
     );
     let carrier = bind_merge_entry_to_carrier(Arc::new(raw_carrier), &mut entry);
     let carrier_hash = carrier.hash();
@@ -2736,7 +2952,8 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     );
     assert_eq!(
         reopened.get_block_heights_by_entrypoint_hash(entrypoint_hash),
-        Some(BTreeSet::from([nonzero!(2_usize)]))
+        None,
+        "retained merge finality cannot replace the missing canonical output body"
     );
     assert_eq!(
         reopened
@@ -2916,7 +3133,8 @@ fn canonical_transaction_index_keeps_empty_and_nonempty_resultless_bodies_incomp
             );
             let expected_wire = block.encode_wire().expect("encode exact index test body");
             let probe = block
-                .entrypoints_cloned()
+                .network_entrypoints()
+                .cloned()
                 .next()
                 .map(|entry| entry.hash())
                 .unwrap_or_else(|| {
@@ -2937,9 +3155,7 @@ fn canonical_transaction_index_keeps_empty_and_nonempty_resultless_bodies_incomp
             let index = kura.transaction_entrypoint_index.lock();
             assert_eq!(index.complete, attach_results);
             assert_eq!(
-                index
-                    .incomplete_kaigi_signal_heights
-                    .contains(&nonzero!(1_usize)),
+                index.incomplete_heights.contains(&nonzero!(1_usize)),
                 !attach_results,
             );
             drop(index);

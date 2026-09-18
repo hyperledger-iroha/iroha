@@ -331,20 +331,33 @@ fn resident_post_wsv_recounts_real_partial_consumption_and_exact_retry() {
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let carrier = next_merge_carrier(&mut blocks, &mut entry);
-    let descriptor = &entry
+    let execution = entry
         .execution_batch
         .as_ref()
         .expect("one execution batch")
         .lanes
         .first()
-        .expect("one active execution")
-        .proposal
-        .descriptor;
+        .expect("one active execution");
+    let descriptor = &execution.proposal.descriptor;
+    kura.bind_lane_storage_network(execution.autonomous_network_id)
+        .expect("bind storage to the exact signed execution network before initial publication");
     publish_initial_configured_lane_geometry_for_test(
         &kura,
         &RuntimeLaneConfig::default(),
         &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
     );
+    {
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let active = kura
+            .lane_storage_entry(descriptor.lane_id)
+            .expect("the fixture published its actual execution route");
+        assert_eq!(active.network_id, execution.autonomous_network_id);
+        assert_eq!(active.dataspace_id, descriptor.dataspace_id);
+        assert_eq!(active.incarnation, descriptor.lane_incarnation);
+        assert_eq!(active.activation_height, 0);
+        kura.require_active_lane_artifact(&active, descriptor)
+            .expect("the exact full marker admits this execution before carrier storage");
+    }
     let expected = kura
         .merge_lane_application_artifact_required_bytes_for_block(carrier.as_ref(), Some(&entry))
         .expect("account committed carrier envelope");
@@ -488,6 +501,10 @@ fn resident_failed_authenticated_rebuild_never_requalifies_partial_frontier() {
     fail_after_next_certified_frontier_build_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("leave authenticated frontier build");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let (frontier_path, build_path) =
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, temp_dir.path());
     let mut conflict_artifact = prepared.source.bundle.certified.clone();

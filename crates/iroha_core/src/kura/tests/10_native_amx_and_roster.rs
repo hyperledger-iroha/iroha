@@ -385,6 +385,7 @@ fn native_amx_latest_index_startup_reconciles_exact_temporary_matrix() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native latest-temp Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native latest-temp primary lane entry");
@@ -499,6 +500,7 @@ fn native_amx_latest_index_temporary_failures_retain_exact_forensics() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize damaged Native latest-temp Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("damaged Native latest-temp lane entry");
@@ -609,6 +611,7 @@ fn native_amx_latest_index_temporary_rejects_links_without_touching_targets() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize linked Native latest-temp Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("linked Native latest-temp lane entry");
@@ -668,6 +671,7 @@ fn native_amx_latest_index_temporary_rejects_recovery_journal_overlap_before_mut
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize overlapped Native latest-temp Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("overlapped Native latest-temp lane entry");
@@ -803,6 +807,7 @@ fn native_amx_latest_index_temporary_recovery_crash_boundaries_converge() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native latest-temp crash-boundary Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native latest-temp crash-boundary lane entry");
@@ -909,6 +914,7 @@ fn native_amx_latest_index_temporary_rejects_same_byte_swap_before_promotion() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Native latest-temp swap Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native latest-temp swap lane entry");
@@ -977,6 +983,7 @@ fn native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native prune path-swap Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune path-swap lane entry");
@@ -1051,6 +1058,7 @@ fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1238,8 +1246,9 @@ fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreat
     let old_incarnation = receipt.participant_proposal.descriptor.lane_incarnation;
     let recreated_incarnation = Hash::new(b"Native AMX retirement ABA incarnation B");
     assert_ne!(old_incarnation, recreated_incarnation);
-    kura.install_lane_incarnation_marker_for_test(&entry, recreated_incarnation, 0)
+    kura.substitute_lane_marker_identity_for_test(&entry, recreated_incarnation, 0)
         .expect("recreate the same lane route with incarnation B");
+    let before = snapshot_regular_files_recursively(&kura.store_root);
     let error = kura
         .first_release_lane_retirement_admissible_for_test(
             entry.lane_id,
@@ -1250,9 +1259,10 @@ fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreat
     assert!(
         error
             .to_string()
-            .contains("stale or duplicate Native AMX participant manifest identity"),
+            .contains("active lane marker has the wrong route identity"),
         "unexpected ABA retirement error: {error}"
     );
+    assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
 }
 #[test]
 fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
@@ -1261,6 +1271,7 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native prune-intent B1/B2 Kura");
+    establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native prune-intent B1/B2 lane entry");
@@ -1276,7 +1287,7 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
         fs::read(&removable_receipt).expect("snapshot B1 removable receipt");
     let incarnation_b2 = Hash::new(b"Native prune intent recreated incarnation B2");
     assert_ne!(incarnation_b2, intent.lane_incarnation);
-    kura.install_lane_incarnation_marker_for_test(&entry, incarnation_b2, 100)
+    kura.substitute_lane_marker_identity_for_test(&entry, incarnation_b2, 100)
         .expect("activate Native prune-intent incarnation B2");
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_chain_guard = kura.canonical_chain_lock.lock();
@@ -1285,11 +1296,14 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
     let namespace = kura
         .native_amx_evidence_namespace_for_entry(&entry)
         .expect("bind recreated Native B2 namespace");
+    let before = snapshot_regular_files_recursively(&kura.store_root);
     let error = kura
         .validate_native_amx_evidence_prune_intent_locked(&entry, &namespace, &intent)
         .expect_err("a delayed B1 prune intent must not execute in B2");
     assert!(
-        error.to_string().contains("stale route, incarnation"),
+        error
+            .to_string()
+            .contains("active lane marker has the wrong route identity"),
         "unexpected B1/B2 Native prune-intent error: {error}"
     );
     assert_eq!(
@@ -1300,6 +1314,7 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
         fs::read(&removable_receipt).expect("reread B1 removable receipt"),
         removable_receipt_bytes
     );
+    assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
 }
 #[test]
 fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
@@ -1309,6 +1324,7 @@ fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1381,6 +1397,7 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1442,7 +1459,11 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         .iter()
         .map(|entry| {
             let (incarnation, activation) = kura
-                .active_lane_incarnation_marker(entry)
+                .active_lane_incarnation_marker(
+                    &kura
+                        .lane_storage_entry(entry.lane_id)
+                        .expect("exact active identity"),
+                )
                 .expect("authenticate the original journal-published lane");
             ((entry.lane_id, incarnation), (entry.lane_id, activation))
         })
@@ -1473,7 +1494,8 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         receipt.encode_framed().expect("exact Native receipt bytes")
     );
     fs::remove_file(&data_path).expect("stage crash before receipt promotion");
-    fs::write(&temporary, &exact_bytes).expect("stage exact receipt publication temporary");
+    write_synced_native_amx_test_file(&temporary, &exact_bytes);
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reserve the exact unfinished publication before State geometry replay");
@@ -1483,12 +1505,16 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
             .lock()
             .contains_key(&entry.lane_id)
     );
-    assert_eq!(
-        fs::read(&temporary).expect("retain the exact secondary receipt temporary"),
-        exact_bytes,
-        "physical reservation discovery must not publish secondary evidence"
+    assert!(
+        !temporary.exists(),
+        "retained journal authority consumes its exact temporary"
     );
-    assert!(!data_path.exists());
+    assert_eq!(
+        fs::read(&data_path).expect("receipt recovered before State geometry replay"),
+        exact_bytes,
+        "Strict startup promotes authenticated bytes without activating lane writers"
+    );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
         .expect("authenticate and restore the actual secondary lane geometry");
@@ -1715,6 +1741,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native publication Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native publication primary lane storage entry");
@@ -1805,6 +1832,7 @@ fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize phase-aware Native evidence Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("phase-aware Native evidence lane entry");
@@ -1881,6 +1909,7 @@ fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
         &RuntimeLaneConfig::default(),
     )
     .expect("initialize missing-manifest Native evidence Kura");
+    establish_dummy_store_primary_anchor(&missing_manifest_kura);
     let missing_manifest_entry = missing_manifest_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("missing-manifest Native evidence lane entry");
@@ -2006,15 +2035,17 @@ fn native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp(
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
         .expect("initialize multi-route Native barrier Kura");
-    kura.restore_lane_segments(&lane_config)
+    kura.bind_lane_storage_network(crate::sumeragi::synthetic_network_id(
+        "native-manifest-exec-test",
+    ))
+    .expect("bind the real Native manifest fixture network");
+    let incarnations = artifacts
+        .iter()
+        .map(|(artifact, _)| (artifact.leaf.lane_id, artifact.leaf.lane_incarnation))
+        .collect::<BTreeMap<_, _>>();
+    publish_initial_configured_lane_geometry_for_test(&kura, &lane_config, &incarnations);
+    kura.restore_published_lane_geometry_for_test(&lane_config)
         .expect("restore trusted multi-route Native barrier lane geometry");
-    for (artifact, _) in &artifacts {
-        let entry = kura
-            .lane_storage_entry(artifact.leaf.lane_id)
-            .expect("multi-route Native barrier lane entry");
-        kura.install_lane_incarnation_marker_for_test(&entry, artifact.leaf.lane_incarnation, 0)
-            .expect("install multi-route Native barrier incarnation");
-    }
     let (residual_manifest, residual_receipt) = artifacts
         .last()
         .expect("multi-route Native barrier residual route");
@@ -2262,10 +2293,83 @@ fn native_amx_startup_repair_does_not_require_retired_sibling_storage() {
         .join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
     let index_before = snapshot_regular_files_recursively(&index_directory);
 
-    let route_b_blocks = fixture.entries[1].blocks_dir(&fixture.kura.store_root);
-    let retired_route_b = fixture._temp_dir.path().join("retired-native-route-b");
-    fs::rename(&route_b_blocks, &retired_route_b).expect("retire route-B storage");
-    let retired_before = snapshot_regular_files_recursively(&retired_route_b);
+    let route_b = &fixture.entries[1];
+    let route_b_blocks = route_b.blocks_dir(&fixture.kura.store_root);
+    let route_b_merge = route_b.merge_log_path(&fixture.kura.store_root);
+    let retained_before = snapshot_regular_files_recursively(&route_b_blocks);
+    let retained_merge_before = fs::read(&route_b_merge).expect("retain route-B merge object");
+    let previous_incarnations = fixture
+        .kura
+        .lane_storage_entries
+        .lock()
+        .iter()
+        .map(|(lane, entry)| (*lane, entry.incarnation))
+        .collect::<BTreeMap<_, _>>();
+    let previous_activations = fixture
+        .kura
+        .lane_storage_entries
+        .lock()
+        .iter()
+        .map(|(lane, entry)| (*lane, entry.activation_height))
+        .collect::<BTreeMap<_, _>>();
+    let metadata = fixture
+        .lane_config
+        .entries()
+        .iter()
+        .map(|entry| ModelLaneConfig {
+            id: entry.lane_id,
+            dataspace_id: entry.dataspace_id,
+            alias: entry.alias.clone(),
+            ..ModelLaneConfig::default()
+        })
+        .collect::<Vec<_>>();
+    let bound = NonZeroU32::new(10).unwrap();
+    assert_eq!(
+        RuntimeLaneConfig::from_catalog(&LaneCatalog::new(bound, metadata.clone()).unwrap()),
+        fixture.lane_config,
+        "reconstructed test catalog preserves every configured policy"
+    );
+    let remaining_catalog = LaneCatalog::new(
+        bound,
+        metadata
+            .into_iter()
+            .filter(|entry| entry.id != route_b.lane_id)
+            .collect(),
+    )
+    .expect("catalog without route B");
+    let remaining_config = RuntimeLaneConfig::from_catalog(&remaining_catalog);
+    let mut remaining_incarnations = previous_incarnations.clone();
+    let mut remaining_activations = previous_activations.clone();
+    remaining_incarnations.remove(&route_b.lane_id);
+    remaining_activations.remove(&route_b.lane_id);
+    fixture
+        .kura
+        .apply_lane_geometry_transition_with_certified_retirements(
+            &fixture.lane_config,
+            &remaining_config,
+            &previous_incarnations,
+            &remaining_incarnations,
+            &previous_activations,
+            &remaining_activations,
+            &BTreeSet::new(),
+            &BTreeSet::from([(route_b.lane_id, route_b.dataspace_id, route_b.incarnation)]),
+        )
+        .expect(
+            "journal certified route-B retirement while retaining its pending publication owner",
+        );
+    assert!(fixture.kura.lane_storage_entry(route_b.lane_id).is_err());
+    {
+        let _geometry_guard = fixture.kura.lane_geometry_lock.lock();
+        fixture
+            .kura
+            .require_retained_lane_storage_entry(route_b)
+            .expect("pending sibling keeps its complete immutable instance");
+    }
+    assert_eq!(
+        snapshot_regular_files_recursively(&route_b_blocks),
+        retained_before
+    );
+    assert_eq!(fs::read(&route_b_merge).unwrap(), retained_merge_before);
     let route_a_targets = fixture
         .kura
         .native_amx_participant_application_repair_target_indices(
@@ -2315,13 +2419,14 @@ fn native_amx_startup_repair_does_not_require_retired_sibling_storage() {
     );
 
     assert_eq!(
-        snapshot_regular_files_recursively(&retired_route_b),
-        retired_before,
-        "historical route-B storage must remain archived and untouched"
+        snapshot_regular_files_recursively(&route_b_blocks),
+        retained_before,
+        "historical route-B storage must remain retained and untouched"
     );
+    assert_eq!(fs::read(&route_b_merge).unwrap(), retained_merge_before);
     assert!(
-        !route_b_blocks.exists(),
-        "A-only repair must not recreate retired route-B storage"
+        fixture.kura.lane_storage_entry(route_b.lane_id).is_err(),
+        "A-only repair must not republish retired route-B admission"
     );
 }
 #[test]
@@ -2349,21 +2454,35 @@ fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() 
     let index_before = snapshot_regular_files_recursively(&index_directory);
 
     let route_b = &fixture.entries[1];
-    let route_b_blocks = route_b.blocks_dir(&fixture.kura.store_root);
-    let archived_b1 = fixture._temp_dir.path().join("archived-native-route-b1");
-    fs::rename(&route_b_blocks, &archived_b1).expect("archive Native route B1");
-    fixture
-        .kura
-        .reconcile_lane_segments_for_testing(&[], &[], &[(route_b, route_b)])
-        .expect("provision recreated Native route B2 storage");
+    let retained_b1 = route_b.blocks_dir(&fixture.kura.store_root);
     let incarnation_b2 = Hash::new(b"targeted Native repair recreated route B2");
     assert_ne!(incarnation_b2, fixture.markers[1].lane_incarnation);
+    let route_b2 = LaneStorageEntry {
+        identity: LaneStorageIdentity {
+            incarnation: incarnation_b2,
+            activation_height: 100,
+            ..route_b.identity
+        },
+    };
+    let configured_b = fixture
+        .lane_config
+        .entry(route_b.lane_id)
+        .expect("route B metadata");
     fixture
         .kura
-        .install_lane_incarnation_marker_for_test(route_b, incarnation_b2, 100)
-        .expect("activate recreated Native route B2");
+        .install_lane_incarnation_marker_for_test(configured_b, incarnation_b2, 100)
+        .expect("provision a distinct B2 instance for the current-admission substitution control");
+    // Explicit local-admission fault setup, not a certified retirement: pending
+    // B1 work remains pinned at its original journal-owned immutable address.
+    fixture
+        .kura
+        .lane_storage_entries
+        .lock()
+        .insert(route_b.lane_id, route_b2.clone());
+    let route_b_blocks = route_b2.blocks_dir(&fixture.kura.store_root);
+    assert_ne!(route_b_blocks, retained_b1);
     let route_b2_before = snapshot_regular_files_recursively(&route_b_blocks);
-    let archived_b1_before = snapshot_regular_files_recursively(&archived_b1);
+    let retained_b1_before = snapshot_regular_files_recursively(&retained_b1);
     let route_a_targets = fixture
         .kura
         .native_amx_participant_application_repair_target_indices(
@@ -2420,9 +2539,9 @@ fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() 
             "route-A retry {attempt} must not mutate the recreated B2 namespace"
         );
         assert_eq!(
-            snapshot_regular_files_recursively(&archived_b1),
-            archived_b1_before,
-            "route-A retry {attempt} must not mutate archived B1 evidence"
+            snapshot_regular_files_recursively(&retained_b1),
+            retained_b1_before,
+            "route-A retry {attempt} must not mutate retained B1 evidence"
         );
     }
     let retained_owner = fixture
@@ -2461,8 +2580,8 @@ fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() 
         route_b2_before
     );
     assert_eq!(
-        snapshot_regular_files_recursively(&archived_b1),
-        archived_b1_before
+        snapshot_regular_files_recursively(&retained_b1),
+        retained_b1_before
     );
     fixture
         .kura

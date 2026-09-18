@@ -71,7 +71,6 @@ mod governance_authorization_tests {
             NonZeroU64::new(height).expect("nonzero block height"),
             None,
             None,
-            None,
             0,
             0,
         )

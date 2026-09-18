@@ -115,6 +115,10 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
     );
     assert_eq!(input.entrypoints, recovered.entrypoints);
     assert!(kura.lane_block_execution_input_available(&proposal));
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -162,6 +166,10 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (artifact_data_path, artifact_index_path) =
         Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     std::fs::remove_file(&artifact_data_path).expect("remove lane artifact data sidecar");

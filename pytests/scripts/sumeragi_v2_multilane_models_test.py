@@ -706,7 +706,8 @@ def copy_native_prepublication_fixture(
     relatives.update(
         Path(relative)
         for relative, _, _, _ in (
-            module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS
+            *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
+            *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
         )
     )
     copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
@@ -1074,7 +1075,7 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
         ),
         (
             "state_ref.apply_committed_autoscale_lane_geometry(",
-            "transactions.commit()",
+            "transactions.publish()",
         ),
     ),
 )
@@ -3036,3 +3037,158 @@ def test_stable_generation_diagnostics_rejects_unwrapped_projection(
         and "derive_diagnostics_at_stable_state_generation" in error
         for error in errors
     ), errors
+
+
+_QUEUE_BINDING_OWNER_SYMBOLS = (
+    "Queue::complete_lane_reservation_startup_reconciliation",
+    "Queue::revalidate_complete_live_pre_kura_group_locked",
+    "Queue::replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+)
+
+
+def test_inflight_queue_binding_owners_accept_current_production(tmp_path, monkeypatch):
+    module = load_checker()
+    copy_inflight_repair_fixture(tmp_path, module, monkeypatch, _QUEUE_BINDING_OWNER_SYMBOLS)
+
+
+@pytest.mark.parametrize(("symbol", "old", "new"), (
+    (_QUEUE_BINDING_OWNER_SYMBOLS[0],
+     "|| !reconciliation_pending",
+     "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[1],
+     "&record.key,\n            )", "&keys[0],\n            )"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[1],
+     "validate_queue_plan_binding_for_lane_reservation_commit(",
+     "validate_unrelated_binding("),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[2],
+     "&binding, key,", "&binding, &ordered_keys[0],"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[2],
+     "validate_queue_plan_binding_for_lane_reservation_commit(",
+     "validate_unrelated_binding("),
+))
+def test_inflight_queue_binding_owners_reject_weakened_authority(
+    tmp_path, monkeypatch, symbol, old, new,
+):
+    module = load_checker()
+    contract = copy_inflight_repair_fixture(
+        tmp_path, module, monkeypatch, _QUEUE_BINDING_OWNER_SYMBOLS,
+    )
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once_after(path, "fn " + symbol.split("::")[-1] + "(", old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and "token" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(("symbol", "old", "new"), (
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "if preimage_heights != removal_heights", "if false"),
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "Self::validate_native_amx_settlement_chain_links(&original_links)",
+     "Self::validate_unrelated_links(&original_links)"),
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "receipt.participant_settlement != *settlement", "false"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "&manifests,\n            &receipts,", "&manifests,\n            &BTreeMap::new(),"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "intent.protected_latest != protected_latest", "false"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "Hash::new(bytes) != removal.artifact_hash", "false"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "let fits = !stopped", "let fits = true"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "bytes <= stable_byte_limit", "true"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "if !kept_complete.contains(&protected_height)", "if false"),
+    ("collect_native_amx_prune_settlement_preimages",
+     "if next_bytes > byte_limit", "if false"),
+    ("collect_native_amx_prune_settlement_preimages",
+     "retained_bytes = next_bytes", "retained_bytes = 0"),
+    ("prune_native_amx_evidence_pairs_locked",
+     "self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;",
+     "validate_unrelated_intent(&intent)?;"),
+))
+def test_native_exact_object_prune_contract_rejects_planner_or_replay_weakening(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    """Bind live pruning, prospective budgeting and interrupted-prefix authentication."""
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    suffix = "<F>(" if symbol == "collect_native_amx_prune_settlement_preimages" else "("
+    replace_once_after(tmp_path / "crates/iroha_core/src/kura.rs", f"fn {symbol}{suffix}", old, new)
+    errors = validate_native_exact_object_prune_fixture(tmp_path, module, models)
+    assert any("exact-object" in error and symbol in error for error in errors), errors
+
+
+def test_native_exact_object_prune_contract_rejects_removed_planner_ledger_owner(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    native = next(model for model in models if model["module"] == module.NATIVE_PREPUBLICATION_MODULE)
+    native["production_symbols"] = [binding for binding in native["production_symbols"]
+        if binding["symbol"] != "plan_native_amx_evidence_prune_intent_from_artifacts"]
+    errors = validate_native_exact_object_prune_fixture(tmp_path, module, models)
+    assert any("exactly once" in error and "plan_native_amx_evidence_prune_intent_from_artifacts" in error
+        for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    [
+        (None, None, None),
+        ("pending_autoscale_lane_drain_body", "self.pending_autoscale_lane_drain_body_with_frontier(", "self.unchecked_drain_body("),
+        ("pending_autoscale_lane_drain_body", "Self::evidence_aware_lane_drain_frontier_from_world(", "Self::unchecked_frontier("),
+        ("pending_autoscale_lane_drain_body_with_frontier", "if !autoscale_lane_drain_state_matches_context(", "if !unchecked_context("),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.close_global_height > committed_height", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.validator_set_hash != HashOf::new(&committee)", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.min_quorum != min_quorum", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "frontier(lane.id, lane.dataspace_id, incarnation)?", "unchecked_frontier()"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "crate::lane_consensus::validate_lane_drain_certificate_body(&body)", "unchecked_body(&body)"),
+        ("apply_autoscale_lane_lifecycle", "self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();", "self.lane_incarnations.clear();"),
+        ("apply_autoscale_lane_lifecycle", "self.lane_incarnation_lineage = lifecycle_update.updated_lane_incarnation_lineage.clone();", "self.lane_incarnation_lineage.clear();"),
+        ("apply_autoscale_lane_lifecycle", "self.refresh_canonical_runtime();", "self.skip_refresh();"),
+        ("apply_committed_autoscale_lane_lifecycle", "self.reset_lane_scoped_runtime_state(", "self.skip_reset("),
+        ("apply_committed_autoscale_lane_lifecycle", "self.record_da_lane_reset_watermarks(", "self.skip_watermarks("),
+    ],
+)
+def test_autoscale_current_publication_and_drain_owners(
+    tmp_path: Path, symbol: str | None, old: str | None, new: str | None
+) -> None:
+    """Follow delegated validation and bind the sole staged identity publisher."""
+    module = load_checker()
+    relative = "crates/iroha_core/src/state.rs"
+    path = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    model = next(m for m in canonical_models() if m["module"] == "SumeragiV2AutoscaleLifecycle")
+    owners = {
+        "apply_autoscale_lane_lifecycle",
+        "apply_committed_autoscale_lane_lifecycle",
+        "pending_autoscale_lane_drain_body",
+        "pending_autoscale_lane_drain_body_with_frontier",
+    }
+    model["production_symbols"] = [b for b in model["production_symbols"] if b["symbol"] in owners]
+    assert len(model["production_symbols"]) == len(owners)
+    if symbol is not None:
+        assert old is not None and new is not None
+        replace_once_after(path, f"fn {symbol}(", old, new)
+    errors: list[str] = []
+    module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors)
+    if symbol is None:
+        assert errors == [], errors
+    else:
+        assert any(symbol in error and "missing source-binding token" in error for error in errors), errors
+
+
+def test_reviewed_rust_source_expands_immutable_instance_owners(tmp_path: Path) -> None:
+    """The tracked closure includes the new identity, recovery and collection modules."""
+    module = load_checker()
+    for relative, symbols in (
+        ("crates/iroha_core/src/kura.rs", ("immutable_paths_commit_every_identity_component",)),
+        ("crates/iroha_core/src/kura/lane_geometry.rs", ("recover_journal_owned_lane_instances_on_startup", "collect_released_lane_instances_locked")),
+    ):
+        copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+        errors: list[str] = []
+        _, source = module._read_reviewed_rust_source(tmp_path, relative, "immutable instance owner closure", errors)
+        assert errors == [], errors
+        assert source is not None
+        for symbol in symbols:
+            assert source.count(f"fn {symbol}(") == 1

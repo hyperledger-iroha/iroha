@@ -15,21 +15,12 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let entries = {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            self.lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
+            self.retained_lane_storage_entries_under_geometry_guard()?
         };
         for expected_entry in entries {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            let entry = self.lane_storage_entry(expected_entry.lane_id)?;
-            if entry != expected_entry {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "lane geometry changed during consensus-sidecar startup recovery",
-                ));
-            }
+            self.require_retained_lane_storage_entry(&expected_entry)?;
+            let entry = expected_entry;
             let pairs = [
                 (
                     "lane block artifact",
@@ -411,7 +402,7 @@ impl Kura {
     /// authority can be consumed. The caller owns geometry and sidecar locks.
     fn read_lane_block_execution_input_for_write_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_block_height: u64,
         data_path: &Path,
         index_path: &Path,
@@ -492,6 +483,9 @@ impl Kura {
         })?;
         let data_metadata = self.regular_sidecar_metadata(data_path, parent)?;
         let index_metadata = self.regular_sidecar_metadata(index_path, parent)?;
+        let old_data_len = data_metadata
+            .as_ref()
+            .map_or(0, |metadata| metadata.file.len());
         let layout = match (data_metadata, index_metadata) {
             (None, None) => None,
             (Some(_), Some(index_metadata)) => {
@@ -528,40 +522,25 @@ impl Kura {
         let transient_bytes = if let Some(layout) = layout
             && lane_block_height < layout.base_height
         {
-            let prepend = layout
-                .base_height
-                .checked_sub(lane_block_height)
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        index_path.to_path_buf(),
-                        "lane block execution input prepend accounting underflows",
-                    )
+            let new = BoundProgressAppendIntentV1::prepend_layout(layout, lane_block_height)
+                .map_err(|reason| {
+                    Self::invalid_lane_artifact_error(index_path.to_path_buf(), reason)
                 })?;
-            if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-                return Err(Self::invalid_lane_artifact_error(
-                    index_path.to_path_buf(),
-                    "lane block execution input prepend exceeds the bounded index window",
-                ));
-            }
-            let projected_entries = layout.entry_count.checked_add(prepend).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    index_path.to_path_buf(),
-                    "lane block execution input prepend entry count overflows",
-                )
+            let intent_len = BoundProgressAppendIntentV1::prepend_encoded_len(
+                &namespace,
+                data_path,
+                index_path,
+                lane_block_height,
+                layout,
+                old_data_len,
+                payload_len,
+            )
+            .map_err(|reason| {
+                Self::invalid_lane_artifact_error(index_path.to_path_buf(), reason)
             })?;
-            let projected_index_len = projected_entries
-                .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                .and_then(|bytes| bytes.checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64))
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        index_path.to_path_buf(),
-                        "lane block execution input prepend temp accounting overflows",
-                    )
-                })?;
-            // The complete replacement index exists beside the old index until
-            // promotion; the appended payload exists beside both.
             payload_len
-                .checked_add(projected_index_len)
+                .checked_add(new.aligned_len - layout.aligned_len)
+                .and_then(|bytes| bytes.checked_add(u64::try_from(intent_len).ok()?))
                 .ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         data_path.to_path_buf(),
@@ -595,7 +574,7 @@ impl Kura {
     }
     fn autonomous_view_state_inventory_with_allowed_temp_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_block_height: u64,
         allowed_temp: Option<&Path>,
     ) -> Result<AutonomousLaneAttemptInventoryBudget> {
@@ -632,7 +611,7 @@ impl Kura {
     fn preflight_autonomous_view_state_recovery_promotion_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_block_height: u64,
         path: &Path,
         temp_path: &Path,
@@ -662,7 +641,7 @@ impl Kura {
     fn preflight_autonomous_view_state_write_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         identity: (u64, u64),
         path: &Path,
         temp_path: &Path,

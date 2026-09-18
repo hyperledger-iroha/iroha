@@ -269,7 +269,7 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
             "Error::InvalidKuraReplicaAdvertConfiguration(error.to_string())",
             "eviction_required_replicas: config.replica_advert.eviction_required_replicas",
             "local_peer_id: OnceLock::new()",
-            "replica_registry: Mutex::new(BTreeMap::new())",
+            "replica_registry: ResidentMutex::new(NestedMap::default(), &resource_inventory)",
             "replica_registry_key_capacity,",
             "replica_advert_evictable_window: config.replica_advert.evictable_window",
             "replica_advert_ttl: config.replica_advert.ttl",

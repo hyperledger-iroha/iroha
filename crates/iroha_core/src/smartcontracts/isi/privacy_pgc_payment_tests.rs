@@ -362,7 +362,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         NonZeroU64::new(TEST_BLOCK_HEIGHT + 300).expect("effective height"),
         Some(header_hash),
         None,
-        None,
         1_800_000_000_001,
         0,
     );

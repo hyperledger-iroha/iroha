@@ -2,6 +2,7 @@
 //!
 //! The whole group batch is checked before execution mutates its overlay. Native
 //! votes certify immutable inputs; this carrier alone supplies the economic base.
+//! The after-start capability enters the common Network/Pipeline/Time producer.
 //! TODO: activate this executor with the replacement global consumer and retire
 //! the old MergeLaneExecution source and independent frontier writers together.
 
@@ -182,8 +183,8 @@ impl State {
     /// Execute a complete native group batch in a disposable global candidate overlay.
     ///
     /// Every rejection drops the whole owned overlay. On success the caller must
-    /// still project the actual outputs through the global result/witness and
-    /// execution commitment, then use the normal publication gate. No local lane Apply is
+    /// still consume the retained common outputs through global result/witness
+    /// and execution commitment, then use the normal publication gate. No local lane Apply is
     /// acknowledged here, including for a successful economic result.
     /// TODO: replace the old merge source DTO and consumer with this actual
     /// transition before activating the process-lived lane instances.
@@ -220,13 +221,16 @@ impl State {
             Vec<PreexecutedLaneDecisionGroupV1>,
         ) -> Result<R, super::MergeLedgerCommitError>,
     ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
-        let generation = self.state_view_generation();
+        // The constructor acquires a coherent predecessor and retains the
+        // actual World, membership, hash and runtime writer guards throughout
+        // this transition. Its policy projections are immutable snapshots.
+        // A later diagnostic generation change (for example a manifest-cache
+        // refresh) cannot replace any of those owned execution inputs.
         self.block_with_owned_start_stages(
             header,
             |overlay| {
                 let invalid = super::MergeLedgerCommitError::ExecutionBatchInvalid;
-                if !super::is_stable_state_view_generation(generation, self.state_view_generation())
-                    || overlay.start_of_block_effects_applied
+                if overlay.start_of_block_effects_applied
                     || overlay.native_lane_stage.is_some()
                     || overlay.staged_merge_entry.is_some()
                     || !overlay.staged_queue_plan_admissions.is_empty()
@@ -239,289 +243,28 @@ impl State {
                 overlay
                     .preflight_lane_decision_execution_inputs(groups)
                     .map_err(invalid)?;
-                Ok(NativeLaneAfterStartV1 { groups })
+                Ok(NativeLaneAfterStartV1 {
+                    header: overlay._curr_block.clone(),
+                    groups,
+                })
             },
-            |overlay, preflight| {
-                // A due hook owns real global effects, not native input receipts.
-                // Preserve its accumulator for the eventual sole global consumer;
-                // the native per-input drain must not attribute it to the first input.
-                let start_settlement = std::mem::take(&mut overlay.settlement_accumulator);
-                let executions =
-                    overlay.execute_preflighted_lane_decision_groups(preflight.groups)?;
-                if !overlay.settlement_accumulator.is_empty() {
-                    return Err(super::MergeLedgerCommitError::ExecutionDivergence(
-                        "native execution retained unbound settlement receipts".into(),
-                    ));
-                }
-                overlay.settlement_accumulator = start_settlement;
-                let result = finish(overlay, executions)?;
-                if !super::is_stable_state_view_generation(generation, self.state_view_generation())
-                {
-                    return Err(super::MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "native applying publication changed during ordered execution".into(),
-                    ));
-                }
-                Ok(result)
-            },
+            |overlay, preflight| overlay.produce_native_execution_outputs(preflight, finish),
         )
     }
 }
 
 /// Only the constructor's pristine callback creates this value. Its consumer
 /// executes on that constructor's same overlay after the shared hooks finish.
-struct NativeLaneAfterStartV1<'groups> {
+pub(super) struct NativeLaneAfterStartV1<'groups> {
+    header: super::BlockHeader,
     groups: &'groups [VerifiedLaneDecisionGroupV1],
 }
 
-impl StateBlock<'_> {
-    // Called only by the owning noncommitting scope above; an error must drop it.
-    fn execute_preflighted_lane_decision_groups(
-        &mut self,
-        groups: &[VerifiedLaneDecisionGroupV1],
-    ) -> Result<Vec<PreexecutedLaneDecisionGroupV1>, super::MergeLedgerCommitError> {
-        use super::{
-            AppliedMergeLaneFrontierMarker, LaneExecutionSettlementInput, MergeLedgerCommitError,
-            TransactionEntrypoint, TransactionResult,
-        };
-        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
-        // Freeze canonical stateless classification before any group can mutate
-        // governed limits or crypto policy. Exact QueuePlan admission time owns
-        // TTL; actual carrier time/height still govern block placement and all
-        // stateful effects. A certified but non-executable input is a terminal
-        // deterministic rejection, never an endlessly rejected carrier head.
-        let mut accepted = groups
-            .iter()
-            .map(|group| self.accept_native_group_entrypoint(group))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut reserved_gas = 0u64;
-        for (index, classification) in accepted.iter_mut().enumerate() {
-            let Ok(transaction) = classification else {
-                continue;
-            };
-            let cost = match crate::queue::Queue::compute_proposal_gas_cost(transaction) {
-                Ok(cost)
-                    if crate::gas::gas_components_fit_block_limit(
-                        self.gas_limit_per_block,
-                        [cost],
-                    ) =>
-                {
-                    cost
-                }
-                result => {
-                    let reason = match result {
-                        Ok(cost) => format!(
-                            "native input gas reservation {cost} exceeds current whole-block limit {}",
-                            self.gas_limit_per_block
-                        ),
-                        Err(error) => {
-                            format!("native input has invalid proposal gas accounting: {error}")
-                        }
-                    };
-                    *classification = Err(iroha_data_model::transaction::error::TransactionRejectionReason::LimitCheck(
-                        iroha_data_model::transaction::error::TransactionLimitError { reason },
-                    ));
-                    continue;
-                }
-            };
-            let Some(next) = reserved_gas.checked_add(cost).filter(|next| {
-                crate::gas::gas_components_fit_block_limit(
-                    self.gas_limit_per_block,
-                    [self.gas_used_in_block, *next],
-                )
-            }) else {
-                return Err(MergeLedgerCommitError::ExecutionBatchFull {
-                    fitting_prefix: index,
-                    gas_limit: self.gas_limit_per_block,
-                    gas_used: self.gas_used_in_block,
-                });
-            };
-            reserved_gas = next;
-        }
-        // Preserve canonical mixed-block sealed fairness: reorder only reveal
-        // execution positions by immutable pre-block commitment order. Sources,
-        // pending priority and result vector retain original admission positions.
-        let mut execution_order = (0..groups.len()).collect::<Vec<_>>();
-        let reveal_positions = execution_order
-            .iter()
-            .copied()
-            .filter(|&index| {
-                matches!(
-                    groups[index].body().payload().input.entrypoint,
-                    TransactionEntrypoint::SealedReveal(_)
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut ordered_reveals = groups
-            .iter()
-            .enumerate()
-            .filter_map(|(index, group)| {
-                if let TransactionEntrypoint::SealedReveal(reveal) =
-                    &group.body().payload().input.entrypoint
-                {
-                    Some((crate::tx::sealed_reveal_execution_key(self, reveal), index))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        ordered_reveals.sort_by_key(|(key, _)| *key);
-        for (position, (_, source)) in reveal_positions.into_iter().zip(ordered_reveals) {
-            execution_order[position] = source;
-        }
-        let mut accepted = accepted.into_iter().map(Some).collect::<Vec<_>>();
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let mut executions = (0..groups.len()).map(|_| None).collect::<Vec<_>>();
-        let mut required = Vec::with_capacity(groups.len());
-        let mut signed_terminal = BTreeSet::new();
-        let mut frontier_markers = Vec::new();
-        let application_height = self._curr_block.height().get();
-        for index in execution_order {
-            let group = &groups[index];
-            let accepted = accepted[index]
-                .take()
-                .ok_or_else(|| invalid("native execution permutation repeats a source".into()))?;
-            let payload = group.body().payload();
-            let input = &payload.input;
-            let entrypoint = &input.entrypoint;
-            let plan = input.routing_plan().map_err(invalid)?;
-            let route = plan.coordinator_route();
-            let slot = payload
-                .descriptor
-                .slots
-                .iter()
-                .find(|slot| slot.route == route)
-                .ok_or_else(|| invalid("native group lost its coordinator route".into()))?;
-            let stateless_accepted = accepted.is_ok();
-            // The helper authenticates against pre-block commitment state. Capture
-            // it before execution/removal, and never broaden a bad-signature
-            // rejection into authority over the enclosed signed replay identity.
-            let authenticated_signed_replay_alias = stateless_accepted
-                .then(|| {
-                    crate::tx::authenticated_signed_replay_alias(self, entrypoint).map(Hash::from)
-                })
-                .flatten();
-            let (actual_hash, result) = match accepted {
-                Ok(accepted) => self
-                    .validate_transaction_with_entrypoint_index_and_routing_context(
-                        accepted,
-                        &mut ivm_cache,
-                        index,
-                        route,
-                    ),
-                Err(rejection) => (entrypoint.hash(), Err(rejection)),
-            };
-            if actual_hash != entrypoint.hash() {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "native group executor returned another entrypoint identity".into(),
-                ));
-            }
-            let mut result = TransactionResult::new(result);
-            self.take_merge_lane_batch_transfer_outcomes(
-                std::slice::from_ref(entrypoint),
-                std::slice::from_mut(&mut result),
-            )?;
-            let fastpq_transcripts =
-                self.retain_native_lane_fastpq_outputs(std::slice::from_ref(entrypoint))?;
-            match entrypoint {
-                TransactionEntrypoint::External(transaction) => {
-                    if authenticated_signed_replay_alias.is_some() {
-                        return Err(invalid(
-                            "direct native input carries a sealed replay alias".into(),
-                        ));
-                    }
-                    if stateless_accepted {
-                        signed_terminal.insert(transaction.hash());
-                    }
-                }
-                _ => {
-                    if let Some(alias) = authenticated_signed_replay_alias {
-                        let signed = crate::tx::exact_signed_transaction_hash(entrypoint)
-                            .ok_or_else(|| {
-                                invalid("native replay alias lacks a signed transaction".into())
-                            })?;
-                        if Hash::from(signed) != alias {
-                            return Err(invalid(
-                                "native replay alias differs from its exact signed identity".into(),
-                            ));
-                        }
-                        signed_terminal.insert(signed);
-                    }
-                }
-            }
-            let mut membership = vec![entrypoint.hash()];
-            if let Some(alias) = authenticated_signed_replay_alias {
-                let alias = iroha_crypto::HashOf::from_untyped_unchecked(alias);
-                if alias != entrypoint.hash() {
-                    membership.push(alias);
-                }
-            }
-            self.stage_merge_carrier_entrypoints(membership);
-            let settlement_commitment =
-                self.drain_lane_execution_settlement(LaneExecutionSettlementInput {
-                    route,
-                    lane_incarnation: slot.lane_incarnation,
-                    lane_height: slot.lane_height,
-                    entrypoints: std::slice::from_ref(entrypoint),
-                    native_amx_receipts: &[None],
-                    atomic_group: matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)),
-                })?;
-            let settlement_hash = super::canonical_merge_settlement_hash(&settlement_commitment)?;
-            required.push((
-                entrypoint.hash(),
-                input.certificate.binding.canonical_hash(),
-            ));
-            let descriptor_hash = payload.descriptor.canonical_hash().map_err(invalid)?;
-            for (route_slot, context) in payload.descriptor.slots.iter().zip(group.contexts()) {
-                let frozen = context.frozen();
-                State::validate_lane_frontier_successor(
-                    &self.world,
-                    (
-                        route_slot.route.lane_id,
-                        route_slot.route.dataspace_id,
-                        route_slot.lane_incarnation,
-                    ),
-                    route_slot.lane_height,
-                    frozen.predecessor_height,
-                    frozen.predecessor_hash,
-                )?;
-                frontier_markers.push(State::encode_merge_lane_frontier_marker(
-                    AppliedMergeLaneFrontierMarker {
-                        version: 1,
-                        lane_id: route_slot.route.lane_id,
-                        dataspace_id: route_slot.route.dataspace_id,
-                        lane_incarnation: route_slot.lane_incarnation,
-                        lane_block_height: route_slot.lane_height,
-                        lane_block_descriptor_hash: descriptor_hash,
-                        applied_global_height: application_height,
-                    },
-                )?);
-            }
-            executions[index] = Some(PreexecutedLaneDecisionGroupV1 {
-                source: group.to_wire(),
-                result,
-                authenticated_signed_replay_alias,
-                settlement_commitment,
-                settlement_hash,
-                fastpq_transcripts,
-            });
-        }
-        let executions = executions
-            .into_iter()
-            .map(|execution| {
-                execution
-                    .ok_or_else(|| invalid("native execution permutation omitted a source".into()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.resolve_required_queue_plan_pending_obligations(required, signed_terminal)?;
-        self.stage_lane_execution_nexus_fee_settlement(executions.iter().map(|execution| {
-            (
-                &execution.settlement_commitment,
-                execution.settlement_hash,
-                application_height,
-            )
-        }))?;
-        self.stage_merge_lane_frontier_markers(frontier_markers)?;
-        Ok(executions)
+impl<'groups> NativeLaneAfterStartV1<'groups> {
+    pub(super) fn into_source(
+        self,
+    ) -> (super::BlockHeader, &'groups [VerifiedLaneDecisionGroupV1]) {
+        (self.header, self.groups)
     }
 }
 
@@ -529,12 +272,12 @@ impl StateBlock<'_> {
     /// Classify an exact admitted input without mutating economics or charging fees.
     /// Structural/source contradictions reject the disposable batch; ordinary
     /// deterministic admission failure becomes that input's terminal result.
-    fn accept_native_group_entrypoint(
+    pub(super) fn accept_native_group_entrypoint<'source>(
         &self,
-        group: &VerifiedLaneDecisionGroupV1,
+        group: &'source VerifiedLaneDecisionGroupV1,
     ) -> Result<
         Result<
-            crate::tx::AcceptedTransaction<'static>,
+            crate::tx::AcceptedTransaction<'source>,
             iroha_data_model::transaction::error::TransactionRejectionReason,
         >,
         super::MergeLedgerCommitError,
@@ -570,11 +313,6 @@ impl StateBlock<'_> {
             TransactionEntrypoint::External(tx) => Some(tx),
             TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
             TransactionEntrypoint::SealedCommitment(_) => None,
-            TransactionEntrypoint::Time(_) => {
-                return Err(invalid(
-                    "native input cannot be a global time entrypoint".into(),
-                ));
-            }
         };
         if signed.is_some_and(|tx| tx.creation_time() >= self._curr_block.creation_time()) {
             return Ok(Err(reject(
@@ -590,19 +328,21 @@ impl StateBlock<'_> {
             }
         }
         let parameters = self.world.parameters();
-        Ok(crate::tx::AcceptedTransaction::accept_entrypoint_at_time(
-            entrypoint.clone(),
-            &self.network_id,
-            parameters.sumeragi().max_clock_drift(),
-            parameters.transaction(),
-            self.crypto.as_ref(),
-            std::time::Duration::from_millis(binding.enqueue_timestamp_ms),
+        Ok(
+            crate::tx::AcceptedTransaction::accept_borrowed_entrypoint_at_time(
+                entrypoint,
+                &self.network_id,
+                parameters.sumeragi().max_clock_drift(),
+                parameters.transaction(),
+                self.crypto.as_ref(),
+                std::time::Duration::from_millis(binding.enqueue_timestamp_ms),
+            )
+            .map_err(|error| match error {
+                crate::tx::AcceptTransactionFail::TransactionLimit(limit) => {
+                    TransactionRejectionReason::LimitCheck(limit)
+                }
+                other => reject(format!("native input stateless acceptance failed: {other}")),
+            }),
         )
-        .map_err(|error| match error {
-            crate::tx::AcceptTransactionFail::TransactionLimit(limit) => {
-                TransactionRejectionReason::LimitCheck(limit)
-            }
-            other => reject(format!("native input stateless acceptance failed: {other}")),
-        }))
     }
 }

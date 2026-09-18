@@ -1,3 +1,4 @@
+// Canonical genesis output structure, caches and minimum applied-fragment controls.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::block::valid::tests::MutableGenesisBlockWire")]
 #[derive(norito::codec::Decode, norito::codec::Encode)]
@@ -7,8 +8,38 @@ struct MutableGenesisBlockWire {
     result: Option<BlockResult>,
 }
 
+fn install_genesis_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    fragments: u64,
+) {
+    let limits = iroha_data_model::block::output_budget::ExecutionOutputLimits {
+        max_outputs: 16,
+        max_output_bytes: 65_536,
+        max_total_output_bytes: 262_144,
+        max_executed_wire_bytes: 1_048_576,
+    };
+    let proposal = block.canonical_resultless_proposal();
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &limits,
+        )
+        .expect("structural genesis outputs must fit their explicit finite fixture policy");
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
+}
+
 fn canonical_executed_genesis_fixture() -> SignedBlock {
-    use iroha_data_model::prelude::*;
+    use iroha_data_model::{
+        block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        prelude::*,
+    };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
     let transaction = TransactionBuilder::new_genesis(
         SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -22,37 +53,24 @@ fn canonical_executed_genesis_fixture() -> SignedBlock {
         None,
         None,
     );
-    let entrypoint_hashes = block
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entrypoint_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("genesis fixture entrypoint and result must align");
-    let final_signature = BlockSignature::new(
-        0,
-        SignatureOf::try_from_hash(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash())
-            .expect("sign canonical result-bearing genesis fixture"),
+    install_genesis_outputs(
+        &mut block,
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: iroha_data_model::transaction::TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        })],
+        1,
     );
-    block
-        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
-        .expect("replace canonical result-bearing genesis signature");
-    {
-        let mut final_signatures = block.signatures();
-        let final_signature = final_signatures
-            .next()
-            .expect("canonical result-bearing genesis signature");
-        assert_eq!(final_signature.index(), 0);
-        assert!(final_signatures.next().is_none());
-        final_signature
-            .signature()
-            .verify_hash(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(), block.hash())
-            .expect("verify canonical result-bearing genesis signature");
-    }
+    let mut signatures = block.signatures();
+    let signature = signatures.next().expect("canonical genesis signature");
+    assert_eq!(signature.index(), 0);
+    assert!(signatures.next().is_none());
+    signature
+        .signature()
+        .verify_hash(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(), block.hash())
+        .expect("output attachment preserves the original genesis signature");
+    drop(signatures);
     block
 }
 
@@ -67,91 +85,221 @@ fn mutate_genesis_result(
     let result = wire
         .result
         .as_mut()
-        .expect("canonical genesis fixture must carry execution results");
+        .expect("canonical genesis fixture carries outputs");
     mutate(&mut wire.payload, result);
     let encoded = norito::codec::Encode::encode(&wire);
     SignedBlock::decode_all(&mut encoded.as_slice())
-        .expect("adversarial genesis fixture must remain structurally decodable")
+        .expect("adversarial genesis fixture remains structurally decodable")
+}
+
+fn genesis_internal_outputs() -> Vec<iroha_data_model::block::execution_output::ExecutionOutputV1> {
+    use iroha_data_model::{
+        block::execution_output::*,
+        events::{
+            time::{TimeEvent, TimeInterval},
+            trigger_completed::TriggerCompletedOutcome,
+        },
+        transaction::{TransactionResult, signed::ExecutionStep},
+        trigger::{DataTriggerStep, TriggerId},
+    };
+    let make_use = |name: &str| TriggerUseV1 {
+        trigger_id: name.parse().unwrap(),
+        registered_at_height: 0,
+        action_hash: iroha_crypto::Hash::new(name.as_bytes()),
+    };
+    let result = |id: &TriggerId| {
+        TransactionResult::new(Ok(vec![DataTriggerStep {
+            id: id.clone(),
+            instructions: ExecutionStep(Vec::new().into()),
+        }]))
+    };
+    let completions = |id: &TriggerId| {
+        vec![InvocationCompletionV1 {
+            callback_index: 0,
+            trigger_id: id.clone(),
+            outcome: TriggerCompletedOutcome::Success,
+        }]
+    };
+    let pipeline = make_use("genesis_pipeline");
+    let time = make_use("genesis_time");
+    vec![
+        ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+            result: result(&pipeline.trigger_id),
+            completions: completions(&pipeline.trigger_id),
+            invocation: PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger: pipeline,
+            },
+            failure_root: None,
+        }),
+        ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            result: result(&time.trigger_id),
+            completions: completions(&time.trigger_id),
+            invocation: TimeInvocationV1 {
+                schedule_index: 0,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 0,
+                        length_ms: 1,
+                    },
+                },
+                trigger: time,
+            },
+            failure_root: None,
+        }),
+    ]
 }
 
 #[test]
 fn check_genesis_block_requires_canonical_execution_results() {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let canonical = canonical_executed_genesis_fixture();
     assert_eq!(check_genesis_block(&canonical, &genesis_account), Ok(()));
-
-    let resultless = canonical.canonical_resultless_proposal();
     assert_eq!(
-        check_genesis_block(&resultless, &genesis_account),
+        check_genesis_block(&canonical.canonical_resultless_proposal(), &genesis_account),
         Err(InvalidGenesisError::MissingResults)
     );
 
-    let zero_result_sentinel = mutate_genesis_result(&canonical, |_, result| {
-        *result = BlockResult::default();
-    });
+    let missing_output =
+        mutate_genesis_result(&canonical, |_, result| *result = BlockResult::default());
     assert_eq!(
-        check_genesis_block(&zero_result_sentinel, &genesis_account),
-        Err(InvalidGenesisError::ResultCountMismatch {
+        check_genesis_block(&missing_output, &genesis_account),
+        Err(InvalidGenesisError::NetworkOutputCountMismatch {
             expected: 1,
-            actual: 0,
+            actual: 0
         })
     );
 
-    let mut rejected_result = canonical.clone();
-    let rejection = TransactionResultInner::Err(
+    let mut rejected = canonical.clone();
+    let mut outputs = rejected.execution_outputs().to_vec();
+    let ExecutionOutputV1::Network(row) = &mut outputs[0] else {
+        unreachable!()
+    };
+    row.result = iroha_data_model::transaction::TransactionResult::new(Err(
         iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
             iroha_data_model::ValidationFail::NotPermitted("genesis rejection fixture".to_owned()),
         ),
-    );
-    assert!(rejected_result.update_transaction_result(0, &rejection));
+    ));
+    install_genesis_outputs(&mut rejected, outputs, 1);
     assert_eq!(
-        check_genesis_block(&rejected_result, &genesis_account),
+        check_genesis_block(&rejected, &genesis_account),
         Err(InvalidGenesisError::ContainsErrors)
     );
 
-    let entrypoint_cache_mismatch = mutate_genesis_result(&canonical, |_, result| {
-        result.merkle = MerkleTree::default();
+    // There is no parallel input cache. Validate the real proposal-input commitment.
+    let source_mismatch =
+        mutate_genesis_result(&canonical, |payload, _| payload.header.merkle_root = None);
+    assert_eq!(
+        check_genesis_execution_results(&source_mismatch),
+        Err(InvalidGenesisError::ProposalCommitmentMismatch)
+    );
+    let cache_mismatch = mutate_genesis_result(&canonical, |_, result| {
+        result.output_merkle = MerkleTree::default()
     });
     assert_eq!(
-        check_genesis_block(&entrypoint_cache_mismatch, &genesis_account),
-        Err(InvalidGenesisError::EntrypointMerkleCacheMismatch)
+        check_genesis_block(&cache_mismatch, &genesis_account),
+        Err(InvalidGenesisError::OutputMerkleCacheMismatch)
     );
-
-    let result_cache_mismatch = mutate_genesis_result(&canonical, |_, result| {
-        result.result_merkle = MerkleTree::default();
+    // The retired Header result root is replaced by the sole full-output cache;
+    // a well-formed foreign tree of the same cardinality must also be refused.
+    let foreign_tree = mutate_genesis_result(&canonical, |_, result| {
+        result.output_merkle = rejected.output_hashes().collect();
     });
     assert_eq!(
-        check_genesis_block(&result_cache_mismatch, &genesis_account),
-        Err(InvalidGenesisError::ResultMerkleCacheMismatch)
+        check_genesis_block(&foreign_tree, &genesis_account),
+        Err(InvalidGenesisError::OutputMerkleCacheMismatch)
     );
-
-    let header_result_root_mismatch = mutate_genesis_result(&canonical, |payload, _| {
-        payload.header.result_merkle_root = None;
+    let wrong_join = mutate_genesis_result(&canonical, |_, result| {
+        let ExecutionOutputV1::Network(row) = &mut result.outputs[0] else {
+            unreachable!()
+        };
+        row.input_index = 1;
+        result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
     });
     assert_eq!(
-        check_genesis_block(&header_result_root_mismatch, &genesis_account),
-        Err(InvalidGenesisError::ResultMerkleMismatch)
+        check_genesis_block(&wrong_join, &genesis_account),
+        Err(InvalidGenesisError::OutputStructureMismatch)
     );
 
-    let mut extra_internal_fragments = canonical.clone();
-    extra_internal_fragments.set_committed_fragment_count(3);
+    let mut extra_fragments = canonical.clone();
+    install_genesis_outputs(
+        &mut extra_fragments,
+        canonical.execution_outputs().to_vec(),
+        3,
+    );
     assert_eq!(
-        check_genesis_block(&extra_internal_fragments, &genesis_account),
+        check_genesis_block(&extra_fragments, &genesis_account),
         Ok(()),
-        "deterministic internal fragments may increase the committed count beyond the result count"
+        "protocol fragments can exceed the output count"
     );
-
-    let mut committed_count_too_small = canonical;
-    committed_count_too_small.set_committed_fragment_count(0);
+    let too_few =
+        mutate_genesis_result(&canonical, |_, result| result.committed_fragment_count = 0);
     assert_eq!(
-        check_genesis_block(&committed_count_too_small, &genesis_account),
+        check_genesis_block(&too_few, &genesis_account),
         Err(
-            InvalidGenesisError::CommittedFragmentCountBelowResultCount {
+            InvalidGenesisError::CommittedFragmentCountBelowOutputCount {
                 minimum: 1,
-                actual: Some(0),
+                actual: Some(0)
             }
         )
+    );
+}
+
+#[test]
+fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts() {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+    let mut block = canonical_executed_genesis_fixture();
+    let mut outputs = block.execution_outputs().to_vec();
+    outputs.extend(genesis_internal_outputs());
+    install_genesis_outputs(&mut block, outputs.clone(), 3);
+    assert_eq!(block.network_entrypoint_count(), 1);
+    assert_eq!(block.execution_outputs().len(), 3);
+    assert_eq!(
+        check_genesis_block(&block, &SAMPLE_GENESIS_ACCOUNT_ID),
+        Ok(())
+    );
+    let too_few = mutate_genesis_result(&block, |_, result| result.committed_fragment_count = 2);
+    assert_eq!(
+        check_genesis_execution_results(&too_few),
+        Err(
+            InvalidGenesisError::CommittedFragmentCountBelowOutputCount {
+                minimum: 3,
+                actual: Some(2)
+            }
+        )
+    );
+    for index in [1, 2] {
+        let mut rejected_outputs = outputs.clone();
+        rejected_outputs[index] = match &outputs[index] {
+            ExecutionOutputV1::Pipeline(row) => {
+                ExecutionOutputV1::pipeline_output_limit_rejection(row.invocation.clone())
+            }
+            ExecutionOutputV1::Time(row) => {
+                ExecutionOutputV1::time_output_limit_rejection(row.invocation.clone())
+            }
+            ExecutionOutputV1::Network(_) => unreachable!(),
+        };
+        let mut rejected = block.clone();
+        install_genesis_outputs(&mut rejected, rejected_outputs, 3);
+        assert_eq!(
+            check_genesis_block(&rejected, &SAMPLE_GENESIS_ACCOUNT_ID),
+            Err(InvalidGenesisError::ContainsErrors),
+            "an internal failure cannot hide behind successful Network outputs"
+        );
+    }
+    let stale = mutate_genesis_result(&block, |_, result| {
+        let ExecutionOutputV1::Time(row) = &mut result.outputs[2] else {
+            unreachable!()
+        };
+        row.invocation.trigger.action_hash = iroha_crypto::Hash::new(b"changed internal action");
+    });
+    assert_eq!(
+        check_genesis_execution_results(&stale),
+        Err(InvalidGenesisError::OutputMerkleCacheMismatch)
     );
 }
 
@@ -232,5 +380,88 @@ fn check_genesis_block_rejects_height_above_one() {
     assert_eq!(
         check_genesis_block(&block, &genesis_account),
         Err(InvalidGenesisError::InvalidHeader)
+    );
+}
+
+#[test]
+fn configured_genesis_execution_capability_rejects_foreign_key_header_and_inputs() {
+    use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+    let block = canonical_executed_genesis_fixture();
+    let capability =
+        authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
+    assert_eq!(
+        capability.account_for(&block).unwrap(),
+        &*SAMPLE_GENESIS_ACCOUNT_ID
+    );
+    assert!(authenticate_genesis_block_intents(&block, &ALICE_ID).is_err());
+    let changed = mutate_genesis_result(&block, |payload, _| {
+        payload.header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    });
+    assert!(capability.account_for(&changed).is_err());
+    let changed_input = mutate_genesis_result(&block, |payload, _| {
+        payload.external_entrypoints.clear();
+    });
+    assert!(capability.account_for(&changed_input).is_err());
+}
+
+#[test]
+fn authenticated_genesis_uses_the_actual_whole_output_owner() {
+    use iroha_data_model::{Registrable, account::Account};
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+    let committed_fixture = canonical_executed_genesis_fixture();
+    let mut source = committed_fixture.canonical_resultless_proposal();
+    let account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let world = World::with([], [Account::new(account.clone()).build(&account)], []);
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    let statuses = state
+        .nexus_snapshot()
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            (
+                lane.id,
+                crate::governance::manifest::LaneManifestStatus {
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility,
+                    storage: lane.storage,
+                    governance: None,
+                    manifest_path: None,
+                    governance_rules: None,
+                    privacy_commitments: Vec::new(),
+                },
+            )
+        })
+        .collect();
+    state.install_lane_manifests(&std::sync::Arc::new(
+        crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
+    ));
+    let mut block = state.block(source.header());
+    let before = block.committed_fragment_count();
+    ValidBlock::execute_block_outputs_for_test(&mut source, &mut block, Some(&account)).unwrap();
+    source.validate_output_merkle_cache().unwrap();
+    assert_eq!(source.network_entrypoint_count(), 1);
+    assert_eq!(source.execution_outputs().len(), 1);
+    let (position, output) = source.network_output_at(0).unwrap();
+    assert_eq!(position, 0);
+    assert!(output.result.is_ok());
+    assert!(output.completions.is_empty());
+    assert_eq!(block.committed_fragment_count(), before + 1);
+    assert_eq!(
+        source.canonical_resultless_proposal(),
+        committed_fixture.canonical_resultless_proposal()
+    );
+    assert_eq!(source.header(), committed_fixture.header());
+    block.verify_execution_output_seal(&source).unwrap();
+    assert_eq!(
+        block.commit().unwrap_err(),
+        crate::state::storage_transactions::TransactionsBlockError::ExecutionOutputCapacity,
+        "execution does not invent the unfinished publication authority"
     );
 }

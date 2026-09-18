@@ -7235,7 +7235,7 @@ pub mod isi {
             let (state, definition, source) = build_asset_transfer_control_test_state(10);
             let destination = AssetId::new(definition, BOB_ID.clone());
             let legs = vec![(source.clone(), destination.clone(), Quantity::from(3_u32))];
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let stx = block.transaction();
             assert!(stx.tx_call_hash.is_none());
             let dispute_binding = canonical_numeric_movement_binding(&OracleDisputeId(7)).unwrap();
@@ -8417,7 +8417,7 @@ pub mod query {
             let account = build_account_in_domain(&ALICE_ID, &wonderland_domain_id());
             let world = World::with([], [account], []);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
             let missing = wonderland_asset_definition_id("missing");
@@ -8460,7 +8460,7 @@ pub mod query {
                 .build(&ALICE_ID);
             let world = World::with([domain], [account], [asset_definition]);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
             let before = state_transaction
@@ -8518,7 +8518,7 @@ pub mod query {
             let asset_def = build_numeric_asset_definition(&asset_def_id, "xor", &ALICE_ID);
             let world = World::with([domain], [alice_account, bob_account], [asset_def]);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -8559,7 +8559,7 @@ pub mod query {
                 [],
             );
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let private_dataspace = DataSpaceId::new(7);
@@ -8599,7 +8599,7 @@ pub mod query {
             let world =
                 World::with_assets([domain], [alice_account], [asset_def], [source_asset], []);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let private_dataspace = DataSpaceId::new(7);
@@ -8642,7 +8642,7 @@ pub mod query {
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let private_dataspace = DataSpaceId::new(7);
@@ -8689,7 +8689,7 @@ pub mod query {
                 },
             );
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             block.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
                 iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -8742,7 +8742,7 @@ pub mod query {
                 [],
             );
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::new(8));
@@ -8793,7 +8793,7 @@ pub mod query {
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
             let mut state = asset_route_test_state(world);
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
@@ -8861,7 +8861,7 @@ pub mod query {
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
             let mut state = asset_route_test_state(world);
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
@@ -8927,7 +8927,7 @@ pub mod query {
                 [],
             );
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
@@ -9088,7 +9088,7 @@ pub mod query {
                 .insert(uaid_alice, alice_set);
             world.space_directory_manifests.insert(uaid_bob, bob_set);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -9171,7 +9171,7 @@ pub mod query {
                 },
             );
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let catalog = DataSpaceCatalog::new(vec![
                 iroha_data_model::nexus::DataSpaceMetadata::default(),
@@ -9262,7 +9262,7 @@ pub mod query {
             bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
             world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let state = asset_route_test_state(world);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -9352,7 +9352,7 @@ pub mod query {
                 .uaid_dataspaces
                 .insert(uaid_alice, alice_bindings);
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

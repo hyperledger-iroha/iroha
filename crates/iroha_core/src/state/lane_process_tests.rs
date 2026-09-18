@@ -447,7 +447,7 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
     let pool=LanePhysicalPool::new(Arc::clone(&fixture.state),Arc::clone(&guard),limits).unwrap();
     let mut table=LaneProcessOwner::new(Arc::clone(&fixture.state),Arc::clone(&guard),limits).unwrap();
     native_process_open_for_test(&mut table,&pool,&fixture,&observed,lane,signer,now);
-    let before=crate::snapshot::canonical_state_snapshot_hash(&fixture.state);
+    let before=crate::snapshot::canonical_state_snapshot_hash(&fixture.state).expect("stable valid fixture snapshot");
     table.prepare_body(id,&observed).unwrap();table.dispatch_one(&pool,LaneWorkerClass::Body).unwrap();
     assert!(matches!(table.accept_completion(native_process_receive(&pool),&observed).unwrap(),LaneProcessProgress::Body(LaneBodyProgress::Stepped(_))));
     // LocalProposalReady follows actual source recovery, RS16, fsync/readback and
@@ -509,7 +509,7 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
         table.accept_completion(native_process_receive(&pool),&observed).unwrap();
     }
     assert!(table.instance(id).unwrap().held_effects().any(|effect|matches!(effect,core::Effect::Apply{..})),"the sole global consumer still owns the future Apply acknowledgement");
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state),before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).expect("stable valid fixture snapshot"),before);
     assert!(table.instance(id).unwrap().source_recovery_requirement().is_none());
     assert!(!guard.restart_required());drop(table);pool.shutdown().join().unwrap();
     assert_eq!(packet.canonical_bytes,norito::encode_canonical(&packet.envelope).unwrap(),"already-transferred native packet stays transport-owned even when table closes");

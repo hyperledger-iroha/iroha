@@ -16,7 +16,7 @@ fn register_restricted_asset_definition_requires_explicit_owning_domain() {
         None,
     )
     .with_alias(Some(alias.clone()));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);

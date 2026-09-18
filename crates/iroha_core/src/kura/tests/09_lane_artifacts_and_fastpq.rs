@@ -124,7 +124,12 @@ fn lane_block_artifact_read_rejects_global_block_hash_mismatch() {
     forged.proposal_block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
     let payload = forged.encode_framed().expect("encode forged artifact");
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -163,7 +168,12 @@ fn lane_block_artifact_read_rejects_replay_material_mismatch() {
     forged.ownership.accepted_transaction_hashes[0] =
         Hash::new(b"forged accepted transaction hash");
     let payload = forged.encode_framed().expect("encode forged artifact");
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -212,7 +222,12 @@ fn latest_lane_block_artifact_rejects_replay_material_mismatch() {
         .lane_block_descriptor_validator_count
         .saturating_add(1);
     let payload = forged.encode_framed().expect("encode forged artifact");
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -322,7 +337,12 @@ fn lane_block_artifact_rolls_back_when_block_write_fails() {
             .is_none(),
         "aborted block must not leave a readable lane artifact"
     );
-    assert_lane_artifact_files_absent_or_empty(lane_entry, temp_dir.path());
+    assert_lane_artifact_files_absent_or_empty(
+        &kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("capture the exact artifact storage identity"),
+        temp_dir.path(),
+    );
     kura.store_block(replacement)
         .expect("later valid block at same lane height must not be poisoned");
     assert!(
@@ -370,7 +390,12 @@ fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
         kura.read_lane_block_artifact(lane_id, 1).is_none(),
         "rollback must remove the prepended lower artifact"
     );
-    let (_, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+    let (_, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     let mut index = std::fs::File::open(index_path).expect("open rolled-back lane index");
     let index_len = index.metadata().expect("lane index metadata").len();
     let layout = SidecarIndexLayout::read_from(&mut index, index_len)
@@ -429,9 +454,13 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
         .map(|entry| {
             (
                 entry.lane_id,
-                kura.active_lane_incarnation_marker(entry)
-                    .expect("bound fixture lane")
-                    .0,
+                kura.active_lane_incarnation_marker(
+                    &kura
+                        .lane_storage_entry(entry.lane_id)
+                        .expect("exact active identity"),
+                )
+                .expect("bound fixture lane")
+                .0,
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -440,6 +469,7 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
         .iter()
         .map(|entry| (entry.lane_id, 0))
         .collect();
+    let original_network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let (kura, BlockCount(count)) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -449,6 +479,7 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
         kura.lane_storage_entry(lane_id).is_err(),
         "physical startup repair must not publish active secondary catalog membership"
     );
+    kura.bind_lane_storage_network(original_network_id).unwrap();
     kura.recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .expect("restore the exact authoritative fixture geometry after physical startup repair");
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
@@ -769,7 +800,9 @@ fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
 #[test]
 fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::tests::pipeline_sidecar_canonical_boundary_rejects_missing_current_fields::PreReleasePipelineRecoverySidecar")]
+    #[norito_schema(
+        name = "iroha_core::kura::tests::pipeline_sidecar_canonical_boundary_rejects_missing_current_fields::PreReleasePipelineRecoverySidecar"
+    )]
     #[derive(Debug, Clone, Encode, Decode)]
     struct PreReleasePipelineRecoverySidecar {
         format: PipelineRecoveryFormat,
@@ -839,7 +872,9 @@ fn pipeline_tx_snapshot_counts_are_explicit_not_inferred_from_samples() {
 #[test]
 fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::tests::pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts::PreReleasePipelineTxSnapshot")]
+    #[norito_schema(
+        name = "iroha_core::kura::tests::pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts::PreReleasePipelineTxSnapshot"
+    )]
     #[derive(Debug, Clone, Encode, Decode)]
     struct PreReleasePipelineTxSnapshot {
         hash: HashOf<TransactionEntrypoint>,
@@ -2687,9 +2722,13 @@ fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() 
 fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
     let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let lane = lane_config.primary();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
+    establish_configured_lane_markers_for_test(&kura, &lane_config);
+    let lane = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("exact initial identity");
+    let lane = &lane;
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     std::fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     let paths = (1_u64..=3)
@@ -2755,7 +2794,12 @@ fn consensus_lane_frontier_distinguishes_empty_storage_from_corrupt_occupied_slo
                 .expect("canonical exact active lane slot")
                 .is_some()
         );
-        let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+        let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+            &kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("exact producer identity"),
+            temp_dir.path(),
+        );
         if corrupt_index {
             let mut bytes = fs::read(&index_path).expect("read index");
             let slot = usize::try_from(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64).expect("slot offset");
@@ -2791,7 +2835,12 @@ fn consensus_lane_frontier_budget_and_concurrent_writer_state_cannot_prove_absen
     let block = dummy_block_with_lane_payload_ownership(lane_id, lane.dataspace_id, 1);
     kura.store_block(block)
         .expect("persist canonical lane carrier");
-    let (_, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let (_, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     let index = fs::OpenOptions::new()
         .write(true)
         .open(&index_path)
@@ -2836,9 +2885,16 @@ fn consensus_lane_frontier_budget_and_concurrent_writer_state_cannot_prove_absen
 fn consensus_lane_frontier_authenticates_empty_private_directory_and_active_marker() {
     let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
-    let lane = lane_config.entry(lane_id).expect("configured lane");
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    let (data_path, _) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let lane = kura
+        .lane_storage_entry(lane_id)
+        .expect("exact configured identity");
+    let (data_path, _) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     let directory = data_path.parent().expect("committee-private directory");
     if directory.exists() {
         fs::remove_dir(directory).expect("remove empty private directory");
@@ -2883,7 +2939,12 @@ fn canonical_height_projection_and_recovery_reject_corrupt_occupied_sidecar() {
         .len(),
         1
     );
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     fs::write(&data_path, b"corrupt occupied canonical lane sidecar")
         .expect("damage actual sidecar");
     let before = (
@@ -2942,7 +3003,12 @@ fn raw_lane_writer_preserves_occupied_corruption_and_valid_competitors() {
         .expect("authenticate canonical raw slot")
         .expect("occupied slot");
     let proposal = lane_block_proposal_from_ownership(&artifact.ownership);
-    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     let original = (
         fs::read(&data_path).unwrap(),
         fs::read(&index_path).unwrap(),
@@ -2958,8 +3024,12 @@ fn raw_lane_writer_preserves_occupied_corruption_and_valid_competitors() {
         .expect("publish genuinely absent execution input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("healthy exact execution-input retry");
-    let (input_data, input_index) =
-        Kura::lane_block_execution_input_paths_for_entry(lane, temp_dir.path());
+    let (input_data, input_index) = Kura::lane_block_execution_input_paths_for_entry(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact producer identity"),
+        temp_dir.path(),
+    );
     let input_bytes = (
         fs::read(&input_data).unwrap(),
         fs::read(&input_index).unwrap(),
@@ -3036,6 +3106,7 @@ struct PendingSecondaryAssociationFixture {
     config: KuraConfig,
     lanes: RuntimeLaneConfig,
     carrier: Arc<SignedBlock>,
+    lane_entry: LaneStorageEntry,
 }
 fn pending_secondary_association_fixture() -> PendingSecondaryAssociationFixture {
     let (directory, config, lanes) = two_lane_storage_fixture();
@@ -3063,19 +3134,23 @@ fn pending_secondary_association_fixture() -> PendingSecondaryAssociationFixture
         Some(carrier.hash())
     );
     assert!(kura.canonical_association_stage_path().exists());
+    let lane_entry = kura
+        .lane_storage_entry(entry.lane_id)
+        .expect("retain the exact pre-crash secondary storage identity");
     drop(kura);
     PendingSecondaryAssociationFixture {
         directory,
         config,
         lanes,
         carrier,
+        lane_entry,
     }
 }
 #[test]
 fn startup_secondary_association_recovery_rejects_corrupt_occupied_slot_without_mutation() {
     let fixture = pending_secondary_association_fixture();
-    let entry = fixture.lanes.entry(LaneId::new(1)).expect("secondary lane");
-    let (data, _) = Kura::lane_artifact_paths_for_entry(entry, fixture.directory.path());
+    let (data, _) =
+        Kura::lane_artifact_paths_for_entry(&fixture.lane_entry, fixture.directory.path());
     let mut corrupt = std::fs::OpenOptions::new()
         .write(true)
         .open(&data)

@@ -141,9 +141,7 @@ fn canonical_anchor_rejects_coherent_raw_rewrite_bound_to_unchanged_signed_carri
 
     let blocks = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("configured lane")
         .blocks_dir(adapter.kura.store_root());
     let data_path = blocks.join("lane_artifacts/ownerships.norito");
@@ -254,12 +252,7 @@ fn canonical_anchor_errors_preserve_rollover_owners_and_reject_only_corruption()
     let proposals_before = adapter.lane_sessions.rollover_proposal_hashes();
     let qcs_before = adapter.lane_sessions.qcs_for_incomplete_sessions();
     let bindings_before = adapter.locally_bound_lane_proposals.clone();
-    let blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     let body_path = blocks.join("blocks.data");
     corrupt_durable_file_for_test(&body_path);
     let damaged = std::fs::read(&body_path).expect("read injected body corruption");
@@ -321,9 +314,7 @@ fn occupied_receipt_corruption_never_reopens_fresh_lane_signing() {
     let qcs_before = adapter.lane_sessions.qcs_for_incomplete_sessions();
     let source = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("configured lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts");

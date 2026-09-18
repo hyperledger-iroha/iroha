@@ -1,3 +1,91 @@
+type TailBatchOutcomes = BTreeMap<
+    HashOf<TransactionEntrypoint>,
+    Vec<iroha_data_model::events::data::prelude::AssetBatchTransferOutcome>,
+>;
+
+/// Attach executor-owned receipt rows without clearing already-complete outputs.
+/// Validate every row before changing any result. No display-hash inference occurs here.
+fn attach_fixture_receipts(
+    results: &mut [iroha_data_model::transaction::signed::TransactionResult],
+    owners: &BTreeMap<HashOf<TransactionEntrypoint>, usize>,
+    outcomes: TailBatchOutcomes,
+) -> Result<(), String> {
+    let mut assigned = BTreeSet::new();
+    for (owner, receipts) in &outcomes {
+        let index = owners
+            .get(owner)
+            .ok_or_else(|| "batch receipt has no exact executed owner".to_owned())?;
+        let result = results
+            .get(*index)
+            .ok_or_else(|| "batch receipt result position is out of range".to_owned())?;
+        if !assigned.insert(*index) {
+            return Err("batch receipts repeat one result position".into());
+        }
+        if receipts.is_empty() || !result.batch_transfer_outcomes().is_empty() {
+            return Err("batch receipt competes with an existing output or is empty".into());
+        }
+    }
+    for (owner, receipts) in outcomes {
+        results[owners[&owner]].set_batch_transfer_outcomes(receipts);
+    }
+    Ok(())
+}
+
+/// Prefix identities are real network execution calls; reveal receipts use their
+/// inner call. Canonical outer/inner uniqueness preserves the existing receipt gate.
+fn fixture_network_receipt_owners(
+    entries: &[TransactionEntrypoint],
+) -> Result<BTreeMap<HashOf<TransactionEntrypoint>, usize>, String> {
+    let mut identities = BTreeSet::new();
+    for entry in entries {
+        if !identities.insert(entry.hash()) {
+            return Err("network prefix repeats a canonical receipt identity".into());
+        }
+    }
+    let mut owners = BTreeMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let call = entry.execution_call_hash();
+        if matches!(entry, TransactionEntrypoint::SealedReveal(_)) && !identities.insert(call) {
+            return Err("network prefix repeats a sealed receipt alias".into());
+        }
+        if owners.insert(call, index).is_some() {
+            return Err("network prefix repeats an executed receipt owner".into());
+        }
+    }
+    Ok(owners)
+}
+
+// Structural-only receipt mutation controls; execution custody is exercised by
+// actual State output producer tests. This helper is never used by production.
+fn join_time_fixture_receipts(
+    prefix: &BTreeMap<HashOf<TransactionEntrypoint>, usize>,
+    proposal: HashOf<BlockHeader>,
+    invocations: &[iroha_data_model::block::execution_output::TimeInvocationV1],
+    results: Vec<TransactionResultInner>,
+    calls: &[Hash],
+    receipts: TailBatchOutcomes,
+) -> Result<Vec<iroha_data_model::transaction::TransactionResult>, String> {
+    if invocations.len() != results.len() || invocations.len() != calls.len() {
+        return Err("Time occurrence positions differ".into());
+    }
+    let mut owners = BTreeMap::new();
+    for (index, (invocation, call)) in invocations.iter().zip(calls).enumerate() {
+        if invocation.execution_call_hash(proposal)? != *call {
+            return Err("Time call differs from its exact descriptor".into());
+        }
+        let call = HashOf::from_untyped_unchecked(*call);
+        if prefix.contains_key(&call) || owners.insert(call, index).is_some() {
+            return Err("Time call repeats another source".into());
+        }
+    }
+    let mut rows: Vec<_> = results
+        .into_iter()
+        .map(iroha_data_model::transaction::TransactionResult::from)
+        .collect();
+    attach_fixture_receipts(&mut rows, &owners, receipts)?;
+    Ok(rows)
+}
+
 // Private result ownership checks. Economic rows are additionally exercised by
 // the real State/Kura independent-batch controls in ordinary_common_tail_tests.
 
@@ -30,11 +118,11 @@ fn common_tail_receipt_join_preserves_full_prefix_and_rejects_competing_rows_ato
     let mut prefix = vec![TransactionResult::new(Ok(Default::default())); 2];
     prefix[0].set_batch_transfer_outcomes(vec![receipt.clone()]);
     let retained = prefix[0].clone();
-    assign_tail_batch_outcomes(&mut prefix, &owners, BTreeMap::new()).unwrap();
+    attach_fixture_receipts(&mut prefix, &owners, BTreeMap::new()).unwrap();
     assert_eq!(prefix[0], retained);
     let before = prefix.clone();
     assert!(
-        assign_tail_batch_outcomes(
+        attach_fixture_receipts(
             &mut prefix,
             &owners,
             BTreeMap::from([
@@ -50,7 +138,7 @@ fn common_tail_receipt_join_preserves_full_prefix_and_rejects_competing_rows_ato
     );
     let mut empty = vec![TransactionResult::new(Ok(Default::default()))];
     assert!(
-        assign_tail_batch_outcomes(
+        attach_fixture_receipts(
             &mut empty,
             &BTreeMap::from([(first, 0), (second, 0)]),
             BTreeMap::from([
@@ -61,7 +149,7 @@ fn common_tail_receipt_join_preserves_full_prefix_and_rejects_competing_rows_ato
         .is_err()
     );
     assert!(empty[0].batch_transfer_outcomes().is_empty());
-    assign_tail_batch_outcomes(
+    attach_fixture_receipts(
         &mut prefix,
         &owners,
         BTreeMap::from([(second, vec![receipt.clone()])]),
@@ -92,27 +180,35 @@ fn common_tail_receipt_join_rejects_unknown_empty_and_out_of_range_owners() {
     ] {
         let mut results = vec![TransactionResult::new(Ok(Default::default()))];
         let before = results.clone();
-        assert!(assign_tail_batch_outcomes(&mut results, &owners, outcomes).is_err());
+        assert!(attach_fixture_receipts(&mut results, &owners, outcomes).is_err());
         assert_eq!(results, before);
     }
 }
 
 #[test]
-fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
-    let (authority, _) = gen_account_in("tail");
-    let time = iroha_data_model::trigger::TimeTriggerEntrypoint {
-        id: "repeat".parse().unwrap(),
-        instructions: iroha_data_model::transaction::ExecutionStep(
-            iroha_primitives::const_vec::ConstVec::new_empty(),
-        ),
-        authority,
+fn time_receipts_bind_distinct_schedule_calls_of_the_same_action() {
+    use iroha_data_model::block::execution_output::{TimeInvocationV1, TriggerUseV1};
+    use iroha_data_model::events::time::{TimeEvent, TimeInterval};
+    let proposal = HashOf::from_untyped_unchecked(Hash::new(b"Time fixture proposal"));
+    let time = TimeInvocationV1 {
+        schedule_index: 0,
+        event: TimeEvent::new(TimeInterval {
+            since_ms: 0,
+            length_ms: 1,
+        }),
+        trigger: TriggerUseV1 {
+            trigger_id: "repeat".parse().unwrap(),
+            registered_at_height: 0,
+            action_hash: Hash::new(b"same use-time action"),
+        },
     };
-    let entries = vec![time.clone(), time.clone()];
-    let displays = vec![time.hash_as_entrypoint(); 2];
-    let calls = [
-        Hash::new(b"actual invocation 0"),
-        Hash::new(b"actual invocation 1"),
-    ];
+    let mut second_invocation = time.clone();
+    second_invocation.schedule_index = 1;
+    let entries = vec![time, second_invocation];
+    let calls = entries
+        .iter()
+        .map(|entry| entry.execution_call_hash(proposal).unwrap())
+        .collect::<Vec<_>>();
     let first = tail_receipt_fixture();
     let mut second = first.clone();
     second.leg_id = "second invocation".into();
@@ -127,10 +223,10 @@ fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
         ),
     ]);
     let inner = vec![Ok(Default::default()); 2];
-    let full = join_time_tail_receipts(
+    let full = join_time_fixture_receipts(
         &BTreeMap::new(),
+        proposal,
         &entries,
-        &displays,
         inner.clone(),
         &calls,
         rows.clone(),
@@ -138,26 +234,27 @@ fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
     .unwrap();
     assert_eq!(full[0].batch_transfer_outcomes(), &[first]);
     assert_eq!(full[1].batch_transfer_outcomes(), &[second]);
-    assert_eq!(entries[0], entries[1]);
+    assert_eq!(entries[0].trigger, entries[1].trigger);
+    assert_ne!(entries[0].schedule_index, entries[1].schedule_index);
     assert_ne!(calls[0], calls[1]);
     assert!(
-        join_time_tail_receipts(
+        join_time_fixture_receipts(
             &BTreeMap::new(),
-            &entries,
-            &displays[..1],
+            proposal,
+            &entries[..1],
             inner.clone(),
             &calls,
             rows.clone()
         )
         .is_err()
     );
-    let mut wrong_display = displays.clone();
-    wrong_display[0] = HashOf::from_untyped_unchecked(Hash::new(b"not that Time entry"));
+    let mut wrong_descriptor = entries.clone();
+    wrong_descriptor[0].trigger.action_hash = Hash::new(b"not that Time action");
     assert!(
-        join_time_tail_receipts(
+        join_time_fixture_receipts(
             &BTreeMap::new(),
-            &entries,
-            &wrong_display,
+            proposal,
+            &wrong_descriptor,
             inner.clone(),
             &calls,
             rows.clone()
@@ -165,10 +262,10 @@ fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
         .is_err()
     );
     assert!(
-        join_time_tail_receipts(
+        join_time_fixture_receipts(
             &BTreeMap::new(),
+            proposal,
             &entries,
-            &displays,
             inner.clone(),
             &[calls[0]; 2],
             rows.clone()
@@ -177,10 +274,10 @@ fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
     );
     let prefix = BTreeMap::from([(HashOf::from_untyped_unchecked(calls[0]), 0)]);
     assert!(
-        join_time_tail_receipts(
+        join_time_fixture_receipts(
             &prefix,
+            proposal,
             &entries,
-            &displays,
             inner.clone(),
             &calls,
             rows.clone()
@@ -193,10 +290,10 @@ fn common_tail_time_join_uses_returned_calls_not_repeated_display_hashes() {
         vec![tail_receipt_fixture()],
     );
     assert!(
-        join_time_tail_receipts(
+        join_time_fixture_receipts(
             &BTreeMap::new(),
+            proposal,
             &entries,
-            &displays,
             inner,
             &calls,
             leftovers
@@ -228,11 +325,11 @@ fn common_tail_prefix_receipt_aliases_are_one_to_one() {
         [0; 32],
     ));
     assert_eq!(
-        prefix_tail_receipt_owners(std::slice::from_ref(&reveal))
+        fixture_network_receipt_owners(std::slice::from_ref(&reveal))
             .unwrap()
             .get(&external.execution_call_hash()),
         Some(&0)
     );
-    assert!(prefix_tail_receipt_owners(&[external.clone(), external.clone()]).is_err());
-    assert!(prefix_tail_receipt_owners(&[external, reveal]).is_err());
+    assert!(fixture_network_receipt_owners(&[external.clone(), external.clone()]).is_err());
+    assert!(fixture_network_receipt_owners(&[external, reveal]).is_err());
 }

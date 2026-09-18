@@ -35,6 +35,7 @@ def _load(path, name):
 
 @pytest.fixture(scope="module")
 def contract():
+    sys.path.insert(0, str(ROOT / "scripts/formal"))
     native = _load(ROOT / HELPER, "native_settlement_source_contract")
     tree = ast.parse((ROOT / CHECKER).read_text())
     functions = {"_extract_braced_item", "_indexed_rust_binding_items",
@@ -917,21 +918,21 @@ CONTROLS = [{'id': 'NS001',
  {'id': 'NS098',
   'path': 'crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'kind': 'method',
-  'symbol': 'ApplyFixture::new_with_options_and_retention',
+  'symbol': 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   'old': 'if include_lane_lifecycle {',
   'new': 'if false {',
   'reason': 'Fixture uses lifecycle-backed Kura when requested.'},
  {'id': 'NS099',
   'path': 'crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'kind': 'method',
-  'symbol': 'ApplyFixture::new_with_options_and_retention',
+  'symbol': 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   'old': 'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
   'new': 'let _ = &validator_set_pops;',
   'reason': 'Fixture must install real canonical validator authority.'},
  {'id': 'NS100',
   'path': 'crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'kind': 'method',
-  'symbol': 'ApplyFixture::new_with_options_and_retention',
+  'symbol': 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   'old': 'install_fixture_native_lane(&mut state, &mut context);',
   'new': 'let _ = &mut context;',
   'reason': 'Fixture must install actual Native lane instead of toggling a declaration.'},

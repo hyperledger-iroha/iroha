@@ -60,10 +60,10 @@ use iroha_data_model::{
         error::TransactionRejectionReason,
         signed::{
             SealedTransactionReveal, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-            TransactionResultInner, TransactionSignature, compute_sealed_transaction_commitment,
+            TransactionSignature, compute_sealed_transaction_commitment,
         },
     },
-    trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint, TriggerId},
+    trigger::{DataTriggerSequence, DataTriggerStep, TriggerId},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
@@ -424,7 +424,6 @@ fn grant_account_permission_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -453,7 +452,6 @@ fn seed_asset_definition_for_test(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -1000,7 +998,6 @@ fn ensure_runtime_peer_binding_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1358,7 +1355,6 @@ pub(crate) fn bind_account_alias_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1471,7 +1467,6 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1518,7 +1513,6 @@ pub(crate) fn bind_contract_alias_for_test(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1554,7 +1548,6 @@ pub(crate) fn bind_domain_name_for_test_with_status(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -1762,7 +1755,6 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
     let keypair = checked_torii_test_bls_keypair(0xb1, "derive Torii block signature fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(9).expect("nonzero height"),
-        None,
         None,
         None,
         0,

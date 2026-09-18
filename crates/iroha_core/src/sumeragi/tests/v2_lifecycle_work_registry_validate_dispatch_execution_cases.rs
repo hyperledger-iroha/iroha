@@ -3842,7 +3842,6 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         NonZeroU64::new(context.height).expect("non-zero successor height"),
         Some(parent),
         None,
-        None,
         1_000,
         0,
     );

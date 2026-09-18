@@ -6790,12 +6790,24 @@ mod tests {
         // ValidBlock validation; require the persisted result to retain that success.
         let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
             .expect("read native executed Taira genesis");
-        for index in 0..signed.external_transactions().count() {
+        signed
+            .validate_output_merkle_cache()
+            .expect("generated genesis has complete typed execution outputs");
+        for index in 0..signed.network_entrypoint_count() {
+            let (_, output) = signed
+                .network_output_at(u32::try_from(index).expect("genesis input fits u32"))
+                .expect("genesis input must have its exact Network output");
             assert!(
-                signed.error(index).is_none(),
+                output.result.as_ref().is_ok(),
                 "genesis transaction {index} failed"
             );
         }
+        assert!(
+            signed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
+            "all generated genesis invocation outputs must be successful"
+        );
 
         let start_script = fs::read_to_string(temp.path().join("start.sh"))
             .expect("read generated Taira start script");

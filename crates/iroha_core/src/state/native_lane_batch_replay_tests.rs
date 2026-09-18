@@ -33,15 +33,30 @@ fn attach_actual_native_prefix_results_for_test(
         }
     }
     let proposal_hash = carrier.hash();
+    assert!(carrier.network_input_hashes().eq(hashes.iter().copied()));
+    let outputs = results
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).unwrap(),
+                    result,
+                    completions: Vec::new(),
+                },
+            )
+        })
+        .collect();
     carrier
-        .set_full_transaction_results_with_transcripts(
-            Vec::new(),
-            &hashes,
-            results,
+        .set_execution_outputs(
+            outputs,
             u64::try_from(prepared.overlay().committed_fragment_count()).unwrap(),
             transcripts,
             prepared.overlay().axt_envelopes().to_vec(),
             prepared.overlay().axt_policy_snapshot(),
+            prepared.overlay().axt_authorization_transitioned().clone(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("actual native outputs join their source positions");
     assert_eq!(carrier.hash(), proposal_hash);
@@ -165,7 +180,7 @@ state_test! { sync historical_native_batch_replays_only_on_exact_pre_state_witho
     use super::NativeLaneBatchReplayV1;
     let (fixture, carrier, included) = retained_native_batch_fixture();
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let NativeLaneBatchReplayV1::Ready(replayed) =
         state.replay_finalized_native_lane_batch(&included, &[]).unwrap()
         else { panic!("exact private sources re-enter economic replay"); };
@@ -173,7 +188,7 @@ state_test! { sync historical_native_batch_replays_only_on_exact_pre_state_witho
     assert_eq!(replayed.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(75u32));
     assert_eq!(replayed.overlay().world.assets.get(&fixture.destination).unwrap().0, Quantity::from(25u32));
     drop(replayed);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     let other = native_economic_fixture(&[NativeEconomicCase::Transfer(30)], false);
     assert!(other.native.state.replay_finalized_native_lane_batch(&included, &[]).is_err(),
         "same-looking roster or height is not the exact first source/base");
@@ -235,11 +250,11 @@ state_test! { sync historical_native_batch_first_source_recovery_is_typed_and_re
 state_test! { sync historical_native_batch_rechecks_even_finalized_resigned_source_substitution
     let (fixture, _, included) = retained_native_batch_fixture_with_substitution(true);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     // The storage fixture's canonical CommitQC really contains this substituted
     // group, whose native shares were also re-signed. Inclusion is not execution.
     assert!(state.replay_finalized_native_lane_batch(&included, &[]).is_err());
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert!(state.kura.read_finalized_native_lane_batch(
         NonZeroUsize::new(fixture.native.block.header().height().get() as usize).unwrap(),
         fixture.native.block.hash(),
@@ -249,13 +264,11 @@ state_test! { sync historical_native_batch_rechecks_even_finalized_resigned_sour
 // Outline the actual snapshot decoder so the test does not reserve a second
 // whole State alongside both block overlays on its ordinary test-thread stack.
 fn restore_native_batch_pre_state_for_test(state: &State) -> Box<State> {
-    let mut restored = Box::new(
-        deserialize_state_snapshot_value_with_kura(
-            norito::json::to_value(state).unwrap(),
-            Arc::clone(&state.kura),
-        )
-        .unwrap(),
-    );
+    let mut restored = deserialize_state_snapshot_value_with_kura(
+        norito::json::to_value(state).unwrap(),
+        Arc::clone(&state.kura),
+    )
+    .unwrap();
     // Process settings are not snapshot state. Reinstall the same test startup
     // settings before the original configured Nexus policy, just as the source
     // fixture did; the resulting prefix must retain its exact authenticated root.
@@ -276,8 +289,12 @@ fn restore_native_batch_pre_state_for_test(state: &State) -> Box<State> {
         "historical replay requires the same authenticated execution policy, not only the WSV root",
     );
     assert_eq!(
-        restored.lane_execution_state_hash(),
-        state.lane_execution_state_hash(),
+        restored
+            .lane_execution_state_hash()
+            .expect("stable valid fixture snapshot"),
+        state
+            .lane_execution_state_hash()
+            .expect("stable valid fixture snapshot"),
         "installing static policy must preserve the authenticated applying prefix",
     );
     restored
@@ -346,7 +363,7 @@ state_test! { sync historical_native_batch_inclusion_survives_authenticated_clos
     let (fixture, carrier, included) = retained_native_batch_fixture();
     let state = &fixture.native.state;
     let pre_state = restore_native_batch_pre_state_for_test(state);
-    assert_eq!(pre_state.lane_execution_state_hash(), included.batch().base_state_hash);
+    assert_eq!(pre_state.lane_execution_state_hash().expect("stable valid fixture snapshot"), included.batch().base_state_hash);
     close_native_batch_fixture_membership_for_test(&fixture, &carrier, &included);
     assert!(state.verified_lane_consensus_contexts().unwrap().unwrap().contexts().is_empty());
     let NativeLaneBatchCarrierReadV1::Ready(retained) = state.kura.read_finalized_native_lane_batch(
@@ -360,7 +377,7 @@ state_test! { sync historical_native_batch_inclusion_survives_authenticated_clos
     ).unwrap() else { panic!("explicit preserved prefix reauthenticates its own historical inputs"); };
     assert_eq!(replayed.batch(), included.batch());
     drop(replayed);
-    assert_eq!(pre_state.lane_execution_state_hash(), included.batch().base_state_hash);
+    assert_eq!(pre_state.lane_execution_state_hash().expect("stable valid fixture snapshot"), included.batch().base_state_hash);
 }
 
 fn authenticated_native_batch_body_response_for_test(
@@ -448,9 +465,9 @@ state_test! { sync historical_native_batch_carrier_recovery_retains_exact_result
     let recovered = requirement.complete_from_authenticated_response(&request, &response).unwrap();
     assert_eq!(recovered.batch(), included.batch());
     assert_eq!(included.carrier_header(), &carrier.header());
-    assert!(included.carrier_header().result_merkle_root().is_some());
+    assert!(carrier.output_merkle_commitment().is_some());
     assert_eq!(recovered.carrier_header(), &carrier.canonical_resultless_proposal().header());
-    assert!(recovered.carrier_header().result_merkle_root().is_none());
+    assert_eq!(included.carrier_header(), recovered.carrier_header(), "execution output attachment preserves the immutable proposal header");
     assert_eq!(recovered.carrier_header().hash(), included.carrier_header().hash());
     assert_eq!(recovered.finality(), included.finality());
     let NativeLaneBatchReplayV1::Ready(replayed) =
@@ -474,7 +491,7 @@ state_test! { sync historical_native_batch_multiple_missing_inputs_retain_prior_
         &[NativeEconomicCase::Transfer(25), NativeEconomicCase::Transfer(30)], false,
     );
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let first = &fixture.native.block;
     state.kura.evict_first_admission_body_for_testing(
         NonZeroUsize::new(first.header().height().get() as usize).unwrap(), first.hash(),
@@ -506,7 +523,7 @@ state_test! { sync historical_native_batch_multiple_missing_inputs_retain_prior_
     assert_eq!(replayed.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(45u32));
     assert_eq!(replayed.overlay().world.assets.get(&fixture.destination).unwrap().0, Quantity::from(55u32));
     drop(replayed);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert_eq!(outstanding.len(), 1, "economic replay cannot discharge the shared transport owner");
 }
 
@@ -517,7 +534,8 @@ fn assert_actual_native_prefix_wire_for_test(
     expected_success: &[bool],
 ) {
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state)
+        .expect("stable valid fixture snapshot");
     let groups = native_economic_groups(fixture);
     let mut carrier =
         empty_global_block_after(Some(&fixture.native.block)).canonical_resultless_proposal();
@@ -545,7 +563,7 @@ fn assert_actual_native_prefix_wire_for_test(
         Some(u64::try_from(prepared.overlay().committed_fragment_count()).unwrap())
     );
     assert_eq!(
-        carrier.results().cloned().collect::<Vec<_>>(),
+        carrier.output_results().cloned().collect::<Vec<_>>(),
         prepared
             .executions()
             .iter()
@@ -562,11 +580,22 @@ fn assert_actual_native_prefix_wire_for_test(
     );
     for (index, actual) in prepared.executions().iter().enumerate() {
         let input = &actual.source.payload.input.entrypoint;
-        assert_eq!(decoded.entrypoint_cloned_at(index), Some(input.clone()));
-        let proofs = decoded.proofs_for_entry_hash(&input.hash()).unwrap();
-        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-        assert!(proofs.result_proof.verify(&proofs.result_commitment));
-        assert_eq!(*proofs.result_proof.leaf(), actual.result.hash());
+        assert_eq!(decoded.network_entrypoint_at(index), Some(input));
+        let input_index = u32::try_from(index).unwrap();
+        let input_proof = decoded.network_input_proof(input_index).unwrap();
+        let input_commitment = decoded.network_input_merkle_commitment().unwrap();
+        assert!(input_proof.verify(&input.hash(), &input_commitment));
+        let foreign_input = HashOf::from_untyped_unchecked(Hash::new(b"foreign native input"));
+        assert!(!input_proof.verify(&foreign_input, &input_commitment));
+        let (output_index, row) = decoded.network_output_at(input_index).unwrap();
+        assert_eq!(row.input_index, input_index);
+        assert_eq!(row.result, actual.result);
+        let output_proof = decoded.output_proof(output_index).unwrap();
+        let output_commitment = decoded.output_merkle_commitment().unwrap();
+        let output_hash = HashOf::new(&decoded.execution_outputs()[output_index as usize]);
+        assert!(output_proof.verify(&output_hash, &output_commitment));
+        let foreign_output = HashOf::from_untyped_unchecked(Hash::new(b"foreign native output"));
+        assert!(!output_proof.verify(&foreign_output, &output_commitment));
         if let TransactionEntrypoint::SealedReveal(_) = input {
             assert_ne!(
                 Hash::from(input.hash()),
@@ -574,10 +603,9 @@ fn assert_actual_native_prefix_wire_for_test(
             );
             assert!(
                 decoded
-                    .proofs_for_entry_hash(&HashOf::from_untyped_unchecked(Hash::from(
-                        input.execution_call_hash()
-                    )))
-                    .is_none()
+                    .network_input_hashes()
+                    .all(|hash| Hash::from(hash) != Hash::from(input.execution_call_hash())),
+                "the signed replay alias is not a second canonical input"
             );
             assert!(
                 !decoded
@@ -588,7 +616,8 @@ fn assert_actual_native_prefix_wire_for_test(
     }
     drop(prepared);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(state),
+        crate::snapshot::canonical_state_snapshot_hash(state)
+            .expect("stable valid fixture snapshot"),
         before
     );
 }

@@ -214,7 +214,7 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
     for direct in [false, true] {
         for count in [3, 255] {
             let (state, instruction, sponsor) = fixture(count, false);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_consents(&mut block, &instruction, &sponsor, None);
             let mut state_tx = block.transaction();
             state_tx.tx_call_hash = Some(Hash::new(b"atomic-overlay-carrier"));
@@ -281,7 +281,7 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
 fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
     for direct in [false, true] {
         let (state, instruction, sponsor) = fixture(255, false);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, Some(254));
         let mut state_tx = block.transaction();
         state_tx.tx_call_hash = Some(Hash::new(b"missing-final-consent"));
@@ -306,7 +306,7 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
 fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution() {
     for direct in [false, true] {
         let (state, instruction, sponsor) = fixture(255, true);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, None);
         let mut state_tx = block.transaction();
         state_tx.tx_call_hash = Some(Hash::new(b"final-scope-policy"));
@@ -327,7 +327,7 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
 #[test]
 fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
     let (state, instruction, sponsor) = fixture(3, false);
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_tx = block.transaction();
     assert!(!crate::executor::is_initial_genesis_context(&state_tx));
     let source = &instruction.movements().as_slice()[2].source;

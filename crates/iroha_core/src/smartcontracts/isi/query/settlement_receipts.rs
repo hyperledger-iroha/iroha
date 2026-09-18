@@ -84,8 +84,7 @@ mod tests {
     fn settlement_receipt_query_returns_every_exact_movement_without_mutating_history() {
         for count in [3, 255] {
             let state = state();
-            let mut block =
-                state.block(BlockHeader::new(nonzero!(8_u64), None, None, None, 1235, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(8_u64), None, None, 1235, 0));
             let mut tx = block.transaction();
             let id: SettlementId = "query_business".parse().expect("id");
             let expected = receipt(count);
@@ -126,7 +125,7 @@ mod tests {
     #[test]
     fn settlement_receipt_query_rejects_absence_without_creating_a_record() {
         let state = state();
-        let mut block = state.block(BlockHeader::new(nonzero!(8_u64), None, None, None, 1235, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(8_u64), None, None, 1235, 0));
         let tx = block.transaction();
         let id: SettlementId = "absent_business".parse().expect("id");
         let query = FindSettlementReceiptById::new(id.clone());
@@ -140,7 +139,7 @@ mod tests {
     #[test]
     fn settlement_receipt_query_enforces_the_actual_singular_output_frame_limit() {
         let state = state();
-        let mut block = state.block(BlockHeader::new(nonzero!(8_u64), None, None, None, 1235, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(8_u64), None, None, 1235, 0));
         let mut tx = block.transaction();
         let id: SettlementId = "bounded_business".parse().expect("id");
         let expected = receipt(255);

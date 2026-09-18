@@ -5,15 +5,14 @@ fn commit_result_bearing_lane_parent(
 ) -> CommittedBlock {
     let mut signed: SignedBlock = valid.into();
     let axt_policy_snapshot = state.block(signed.header()).axt_policy_snapshot();
-    signed
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[],
-            Vec::new(),
-            BTreeMap::new(),
-            Vec::new(),
-            axt_policy_snapshot,
-        )
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&signed, &[], Vec::new());
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+signed.set_execution_outputs(outputs, fragments, BTreeMap::new(),
+Vec::new(),
+axt_policy_snapshot,
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach the required lane-work parent AXT policy snapshot");
     let signature = SignatureOf::try_from_hash(leader_private, signed.header().hash())
         .expect("sign the result-bearing lane-work parent");

@@ -2349,7 +2349,6 @@ fn merge_sidecar_carrier_block(
         NonZeroU64::new(qc.carrier_height).expect("historical carrier height is non-zero"),
         Some(qc.carrier_parent_hash),
         None,
-        None,
         qc.carrier_height,
         qc.view,
     );
@@ -3779,10 +3778,7 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         .entry(autonomous_lane_id)
         .expect("autonomous mixed-carrier lane storage entry")
         .clone();
-    parent
-        .kura
-        .reconcile_lane_segments_for_testing(&[&autonomous_lane_entry], &[], &[])
-        .expect("provision autonomous mixed-carrier lane storage");
+    parent.state.install_active_lane_markers_for_tests();
     let autonomous_lane_incarnation = parent
         .state
         .lane_incarnation_at_height(autonomous_lane_id, parent.context.height)
@@ -3937,7 +3933,6 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         NonZeroU64::new(successor.context.height).expect("non-zero successor height"),
         Some(parent_block.hash()),
         None,
-        None,
         successor.context.height,
         global_view,
     );
@@ -4001,12 +3996,14 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
     );
     let _ = successor.drain_effects(usize::MAX);
     let mut executed_successor_block = successor_block.clone();
-    executed_successor_block
-        .set_transaction_results(
-            Vec::new(),
-            &[entrypoint_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&executed_successor_block, &[entrypoint_hash], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+executed_successor_block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach canonical successor transaction result");
     assert_eq!(
         executed_successor_block.canonical_resultless_proposal(),
@@ -4239,7 +4236,6 @@ fn finalized_carrier_malformed_cross_kind_fail_stops_proposal_and_payload_ingres
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
             None,
-            None,
             adapter.context.height,
             0,
         );
@@ -4387,7 +4383,6 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         NonZeroU64::new(second.context.height).expect("non-zero second-link height"),
         Some(first_block.hash()),
         None,
-        None,
         second.context.height,
         global_view,
     );
@@ -4408,15 +4403,14 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         )
         .canonical_resultless_proposal();
     let axt_policy_snapshot = state.block(second_block.header()).axt_policy_snapshot();
-    second_block
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[entrypoint_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            BTreeMap::new(),
-            Vec::new(),
-            axt_policy_snapshot,
-        )
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&second_block, &[entrypoint_hash], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+second_block.set_execution_outputs(outputs, fragments, BTreeMap::new(),
+Vec::new(),
+axt_policy_snapshot,
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach the executed second-link result and required AXT snapshot");
     let signature = SignatureOf::try_from_hash(
         keys[leader_index].private_key(),

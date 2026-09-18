@@ -2716,7 +2716,6 @@ pub(crate) mod tests {
                     .expect("fixture successor height is non-zero"),
                 None,
                 None,
-                None,
                 0,
                 0,
             )
@@ -3384,7 +3383,6 @@ pub(crate) mod tests {
         );
         let header = BlockHeader::new(
             NonZeroU64::new(receipt.finalized_height).expect("non-zero finalization height"),
-            None,
             None,
             None,
             0,

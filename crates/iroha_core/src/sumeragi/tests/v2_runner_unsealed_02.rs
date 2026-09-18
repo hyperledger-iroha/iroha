@@ -369,27 +369,29 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     .sign(key_pair.private_key());
     let entrypoint = transaction.hash_as_entrypoint();
     let mut staged = SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
-    staged
-        .set_transaction_results(
-            Vec::new(),
-            &[entrypoint],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&staged, &[entrypoint], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+staged.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach deterministic staged genesis results");
     assert!(staged.has_results());
     assert!(!staged.is_resultless_proposal());
-    assert!(staged.header().result_merkle_root().is_some());
+    assert!(staged.output_merkle_commitment().is_some());
     let staged_header_hash = staged.header().hash();
     let staged_hash = staged.hash();
     let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
-    let staged_result_root = staged.header().result_merkle_root();
+    let staged_result_root = staged.output_merkle_commitment();
     let staged_execution_wire = staged.encode_wire().expect("encode staged execution image");
     let wire =
         canonical_height_one_proposal_wire(&staged).expect("encode canonical height-one proposal");
     let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
     assert!(proposal.is_resultless_proposal());
     assert!(!proposal.has_results());
-    assert!(proposal.header().result_merkle_root().is_none());
+    assert!(proposal.output_merkle_commitment().is_none());
     assert_eq!(proposal.header().hash(), staged_header_hash);
     assert_eq!(proposal.hash(), staged_hash);
     assert_eq!(
@@ -397,7 +399,7 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
         staged_signatures
     );
     assert_eq!(
-        staged.header().result_merkle_root(),
+        staged.output_merkle_commitment(),
         staged_result_root,
         "proposal projection must not mutate the staged result root"
     );

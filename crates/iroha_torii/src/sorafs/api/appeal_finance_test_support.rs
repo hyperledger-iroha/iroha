@@ -978,7 +978,6 @@ fn seed_appeal_finance_asset_lock(
         NonZeroU64::new(1).expect("non-zero block height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1004,7 +1003,6 @@ fn seed_appeal_finance_asset_lock(
 fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero block height"),
-        None,
         None,
         None,
         0,
@@ -1033,7 +1031,6 @@ fn drawdown_appeal_finance_asset_lock(
         .clone();
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero block height"),
-        None,
         None,
         None,
         0,
@@ -1067,7 +1064,6 @@ fn cancel_appeal_finance_asset_lock(
         .clone();
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero block height"),
-        None,
         None,
         None,
         0,

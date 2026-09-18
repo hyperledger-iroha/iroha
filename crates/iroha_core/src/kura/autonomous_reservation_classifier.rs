@@ -85,7 +85,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     #[allow(clippy::too_many_arguments)]
     fn load_autonomous_reservation_attempt_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         inventory: &AutonomousReservationLaneInventory,
         lane_id: LaneId,
         lane_block_height: u64,
@@ -147,7 +147,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     #[allow(clippy::too_many_arguments)]
     fn load_autonomous_reservation_attempt_self_context_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         inventory: &AutonomousReservationLaneInventory,
         lane_id: LaneId,
         lane_block_height: u64,
@@ -292,7 +292,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn preflight_autonomous_reservation_claims_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         inventory: &AutonomousReservationLaneInventory,
         payload: &LaneExecutablePayloadV1,
         retirement: Option<&AutonomousLaneSlotRetirementV1>,
@@ -615,7 +615,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn read_requested_certified_lane_blocks_strict_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         requested_heights: &BTreeSet<u64>,
         bound: &mut BoundProgressSidecar,
         scanned_entries: &mut usize,
@@ -786,7 +786,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     }
     fn autonomous_reservation_certified_lane_snapshot_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         inventory: &AutonomousReservationLaneInventory,
         requested_heights: &BTreeSet<u64>,
         scanned_entries: &mut usize,
@@ -901,7 +901,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
     }
     fn autonomous_reservation_certification_for_payload(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         snapshot: &AutonomousReservationCertifiedLaneSnapshot,
         payload: &LaneExecutablePayloadV1,
     ) -> std::result::Result<
@@ -1044,7 +1044,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let mut entries = BTreeMap::<LaneId, LaneConfigEntry>::new();
+        let mut entries = BTreeMap::<LaneId, LaneStorageEntry>::new();
         let mut requested_certified_heights = BTreeMap::<LaneId, BTreeSet<u64>>::new();
         for group in groups {
             let entry = match entries.get(&group.identity.lane_id) {

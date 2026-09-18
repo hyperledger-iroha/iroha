@@ -1457,7 +1457,6 @@ fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomPar
         NonZeroU64::new(next_height).expect("test block height is non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );

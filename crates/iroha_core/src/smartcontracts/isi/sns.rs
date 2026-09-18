@@ -742,7 +742,6 @@ mod tests {
             NonZeroU64::new(height).expect("height > 0"),
             None,
             None,
-            None,
             0,
             0,
         )
@@ -1218,7 +1217,6 @@ mod tests {
             NonZeroU64::new(height).expect("height > 0"),
             None,
             None,
-            None,
             creation_time_ms,
             0,
         )
@@ -1328,9 +1326,18 @@ mod tests {
         }
     }
     fn run_alias_auto_renew_maintenance(state: &State, now_ms: u64) {
-        let header = next_header_at(state, now_ms);
+        let mut header = next_header_at(state, now_ms);
+        // This fixture seeds World without a canonical history. Maintenance is
+        // an ordinary phase following that setup, never unauthenticated genesis.
+        if header.is_genesis() {
+            header.set_height(NonZeroU64::new(2).unwrap());
+        }
         let mut block = state.block(header.clone());
-        let _ = block.execute_time_triggers(&header);
+        let outputs = crate::state::run_empty_network_owner_fixture(&mut block);
+        assert!(
+            outputs.is_empty(),
+            "native maintenance must not invent trigger outputs"
+        );
         block
             .commit_world_overlay_for_testing()
             .expect("maintenance block commits");
@@ -2405,7 +2412,6 @@ mod tests {
         );
         state.append_committed_block_header_for_tests(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero height"),
-            None,
             None,
             None,
             11,

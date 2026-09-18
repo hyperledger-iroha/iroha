@@ -2799,7 +2799,6 @@ fn candidate_attachments(
         || round_header.prev_block_hash() != Some(parent.hash())
         || round_header.view_change_index() != view
         || round_header.merkle_root().is_some()
-        || round_header.result_merkle_root().is_some()
     {
         return Err(V2RunnerError::Candidate(
             "certified merge carrier probe differs from the frozen round".to_owned(),

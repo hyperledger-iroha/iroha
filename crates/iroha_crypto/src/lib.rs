@@ -26,6 +26,7 @@ pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
+mod merkle_map;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
 /// ML-DSA-65 typed-key operations with the shared portable `AArch64` fallback.
@@ -148,6 +149,7 @@ use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
+pub use merkle_map::{MerkleMap, MerkleMapError};
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
     PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,

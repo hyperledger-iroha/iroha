@@ -15,7 +15,7 @@
             [],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let transfer_asset_id = AssetId::new(
@@ -112,7 +112,7 @@
                     .insert(authority.clone(), BTreeSet::from([permission]));
             }
             let state = state_for_testing(world);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut transaction = block.transaction();
             transaction.tx_call_hash = Some(Hash::new(case.as_bytes()));
             let result = super::Executor::Initial.execute_instruction(
@@ -153,7 +153,7 @@
             "the concrete batch must be admitted to Core's per-leg authorization"
         );
         let state = state_for_testing(fixture.world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"initial-owner-atomic-batch"));
         super::Executor::Initial
@@ -185,7 +185,7 @@
         );
         let fixture = initial_batch_fixture();
         let state = state_for_testing(fixture.world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"initial-mixed-atomic-batch"));
         let error = super::Executor::Initial
@@ -238,7 +238,7 @@
     fn initial_executor_transfer_asset_batch_independent_isolates_unauthorized_source_receipt() {
         let fixture = initial_batch_fixture();
         let state = state_for_testing(fixture.world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"initial-mixed-independent-batch"));
         super::Executor::Initial
@@ -347,7 +347,7 @@
                     .insert(fixture.delegate.clone(), BTreeSet::from([permission]));
             }
             let state = state_for_testing(fixture.world);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut transaction = block.transaction();
             transaction.tx_call_hash = Some(Hash::new(permission_case.as_bytes()));
             let result = super::Executor::Initial.execute_instruction(

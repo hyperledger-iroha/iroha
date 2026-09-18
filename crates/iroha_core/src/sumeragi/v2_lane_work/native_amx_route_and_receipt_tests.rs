@@ -718,7 +718,8 @@ fn native_coordinator_after_applied_participant_fixture(
         &ValidBlock::committed_from_replay_signed_block(carrier.clone()),
         &adapter.context,
     );
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     adapter
         .kura
         .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
@@ -1001,9 +1002,7 @@ fn native_coordinator_successor_fails_closed_on_corrupt_applied_native_receipt()
     let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     let receipt_path = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .expect("actual participant storage route")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/native_amx_receipt_v1_00000000000000000001.norito");

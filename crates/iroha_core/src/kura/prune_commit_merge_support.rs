@@ -603,36 +603,31 @@ impl FastpqProofSidecarTelemetry {
 /// Stable structural position of one indexed Kaigi signal carrier.
 ///
 /// Positions follow the app endpoint's chronological order: lower block
-/// heights are older, merge execution precedes ordinary execution in one
-/// carrier, and lower indexes are earlier within either execution phase. The
+/// heights are older and lower Network input indexes are earlier within one
+/// carrier. Internal invocation outputs have no position here. The
 /// hashes bind a cursor to the exact canonical carrier and entrypoint.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::KaigiSignalCandidatePosition")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct KaigiSignalCandidatePosition {
     block_height: u64,
-    execution_phase: u8,
-    transaction_index: u64,
+    network_input_index: u32,
     block_hash: HashOf<BlockHeader>,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 
 impl KaigiSignalCandidatePosition {
     /// Construct a canonical signal position.
-    ///
-    /// Phase zero denotes merge execution and phase one ordinary execution.
     #[must_use]
     pub fn new(
         block_height: u64,
-        execution_phase: u8,
-        transaction_index: u64,
+        network_input_index: u32,
         block_hash: HashOf<BlockHeader>,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Option<Self> {
-        (block_height > 0 && execution_phase <= 1).then_some(Self {
+        (block_height > 0).then_some(Self {
             block_height,
-            execution_phase,
-            transaction_index,
+            network_input_index,
             block_hash,
             entrypoint_hash,
         })
@@ -644,16 +639,10 @@ impl KaigiSignalCandidatePosition {
         self.block_height
     }
 
-    /// Return zero for merge execution or one for ordinary execution.
+    /// Return the position in the complete canonical Network input sequence.
     #[must_use]
-    pub const fn execution_phase(self) -> u8 {
-        self.execution_phase
-    }
-
-    /// Return the canonical transaction index within the execution phase.
-    #[must_use]
-    pub const fn transaction_index(self) -> u64 {
-        self.transaction_index
+    pub const fn network_input_index(self) -> u32 {
+        self.network_input_index
     }
 
     /// Return the canonical carrier block hash.
@@ -675,7 +664,7 @@ pub(crate) struct KaigiSignalCandidateLocator {
     pub(crate) authority: AccountId,
 }
 
-type KaigiSignalCandidatesByOffset = BTreeMap<(u8, u64), KaigiSignalCandidateLocator>;
+type KaigiSignalCandidatesByOffset = BTreeMap<u32, KaigiSignalCandidateLocator>;
 type KaigiSignalCandidatesByHeight = BTreeMap<NonZeroUsize, KaigiSignalCandidatesByOffset>;
 type KaigiSignalCandidatesByCall = BTreeMap<KaigiId, KaigiSignalCandidatesByHeight>;
 
@@ -706,8 +695,7 @@ struct TransactionEntrypointIndex {
     nested_associations: AssociationCount,
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
-    incomplete_merge_heights: BTreeSet<NonZeroUsize>,
-    incomplete_kaigi_signal_heights: BTreeSet<NonZeroUsize>,
+    incomplete_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
@@ -721,8 +709,7 @@ impl TransactionEntrypointIndex {
             nested_associations: AssociationCount::default(),
             complete: true,
             indexed_heights: BTreeSet::new(),
-            incomplete_merge_heights: BTreeSet::new(),
-            incomplete_kaigi_signal_heights: BTreeSet::new(),
+            incomplete_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),

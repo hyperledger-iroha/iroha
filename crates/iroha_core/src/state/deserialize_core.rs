@@ -2,7 +2,7 @@ use super::{default_oracle, *};
 use iroha_model_base::chain::ChainId;
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+use std::{collections::BTreeMap, marker::PhantomData};
 #[cfg(test)]
 std::thread_local! {
     static SNAPSHOT_NORITO_CANONICAL_PASSES: std::cell::Cell<usize> = const {
@@ -200,16 +200,9 @@ impl<'a> SnapshotJsonMap<'a> {
         }
     }
 }
-fn canonical_world_field_order() -> &'static [String] {
-    static ORDER: OnceLock<Vec<String>> = OnceLock::new();
-    ORDER.get_or_init(|| {
-        let encoded = json::to_json(&World::default())
-            .expect("default World must have a canonical JSON representation");
-        SnapshotJsonMap::parse(&encoded, "default world")
-            .expect("default World JSON must be a canonical object")
-            .source_order
-            .expect("borrowed default World JSON retains source order")
-    })
+fn canonical_world_field_order() -> &'static [&'static str] {
+    <World as norito::json::FastJsonWrite>::json_object_field_order()
+        .expect("World snapshot has a fixed derived object schema")
 }
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
@@ -238,7 +231,7 @@ pub struct KuraSeed {
 }
 impl KuraSeed {
     #[cfg(test)]
-    pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
+    pub fn into_state_from_json(self, value: json::Value) -> Result<Box<State>, json::Error> {
         self.into_state_from_json_with_recovery_mode(value, true)
     }
     /// Decode a canonical snapshot directly from its authenticated JSON bytes.
@@ -246,7 +239,9 @@ impl KuraSeed {
     /// The borrowed field map retains only schema keys and raw value slices;
     /// each field is decoded into its final typed owner before the next field,
     /// so restoration never constructs a recursive full-state JSON tree.
-    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<State, json::Error> {
+    /// The restored State stays on the heap through validation and handoff;
+    /// nested restore calls must not reserve a full State in each stack frame.
+    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<Box<State>, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true)
     }
@@ -264,7 +259,7 @@ impl KuraSeed {
         snapshot_height: usize,
         snapshot_tip: Option<HashOf<BlockHeader>>,
         sccp_policy_hash: [u8; 32],
-    ) -> Result<State, json::Error> {
+    ) -> Result<Box<State>, json::Error> {
         let block_hashes =
             emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
         let nexus = iroha_config::parameters::actual::Nexus::default();
@@ -296,6 +291,15 @@ impl KuraSeed {
                 prev_commit_topology: Cell::new(Vec::new()),
                 lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
                 ivm: IVM::new(0),
+                canonical_runtime: Cell::new(
+                    SnapshotNexusRuntime::from_nexus_with_autoscale_history(
+                        &nexus,
+                        &lane_incarnations,
+                        &lane_incarnation_activation_heights,
+                        &VecDeque::new(),
+                        &lane_incarnation_lineage,
+                    ),
+                ),
                 nexus,
                 lane_incarnations,
                 lane_incarnation_activation_heights,
@@ -330,7 +334,7 @@ impl KuraSeed {
     pub(crate) fn into_state_from_json_str_without_durable_recovery(
         self,
         input: &str,
-    ) -> Result<State, json::Error> {
+    ) -> Result<Box<State>, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, false)
     }
@@ -339,7 +343,7 @@ impl KuraSeed {
         self,
         value: json::Value,
         allow_durable_recovery: bool,
-    ) -> Result<State, json::Error> {
+    ) -> Result<Box<State>, json::Error> {
         let json::Value::Object(map) = value else {
             return Err(json::Error::InvalidField {
                 field: "state".into(),
@@ -352,7 +356,7 @@ impl KuraSeed {
         self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
-    ) -> Result<State, json::Error> {
+    ) -> Result<Box<State>, json::Error> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
             "network_id",
@@ -365,6 +369,20 @@ impl KuraSeed {
             "public_lane_rewards",
             "public_lane_reward_claims",
             "space_directory_manifests",
+            "capacity_fee_ledger",
+            "capacity_disputes",
+            "provider_credit_ledger",
+            "sorafs_pricing",
+            "soradns_directory_records",
+            "soradns_directory_pending",
+            "soradns_directory_history",
+            "soradns_directory_prev_of",
+            "soradns_directory_revocations",
+            "soradns_release_signers",
+            "soradns_directory_latest",
+            "soradns_rotation_policy",
+            "soradns_last_publish_ms",
+            "soradns_history_len",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -382,6 +400,20 @@ impl KuraSeed {
             "public_lane_rewards",
             "public_lane_reward_claims",
             "space_directory_manifests",
+            "capacity_fee_ledger",
+            "capacity_disputes",
+            "provider_credit_ledger",
+            "sorafs_pricing",
+            "soradns_directory_records",
+            "soradns_directory_pending",
+            "soradns_directory_history",
+            "soradns_directory_prev_of",
+            "soradns_directory_revocations",
+            "soradns_release_signers",
+            "soradns_directory_latest",
+            "soradns_rotation_policy",
+            "soradns_last_publish_ms",
+            "soradns_history_len",
             "commit_topology",
             "prev_commit_topology",
             "lane_consensus_contexts",
@@ -407,18 +439,59 @@ impl KuraSeed {
             _marker: PhantomData,
         };
         let mut world = parse_world(world_map, &ivm_seed)?;
-        let public_lane_validators: Vec<SnapshotNoritoBlob> =
-            take_required(&mut map, "public_lane_validators")?;
-        let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
-            take_required(&mut map, "public_lane_stake_shares")?;
-        let public_lane_rewards: Vec<SnapshotNoritoBlob> =
-            take_required(&mut map, "public_lane_rewards")?;
-        let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
-            take_required(&mut map, "public_lane_reward_claims")?;
-        let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
-            take_required(&mut map, "space_directory_manifests")?;
-        let snapshot_nexus_runtime: SnapshotNexusRuntime =
+        world.public_lane_validators =
+            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_validators")?
+                .decode(
+                    "public_lane_validators",
+                    public_lane_validator_record_matches_key,
+                )?;
+        world.public_lane_stake_shares = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_stake_shares",
+        )?
+        .decode(
+            "public_lane_stake_shares",
+            public_lane_stake_share_matches_key,
+        )?;
+        world.public_lane_rewards =
+            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_rewards")?
+                .decode("public_lane_rewards", public_lane_reward_record_matches_key)?;
+        world.public_lane_reward_claims = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_reward_claims",
+        )?
+        .decode("public_lane_reward_claims", |_, _| true)?;
+        world.space_directory_manifests = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "space_directory_manifests",
+        )?
+        .decode(
+            "space_directory_manifests",
+            snapshot_storage::manifest_set_matches_key,
+        )?;
+        snapshot_service_state::SnapshotServiceState {
+            capacity_fee_ledger: take_required(&mut map, "capacity_fee_ledger")?,
+            capacity_disputes: take_required(&mut map, "capacity_disputes")?,
+            provider_credit_ledger: take_required(&mut map, "provider_credit_ledger")?,
+            sorafs_pricing: take_required(&mut map, "sorafs_pricing")?,
+            soradns_directory_records: take_required(&mut map, "soradns_directory_records")?,
+            soradns_directory_pending: take_required(&mut map, "soradns_directory_pending")?,
+            soradns_directory_history: take_required(&mut map, "soradns_directory_history")?,
+            soradns_directory_prev_of: take_required(&mut map, "soradns_directory_prev_of")?,
+            soradns_directory_revocations: take_required(
+                &mut map,
+                "soradns_directory_revocations",
+            )?,
+            soradns_release_signers: take_required(&mut map, "soradns_release_signers")?,
+            soradns_directory_latest: take_required(&mut map, "soradns_directory_latest")?,
+            soradns_rotation_policy: take_required(&mut map, "soradns_rotation_policy")?,
+            soradns_last_publish_ms: take_required(&mut map, "soradns_last_publish_ms")?,
+            soradns_history_len: take_required(&mut map, "soradns_history_len")?,
+        }
+        .restore(&mut world)?;
+        let canonical_runtime: Cell<SnapshotNexusRuntime> =
             take_required(&mut map, "nexus_runtime")?;
+        let snapshot_nexus_runtime = canonical_runtime.view().get().clone();
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
@@ -447,28 +520,115 @@ impl KuraSeed {
             message,
         })?;
         let (
-            restored_nexus,
+            mut restored_nexus,
             lane_incarnations,
             lane_incarnation_activation_heights,
             lane_incarnation_lineage,
             autoscale_sample_history,
         ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
+        let world_catalog = runtime_catalog_from_world(&world.view()).map_err(|error| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.blocks".to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let added_dataspaces: BTreeSet<_> = world_catalog
+            .as_ref()
+            .into_iter()
+            .flat_map(|catalog| catalog.dataspaces.iter().map(|entry| entry.descriptor.id))
+            .collect();
+        restored_nexus.configured_dataspace_catalog = DataSpaceCatalog::new(
+            restored_nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .filter(|entry| !added_dataspaces.contains(&entry.id))
+                .cloned()
+                .collect(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "nexus_runtime.blocks.owner_policy".to_owned(),
+            message: error.to_string(),
+        })?;
+        let reconstructed_dataspaces = runtime_catalog_dataspaces(
+            &restored_nexus.configured_dataspace_catalog,
+            world_catalog.as_ref(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "nexus_runtime.blocks.owner_policy".to_owned(),
+            message: error.to_string(),
+        })?;
+        let retained_physical_policy =
+            SnapshotNexusOwnerPolicy::from_nexus(&restored_nexus).dataspaces;
+        restored_nexus.dataspace_catalog = reconstructed_dataspaces;
+        if SnapshotNexusOwnerPolicy::from_nexus(&restored_nexus).dataspaces
+            != retained_physical_policy
+        {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.blocks.owner_policy".to_owned(),
+                message: "physical ownership differs from canonical World catalog".to_owned(),
+            });
+        }
+        let runtime_predecessor = canonical_runtime.predecessor_view();
+        // Every real carrier appends its height-bound sample, even when no
+        // lifecycle policy changes. Therefore a positive-height runtime cannot
+        // be a no-op Cell publication: replacement requires its actual H-1
+        // record, not a reconstruction from the current policy or sample tail.
+        if committed_height > 0 && runtime_predecessor.get().is_none() {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.revert".to_owned(),
+                message: "committed runtime must retain its predecessor record".to_owned(),
+            });
+        }
+        let mut predecessor_context_policy = None;
+        if let Some(previous) = runtime_predecessor.get() {
+            let predecessor_len =
+                block_hashes
+                    .len()
+                    .checked_sub(1)
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: "nexus_runtime.revert".to_owned(),
+                        message: "height-zero runtime cannot retain predecessor undo".to_owned(),
+                    })?;
+            let (mut prior_nexus, prior_incarnations, _, _, _) =
+                nexus_from_snapshot_runtime(previous.clone(), &block_hashes[..predecessor_len])?;
+            let prior_world = world.block_and_revert();
+            let prior_catalog = runtime_catalog_from_world(&prior_world).map_err(|error| {
+                json::Error::InvalidField {
+                    field: "nexus_runtime.revert.owner_policy".to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            prior_nexus.dataspace_catalog = runtime_catalog_dataspaces(
+                &restored_nexus.configured_dataspace_catalog,
+                prior_catalog.as_ref(),
+            )
+            .map_err(|error| json::Error::InvalidField {
+                field: "nexus_runtime.revert.owner_policy".to_owned(),
+                message: error.to_string(),
+            })?;
+            if SnapshotNexusOwnerPolicy::from_nexus(&prior_nexus).dataspaces
+                != previous.owner_policy.dataspaces
+            {
+                return Err(json::Error::InvalidField {
+                    field: "nexus_runtime.revert.owner_policy".to_owned(),
+                    message: "predecessor physical ownership differs from reverted World catalog"
+                        .to_owned(),
+                });
+            }
+            predecessor_context_policy = Some((prior_nexus, prior_incarnations));
+        }
+        drop(runtime_predecessor);
         let nexus_runtime_restored_from_snapshot = true;
         let transactions = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-        let lane_consensus_contexts: LaneConsensusContextsV1 =
+        let lane_consensus_contexts: Cell<LaneConsensusContextsV1> =
             take_required(&mut map, "lane_consensus_contexts")?;
-        lane_consensus_contexts.validate().map_err(|error| json::Error::InvalidField {
-            field: "lane_consensus_contexts".to_owned(),
-            message: error.to_string(),
-        })?;
-        if lane_consensus_contexts.contexts.iter().any(|context| {
-            context.network_id != network_id || context.opening_global_height > committed_height
-        }) {
+        if committed_height == 0 && lane_consensus_contexts.predecessor_view().get().is_some() {
             return Err(json::Error::InvalidField {
-                field: "lane_consensus_contexts".to_owned(),
-                message: "lane context belongs to another network or a future carrier".to_owned(),
+                field: "lane_consensus_contexts.revert".to_owned(),
+                message: "height-zero contexts cannot retain predecessor undo".to_owned(),
             });
         }
         if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
@@ -500,77 +660,6 @@ impl KuraSeed {
                 message,
             },
         )?;
-        let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
-            decode_snapshot_records(public_lane_validators, "public_lane_validators")?;
-        let public_lane_stake_share_records: Vec<PublicLaneStakeShare> =
-            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares")?;
-        let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
-            public_lane_rewards,
-            "public_lane_rewards",
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_validator_records,
-            "public_lane_validators",
-            |record| (record.lane_id, record.validator.clone()),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_stake_share_records,
-            "public_lane_stake_shares",
-            |record| {
-                (
-                    record.lane_id,
-                    record.validator.clone(),
-                    record.staker.clone(),
-                )
-            },
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_reward_records,
-            "public_lane_rewards",
-            |record| (record.lane_id, record.epoch),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_reward_claims,
-            "public_lane_reward_claims",
-            |record| (record.lane_id, record.account.clone(), record.asset.clone()),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &space_directory_manifests,
-            "space_directory_manifests",
-            |record| record.uaid,
-        )?;
-        world.public_lane_validators = public_lane_validator_records
-            .into_iter()
-            .map(|record| ((record.lane_id, record.validator.clone()), record))
-            .collect();
-        world.public_lane_stake_shares = public_lane_stake_share_records
-            .into_iter()
-            .map(|record| {
-                (
-                    (
-                        record.lane_id,
-                        record.validator.clone(),
-                        record.staker.clone(),
-                    ),
-                    record,
-                )
-            })
-            .collect();
-        world.public_lane_rewards = public_lane_reward_records
-            .into_iter()
-            .map(|record| ((record.lane_id, record.epoch), record))
-            .collect();
-        world.public_lane_reward_claims = public_lane_reward_claims
-            .into_iter()
-            .map(|record| {
-                (
-                    (record.lane_id, record.account.clone(), record.asset.clone()),
-                    record.last_claimed_epoch,
-                )
-            })
-            .collect();
-        world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests)?;
         world
             .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
@@ -578,11 +667,37 @@ impl KuraSeed {
                 message,
             })?;
         lane_consensus_state::validate_committed_lane_consensus_contexts(
-            &lane_consensus_contexts, &world.view(), &restored_nexus,
-            &lane_incarnations, network_id, committed_height,
-        ).map_err(|message| json::Error::InvalidField {
-            field: "lane_consensus_contexts".to_owned(), message,
+            lane_consensus_contexts.view().get(),
+            &world.view(),
+            &restored_nexus,
+            &lane_incarnations,
+            network_id,
+            committed_height,
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "lane_consensus_contexts".to_owned(),
+            message,
         })?;
+        if let Some((prior_nexus, prior_incarnations)) = predecessor_context_policy {
+            let current_contexts = lane_consensus_contexts.view();
+            let predecessor = lane_consensus_contexts.predecessor_view();
+            // A no-op Cell publication legitimately has no undo. Its current
+            // record must then be valid at H-1 as well; never invent old contexts.
+            let prior_contexts = predecessor.get().as_ref().unwrap_or(current_contexts.get());
+            let prior_world = world.block_and_revert();
+            lane_consensus_state::validate_committed_lane_consensus_contexts(
+                prior_contexts,
+                &prior_world,
+                &prior_nexus,
+                &prior_incarnations,
+                network_id,
+                committed_height - 1,
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "lane_consensus_contexts.revert".to_owned(),
+                message,
+            })?;
+        }
         let state = build_state(
             BuildStateInputs {
                 world,
@@ -590,8 +705,9 @@ impl KuraSeed {
                 transactions,
                 commit_topology,
                 prev_commit_topology,
-                lane_consensus_contexts: Cell::new(lane_consensus_contexts),
+                lane_consensus_contexts,
                 ivm: ivm_runtime,
+                canonical_runtime,
                 nexus: restored_nexus,
                 lane_incarnations,
                 lane_incarnation_activation_heights,
@@ -1080,6 +1196,7 @@ fn validate_snapshot_autoscale_sample_history(
     }
     Ok(history.iter().copied().collect())
 }
+#[cfg(test)]
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
@@ -1113,6 +1230,7 @@ where
         })
         .collect()
 }
+#[cfg(test)]
 fn validate_canonical_snapshot_record_order<T, K>(
     records: &[T],
     field: &str,
@@ -1138,39 +1256,6 @@ where
         previous = Some(current);
     }
     Ok(())
-}
-fn decode_space_directory_manifest_sets(
-    records: Vec<SnapshotSpaceDirectoryManifestSet>,
-) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
-    let mut storage = Storage::default();
-    for (index, record) in records.into_iter().enumerate() {
-        let bytes = hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-            field: "space_directory_manifests".to_owned(),
-            message: format!("record {index} hex decode failed: {err}"),
-        })?;
-        let mut cursor = bytes.as_slice();
-        let manifest_set = SpaceDirectoryManifestSet::decode_all(&mut cursor).map_err(|err| {
-            json::Error::InvalidField {
-                field: "space_directory_manifests".to_owned(),
-                message: format!("record {index} norito decode failed: {err}"),
-            }
-        })?;
-        #[cfg(test)]
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
-        if manifest_set.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "space_directory_manifests".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
-        }
-        if storage.insert(record.uaid, manifest_set).is_some() {
-            return Err(json::Error::InvalidField {
-                field: "space_directory_manifests".to_owned(),
-                message: format!("duplicate UAID at record {index}"),
-            });
-        }
-    }
-    Ok(storage)
 }
 fn take_required<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
 where

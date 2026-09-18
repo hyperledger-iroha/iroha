@@ -1851,7 +1851,6 @@ mod tests {
             height.try_into().expect("non-zero reserve test height"),
             None,
             None,
-            None,
             now_unix.checked_mul(1_000).expect("reserve test time"),
             0,
         );

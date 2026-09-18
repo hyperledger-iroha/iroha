@@ -56,7 +56,7 @@ fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error
 }
 fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     let kp = reference_signer()?;
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let sig = SignatureOf::<BlockHeader>::from_hash(kp.private_key(), header.hash());
     let block_sig = BlockSignature::new(0, sig);
     let mut set = BTreeSet::new();

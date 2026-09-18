@@ -8,7 +8,18 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
     ] {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join(format!("kura-stage-{stage}"));
-        let kura = open_anchored_geometry_kura(&root, &initial_and_extended_configs().0, initial_geometry().0[&LaneId::SINGLE]);
+        let (initial, _) = initial_and_extended_configs();
+        let (initial_incarnations, _) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        // Bind the actual configured primary before retaining geometry or bodies for restart.
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            initial.primary(),
+            initial_incarnations[&LaneId::SINGLE],
+            kura.configured_lane_catalog_baseline()
+                .expect("read authenticated configured catalog")
+                .expect("configured catalog was admitted at open"),
+        )
+        .expect("anchor configured primary before restart fixture writes");
         let fixture = prepare_retired_geometry_archive(&kura, &root);
         let transition_roots = kura
             .read_lane_geometry_journal()
@@ -21,14 +32,19 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
             })
             .collect::<Vec<_>>();
         assert_eq!(transition_roots.len(), 2);
-        assert!(transition_roots.iter().all(|archive| archive.exists()));
-        let first_archive = &transition_roots[0];
-        let quarantine = first_archive
+        assert!(transition_roots.iter().all(|archive| !archive.exists()));
+        assert!(
+            fixture.retained_blocks.is_dir(),
+            "Apply retains the immutable instance in place"
+        );
+        // Only the retirement collects an unreferenced instance; creation has no archive.
+        let collected_archive = &transition_roots[1];
+        let quarantine = collected_archive
             .parent()
             .expect("archive parent")
             .join(format!(
                 "{GC_QUARANTINE_PREFIX}{}",
-                first_archive
+                collected_archive
                     .file_name()
                     .expect("transition id")
                     .to_string_lossy()
@@ -41,12 +57,13 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
             .expect("journal after crash");
         assert!(after_failure.records.is_empty());
         if stage == GC_FAIL_AFTER_COMPACTION_INTENT {
-            assert!(transition_roots.iter().all(|archive| archive.exists()));
+            assert!(transition_roots.iter().all(|archive| !archive.exists()));
+            assert!(fixture.retained_blocks.is_dir());
             assert!(!quarantine.exists());
             assert!(!after_failure.pending_archive_gc.is_empty());
         } else if stage == GC_FAIL_AFTER_ARCHIVE_QUARANTINE {
-            assert!(!first_archive.exists());
-            assert!(fixture.archive_root.exists());
+            assert!(!collected_archive.exists());
+            assert!(!fixture.retained_blocks.exists());
             assert!(quarantine.exists());
             assert!(!after_failure.pending_archive_gc.is_empty());
         } else if stage == GC_FAIL_AFTER_ARCHIVE_DELETION {
@@ -57,6 +74,9 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
             assert!(transition_roots.iter().all(|archive| !archive.exists()));
             assert!(!quarantine.exists());
             assert!(after_failure.pending_archive_gc.is_empty());
+        }
+        if stage != GC_FAIL_AFTER_COMPACTION_INTENT {
+            assert!(!fixture.retained_blocks.exists());
         }
         drop(kura);
         let restarted = open_kura(&root, &fixture.initial);
@@ -71,6 +91,7 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
             .read_lane_geometry_journal()
             .expect("recovered journal");
         assert!(recovered.pending_archive_gc.is_empty());
+        assert!(!fixture.retained_blocks.exists());
         assert!(transition_roots.iter().all(|archive| !archive.exists()));
         assert!(!quarantine.exists());
     }
@@ -83,13 +104,13 @@ fn storage_budget_purge_only_resumes_snapshot_proven_geometry_gc() {
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave durable pending-GC intent");
-    assert!(fixture.archive_root.exists());
+    assert!(fixture.retained_blocks.exists());
     assert!(
         kura.purge_retired_segments()
             .expect("budget purge must validate retired geometry"),
         "budget purge resumes only the already-proven archive deletion"
     );
-    assert!(!fixture.archive_root.exists());
+    assert!(!fixture.retained_blocks.exists());
     assert!(
         kura.read_lane_geometry_journal()
             .expect("journal after budget purge")
@@ -111,7 +132,7 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20)
         .expect_err("leave a durable, snapshot-proven pending archive deletion");
-    assert!(fixture.archive_root.exists());
+    assert!(fixture.retained_blocks.exists());
     kura.refresh_disk_usage_bytes()
         .expect("establish exact pre-GC usage baseline");
     kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
@@ -141,7 +162,7 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
         remained_paused,
         "the deterministic scan barrier must remain active through archive GC"
     );
-    assert!(!fixture.archive_root.exists());
+    assert!(!fixture.retained_blocks.exists());
     assert!(
         kura.read_lane_geometry_journal()
             .expect("journal after archive GC")
@@ -173,15 +194,13 @@ fn storage_budget_purge_never_deletes_uncheckpointed_geometry_by_age_or_pressure
     let root = temp.path().join("kura");
     let kura = open_kura(&root, &initial_and_extended_configs().0);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
-    let sentinel = fixture
-        .archive_root
-        .join("lane_0000000001/previous_blocks/gc-payload.norito");
-    assert!(sentinel.exists());
+    let sentinel = fixture.retained_blocks.join(MARKER_FILE_NAME);
+    let expected_marker = fs::read(&sentinel).expect("exact uncheckpointed instance marker");
     let _ = kura.purge_retired_segments();
-    assert!(fixture.archive_root.exists());
+    assert!(fixture.retained_blocks.exists());
     assert_eq!(
         fs::read(sentinel).expect("uncheckpointed archive retained"),
-        [0xA5; GC_PAYLOAD_LEN]
+        expected_marker
     );
     assert_eq!(
         kura.read_lane_geometry_journal()
@@ -255,23 +274,24 @@ fn geometry_gc_rejects_preexisting_quarantine_collision() {
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
-    let quarantine = fixture
-        .archive_root
-        .parent()
-        .expect("archive parent")
-        .join(format!(
-            "{GC_QUARANTINE_PREFIX}{}",
-            fixture
-                .archive_root
-                .file_name()
-                .expect("transition id")
-                .to_string_lossy()
-        ));
+    let pending = kura
+        .read_lane_geometry_journal()
+        .expect("pending GC ownership");
+    let retirement = pending
+        .pending_archive_gc
+        .last()
+        .expect("retired instance owner");
+    let archive_parent = kura.store_root().join("retired/lane_geometry");
+    fs::create_dir_all(&archive_parent).expect("quarantine parent");
+    let quarantine = archive_parent.join(format!(
+        "{GC_QUARANTINE_PREFIX}{}",
+        hex::encode(retirement.intent.transition_id.as_ref()),
+    ));
     fs::create_dir(&quarantine).expect("quarantine collision");
     fs::write(quarantine.join("operator-data"), b"retain").expect("collision sentinel");
     kura.resume_proven_lane_geometry_archive_gc()
-        .expect_err("root plus quarantine collision must fail closed");
-    assert!(fixture.archive_root.exists());
+        .expect_err("an unowned quarantine must fail before moving the retained instance");
+    assert!(fixture.retained_blocks.exists());
     assert_eq!(
         fs::read(quarantine.join("operator-data")).expect("collision retained"),
         b"retain"
@@ -296,24 +316,39 @@ fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
-    let pending = kura
+    let mut expected_intent = kura
         .read_lane_geometry_journal()
-        .expect("pending geometry journal")
-        .pending_archive_gc;
-    let attacked_transition = pending
-        .first()
-        .expect("at least one pending archive deletion")
+        .expect("pending geometry journal");
+    let retirement = expected_intent
+        .pending_archive_gc
+        .last_mut()
+        .expect("retirement owns the last exact reference to the released instance");
+    let attacked_transition = retirement.intent.transition_id;
+    let collected_binding = retirement
         .intent
-        .transition_id;
+        .operations
+        .iter()
+        .find(|operation| operation.lane_id == LaneId::new(1))
+        .and_then(|operation| operation.previous.clone())
+        .expect("exact retired instance");
+    assert!(retirement.collecting.is_empty());
+    retirement.collecting.push(collected_binding);
+    let pending_root = geometry_pending_archive_gc_root(&expected_intent.pending_archive_gc);
+    let checkpoint = expected_intent
+        .checkpoint
+        .as_mut()
+        .expect("durable snapshot checkpoint");
+    checkpoint.pending_archive_gc_root = Some(pending_root);
+    checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
     let archive_parent = root.join("retired/lane_geometry");
     let root_name = hex::encode(attacked_transition.as_ref());
     let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{root_name}");
+    assert!(fixture.retained_blocks.is_dir());
     assert!(
-        archive_parent.join(&root_name).is_dir(),
-        "the attacked pending archive must exist before parent substitution"
+        !archive_parent.join(&root_name).exists(),
+        "Apply and checkpoint admission must retain the immutable instance in place"
     );
     let journal_path = kura.lane_geometry_journal_path();
-    let durable_intent_before = fs::read(&journal_path).expect("durable pending GC intent");
     let displaced_parent = root.join("authenticated-retired-parent");
     let outside_parent = temp.path().join("outside-retired-parent");
     fs::create_dir(&outside_parent).expect("create outside replacement parent");
@@ -356,8 +391,8 @@ fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
         .expect_err("validated journal reads must reject the substituted archive namespace");
     assert_eq!(
         fs::read(&journal_path).expect("durable pending GC intent after failed revalidation"),
-        durable_intent_before,
-        "failed parent revalidation must not acknowledge or rewrite the durable GC intent"
+        expected_intent.encode(),
+        "the exact instance transfer must be durable, but failed parent revalidation must not acknowledge deletion or clear its intent"
     );
     fs::remove_file(&archive_parent).expect("remove substituted archive-parent symlink");
     fs::rename(&displaced_parent, &archive_parent).expect("restore authenticated archive parent");
@@ -423,7 +458,7 @@ fn geometry_gc_rejects_unauthenticated_archive_collision_without_deleting_it() {
     let root = temp.path().join("kura");
     let kura = open_kura(&root, &initial_and_extended_configs().0);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
-    let collision = fixture.archive_root.join("operator-data.txt");
+    let collision = fixture.retained_blocks.join("operator-data.txt");
     fs::write(&collision, b"must not delete").expect("seed unauthenticated collision");
     checkpoint_retired_geometry(&kura, &fixture, 20)
         .expect_err("unexpected archive content must fail closed");
@@ -485,7 +520,7 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
     checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
         .expect_err("leave the Native archive under a durable snapshot-proven GC intent");
     assert!(
-        fixture.geometry.archive_root.exists(),
+        fixture.geometry.retained_blocks.exists(),
         "the injected boundary must preserve Native evidence for purge replay"
     );
     assert!(
@@ -493,7 +528,7 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
             .expect("budget purge revalidates exact Native archive evidence"),
         "budget purge must resume the snapshot-proven Native archive deletion"
     );
-    assert!(!fixture.geometry.archive_root.exists());
+    assert!(!fixture.geometry.retained_blocks.exists());
     let usage_after = kura
         .kura_disk_usage_bytes()
         .expect("exact usage after Native archive GC");
@@ -599,7 +634,7 @@ fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
             "{corruption} Native evidence must fail archive validation"
         );
         assert!(
-            fixture.geometry.archive_root.exists(),
+            fixture.geometry.retained_blocks.exists(),
             "{corruption} Native evidence must pin the archive for repair"
         );
         assert_eq!(
@@ -636,7 +671,7 @@ fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
             .file_type()
             .is_symlink()
     );
-    assert!(fixture.geometry.archive_root.exists());
+    assert!(fixture.geometry.retained_blocks.exists());
     let hardlink_root = temp.path().join("hardlink-kura");
     let hardlink_outside = temp.path().join("operator-owned-native-hardlink");
     let (hardlink_kura, hardlink_fixture) = prepare_native_amx_archive(&hardlink_root);
@@ -653,7 +688,7 @@ fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
         fs::read(&hardlink_outside).expect("outside hardlink remains readable"),
         fs::read(&hardlink_fixture.manifest).expect("archived hardlink remains readable"),
     );
-    assert!(hardlink_fixture.geometry.archive_root.exists());
+    assert!(hardlink_fixture.geometry.retained_blocks.exists());
 }
 #[test]
 fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_accounted() {
@@ -705,8 +740,8 @@ fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_acco
         .expect("exact usage before autonomous archive GC");
     let summary = checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
         .expect("snapshot-proven GC accepts tombstoned autonomous evidence");
-    assert_eq!(summary.removed_archive_roots, 2);
-    assert!(!fixture.geometry.archive_root.exists());
+    assert_eq!(summary.removed_archive_roots, 1);
+    assert!(!fixture.geometry.retained_blocks.exists());
     let usage_after = kura
         .kura_disk_usage_bytes()
         .expect("exact usage after autonomous archive GC");
@@ -775,7 +810,7 @@ fn autonomous_archive_gc_rejects_malformed_oversized_temporary_and_unexpected_ar
             "{corruption} autonomous archive artifact must fail closed"
         );
         assert!(
-            fixture.geometry.archive_root.exists(),
+            fixture.geometry.retained_blocks.exists(),
             "{corruption} autonomous evidence must pin the archive for repair"
         );
     }
@@ -807,7 +842,7 @@ fn autonomous_archive_gc_rejects_symlinked_view_artifact_without_following_it() 
             .file_type()
             .is_symlink()
     );
-    assert!(fixture.geometry.archive_root.exists());
+    assert!(fixture.geometry.retained_blocks.exists());
 }
 #[test]
 fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence() {
@@ -829,7 +864,7 @@ fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence
     .expect("global claim sentinel");
     checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
         .expect_err("unmerged autonomous sidecar must pin retired geometry");
-    assert!(fixture.geometry.archive_root.exists());
+    assert!(fixture.geometry.retained_blocks.exists());
     assert!(
         !kura
             .read_lane_geometry_journal()
@@ -864,7 +899,7 @@ fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
         .dataspace_id;
     let certified = certified_geometry_lane_block(lane_id, dataspace_id, incarnation, 1);
     let descriptor = &certified.proposal.descriptor;
-    let archived_blocks = fixture.archive_root.join("lane_0000000001/previous_blocks");
+    let archived_blocks = fixture.retained_blocks.clone();
     let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
     fs::create_dir_all(&lane_artifacts).expect("archived lane artifacts");
     let payload = certified
@@ -928,7 +963,7 @@ fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
         unreachable!("assert_geometry_io_error established the error variant")
     };
     assert_eq!(path, &kura.lane_geometry_journal_path());
-    assert!(fixture.archive_root.exists());
+    assert!(fixture.retained_blocks.exists());
 }
 #[test]
 fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
@@ -976,8 +1011,19 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
     let archive_root = root
         .join("retired/lane_geometry")
         .join(hex::encode(retirement.transition_id.as_ref()));
-    let archived_blocks = archive_root.join("lane_0000000001/previous_blocks");
-    let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
+    let retired_binding = retirement
+        .operations
+        .iter()
+        .find(|operation| operation.lane_id == retiring_lane)
+        .and_then(|operation| operation.previous.as_ref())
+        .expect("exact retired instance binding");
+    let retained_blocks = kura.binding_blocks_path(retired_binding);
+    assert!(retained_blocks.is_dir());
+    assert!(
+        !archive_root.exists(),
+        "Apply only changes authenticated references"
+    );
+    let lane_artifacts = retained_blocks.join(LANE_ARTIFACTS_DIR_NAME);
     let receipt_data = lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE);
     let receipt_index = lane_artifacts.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE);
     {
@@ -999,6 +1045,8 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
         .expect("snapshot geometry bindings");
     let lineage_root = unscoped_lineage_root(&bindings);
+    let (recovery_bindings, recovery_root) =
+        geometry_fixture_recovery(&kura, 20, &bindings, lineage_root);
     fail_next_archived_receipt_durability_attestation_for_test(
         ProgressSidecarDurabilityFault::Ancestor(0),
     );
@@ -1006,6 +1054,8 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         .checkpoint_lane_geometry_with_proven_snapshot(
             bindings,
             lineage_root,
+            recovery_bindings,
+            recovery_root,
             20,
             Some(snapshot_block_hash),
             snapshot_state_hash,
@@ -1018,8 +1068,8 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         "retired lane merge application receipt durability attestation failed",
     );
     assert!(
-        archive_root.is_dir(),
-        "failed receipt durability must retain the authenticated archive"
+        retained_blocks.is_dir() && !archive_root.exists(),
+        "failed receipt durability must retain the immutable instance before any GC move"
     );
     assert!(
         !kura
@@ -1038,8 +1088,8 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         .expect("receipt durability recovery resumes exact archived GC");
     assert_eq!(resumed.removed_archive_roots, 1);
     assert!(
-        !archive_root.exists(),
-        "the same authenticated archive is deleted only after barrier recovery"
+        !retained_blocks.exists() && !archive_root.exists(),
+        "the same authenticated instance is collected only after barrier recovery"
     );
 }
 #[test]
@@ -1069,16 +1119,19 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
         None,
     )
     .expect("publish recreated lane");
-    let recreated_blocks = fixture
-        .extended
-        .entry(LaneId::new(1))
-        .expect("recreated lane")
-        .blocks_dir(&root);
-    fs::write(
-        recreated_blocks.join("second-gc-payload.norito"),
-        [0x5A; 53],
-    )
-    .expect("seed second archive payload");
+    let recreated_binding = kura
+        .geometry_binding(
+            fixture
+                .extended
+                .entry(LaneId::new(1))
+                .expect("recreated lane"),
+            &recreated_incarnations,
+            &recreated_activations,
+        )
+        .expect("exact recreated identity");
+    let recreated_blocks = kura.binding_blocks_path(&recreated_binding);
+    assert_ne!(recreated_blocks, fixture.retained_blocks);
+    assert!(recreated_blocks.join(MARKER_FILE_NAME).is_file());
     kura.apply_lane_geometry_transition(
         &fixture.extended,
         &fixture.initial,
@@ -1101,7 +1154,11 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
     let second_archive = root
         .join("retired/lane_geometry")
         .join(hex::encode(journal.records[3].transition_id.as_ref()));
-    let collision = second_archive.join("operator-data.txt");
+    assert!(
+        !second_archive.exists(),
+        "Apply must not archive the second instance"
+    );
+    let collision = recreated_blocks.join("operator-data.txt");
     fs::write(&collision, b"retain until operator repair").expect("collision");
     durable_geometry_snapshot_identity(&kura, 20);
     kura.refresh_disk_usage_bytes()
@@ -1109,10 +1166,13 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
     checkpoint_retired_geometry(&kura, &fixture, 20)
         .expect_err("second archive collision interrupts a multi-root GC pass");
     assert!(
-        !fixture.archive_root.exists(),
+        !fixture.retained_blocks.exists(),
         "first proven root was deleted"
     );
-    assert!(second_archive.exists(), "failing root remains intact");
+    assert!(
+        recreated_blocks.exists(),
+        "the failing immutable instance remains intact"
+    );
     assert_eq!(
         fs::read(&collision).expect("collision retained"),
         b"retain until operator repair"
@@ -1136,6 +1196,7 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
         .expect("resume all exact pending roots");
     assert_eq!(resumed.removed_archive_roots, 1);
     assert!(!second_archive.exists());
+    assert!(!recreated_blocks.exists());
     assert_eq!(
         kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
         kura.kura_disk_usage_bytes()
@@ -1152,7 +1213,7 @@ fn geometry_gc_rejects_symlink_inside_archive_tree() {
     fs::write(&outside, b"outside").expect("outside sentinel");
     let kura = open_kura(&root, &initial_and_extended_configs().0);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
-    let archived_blocks = fixture.archive_root.join("lane_0000000001/previous_blocks");
+    let archived_blocks = fixture.retained_blocks.clone();
     let link = archived_blocks.join("escape");
     symlink(&outside, &link).expect("seed archive symlink");
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("archive symlink must fail closed");
@@ -1162,7 +1223,9 @@ fn geometry_gc_rejects_symlink_inside_archive_tree() {
 #[test]
 fn recovery_rejects_pre_release_journal_layout() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_pre_release_journal_layout::PreReleaseLaneGeometryJournal")]
+    #[norito_schema(
+        name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_pre_release_journal_layout::PreReleaseLaneGeometryJournal"
+    )]
     #[derive(Encode)]
     struct PreReleaseLaneGeometryJournal {
         version: u8,
@@ -1189,10 +1252,13 @@ fn recovery_rejects_corrupt_and_forged_journals() {
     let (initial_incarnations, initial_activations) = initial_geometry();
     let (extended_incarnations, extended_activations) = extended_geometry();
     let kura = open_kura(&root, &initial);
+    let pristine = fs::read(kura.lane_geometry_journal_path())
+        .expect("retain the authenticated fixture baseline");
     fs::write(kura.lane_geometry_journal_path(), b"not norito").expect("write corrupt journal");
     kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
         .expect_err("corrupt journal must fail closed");
-    fs::remove_file(kura.lane_geometry_journal_path()).expect("remove corrupt journal");
+    fs::write(kura.lane_geometry_journal_path(), pristine)
+        .expect("restore the exact authenticated baseline after the corruption control");
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
@@ -1276,7 +1342,9 @@ fn recovery_rejects_noncontiguous_phase_frontiers() {
 #[test]
 fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::HeightCursorJournalV5")]
+    #[norito_schema(
+        name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::HeightCursorJournalV5"
+    )]
     #[derive(Encode)]
     struct HeightCursorJournalV5 {
         version: u8,
@@ -1287,7 +1355,9 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
         records: Vec<LaneGeometryIntent>,
     }
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::LineageJournalV5")]
+    #[norito_schema(
+        name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::LineageJournalV5"
+    )]
     #[derive(Encode)]
     struct LineageJournalV5 {
         version: u8,
@@ -1336,7 +1406,7 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
             &initial_incarnations,
             &initial_activations,
         ) {
-            Ok(()) => panic!("{name} must not be migrated to journal v6"),
+            Ok(()) => panic!("{name} must not be migrated to the current journal"),
             Err(error) => error,
         };
         assert_eq!(
@@ -1348,7 +1418,7 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
             assert_kura_io_error(
                 &error,
                 std::io::ErrorKind::InvalidData,
-                "unsupported lane geometry journal version 5; expected 6",
+                &format!("unsupported lane geometry journal version 5; expected {JOURNAL_VERSION}"),
             );
         }
     }
@@ -1359,7 +1429,7 @@ fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
     let root = temp.path().join("kura");
     let kura = open_kura(&root, &initial_and_extended_configs().0);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
-    checkpoint_retired_geometry(&kura, &fixture, 20).expect("create rooted checkpoint v4");
+    checkpoint_retired_geometry(&kura, &fixture, 20).expect("create current rooted checkpoint");
     let mut prior = kura
         .read_lane_geometry_journal()
         .expect("read rooted checkpoint journal");
@@ -1374,7 +1444,7 @@ fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
             &fixture.initial_incarnations,
             &fixture.initial_activations,
         )
-        .expect_err("checkpoint v3 must not be interpreted as rooted checkpoint v4");
+        .expect_err("a prior checkpoint version must not be interpreted as the current layout");
     assert_kura_io_error(
         &error,
         std::io::ErrorKind::InvalidData,
@@ -1414,7 +1484,7 @@ fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
 }
 #[cfg(unix)]
 #[test]
-fn configured_primary_preflight_rejects_block_path_symlink_before_external_write() {
+fn authenticated_primary_admission_rejects_block_path_symlink_before_external_write() {
     use std::os::unix::fs::symlink;
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
@@ -1427,22 +1497,35 @@ fn configured_primary_preflight_rejects_block_path_symlink_before_external_write
         LaneLifecycleParameterV1::catalog_hash(&configured),
     )
     .expect("establish configured-catalog baseline");
-    let blocks = lane_config.primary().blocks_dir(&root);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+            .expect("open canonical storage before authenticated lane admission");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network");
+    let incarnation = Hash::prehashed([0xA6; Hash::LENGTH]);
+    let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
+    let activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    let blocks = geometry_fixture_blocks(&kura, lane_config.primary(), &incarnations, &activations);
+    let merge = geometry_fixture_merge(&kura, lane_config.primary(), &incarnations, &activations);
     fs::create_dir_all(blocks.parent().expect("block parent")).expect("block parent");
     symlink(&outside, &blocks).expect("configured primary block symlink");
-    Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-        .expect_err("configured primary block symlink must fail before BlockStore opens it");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        incarnation,
+        LaneLifecycleParameterV1::catalog_hash(&configured),
+    )
+    .expect_err("exact primary admission must reject the substituted path before opening it");
     assert!(blocks.is_symlink());
     assert_eq!(
         fs::read_dir(&outside).expect("outside directory").count(),
         0,
         "preflight rejection must not create block-store files outside the Kura root"
     );
-    assert!(!lane_config.primary().merge_log_path(&root).exists());
+    assert!(!merge.exists());
 }
 #[cfg(unix)]
 #[test]
-fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write() {
+fn authenticated_primary_admission_rejects_merge_path_symlink_before_external_write() {
     use std::os::unix::fs::symlink;
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
@@ -1455,17 +1538,30 @@ fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write
         LaneLifecycleParameterV1::catalog_hash(&configured),
     )
     .expect("establish configured-catalog baseline");
-    let merge = lane_config.primary().merge_log_path(&root);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+            .expect("open canonical storage before authenticated lane admission");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network");
+    let incarnation = Hash::prehashed([0xA6; Hash::LENGTH]);
+    let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
+    let activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+    let blocks = geometry_fixture_blocks(&kura, lane_config.primary(), &incarnations, &activations);
+    let merge = geometry_fixture_merge(&kura, lane_config.primary(), &incarnations, &activations);
     fs::create_dir_all(merge.parent().expect("merge parent")).expect("merge parent");
     symlink(&outside, &merge).expect("configured primary merge symlink");
-    Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-        .expect_err("configured primary merge symlink must fail before MergeLedgerLog opens it");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        incarnation,
+        LaneLifecycleParameterV1::catalog_hash(&configured),
+    )
+    .expect_err("exact primary admission must reject the substituted path before opening it");
     assert!(merge.is_symlink());
     assert_eq!(
         fs::read(&outside).expect("outside sentinel"),
         b"operator-owned"
     );
-    assert!(!lane_config.primary().blocks_dir(&root).exists());
+    assert!(!blocks.exists());
 }
 #[cfg(unix)]
 #[test]
@@ -1488,14 +1584,22 @@ fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external
         let (kura, _) =
             Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
                 .expect("open authenticated configured Kura");
+        kura.bind_lane_storage_network(geometry_fixture_network_id())
+            .expect("bind explicit fixture network before geometry authority");
         kura.establish_or_verify_configured_primary_geometry_anchor(
             lane_config.primary(),
             incarnation,
             baseline,
         )
         .expect("bind configured primary");
+        let child = geometry_fixture_blocks(
+            &kura,
+            lane_config.primary(),
+            &BTreeMap::from([(LaneId::SINGLE, incarnation)]),
+            &BTreeMap::from([(LaneId::SINGLE, 0)]),
+        )
+        .join(file_name);
         drop(kura);
-        let child = lane_config.primary().blocks_dir(&root).join(file_name);
         fs::remove_file(&child).expect("remove core block file before symlink injection");
         symlink(&outside, &child).expect("inject core block-file symlink");
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
@@ -1522,6 +1626,8 @@ fn configured_primary_preflight_rejects_retired_root_artifact_symlink() {
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
             .expect("open authenticated configured Kura");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
         Hash::prehashed([0xA8; Hash::LENGTH]),
@@ -1548,6 +1654,8 @@ fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliatio
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
             .expect("open configured Kura");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
     let incarnation = Hash::prehashed([0xA1; Hash::LENGTH]);
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
@@ -1555,14 +1663,19 @@ fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliatio
         LaneLifecycleParameterV1::catalog_hash(&configured),
     )
     .expect("bind configured primary");
-    let marker_path = lane_config
-        .primary()
-        .blocks_dir(&root)
-        .join(MARKER_FILE_NAME);
+    let marker_path = geometry_fixture_blocks(
+        &kura,
+        lane_config.primary(),
+        &BTreeMap::from([(LaneId::SINGLE, incarnation)]),
+        &BTreeMap::from([(LaneId::SINGLE, 0)]),
+    )
+    .join(MARKER_FILE_NAME);
     fs::write(
         &marker_path,
         LaneIncarnationMarker {
             version: MARKER_VERSION,
+            network_id: geometry_fixture_network_id(),
+            dataspace_id: lane_config.primary().dataspace_id,
             lane_id: LaneId::SINGLE,
             incarnation: Hash::prehashed([0xA2; Hash::LENGTH]),
             activation_height: 0,
@@ -1649,6 +1762,8 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
         &configured_catalog,
     )
     .expect("open authenticated configured Kura");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
     kura.establish_or_verify_configured_primary_geometry_anchor(
         configured.primary(),
         incarnations[&LaneId::SINGLE],
@@ -1659,7 +1774,7 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
         .geometry_bindings(&configured, &incarnations, &activation_heights)
         .expect("derive authenticated primary binding");
     let lineage_root = unscoped_lineage_root(&bindings);
-    let primary_blocks = configured.primary().blocks_dir(&root);
+    let primary_blocks = kura.binding_blocks_path(&bindings[0]);
     let lane_artifacts = Kura::lane_artifact_dir(&primary_blocks);
     if lane_artifacts.exists() {
         fs::remove_dir(&lane_artifacts).expect("remove empty primary artifact namespace");
@@ -1690,6 +1805,9 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
         &configured_catalog,
     )
     .expect("reopen authenticated configured Kura");
+    reopened
+        .bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
     reopened
         .restore_lane_segments_with_geometry_at_height_and_lineage_root(
             &configured,
@@ -1732,14 +1850,26 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
     let secondary_entry = configured.entry(LaneId::new(1)).expect("secondary lane");
-    let secondary_blocks = secondary_entry.blocks_dir(&root);
-    let secondary_merge = secondary_entry.merge_log_path(&root);
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
         &configured_catalog,
     )
     .expect("open authenticated configured Kura");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
+    let secondary_blocks = geometry_fixture_blocks(
+        &kura,
+        secondary_entry,
+        &configured_incarnations,
+        &configured_activations,
+    );
+    let secondary_merge = geometry_fixture_merge(
+        &kura,
+        secondary_entry,
+        &configured_incarnations,
+        &configured_activations,
+    );
     kura.establish_or_verify_configured_primary_geometry_anchor(
         initial.primary(),
         initial_incarnations[&LaneId::SINGLE],
@@ -1793,6 +1923,9 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     )
     .expect("reopen exact configured Kura");
     reopened
+        .bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
+    reopened
         .recover_lane_geometry_journal(
             &configured,
             &configured_incarnations,
@@ -1814,7 +1947,7 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     assert_geometry_io_error(
         &error,
         ErrorKind::NotFound,
-        "durable lane geometry evidence is missing; refusing to provision an empty replacement",
+        "durable lane instance evidence is missing; refusing empty provisioning",
     );
     assert!(!secondary_blocks.exists());
     assert!(!secondary_merge.exists());
@@ -1844,24 +1977,30 @@ fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
     ]);
     let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-    let secondary_blocks = configured
-        .entry(LaneId::new(1))
-        .expect("secondary lane")
-        .blocks_dir(&root);
-    Kura::establish_or_verify_configured_lane_catalog_baseline(
-        &root,
-        LaneLifecycleParameterV1::catalog_hash(&configured_catalog),
-    )
-    .expect("establish the authenticated baseline before injecting foreign storage");
-    fs::create_dir_all(&secondary_blocks).expect("seed unjournaled secondary directory");
-    let sentinel = secondary_blocks.join("operator-sentinel");
-    fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed unjournaled sentinel");
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
         &configured_catalog,
     )
-    .expect("authenticated Kura open preserves unproven secondary path for diagnosis");
+    .expect("canonical open must not provision an unowned secondary instance");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        initial.primary(),
+        initial_incarnations[&LaneId::SINGLE],
+        LaneLifecycleParameterV1::catalog_hash(&configured_catalog),
+    )
+    .expect("authenticate the existing primary before secondary admission");
+    let secondary_blocks = geometry_fixture_blocks(
+        &kura,
+        configured.entry(LaneId::new(1)).expect("secondary lane"),
+        &configured_incarnations,
+        &configured_activations,
+    );
+    assert!(!secondary_blocks.exists());
+    fs::create_dir_all(&secondary_blocks).expect("seed unjournaled exact secondary namespace");
+    let sentinel = secondary_blocks.join("operator-sentinel");
+    fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed unjournaled sentinel");
     let error = kura
         .apply_lane_geometry_transition(
             &initial,
@@ -1876,7 +2015,7 @@ fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
     assert_geometry_io_error(
         &error,
         ErrorKind::AlreadyExists,
-        "lane storage already exists at a create target",
+        "new lane instance target already contains storage",
     );
     assert_eq!(
         fs::read(&sentinel).expect("unjournaled sentinel retained"),
@@ -2041,7 +2180,7 @@ fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutati
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
     let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
     Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-        .expect("establish valid v6 baseline");
+        .expect("establish current baseline");
     let journal_path = root.join(JOURNAL_FILE_NAME);
     let mut journal = decode_exact::<LaneGeometryJournal>(
         &fs::read(&journal_path).expect("read valid baseline journal"),
@@ -2073,7 +2212,7 @@ fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutati
     });
     fs::write(&journal_path, journal.encode()).expect("write decodable structural forgery");
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-        .expect_err("correct baseline must not mask a malformed v6 journal");
+        .expect_err("correct baseline must not mask a structurally malformed journal");
     assert_lane_paths_absent(&root, &lane_config);
 }
 #[test]
@@ -2084,7 +2223,7 @@ fn configured_catalog_preflight_rejects_version_mismatch_before_lane_mutation() 
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
     let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
     Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
-        .expect("establish valid v6 baseline");
+        .expect("establish current baseline");
     let journal_path = root.join(JOURNAL_FILE_NAME);
     let mut journal = decode_exact::<LaneGeometryJournal>(
         &fs::read(&journal_path).expect("read valid baseline journal"),
@@ -2109,6 +2248,14 @@ fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_muta
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
             .expect("establish valid configured startup");
+    kura.bind_lane_storage_network(geometry_fixture_network_id())
+        .expect("bind explicit fixture network before geometry authority");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        initial.primary(),
+        initial_incarnations[&LaneId::SINGLE],
+        LaneLifecycleParameterV1::catalog_hash(&configured),
+    )
+    .expect("authenticate primary before a transition can reference it");
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
@@ -2122,16 +2269,23 @@ fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_muta
     let journal = kura
         .read_lane_geometry_journal()
         .expect("transition journal");
-    let relative_link = &journal.records[0].operations[0].archived_blocks_path;
-    let link = root.join(relative_link);
-    fs::create_dir_all(link.parent().expect("archive path parent")).expect("archive path parent");
+    let binding = journal.records[0].operations[0]
+        .updated
+        .as_ref()
+        .expect("created immutable instance binding");
+    let link = kura.binding_blocks_path(binding);
+    let displaced = link.with_extension("displaced");
+    fs::rename(&link, &displaced).expect("retain the original journal-owned instance");
     let outside = temp.path().join("outside");
     fs::create_dir(&outside).expect("outside directory");
-    symlink(&outside, &link).expect("inject journal-derived symlink");
+    fs::write(outside.join("operator-data"), b"retain").expect("outside sentinel");
+    symlink(&outside, &link).expect("inject journal-derived immutable-path symlink");
     drop(kura);
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
         .expect_err("journal-derived symlink must fail before opening attempted lane storage");
     assert!(link.is_symlink());
+    assert!(displaced.is_dir());
+    assert_eq!(fs::read(outside.join("operator-data")).unwrap(), b"retain");
 }
 #[cfg(unix)]
 #[test]

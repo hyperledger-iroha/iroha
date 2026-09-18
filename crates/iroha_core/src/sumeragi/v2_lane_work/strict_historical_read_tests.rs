@@ -125,12 +125,7 @@ fn historical_request_detects_durable_body_corruption_with_warm_cache() {
         adapter.kura.get_block(height).is_some(),
         "warm the body cache"
     );
-    let primary_blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let primary_blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     corrupt_durable_file_for_test(&primary_blocks.join("blocks.data"));
     let inbound = fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
         BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
@@ -260,12 +255,7 @@ fn canonical_chunk_recovery_corrupt_body_requires_restart_and_retains_need() {
         vec![need],
     )
     .expect("install one retained canonical repair need");
-    let primary_blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let primary_blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     corrupt_durable_file_for_test(&primary_blocks.join("blocks.data"));
     let sender = request.requester.clone();
     let inbound = fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
@@ -297,10 +287,9 @@ fn hydration_rejects_corrupt_raw_sidecar_without_repairing_occupied_slot() {
             .expect("read exact existing raw artifact")
             .is_some()
     );
-    let snapshot = adapter.state.nexus_snapshot();
-    let blocks = snapshot
-        .lane_config
-        .entry(descriptor.lane_id)
+    let blocks = adapter
+        .state
+        .lane_storage_identity(descriptor.lane_id)
         .expect("configured historical lane")
         .blocks_dir(adapter.kura.store_root());
     let path = blocks.join("lane_artifacts").join("ownerships.norito");
@@ -350,12 +339,7 @@ fn historical_anchor_storage_errors_retain_recovery_instead_of_superseding() {
         adapter.kura.get_block(height).is_some(),
         "warm the old body cache"
     );
-    let blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     corrupt_durable_file_for_test(&blocks.join("blocks.data"));
     assert!(
         adapter

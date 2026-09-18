@@ -31,7 +31,6 @@ fn run_panel_kura_block(
         NonZeroU64::new(height).expect("nonzero moderation fixture height"),
         fixture.state.view().latest_block_hash(),
         None,
-        None,
         now,
         0,
     );

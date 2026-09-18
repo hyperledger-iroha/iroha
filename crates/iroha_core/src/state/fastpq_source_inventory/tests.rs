@@ -46,7 +46,7 @@ pub(super) fn cache_canonical_test_transaction_set(
 }
 
 pub(super) fn header() -> BlockHeader {
-    BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0)
+    BlockHeader::new(nonzero!(1_u64), None, None, 7, 0)
 }
 
 fn external(state: &State, label: &str) -> TransactionEntrypoint {

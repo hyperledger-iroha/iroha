@@ -4468,15 +4468,39 @@
       "BlockExecutionReceiptProof": {
         "additionalProperties": false,
         "properties": {
-          "leaf": {
-            "$ref": "#/components/schemas/Hash"
+          "output": {
+            "additionalProperties": false,
+            "description": "Complete typed output committed as the Merkle leaf; it is not a leaf hash or a projected status.",
+            "properties": {
+              "detail": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                ],
+                "description": "Canonical detail for the selected ExecutionOutputV1 variant, retaining its full source descriptor, result, receipts and completion records. The Norito data model defines and validates the nested variant fields."
+              },
+              "kind": {
+                "enum": [
+                  "network",
+                  "pipeline",
+                  "time"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "detail"
+            ],
+            "type": "object"
           },
           "proof": {
             "$ref": "#/components/schemas/BlockMerkleProof"
           }
         },
         "required": [
-          "leaf",
+          "output",
           "proof"
         ],
         "type": "object"
@@ -4578,16 +4602,6 @@
               }
             ]
           },
-          "result_merkle_root": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "sccp_commitment_root": {
             "anyOf": [
               {
@@ -4610,7 +4624,6 @@
           "height",
           "prev_block_hash",
           "merkle_root",
-          "result_merkle_root",
           "da_proof_policies_hash",
           "da_commitments_hash",
           "da_pin_intents_hash",
@@ -4860,27 +4873,27 @@
               },
               "type": "array"
             },
-            "description": "FASTPQ transfer transcripts keyed by canonical transaction entrypoint hash literal.",
+            "description": "Complete FASTPQ transcript map keyed by exact execution-call hash literal, authenticated by the exact executed wire.",
             "propertyNames": {
               "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
             },
             "type": "object"
           },
-          "result_commitment": {
+          "output_commitment": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/BlockMerkleCommitment"
               }
             ],
-            "description": "Claimed root and exact leaf count for the mandatory execution proof; its leaf count must equal entry_commitment.leaf_count and it must be verified against separately authenticated block finality."
+            "description": "Claimed root and exact leaf count for the complete typed-output tree, which may contain more leaves than the Network input tree. Authenticate against exact executed-wire finality."
           },
-          "result_proof": {
+          "output_proof": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/BlockExecutionReceiptProof"
               }
             ],
-            "description": "Mandatory execution result proof at the same execution-order index as entry_proof."
+            "description": "Full typed Network output and its audit path. Network.input_index joins the authenticated input proof; Pipeline and Time outputs have no Network input leaf."
           }
         },
         "required": [
@@ -4890,8 +4903,8 @@
           "entry_hash",
           "entry_commitment",
           "entry_proof",
-          "result_commitment",
-          "result_proof",
+          "output_commitment",
+          "output_proof",
           "fastpq_transcripts"
         ],
         "type": "object"
@@ -25977,24 +25990,17 @@
         "additionalProperties": false,
         "properties": {
           "hash": {
-            "description": "Canonical signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
+            "description": "Exact requested network entrypoint hash (64 lowercase hexadecimal digits with the Iroha hash marker set), including the outer sealed-reveal identity.",
             "type": "string"
           },
           "transaction": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact committed transaction with authenticated entrypoint, result, and durable batch receipts."
-          },
-          "trigger_completions": {
-            "items": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "array"
+            "description": "Exact Network input and sole full typed output, with separate input/output proofs, result, durable batch receipts and owned callback completions. Independent Pipeline and Time outputs require their own authenticated output proofs."
           }
         },
         "required": [
           "hash",
-          "transaction",
-          "trigger_completions"
+          "transaction"
         ],
         "type": "object"
       },
@@ -73681,7 +73687,7 @@
     },
     "/v1/ledger/block/{height}": {
       "get": {
-        "description": "Returns only the canonical result-bearing SignedBlockWire whose block hash is bound to the finalized state journal at the requested height. A Kura body which is merely staged, resultless, or inconsistent with that journal is never returned. The application/x-norito response is the exact byte carrier consumed by authenticated BlockProofs verification and is bounded to 32 MiB.",
+        "description": "Returns the original canonical result-bearing SignedBlockWire selected by the finalized state journal at the requested height. The complete stored bytes must match the executed-wire hash and length authenticated by its CommitQC, and the complete source/output structure must validate. Staged, resultless, inconsistent, or unauthenticated bodies are never returned. Authenticated wire length is admitted before body I/O. The application/x-norito response is bounded to 32 MiB; source, output, and transcript work is bounded by the configured query_max_fetch_size. These are wire and work limits, not a complete decoded-memory reservation.",
         "operationId": "ledgerExecutedBlockWire",
         "parameters": [
           {
@@ -73729,7 +73735,7 @@
                 }
               }
             },
-            "description": "The height is not finalized or its canonical body is unavailable."
+            "description": "The height is not present in the finalized state journal."
           },
           "413": {
             "content": {
@@ -73741,6 +73747,16 @@
             },
             "description": "The canonical wire exceeds the authenticated carrier limit."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -73749,7 +73765,7 @@
                 }
               }
             },
-            "description": "Finalized state and canonical block storage are inconsistent."
+            "description": "The finalized body or its exact finality authority is unavailable, inconsistent, or invalid."
           }
         },
         "security": [
@@ -73773,7 +73789,7 @@
     },
     "/v1/ledger/block/{height}/proof/{entry_hash}": {
       "get": {
-        "description": "Returns result-bearing inclusion and execution Merkle proofs for the specified transaction entrypoint. Response commitments are claims until matched against a target-specific anchor derived from separately authenticated block finality.",
+        "description": "Returns a Network input inclusion proof and the proof of its complete typed execution output from a body authenticated against the finalized state journal and exact CommitQC executed-wire hash and length. The input and output trees may have different leaf counts: Pipeline and Time outputs are not Network inputs. The entry hash names the outer transaction entrypoint, including a sealed entrypoint. The complete source/output structure is validated before selecting the requested entry. The stored wire and complete Norito proof response are each bounded to 32 MiB; source, output, and transcript work is bounded by the configured query_max_fetch_size. Response commitments remain claims until matched against a target-specific anchor derived from separately authenticated block finality.",
         "operationId": "ledgerBlockProof",
         "parameters": [
           {
@@ -73805,11 +73821,14 @@
                 "schema": {
                   "description": "Canonical Norito encoding of `BlockProofs`.",
                   "format": "binary",
-                  "type": "string"
+                  "maxLength": 33554432,
+                  "minLength": 1,
+                  "type": "string",
+                  "x-iroha-max-bytes": 33554432
                 }
               }
             },
-            "description": "Merkle proofs for the requested entrypoint."
+            "description": "Network input inclusion and complete typed execution-output proofs for the requested outer entrypoint."
           },
           "400": {
             "content": {
@@ -73829,7 +73848,37 @@
                 }
               }
             },
-            "description": "Block or entrypoint not found."
+            "description": "The height is not finalized or the requested outer Network entrypoint is absent."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated stored wire or complete Norito proof response exceeds its 32 MiB limit."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The finalized body, finality authority, or complete source/output structure is unavailable, inconsistent, or invalid."
           }
         },
         "security": [
@@ -73838,7 +73887,7 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Fetch Merkle proofs for a block entrypoint.",
+        "summary": "Fetch Network input and execution-output Merkle proofs.",
         "tags": [
           "Ledger"
         ],

@@ -613,7 +613,7 @@ v2_apply_test!(
                     .expect("persist bounded sidecar lineage fixture"),
             );
         }
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent), None, None, 2, 1);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent), None, 2, 1);
         let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
         builder.set_execution_context(Some(
             BlockExecutionContextBundle::new(Vec::new())
@@ -667,7 +667,8 @@ v2_apply_test!(forged_commit_qc_is_rejected_before_any_durable_mutation, {
         .persist_pending_certified_merge_entry(&pending)
         .expect("persist pending sidecar before forged Apply");
     let baseline_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let mut forged_certificate = fixture.task.certificate().clone();
     let first_signature_byte = forged_certificate
         .aggregate_signature
@@ -692,7 +693,8 @@ v2_apply_test!(forged_commit_qc_is_rejected_before_any_durable_mutation, {
     ));
     assert_eq!(fixture.state.committed_height(), 0);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         baseline_state_hash,
         "an unauthenticated decision must not mutate WSV"
     );
@@ -854,7 +856,8 @@ v2_apply_test!(block_write_failure_never_advances_wsv_and_retry_is_exact, {
 
     let fixture = ApplyFixture::new();
     let baseline_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let mut store = fixture.reopen_body_store();
     fixture.kura.fail_next_block_write_for_tests();
     assert!(matches!(
@@ -863,7 +866,8 @@ v2_apply_test!(block_write_failure_never_advances_wsv_and_retry_is_exact, {
     ));
     assert_eq!(fixture.state.committed_height(), 0);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         baseline_state_hash,
         "a failed Kura write must not leak any WSV mutation"
     );
@@ -936,9 +940,26 @@ v2_apply_test!(
         let result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
             ValidationFail::InternalError(secret.to_owned()),
         ));
-        rejected
-            .set_transaction_results(Vec::new(), &entry_hashes, vec![result])
-            .expect("attach one rejected result");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &rejected,
+                &entry_hashes,
+                vec![result],
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            rejected.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach one rejected result");
         let error = V2ApplyService::classify_candidate_validation_error(
             None,
             &rejected,
@@ -970,7 +991,8 @@ v2_apply_test!(
 v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
     let fixture = ApplyFixture::new();
     let baseline_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let mut store = fixture.reopen_body_store();
     fixture.service.fail_after_kura_store_for_test();
     assert!(matches!(
@@ -983,14 +1005,15 @@ v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
         .get_block(NonZeroUsize::new(1).expect("height"))
         .expect("read production-validated Kura crash image");
     assert!(durable.has_results());
-    assert_eq!(durable.results().len(), 1);
-    assert!(durable.results().all(|result| result.is_ok()));
+    assert_eq!(durable.output_results().len(), 1);
+    assert!(durable.output_results().all(|result| result.is_ok()));
     let durable_wire = durable.encode_wire().expect("encode Kura crash image");
     fixture.assert_no_post_apply_sidecars();
     assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(fixture.state.committed_height(), 0);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         baseline_state_hash,
         "the Kura-first crash boundary must not leak partial WSV state"
     );
@@ -1013,7 +1036,8 @@ v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
 v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
     let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let baseline_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
     fixture.kura.fail_next_native_amx_prepublication_for_tests();
     let mut store = fixture.reopen_body_store();
     let error = fixture
@@ -1029,7 +1053,8 @@ v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
     assert!(error.requires_restart_recovery());
     assert_eq!(fixture.state.committed_height(), 0);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         baseline_state_hash,
         "prepublication failure must not leak the validated State overlay"
     );
@@ -1064,7 +1089,8 @@ v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
 v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {
     let fixture = ApplyFixture::new_with_lane_payload(true);
     let baseline_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let ownerships = fixture
         .body
         .execution_context()
@@ -1084,14 +1110,15 @@ v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {
         .get_block(NonZeroUsize::new(1).expect("height"))
         .expect("read production-validated Kura lane crash image");
     assert!(durable.has_results());
-    assert_eq!(durable.results().len(), 1);
-    assert!(durable.results().all(|result| result.is_ok()));
+    assert_eq!(durable.output_results().len(), 1);
+    assert!(durable.output_results().all(|result| result.is_ok()));
     let durable_wire = durable.encode_wire().expect("encode Kura lane crash image");
     fixture.assert_no_post_apply_sidecars();
     assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(fixture.state.committed_height(), 0);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         baseline_state_hash,
         "the Kura-first lane crash boundary must not leak partial WSV state"
     );
@@ -1124,21 +1151,31 @@ v2_apply_test!(
         let fixture = ApplyFixture::new();
         let conflicting_key =
             KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519).expect("conflict key");
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height"),
-            None,
-            None,
-            None,
-            9_999,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 9_999, 0);
         let signature = SignatureOf::try_from_hash(conflicting_key.private_key(), header.hash())
             .expect("sign conflicting block");
         let mut conflicting =
             SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
-        conflicting
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("the conflicting canonical block has complete empty execution results");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &conflicting,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            conflicting.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("the conflicting canonical block has complete empty execution results");
         let signature =
             SignatureOf::try_from_hash(conflicting_key.private_key(), conflicting.header().hash())
                 .expect("sign the complete conflicting canonical block");

@@ -6830,7 +6830,6 @@ mod tests {
             NonZeroU64::new(height).expect("non-zero height"),
             None,
             None,
-            None,
             1_800_000_000_000 + height - TEST_BLOCK_HEIGHT,
             0,
         )
@@ -6931,7 +6930,6 @@ mod tests {
     fn fcmp_test_header(fixture: &FcmpRuntimeFixtureForTest) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(fixture.current_height).expect("non-zero FCMP++ height"),
-            None,
             None,
             None,
             fixture.block_timestamp_ms,
@@ -7595,7 +7593,6 @@ mod tests {
             NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("non-zero height"),
             Some(header_hash),
             None,
-            None,
             1_800_000_000_001,
             0,
         );
@@ -8109,7 +8106,6 @@ mod tests {
             NonZeroU64::new(fixture.current_height).expect("non-zero ZK-AMS height"),
             None,
             None,
-            None,
             fixture.block_timestamp_ms,
             0,
         );
@@ -8218,8 +8214,7 @@ mod tests {
             .block_timestamp_ms
             .checked_add(1)
             .expect("next ZK-AMS block timestamp");
-        let replay_header =
-            BlockHeader::new(replay_height, None, None, None, replay_timestamp_ms, 0);
+        let replay_header = BlockHeader::new(replay_height, None, None, replay_timestamp_ms, 0);
         let mut replay_block = state.block(replay_header);
         let mut transaction = replay_block.transaction();
         assert!(

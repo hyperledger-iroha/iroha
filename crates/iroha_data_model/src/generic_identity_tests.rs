@@ -117,7 +117,6 @@ fn context() -> ExecutorContext {
             height: NonZeroU64::new(1).expect("nonzero fixture block height"),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -152,8 +151,7 @@ fn signed_transaction() -> SignedTransaction {
         .expect("sign deterministic identity fixture")
 }
 
-#[test]
-fn public_generic_identity_frames_match_capture() {
+fn current_generic_identity_frames() -> Value {
     let rows = vec![
         family("metadata-account", || metadata(account())),
         family("metadata-domain", || metadata(domain())),
@@ -211,13 +209,25 @@ fn public_generic_identity_frames_match_capture() {
         family("genesis-domain", || TransactionDomain::Genesis),
     ];
     assert_eq!(argument_families.len(), 5);
+    norito::json!({"families": rows, "argument_families": argument_families})
+}
+
+#[test]
+fn public_generic_identity_frames_match_capture() {
     let expected: Value = norito::json::from_str(include_str!(
         "../tests/fixtures/model_generic_identity_frames.json"
     ))
     .expect("read immutable generic identity frames");
-    assert_eq!(
-        norito::json!({"families": rows, "argument_families": argument_families}),
-        expected
+    assert_eq!(current_generic_identity_frames(), expected);
+}
+
+#[test]
+#[ignore = "explicit fixture capture after reviewing an intentional wire-format change"]
+fn capture_current_generic_identity_frames() {
+    println!(
+        "GENERIC_CANONICAL_IDENTITY_CAPTURE={}",
+        norito::json::to_json(&current_generic_identity_frames())
+            .expect("serialize checked generic identity frames")
     );
 }
 

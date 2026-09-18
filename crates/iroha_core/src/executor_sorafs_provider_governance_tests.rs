@@ -34,7 +34,7 @@ mod sorafs_provider_governance_admission {
             ],
             [],
         ));
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut transaction = block.transaction();
         transaction.gov.citizenship_bond_amount = Quantity::from(10_u32);
 

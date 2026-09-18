@@ -1010,7 +1010,6 @@ mod parliament_tle_release_tests {
             NonZeroU64::new(1).expect("non-zero fixture height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1143,7 +1142,7 @@ mod parliament_tle_release_tests {
         );
         let pending_id = pending_public.key_session_id;
         {
-            let header = BlockHeader::new(NonZeroU64::new(14).unwrap(), None, None, None, 0, 0);
+            let header = BlockHeader::new(NonZeroU64::new(14).unwrap(), None, None, 0, 0);
             let mut block = fixture.state.block(header);
             let mut transaction = block.transaction();
             assert!(

@@ -392,8 +392,9 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("read signed snapshot without canonical payload drift");
-    let mut roundtrip = String::new();
-    serialize_state_snapshot(&restored, &mut roundtrip);
+    let roundtrip = CapturedStateSnapshot::capture(&restored)
+        .expect("stable valid fixture snapshot")
+        .json;
     assert_eq!(
         roundtrip.as_bytes(),
         payload,
@@ -505,8 +506,9 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -568,12 +570,13 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     let block = signed_block_with_transaction(accepted_log_transaction("checkpointed"));
     let block_hash = block.hash();
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let expected = canonical_state_snapshot_hash(&state);
+    let expected = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(1, block_hash, expected)
         .expect("persist canonical WSV checkpoint");
     let key_pair = checked_random_snapshot_keypair();
-    let mut serialized = String::new();
-    serialize_state_snapshot(&state, &mut serialized);
+    let serialized = CapturedStateSnapshot::capture(&state)
+        .expect("stable valid fixture snapshot")
+        .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let restored = try_read_snapshot(
         &store_dir,
@@ -588,7 +591,10 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("an exact signed snapshot must match its Kura WSV checkpoint");
-    assert_eq!(canonical_state_snapshot_hash(&restored), expected);
+    assert_eq!(
+        canonical_state_snapshot_hash(&restored).expect("stable valid fixture snapshot"),
+        expected
+    );
     drop(restored);
     let injected_account = AccountId::new(
         checked_seeded_keypair(0xD1, Algorithm::Ed25519)
@@ -604,13 +610,14 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
             Vec::new(),
         )),
     );
-    let actual = canonical_state_snapshot_hash(&state);
+    let actual = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     assert_ne!(
         actual, expected,
         "hostile WSV mutation must affect its checkpoint"
     );
-    serialized.clear();
-    serialize_state_snapshot(&state, &mut serialized);
+    let serialized = CapturedStateSnapshot::capture(&state)
+        .expect("stable valid fixture snapshot")
+        .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
@@ -664,8 +671,9 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             Arc::clone(&kura),
             iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -874,8 +882,9 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let (state, _, _) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {

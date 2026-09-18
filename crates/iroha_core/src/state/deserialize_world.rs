@@ -7085,7 +7085,7 @@ mod validation_fee_registry_restore_tests {
     fn restore_world_with_network(
         world: World,
         restored_network_id: iroha_data_model::NetworkId,
-    ) -> Result<State, json::Error> {
+    ) -> Result<Box<State>, json::Error> {
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -7137,7 +7137,7 @@ mod validation_fee_registry_restore_tests {
         .into_state_from_json(snapshot)
     }
 
-    fn restore_world(world: World) -> Result<State, json::Error> {
+    fn restore_world(world: World) -> Result<Box<State>, json::Error> {
         restore_world_with_network(world, network_id())
     }
 
@@ -7260,8 +7260,31 @@ mod validation_fee_registry_restore_tests {
         let block_hashes: Vec<HashOf<BlockHeader>> = (1..=RESTORED_HEIGHT)
             .map(|height| HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())))
             .collect();
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
+        let activation: BTreeMap<_, _> = incarnations.keys().map(|&id| (id, 0)).collect();
+        let lineage = incarnations
+            .iter()
+            .map(|(&id, &incarnation)| {
+                (
+                    id,
+                    LaneIncarnationLineage {
+                        incarnation,
+                        generation: 0,
+                        activation_height: 0,
+                    },
+                )
+            })
+            .collect();
+        let canonical_runtime = Cell::new(SnapshotNexusRuntime::from_nexus(
+            &nexus,
+            &incarnations,
+            &activation,
+            &lineage,
+        ));
         let error = build_state(
             BuildStateInputs {
+                canonical_runtime,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
                 transactions: TransactionsStorage::new(),
@@ -7314,6 +7337,117 @@ mod validation_fee_registry_restore_tests {
     }
 }
 
+/// Validate one complete persisted DA pin-index cut without rebuilding or
+/// accepting records according to a process-local cache.
+fn validate_da_pin_persistence_cut(
+    by_ticket: &impl mv::storage::StorageReadOnly<StorageTicketId, DaPinIntentWithLocation>,
+    by_alias: &impl mv::storage::StorageReadOnly<String, StorageTicketId>,
+    by_manifest: &impl mv::storage::StorageReadOnly<ManifestDigest, StorageTicketId>,
+    by_lane_epoch: &impl mv::storage::StorageReadOnly<(LaneId, u64, u64), StorageTicketId>,
+    cut: &'static str,
+) -> Result<(), json::Error> {
+    let invalid = |field: &str, reason: &str| json::Error::InvalidField {
+        field: format!("world.{field}"),
+        message: format!("invalid {cut} DA pin-index projection: {reason}"),
+    };
+    let mut locations = BTreeSet::new();
+    for (ticket, record) in by_ticket.iter() {
+        if *ticket != record.intent.storage_ticket {
+            return Err(invalid(
+                "da_pin_intents_by_ticket",
+                "ticket key differs from the stored intent",
+            ));
+        }
+        if !locations.insert((
+            record.location.block_height,
+            record.location.index_in_bundle,
+        )) {
+            return Err(invalid(
+                "da_pin_intents_by_ticket",
+                "multiple intents have the same block location",
+            ));
+        }
+        if by_manifest.get(&record.intent.manifest_hash) != Some(ticket) {
+            return Err(invalid(
+                "da_pin_intents_by_manifest",
+                "primary intent lacks its exact manifest index",
+            ));
+        }
+        let lane_epoch = (
+            record.intent.lane_id,
+            record.intent.epoch,
+            record.intent.sequence,
+        );
+        if by_lane_epoch.get(&lane_epoch) != Some(ticket) {
+            return Err(invalid(
+                "da_pin_intents_by_lane_epoch",
+                "primary intent lacks its exact lane/epoch/sequence index",
+            ));
+        }
+    }
+    for (manifest, ticket) in by_manifest.iter() {
+        if !by_ticket
+            .get(ticket)
+            .is_some_and(|record| record.intent.manifest_hash == *manifest)
+        {
+            return Err(invalid(
+                "da_pin_intents_by_manifest",
+                "manifest index does not identify its exact primary intent",
+            ));
+        }
+    }
+    for (lane_epoch, ticket) in by_lane_epoch.iter() {
+        if !by_ticket.get(ticket).is_some_and(|record| {
+            (
+                record.intent.lane_id,
+                record.intent.epoch,
+                record.intent.sequence,
+            ) == *lane_epoch
+        }) {
+            return Err(invalid(
+                "da_pin_intents_by_lane_epoch",
+                "lane/epoch/sequence index does not identify its exact primary intent",
+            ));
+        }
+    }
+    for (alias, ticket) in by_alias.iter() {
+        if !by_ticket
+            .get(ticket)
+            .is_some_and(|record| record.intent.alias.as_deref() == Some(alias.as_str()))
+        {
+            return Err(invalid(
+                "da_pin_intents_by_alias",
+                "alias does not bind a primary intent declaring that alias",
+            ));
+        }
+    }
+    // Alias removal after lane retirement is valid, as is rebinding the same
+    // alias in a later record. Not every retained intent must have a binding.
+    Ok(())
+}
+
+fn validate_da_pin_persistence(world: &World) -> Result<(), json::Error> {
+    {
+        let tickets = world.da_pin_intents_by_ticket.view();
+        let aliases = world.da_pin_intents_by_alias.view();
+        let manifests = world.da_pin_intents_by_manifest.view();
+        let lane_epochs = world.da_pin_intents_by_lane_epoch.view();
+        validate_da_pin_persistence_cut(&tickets, &aliases, &manifests, &lane_epochs, "current")?;
+    }
+    // Each real MV undo overlay is dropped without committing. Validate all
+    // four retained predecessor stores together, preserving their undo logs.
+    // This proves index coherence of both cuts, not historical authentication.
+    let tickets = world.da_pin_intents_by_ticket.block_and_revert();
+    let aliases = world.da_pin_intents_by_alias.block_and_revert();
+    let manifests = world.da_pin_intents_by_manifest.block_and_revert();
+    let lane_epochs = world.da_pin_intents_by_lane_epoch.block_and_revert();
+    validate_da_pin_persistence_cut(&tickets, &aliases, &manifests, &lane_epochs, "predecessor")
+}
+
+#[cfg(test)]
+#[path = "deserialize_world_da_pin_tests.rs"]
+mod da_pin_persistence_tests;
+
 #[allow(clippy::too_many_lines)]
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
@@ -7321,14 +7455,18 @@ fn parse_world(
 ) -> Result<World, json::Error> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
-        if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
+        if let Some(unknown) = actual.iter().find(|key| !expected.contains(&key.as_str())) {
             return Err(json::Error::InvalidField {
                 field: format!("world.{unknown}"),
                 message: "unknown field is not permitted in a signed first-release snapshot"
                     .to_owned(),
             });
         }
-        if actual != expected {
+        if !actual
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied())
+        {
             return Err(json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "snapshot world fields are not in canonical schema order".to_owned(),
@@ -7657,15 +7795,26 @@ fn parse_world(
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
     > = take_required(&mut map, "private_settlement_outputs")?;
-    let private_settlement_recipient_index = Storage::from_iter(
-        crate::private_settlement::global_state::rebuild_private_settlement_recipient_index_v1(
-            &private_settlement_outputs.view(),
+    // A derived index must follow the same current and predecessor cuts as its
+    // authoritative outputs. Rebuilding only current recipients leaves phantom
+    // reservations when the last block is replaced after a restart.
+    let private_settlement_recipient_index = {
+        use crate::private_settlement::global_state::rebuild_private_settlement_recipient_index_v1;
+        let invalid_outputs = |error: crate::private_settlement::global_state::PrivateSettlementGlobalStateErrorV1| {
+            json::Error::InvalidField {
+                field: "world.private_settlement_outputs".to_owned(),
+                message: error.to_string(),
+            }
+        };
+        let current =
+            rebuild_private_settlement_recipient_index_v1(&private_settlement_outputs.view())
+                .map_err(invalid_outputs)?;
+        let previous = rebuild_private_settlement_recipient_index_v1(
+            &private_settlement_outputs.block_and_revert(),
         )
-        .map_err(|error| json::Error::InvalidField {
-            field: "world.private_settlement_outputs".to_owned(),
-            message: error.to_string(),
-        })?,
-    );
+        .map_err(invalid_outputs)?;
+        rebuild_derived_storage_with_previous(current, previous)
+    };
     let private_settlement_staged_locks: Storage<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
@@ -7980,6 +8129,10 @@ fn parse_world(
         take_required(&mut map, "merge_global_state_root")?;
     let consensus_evidence: Storage<Hash, EvidenceRecord> =
         take_required(&mut map, "consensus_evidence")?;
+    let da_pin_intents_by_ticket = take_required(&mut map, "da_pin_intents_by_ticket")?;
+    let da_pin_intents_by_alias = take_required(&mut map, "da_pin_intents_by_alias")?;
+    let da_pin_intents_by_manifest = take_required(&mut map, "da_pin_intents_by_manifest")?;
+    let da_pin_intents_by_lane_epoch = take_required(&mut map, "da_pin_intents_by_lane_epoch")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
@@ -8182,10 +8335,10 @@ fn parse_world(
         capacity_disputes: Storage::default(),
         provider_owners,
         provider_ingest_completion_authorities,
-        da_pin_intents_by_ticket: Storage::default(),
-        da_pin_intents_by_alias: Storage::default(),
-        da_pin_intents_by_manifest: Storage::default(),
-        da_pin_intents_by_lane_epoch: Storage::default(),
+        da_pin_intents_by_ticket,
+        da_pin_intents_by_alias,
+        da_pin_intents_by_manifest,
+        da_pin_intents_by_lane_epoch,
         sorafs_pricing: Cell::default(),
         provider_credit_ledger: Storage::default(),
         pin_manifests,
@@ -8263,6 +8416,7 @@ fn parse_world(
         consensus_evidence,
         external_event_buf,
     };
+    validate_da_pin_persistence(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
     world
         .rebuild_global_beacon_pulse_slots()
@@ -8495,7 +8649,7 @@ fn parse_world(
     }
     world.rebuild_domain_owner_index();
     world
-        .rebuild_uaid_account_index()
+        .rebuild_account_identity_indexes()
         .map_err(|message| json::Error::InvalidField {
             field: "uaid_accounts".into(),
             message,
@@ -8583,12 +8737,6 @@ fn parse_world(
         })?;
     world.rebuild_repo_agreement_indexes();
     world.rebuild_proof_status_index();
-    world
-        .rebuild_opaque_uaid_index()
-        .map_err(|message| json::Error::InvalidField {
-            field: "opaque_uaids".into(),
-            message,
-        })?;
     world
         .validate_identifier_claims()
         .map_err(|message| json::Error::InvalidField {
@@ -8708,6 +8856,7 @@ mod asset_transfer_control_persistence_tests {
 }
 
 struct BuildStateInputs {
+    canonical_runtime: Cell<SnapshotNexusRuntime>,
     world: World,
     block_hashes: BlockHashes,
     transactions: TransactionsStorage,
@@ -8733,8 +8882,9 @@ fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
     emergency_fast: bool,
-) -> Result<State, MergeLedgerCommitError> {
+) -> Result<Box<State>, MergeLedgerCommitError> {
     let BuildStateInputs {
+        canonical_runtime,
         world,
         block_hashes,
         transactions,
@@ -8879,7 +9029,7 @@ fn build_state(
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header())
     };
-    let mut state = State {
+    let mut state = Box::new(State {
         world,
         block_hashes,
         latest_block_header: parking_lot::RwLock::new(latest_block_header),
@@ -8903,7 +9053,6 @@ fn build_state(
         query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
         da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
         lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
-        settled_nexus_fee_receipts: parking_lot::RwLock::new(BTreeSet::new()),
         lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
         lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
         lane_compliance: parking_lot::RwLock::new(None),
@@ -8928,14 +9077,9 @@ fn build_state(
         ),
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
-        lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
-        lane_incarnation_lineage: parking_lot::RwLock::new(lane_incarnation_lineage),
-        lane_incarnation_activation_heights: parking_lot::RwLock::new(
-            lane_incarnation_activation_heights,
-        ),
+        canonical_runtime,
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
-        autoscale_sample_history: parking_lot::RwLock::new(autoscale_sample_history),
         tiered_backend: Arc::clone(&tiered_backend),
         tiered_snapshot_worker,
         fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -8963,7 +9107,7 @@ fn build_state(
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
-    };
+    });
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
         &state.view(),
         restored_height,
@@ -10238,6 +10382,8 @@ mod decode_tests {
             "duplicate signed snapshot fields must fail closed"
         );
     }
+    include!("private_settlement_snapshot_predecessor_tests.rs");
+
     #[test]
     fn private_settlement_snapshot_roundtrip_validates_governed_pool_projection() {
         let fixture = crate::private_settlement::sidecar_store::tests::sidecar_fixture();

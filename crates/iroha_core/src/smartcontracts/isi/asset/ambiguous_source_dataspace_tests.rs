@@ -58,7 +58,7 @@ fn transfer_restricted_asset_rejects_ambiguous_source_dataspace_binding() {
         .uaid_dataspaces
         .insert(uaid_alice, alice_bindings);
     state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

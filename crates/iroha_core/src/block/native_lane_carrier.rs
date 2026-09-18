@@ -1,7 +1,8 @@
 //! One supported native carrier shape shared by live and finalized scratch replay.
 //!
 //! This is a pure borrowed projection, not a source/finality/acceptance token.
-//! TODO: compose global start hooks and additional controls in one owned overlay
+//! Network, Pipeline and Time outputs share the common actual producer.
+//! TODO: compose additional controls and full State publication in one owned overlay
 //! before expanding this shape or removing the production native inactive gate.
 
 use iroha_crypto::HashOf;
@@ -20,10 +21,6 @@ pub(crate) fn native_lane_batch_for_scratch(
     if header.execution_context_hash() != Some(HashOf::new(bundle))
         || !carrier.external_entrypoints_slice().is_empty()
         || header.merkle_root().is_some()
-        || carrier
-            .axt_envelopes()
-            .is_some_and(|value| !value.is_empty())
-        || (carrier.has_results() && carrier.time_triggers().next().is_some())
     {
         return Err("native carrier has mixed or unbound economic inputs".into());
     }

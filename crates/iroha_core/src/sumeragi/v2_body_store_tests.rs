@@ -174,7 +174,6 @@ mod tests {
             NonZeroU64::new(round.height).expect("non-zero height"),
             None,
             None,
-            None,
             1_000,
             header_view,
         );
@@ -1123,8 +1122,14 @@ mod tests {
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut result_bearing = decode_framed_signed_block(&body).expect("decode fixture body");
-        result_bearing
-            .set_transaction_results(Vec::new(), &[], Vec::new())
+        { let outputs = crate::execution_output_test_support::structural_network_outputs(&result_bearing, &[], Vec::new());
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+result_bearing.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
             .expect("attach empty deterministic execution result");
         assert!(!result_bearing.is_resultless_proposal());
         let result_bearing_wire = result_bearing

@@ -333,7 +333,46 @@ impl Default for Sandbox {
         );
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            std::sync::Arc::clone(&kura),
+            query_handle,
+            CHAIN_ID.clone(),
+            test_network_id(),
+        );
+        // This World is explicitly prepopulated fixture state, not an executed
+        // or finalized genesis. Give it an empty predecessor and seed its AXT
+        // asset incarnations before testing real ordinary economics at height 2.
+        let predecessor = iroha_data_model::block::builder::BlockBuilder::new(
+            iroha_data_model::block::BlockHeader::new(std::num::NonZeroU64::MIN, None, None, 0, 0),
+        )
+        .build_with_signature(0, &GENESIS_ACCOUNT.key);
+        let mut baseline = state.block(predecessor.header());
+        // Empty-block fixture publication intentionally omits signed-block
+        // metadata. Supply this prebuilt World's exact initial resolver cut so
+        // actual height-2 metadata application has its required predecessor.
+        let revision = *baseline.world.musubi_resolver_index_revision.get();
+        let checkpoint = iroha_data_model::musubi::MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: *predecessor.hash().as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("Sandbox baseline resolver checkpoint is canonical");
+        assert!(
+            baseline
+                .world
+                .musubi_resolver_index_checkpoints
+                .insert(revision, checkpoint)
+                .is_none(),
+            "the prebuilt Sandbox World has no earlier resolver checkpoint"
+        );
+        baseline
+            .commit_empty_block_for_testing()
+            .expect("commit the explicit Sandbox fixture baseline");
+        kura.store_block(predecessor)
+            .expect("retain the Sandbox predecessor header and time");
         let mut sandbox = Self {
             state,
             transactions: vec![],

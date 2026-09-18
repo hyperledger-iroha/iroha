@@ -2289,39 +2289,56 @@ mod tests {
             None,
             None,
         );
-        let entrypoint_hashes = genesis
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
+        let proposal_header = genesis.header();
+        let proposal_signatures = genesis.signatures().cloned().collect::<Vec<_>>();
+        let outputs = vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: Ok(iroha_data_model::transaction::DataTriggerSequence::default())
+                        .into(),
+                    completions: Vec::new(),
+                },
+            ),
+        ];
+        let expected_output_tree: iroha_crypto::MerkleTree<
+            iroha_data_model::block::execution_output::ExecutionOutputV1,
+        > = outputs.iter().map(HashOf::new).collect();
+        let output_limits =
+            iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits();
         genesis
-            .set_transaction_results(
+            .set_execution_outputs(
+                outputs,
+                1,
+                Default::default(),
                 Vec::new(),
-                &entrypoint_hashes,
-                vec![Ok(
-                    iroha_data_model::transaction::DataTriggerSequence::default(),
-                )],
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &output_limits,
             )
-            .expect("attach canonical successful archive genesis result");
-        let final_signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(genesis_signer.private_key(), genesis.hash())
-                .expect("sign result-bearing archive genesis"),
+            .expect("attach one canonical successful Network output to archive genesis");
+        genesis
+            .validate_proposal_commitments()
+            .expect("archive genesis must commit its actual proposal inputs");
+        genesis
+            .validate_execution_outputs(&output_limits)
+            .expect("archive genesis outputs, cached tree and complete wire must be canonical");
+        assert_eq!(genesis.header(), proposal_header);
+        assert_eq!(
+            genesis.signatures().cloned().collect::<Vec<_>>(),
+            proposal_signatures
         );
-        genesis
-            .replace_signatures(std::collections::BTreeSet::from([final_signature]))
-            .expect("replace result-bearing archive genesis signature");
-        genesis
-            .validate_entrypoint_merkle_cache()
-            .expect("archive genesis entrypoint Merkle cache must be canonical");
-        genesis
-            .validate_result_merkle_cache()
-            .expect("archive genesis result Merkle cache must be canonical");
         assert_eq!(genesis.committed_fragment_count(), Some(1));
         assert_eq!(
-            genesis.header().result_merkle_root(),
+            genesis.output_merkle_commitment(),
+            expected_output_tree.commitment()
+        );
+        assert_eq!(genesis.network_entrypoint_count(), 1);
+        assert!(
             genesis
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
+                .network_output_at(0)
+                .is_some_and(|(_, output)| output.result.is_ok())
         );
         {
             let mut final_signatures = genesis.signatures();

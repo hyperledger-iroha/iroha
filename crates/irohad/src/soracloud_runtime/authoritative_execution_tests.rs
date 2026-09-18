@@ -14,7 +14,6 @@ fn push_committed_test_block_hash(state: &mut Arc<State>, height: u64) -> Result
         NonZeroU64::new(height).ok_or_else(|| eyre::eyre!("block height must be non-zero"))?,
         view.latest_block_hash(),
         None,
-        None,
         0,
         0,
     );

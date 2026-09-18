@@ -1089,6 +1089,7 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
+    establish_dummy_store_primary_anchor(&kura);
     let mut blocks = DummyBlocks::new();
     for _ in 0..3 {
         let block = blocks.next();
@@ -1396,6 +1397,8 @@ fn recent_disk_loaded_body_is_cached_after_read() {
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
+    // Uncached bytes can enter the derived index/cache only with exact finality.
+    let _ = persist_v2_finality_chain_through(&kura, nonzero!(4_usize));
     let height = nonzero!(3_usize);
     let block_hash = blocks[2].hash();
     {
@@ -1422,6 +1425,8 @@ fn concurrent_index_eviction_cannot_reinsert_inline_body_into_memory_cache() {
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open Kura");
     let blocks = store_dummy_block_arcs(&kura, 2);
+    // Uncached bytes can enter the derived index/cache only with exact finality.
+    let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
     kura.block_data.lock()[1].1 = None;

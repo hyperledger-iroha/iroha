@@ -246,9 +246,9 @@ fn canonical_replica_frame_owners_preserve_validated_bundle_binding() {
     use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
     let fixture = canonical_autonomous_replica_fixture();
     let descriptor = &fixture.certified.proposal.descriptor;
-    let entry = fixture
-        .lane_config
-        .entry(descriptor.lane_id)
+    let entry = &fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
         .expect("lane entry");
     let (data_path, _) =
         Kura::canonical_autonomous_lane_replica_paths_for_entry(entry, &fixture.kura.store_root);

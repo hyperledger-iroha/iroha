@@ -400,17 +400,35 @@ impl DataspaceReadVisibility {
         let Some(bundle) = block.execution_context() else {
             return None;
         };
+        if let Some(batch) = bundle.native_lane_decisions.as_ref() {
+            if block.external_entrypoint_count() != 0 {
+                return None;
+            }
+            bundle.validate_native_lane_decisions_shape().ok()?;
+            let group = batch.groups.get(index)?;
+            let source = block.network_entrypoint_at(index)?;
+            if source.hash() != group.payload.input.entrypoint.hash() {
+                return None;
+            }
+            return Some(
+                group
+                    .payload
+                    .descriptor
+                    .slots
+                    .iter()
+                    .map(|slot| slot.route.dataspace_id)
+                    .collect(),
+            );
+        }
         if !bundle.has_current_version()
-            || bundle.external.len() != block.external_entrypoint_count()
+            || bundle.external.len() != block.network_entrypoint_count()
         {
             return None;
         }
         let Some(context) = bundle.external.get(index) else {
             return None;
         };
-        let Some((entrypoint_hash, _)) = block.external_signed_transaction_at(index) else {
-            return None;
-        };
+        let entrypoint_hash = block.network_entrypoint_at(index)?.hash();
         if context.entrypoint_hash != entrypoint_hash {
             return None;
         }
@@ -453,10 +471,11 @@ impl DataspaceReadVisibility {
         target: HashOf<TransactionEntrypoint>,
     ) -> bool {
         let mut matched = false;
-        for index in 0..block.external_entrypoint_count() {
-            let Some((hash, _)) = block.external_signed_transaction_at(index) else {
+        for index in 0..block.network_entrypoint_count() {
+            let Some(source) = block.network_entrypoint_at(index) else {
                 return false;
             };
+            let hash = source.hash();
             if hash != target {
                 continue;
             }
@@ -2415,7 +2434,7 @@ fn kaigi_signal_authority(
         TransactionEntrypoint::SealedReveal(reveal) => {
             Some(reveal.signed_transaction().authority())
         }
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) => None,
     }
 }
 #[cfg(test)]
@@ -2670,7 +2689,6 @@ fn kaigi_signal_metadata_from_transaction(
         TransactionEntrypoint::External(signed) => signed.metadata(),
         TransactionEntrypoint::SealedCommitment(_) => return None,
         TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().metadata(),
-        TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
     let signal_json = metadata.get(&key)?.try_into_any_norito::<Value>().ok()?;
@@ -2705,7 +2723,6 @@ fn kaigi_signal_from_metadata(
         TransactionEntrypoint::SealedReveal(reveal) => reveal_authorities.then(|| {
             crate::account_literal::display_literal(reveal.signed_transaction().authority())
         }),
-        TransactionEntrypoint::Time(_) => return None,
     };
     let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])
         .ok()??;
@@ -7366,19 +7383,12 @@ mod sccp_first_release_api_tests {
             std::num::NonZeroU64::new(height).expect("archive boundary height is nonzero"),
             previous.map(SignedBlock::hash),
             None,
-            None,
             height,
             0,
         );
-        let signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(signer.private_key(), header.hash())
-                .expect("sign SCCP archive boundary header"),
-        );
-        let mut block = SignedBlock::presigned(signature, header, Vec::new());
-        block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("empty archive boundary results are complete");
+        let mut block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, signer.private_key());
+        crate::test_utils::attach_fixture_execution_outputs(&mut block, Vec::new());
         block
             .signatures()
             .next()
@@ -7403,7 +7413,6 @@ mod sccp_first_release_api_tests {
         let mut provisional_header = BlockHeader::new(
             std::num::NonZeroU64::new(2).expect("SCCP archive height is nonzero"),
             Some(genesis.hash()),
-            None,
             None,
             2,
             0,
@@ -7435,24 +7444,37 @@ mod sccp_first_release_api_tests {
         .sign(transaction_key.private_key());
         let entry_hash = transaction.hash_as_entrypoint();
         let block_key = KeyPair::try_random().expect("SCCP archive block key");
-        let signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(block_key.private_key(), provisional_header.hash())
-                .expect("sign exact SCCP archive header"),
-        );
-        let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("exact SCCP archive block results");
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(provisional_header);
+        builder.push_transaction(transaction);
+        let mut block = builder.build_with_signature(0, block_key.private_key());
+        let proposal_header = block.header();
+        let proposal_hash = block.hash();
         assert_ne!(
-            block.header(),
-            incomplete_header,
-            "attaching the transaction/results must finalize the header Merkle roots"
+            proposal_header, incomplete_header,
+            "the actual Network source finalizes the proposal input commitment"
         );
+        assert_eq!(block.network_entrypoint_at(0).unwrap().hash(), entry_hash);
+        let proposal_wire = block
+            .encode_wire()
+            .expect("canonical archive proposal wire");
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: TransactionResult::new(Ok(DataTriggerSequence::default())),
+                        completions: Vec::new(),
+                    },
+                ),
+            ],
+        );
+        assert_eq!(block.header(), proposal_header);
+        assert_eq!(block.hash(), proposal_hash);
+        assert_ne!(block.encode_wire().unwrap(), proposal_wire);
+        block
+            .validate_output_merkle_cache()
+            .expect("complete archive typed outputs");
         let final_signature = iroha_data_model::block::BlockSignature::new(
             0,
             SignatureOf::try_from_hash(block_key.private_key(), block.hash())
@@ -10917,14 +10939,8 @@ fn bind_permanent_asset_alias_for_test(
     alias: &str,
 ) {
     use iroha_core::smartcontracts::Execute as _;
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     iroha_data_model::isi::SetAssetDefinitionAlias::bind(
@@ -11007,14 +11023,8 @@ fn bind_account_alias_for_test(
         u64::MAX,
         iroha_model_base::metadata::Metadata::default(),
     );
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing()
@@ -11144,14 +11154,8 @@ fn grant_account_alias_resolve_for_test(
     };
     let permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::account::CanResolveAccountAlias { scope }.into();
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     iroha_data_model::isi::Grant::account_permission(permission, authority.clone())
@@ -11227,7 +11231,7 @@ mod zk_roots_selector_tests {
         let next_height =
             core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
                 .expect("next test block height is nonzero");
-        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         {
@@ -11256,7 +11260,7 @@ mod zk_roots_selector_tests {
         let next_height =
             core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
                 .expect("next test block height is nonzero");
-        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         {
@@ -12488,7 +12492,6 @@ pub fn accept_transaction_for_ingress(
                 authority_label,
             )
         }
-        TransactionEntrypoint::Time(_) => (0, tx_limits.max_signatures().get(), "time"),
     };
     let crypto_cfg = state.crypto();
     let network_id = *state.network_id_ref();
@@ -17390,7 +17393,6 @@ mod asset_transfer_request_tests {
         let height = height.max(1);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("positive fixture height"),
-            None,
             None,
             None,
             0,
@@ -24961,7 +24963,6 @@ mod multisig_selector_tests {
     ) {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
-            None,
             None,
             None,
             0,
@@ -33581,7 +33582,7 @@ mod soradns_tests {
         Arc::new(State::new_for_testing(World::new(), kura, query))
     }
     fn block_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+        BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)
     }
     fn sample_record() -> ResolverDirectoryRecordV1 {
         let keys = checked_routing_fixture_keypair(
@@ -35353,9 +35354,7 @@ enum ContractEventCandidatePositions<'a> {
 }
 fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndexCacheKey {
     let committed_height = state.committed_height();
-    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
-        .and_then(|height| state.block_by_height(height))
-        .map(|block| format!("{}", block.hash()));
+    let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
     ContractActivityIndexCacheKey {
         committed_height,
         tip_block_hash,
@@ -35363,9 +35362,7 @@ fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndex
 }
 fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheKey {
     let committed_height = state.committed_height();
-    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
-        .and_then(|height| state.block_by_height(height))
-        .map(|block| format!("{}", block.hash()));
+    let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
     ContractEventIndexCacheKey {
         committed_height,
         tip_block_hash,
@@ -35416,8 +35413,115 @@ struct AccountHistoryTxBase {
     status: String,
     block_height: u64,
 }
+// Display-only borrows: no proof, cache, or execution authority is manufactured.
+// Values originate either in Core's authenticated read or its proof-bearing query DTO.
+trait HistoryTransaction {
+    fn entrypoint(&self) -> &TransactionEntrypoint;
+    fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint>;
+    fn result(&self) -> &TransactionResult;
+    fn block_hash(&self) -> HashOf<BlockHeader>;
+}
+impl HistoryTransaction for iroha_data_model::query::CommittedTransaction {
+    fn entrypoint(&self) -> &TransactionEntrypoint { &self.entrypoint }
+    fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
+    fn result(&self) -> &TransactionResult { self.result() }
+    fn block_hash(&self) -> HashOf<BlockHeader> { self.block_hash }
+}
+struct BorrowedNetworkTransaction<'a> {
+    entrypoint: &'a TransactionEntrypoint,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    result: &'a TransactionResult,
+    block_hash: HashOf<BlockHeader>,
+}
+impl HistoryTransaction for BorrowedNetworkTransaction<'_> {
+    fn entrypoint(&self) -> &TransactionEntrypoint { self.entrypoint }
+    fn entrypoint_hash(&self) -> &HashOf<TransactionEntrypoint> { &self.entrypoint_hash }
+    fn result(&self) -> &TransactionResult { self.result }
+    fn block_hash(&self) -> HashOf<BlockHeader> { self.block_hash }
+}
+fn history_cache_anchor(height: usize, hash: &Option<String>) -> Result<Option<HashOf<BlockHeader>>> {
+    if height == 0 {
+        if hash.is_some() { return Err(conversion_error("empty history cache has a tip hash".into())); }
+        return Ok(None);
+    }
+    hash.as_ref().ok_or_else(|| conversion_error("history cache has no canonical tip".into()))?
+        .parse().map(Some).map_err(|_| conversion_error("history cache tip hash is malformed".into()))
+}
+fn require_history_anchor(state: &CoreState, height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
+    if state.committed_block_hash_at_height(height) != Some(hash) {
+        return Err(conversion_error("canonical history prefix changed during projection".into()));
+    }
+    Ok(())
+}
+fn history_query_error(error: iroha_data_model::query::error::QueryExecutionFail) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(error))
+}
+fn history_capacity_error() -> Error {
+    history_query_error(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)
+}
+fn check_history_retention(rows: usize, maximum: u64) -> Result<()> {
+    if u64::try_from(rows).map_err(|_| history_capacity_error())? > maximum {
+        return Err(history_capacity_error());
+    }
+    Ok(())
+}
+struct HistoryReadBudget { work_left: u64, bytes_left: u64 }
+impl HistoryReadBudget {
+    fn new() -> Self {
+        let work_left = app_query_limits().max_fetch_size;
+        Self { work_left, bytes_left: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work_left) }
+    }
+    fn read(&mut self, state: &CoreState, height: NonZeroUsize) -> Result<Arc<SignedBlock>> {
+        let carrier = state.read_finalized_execution_carrier(height, self.work_left, self.bytes_left)
+            .map_err(history_query_error)?;
+        self.work_left = self.work_left.checked_sub(carrier.work_items()).ok_or_else(history_capacity_error)?;
+        self.bytes_left = self.bytes_left.checked_sub(carrier.wire_bytes()).ok_or_else(history_capacity_error)?;
+        Ok(carrier.into_block())
+    }
+}
+// A range is admitted cumulatively, including empty carriers. Each complete body
+// is authenticated/validated before projection and the prefix is rechecked before
+// publishing any derived rows. A failure drops this local result, never a partial cache.
+fn project_finalized_network_range<T>(
+    state: &CoreState,
+    start_height: usize,
+    end_height: usize,
+    newest_first: bool,
+    expected_end_hash: HashOf<BlockHeader>,
+    mut project: impl FnMut(usize, &BorrowedNetworkTransaction<'_>) -> Vec<T>,
+) -> Result<Vec<T>> {
+    if start_height == 0 || start_height > end_height { return Ok(Vec::new()); }
+    let end = u64::try_from(end_height).map_err(|_| history_capacity_error())?;
+    require_history_anchor(state, end, expected_end_hash)?;
+    let maximum = app_query_limits().max_fetch_size;
+    let mut budget = HistoryReadBudget::new();
+    let mut projections = Vec::new();
+    for offset in 0..=end_height - start_height {
+        let height = if newest_first { end_height - offset } else { start_height + offset };
+        let height_nz = std::num::NonZeroUsize::new(height)
+            .ok_or_else(|| conversion_error("canonical height is zero".into()))?;
+        let block = budget.read(state, height_nz)?;
+        for offset in 0..block.network_entrypoint_count() {
+            let index = if newest_first { block.network_entrypoint_count() - 1 - offset } else { offset };
+            let entrypoint = block.network_entrypoint_at(index)
+                .ok_or_else(|| conversion_error("validated Network source disappeared".into()))?;
+            let index = u32::try_from(index).map_err(|_| history_capacity_error())?;
+            let (_, output) = block.network_output_at(index)
+                .ok_or_else(|| conversion_error("validated Network output disappeared".into()))?;
+            let transaction = BorrowedNetworkTransaction {
+                entrypoint, entrypoint_hash: entrypoint.hash(), result: &output.result, block_hash: block.hash(),
+            };
+            let rows = project(height, &transaction);
+            let count = projections.len().checked_add(rows.len()).ok_or_else(history_capacity_error)?;
+            check_history_retention(count, maximum)?;
+            projections.extend(rows);
+        }
+    }
+    require_history_anchor(state, end, expected_end_hash)?;
+    Ok(projections)
+}
 fn account_history_tx_base(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     block_height: u64,
 ) -> AccountHistoryTxBase {
     let result_ok = tx.result().as_ref().is_ok();
@@ -35650,7 +35754,7 @@ fn account_history_movements_from_instruction(
 }
 fn append_account_history_projections_for_tx(
     index: &mut AccountHistoryIndex,
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     block_height: u64,
 ) {
     use iroha_data_model::transaction::signed::TransactionEntrypoint;
@@ -35702,11 +35806,6 @@ fn append_account_history_projections_for_tx(
                 append_for_instruction(instruction);
             }
         }
-        TransactionEntrypoint::Time(entry) => {
-            for instruction in entry.instructions.iter() {
-                append_for_instruction(instruction);
-            }
-        }
         TransactionEntrypoint::SealedCommitment(commitment) => {
             let account = commitment.authority().to_string();
             append_account_history_projection(
@@ -35736,74 +35835,29 @@ fn append_account_history_projections_for_tx(
     }
 }
 fn account_history_projections_for_height_range(
-    state: &CoreState,
-    start_height: usize,
-    end_height: usize,
-) -> Vec<AccountHistoryProjection> {
-    if start_height == 0 || start_height > end_height {
-        return Vec::new();
-    }
-    let mut index = AccountHistoryIndex::default();
-    for height in (start_height..=end_height).rev() {
-        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
-            continue;
-        };
-        let Some(block) = state.block_by_height(height_nz) else {
-            iroha_logger::warn!(
-                height,
-                "missing block in Kura while building account history index"
-            );
-            continue;
-        };
-        let block_hash = block.hash();
-        let entrypoint_hashes = block.entrypoint_hashes().rev();
-        let entrypoint_proofs = block.entrypoint_proofs().rev();
-        let entrypoints = block.entrypoints_cloned().rev();
-        let result_hashes = block.result_hashes().rev();
-        let result_proofs = block.result_proofs().rev();
-        let results = block.results().cloned().rev();
-        for (
-            ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
-            result,
-        ) in entrypoint_hashes
-            .zip(entrypoint_proofs)
-            .zip(entrypoints)
-            .zip(result_hashes)
-            .zip(result_proofs)
-            .zip(results)
-        {
-            let tx = iroha_data_model::query::CommittedTransaction {
-                block_hash,
-                entrypoint_hash,
-                entrypoint_proof,
-                entrypoint,
-                result_hash,
-                result_proof,
-                result,
-                merge_inclusion: None,
-            };
-            append_account_history_projections_for_tx(
-                &mut index,
-                &tx,
-                u64::try_from(height).unwrap_or(u64::MAX),
-            );
-        }
-    }
-    index.items
+    state: &CoreState, start_height: usize, end_height: usize, expected_end_hash: HashOf<BlockHeader>,
+) -> Result<Vec<AccountHistoryProjection>> {
+    project_finalized_network_range(state, start_height, end_height, true, expected_end_hash, |height, tx| {
+        let mut index = AccountHistoryIndex::default();
+        append_account_history_projections_for_tx(&mut index, tx, height as u64);
+        index.items
+    })
 }
 fn build_account_history_index(
     state: &CoreState,
     cache_key: AccountHistoryIndexCacheKey,
-) -> AccountHistoryIndex {
+) -> Result<AccountHistoryIndex> {
     let mut index = AccountHistoryIndex {
         cache_key,
         ..Default::default()
     };
     let committed_height = index.cache_key.committed_height;
-    for projection in account_history_projections_for_height_range(state, 1, committed_height) {
+    let Some(expected_end_hash) = history_cache_anchor(index.cache_key.committed_height, &index.cache_key.tip_block_hash)? else { return Ok(index); };
+    for projection in account_history_projections_for_height_range(state, 1, committed_height, expected_end_hash)? {
         append_account_history_projection(&mut index, projection);
     }
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn account_history_cache_extends_append_only(
     existing: &AccountHistoryIndex,
@@ -35830,10 +35884,12 @@ fn extend_account_history_index(
     state: &CoreState,
     previous: &AccountHistoryIndex,
     cache_key: AccountHistoryIndexCacheKey,
-) -> AccountHistoryIndex {
+) -> Result<AccountHistoryIndex> {
     if previous.cache_key.committed_height >= cache_key.committed_height {
         return build_account_history_index(state, cache_key);
     }
+    let expected_end_hash = history_cache_anchor(cache_key.committed_height, &cache_key.tip_block_hash)?
+        .ok_or_else(|| conversion_error("nonempty history extension has no tip".into()))?;
     let mut index = AccountHistoryIndex {
         cache_key: cache_key.clone(),
         ..Default::default()
@@ -35841,14 +35897,15 @@ fn extend_account_history_index(
     for projection in account_history_projections_for_height_range(
         state,
         previous.cache_key.committed_height.saturating_add(1),
-        cache_key.committed_height,
-    ) {
+        cache_key.committed_height, expected_end_hash,
+    )? {
         append_account_history_projection(&mut index, projection);
     }
     for projection in previous.items.iter().cloned() {
         append_account_history_projection(&mut index, projection);
     }
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn reject_emergency_fast_history_index(state: &CoreState) -> Result<()> {
     reject_emergency_fast_unbounded_history(state, false, "lazy application history index")
@@ -35887,12 +35944,12 @@ fn account_history_index_snapshot(state: &CoreState) -> Result<Arc<AccountHistor
     }
     let rebuilt = if let Some(previous) = guard.as_ref() {
         if account_history_cache_extends_append_only(previous.as_ref(), state, &cache_key) {
-            Arc::new(extend_account_history_index(state, previous, cache_key))
+            Arc::new(extend_account_history_index(state, previous, cache_key)?)
         } else {
-            Arc::new(build_account_history_index(state, cache_key))
+            Arc::new(build_account_history_index(state, cache_key)?)
         }
     } else {
-        Arc::new(build_account_history_index(state, cache_key))
+        Arc::new(build_account_history_index(state, cache_key)?)
     };
     *guard = Some(Arc::clone(&rebuilt));
     Ok(rebuilt)
@@ -35963,63 +36020,11 @@ fn append_contract_event_projection(
     index.items.push(projection);
 }
 fn contract_activity_projections_for_height_range(
-    state: &CoreState,
-    start_height: usize,
-    end_height: usize,
-) -> Vec<ContractActivityProjection> {
-    if start_height == 0 || start_height > end_height {
-        return Vec::new();
-    }
-    let mut projections = Vec::new();
-    for height in start_height..=end_height {
-        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
-            continue;
-        };
-        let Some(block) = state.block_by_height(height_nz) else {
-            iroha_logger::warn!(
-                height,
-                "missing block in Kura while extending contract activity index"
-            );
-            continue;
-        };
-        let block_hash = block.hash();
-        let entrypoint_hashes = block.entrypoint_hashes();
-        let entrypoint_proofs = block.entrypoint_proofs();
-        let entrypoints = block.entrypoints_cloned();
-        let result_hashes = block.result_hashes();
-        let result_proofs = block.result_proofs();
-        let results = block.results().cloned();
-        projections.extend(
-            entrypoint_hashes
-                .zip(entrypoint_proofs)
-                .zip(entrypoints)
-                .zip(result_hashes)
-                .zip(result_proofs)
-                .zip(results)
-                .filter_map(
-                    |(
-                        (
-                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
-                            result_proof,
-                        ),
-                        result,
-                    )| {
-                        let tx = iroha_data_model::query::CommittedTransaction {
-                            block_hash,
-                            entrypoint_hash,
-                            entrypoint_proof,
-                            entrypoint,
-                            result_hash,
-                            result_proof,
-                            result,
-                            merge_inclusion: None,
-                        };
-                        contract_activity_projection_from_tx(height, &tx)
-                    },
-                ),
-        );
-    }
-    projections
+    state: &CoreState, start_height: usize, end_height: usize, expected_end_hash: HashOf<BlockHeader>,
+) -> Result<Vec<ContractActivityProjection>> {
+    project_finalized_network_range(state, start_height, end_height, false, expected_end_hash, |height, tx| {
+        contract_activity_projection_from_tx(height, tx).into_iter().collect()
+    })
 }
 fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
     if let Some(module) = canonical_contract_module(contract_alias, contract_address) {
@@ -36615,7 +36620,7 @@ fn collect_contract_event_payload_fields(
 }
 fn contract_event_projection_from_tx(
     height: usize,
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
 ) -> Option<ContractEventProjection> {
     let base = project_tx(tx, &None);
     let contract_address = tx_metadata_string(tx, "contract_address")?;
@@ -36661,7 +36666,7 @@ fn contract_event_projection_from_tx(
         timestamp_ms: base.timestamp_ms,
         tx_hash_hex: format!("{}", tx.entrypoint_hash()),
         block_height: height as u64,
-        block_hash_hex: format!("{}", tx.block_hash),
+        block_hash_hex: format!("{}", tx.block_hash()),
         result_ok: base.result_ok,
         contract_address,
         contract_alias,
@@ -36675,93 +36680,45 @@ fn contract_event_projection_from_tx(
     })
 }
 fn contract_event_projections_for_height_range(
-    state: &CoreState,
-    start_height: usize,
-    end_height: usize,
-) -> Vec<ContractEventProjection> {
-    if start_height == 0 || start_height > end_height {
-        return Vec::new();
-    }
-    let mut projections = Vec::new();
-    for height in start_height..=end_height {
-        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
-            continue;
-        };
-        let Some(block) = state.block_by_height(height_nz) else {
-            iroha_logger::warn!(
-                height,
-                "missing block in Kura while extending contract event index"
-            );
-            continue;
-        };
-        let block_hash = block.hash();
-        let entrypoint_hashes = block.entrypoint_hashes();
-        let entrypoint_proofs = block.entrypoint_proofs();
-        let entrypoints = block.entrypoints_cloned();
-        let result_hashes = block.result_hashes();
-        let result_proofs = block.result_proofs();
-        let results = block.results().cloned();
-        projections.extend(
-            entrypoint_hashes
-                .zip(entrypoint_proofs)
-                .zip(entrypoints)
-                .zip(result_hashes)
-                .zip(result_proofs)
-                .zip(results)
-                .filter_map(
-                    |(
-                        (
-                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
-                            result_proof,
-                        ),
-                        result,
-                    )| {
-                        let tx = iroha_data_model::query::CommittedTransaction {
-                            block_hash,
-                            entrypoint_hash,
-                            entrypoint_proof,
-                            entrypoint,
-                            result_hash,
-                            result_proof,
-                            result,
-                            merge_inclusion: None,
-                        };
-                        contract_event_projection_from_tx(height, &tx)
-                    },
-                ),
-        );
-    }
-    projections
+    state: &CoreState, start_height: usize, end_height: usize, expected_end_hash: HashOf<BlockHeader>,
+) -> Result<Vec<ContractEventProjection>> {
+    project_finalized_network_range(state, start_height, end_height, false, expected_end_hash, |height, tx| {
+        contract_event_projection_from_tx(height, tx).into_iter().collect()
+    })
 }
 fn build_contract_activity_index(
     state: &CoreState,
     cache_key: ContractActivityIndexCacheKey,
-) -> ContractActivityIndex {
+) -> Result<ContractActivityIndex> {
     let mut index = ContractActivityIndex {
         cache_key: cache_key.clone(),
         ..ContractActivityIndex::default()
     };
+    let Some(expected_end_hash) = history_cache_anchor(index.cache_key.committed_height, &index.cache_key.tip_block_hash)? else { return Ok(index); };
     for projection in
-        contract_activity_projections_for_height_range(state, 1, cache_key.committed_height)
+        contract_activity_projections_for_height_range(state, 1, cache_key.committed_height, expected_end_hash)?
     {
         append_contract_activity_projection(&mut index, projection);
     }
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn build_contract_event_index(
     state: &CoreState,
     cache_key: ContractEventIndexCacheKey,
-) -> ContractEventIndex {
+) -> Result<ContractEventIndex> {
     let mut index = ContractEventIndex {
         cache_key: cache_key.clone(),
         ..ContractEventIndex::default()
     };
+    let Some(expected_end_hash) = history_cache_anchor(index.cache_key.committed_height, &index.cache_key.tip_block_hash)? else { return Ok(index); };
     for projection in
-        contract_event_projections_for_height_range(state, 1, cache_key.committed_height)
+        contract_event_projections_for_height_range(state, 1, cache_key.committed_height, expected_end_hash)?
     {
         append_contract_event_projection(&mut index, projection);
     }
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn contract_activity_cache_extends_append_only(
     existing: &ContractActivityIndex,
@@ -36777,13 +36734,8 @@ fn contract_activity_cache_extends_append_only(
     if existing.cache_key.committed_height == 0 {
         return true;
     }
-    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
-        return false;
-    };
-    let Some(block) = state.block_by_height(height_nz) else {
-        return false;
-    };
-    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+    committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
+        == existing.cache_key.tip_block_hash
 }
 fn contract_event_cache_extends_append_only(
     existing: &ContractEventIndex,
@@ -36799,45 +36751,46 @@ fn contract_event_cache_extends_append_only(
     if existing.cache_key.committed_height == 0 {
         return true;
     }
-    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
-        return false;
-    };
-    let Some(block) = state.block_by_height(height_nz) else {
-        return false;
-    };
-    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+    committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
+        == existing.cache_key.tip_block_hash
 }
 fn extend_contract_activity_index(
     existing: &ContractActivityIndex,
     state: &CoreState,
     next_key: ContractActivityIndexCacheKey,
-) -> ContractActivityIndex {
+) -> Result<ContractActivityIndex> {
+    let expected_end_hash = history_cache_anchor(next_key.committed_height, &next_key.tip_block_hash)?
+        .ok_or_else(|| conversion_error("nonempty history extension has no tip".into()))?;
     let mut index = existing.clone();
     let start_height = existing.cache_key.committed_height.saturating_add(1);
     for projection in contract_activity_projections_for_height_range(
         state,
         start_height,
-        next_key.committed_height,
-    ) {
+        next_key.committed_height, expected_end_hash,
+    )? {
         append_contract_activity_projection(&mut index, projection);
     }
     index.cache_key = next_key;
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn extend_contract_event_index(
     existing: &ContractEventIndex,
     state: &CoreState,
     next_key: ContractEventIndexCacheKey,
-) -> ContractEventIndex {
+) -> Result<ContractEventIndex> {
+    let expected_end_hash = history_cache_anchor(next_key.committed_height, &next_key.tip_block_hash)?
+        .ok_or_else(|| conversion_error("nonempty history extension has no tip".into()))?;
     let mut index = existing.clone();
     let start_height = existing.cache_key.committed_height.saturating_add(1);
     for projection in
-        contract_event_projections_for_height_range(state, start_height, next_key.committed_height)
+        contract_event_projections_for_height_range(state, start_height, next_key.committed_height, expected_end_hash)?
     {
         append_contract_event_projection(&mut index, projection);
     }
     index.cache_key = next_key;
-    index
+    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
+    Ok(index)
 }
 fn contract_activity_index_snapshot(state: &CoreState) -> Result<Arc<ContractActivityIndex>> {
     reject_emergency_fast_history_index(state)?;
@@ -36861,12 +36814,12 @@ fn contract_activity_index_snapshot(state: &CoreState) -> Result<Arc<ContractAct
                 existing.as_ref(),
                 state,
                 cache_key.clone(),
-            ))
+            )?)
         } else {
-            Arc::new(build_contract_activity_index(state, cache_key.clone()))
+            Arc::new(build_contract_activity_index(state, cache_key.clone())?)
         }
     } else {
-        Arc::new(build_contract_activity_index(state, cache_key.clone()))
+        Arc::new(build_contract_activity_index(state, cache_key.clone())?)
     };
     if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
@@ -36900,12 +36853,12 @@ fn contract_event_index_snapshot(state: &CoreState) -> Result<Arc<ContractEventI
                 existing.as_ref(),
                 state,
                 cache_key.clone(),
-            ))
+            )?)
         } else {
-            Arc::new(build_contract_event_index(state, cache_key.clone()))
+            Arc::new(build_contract_event_index(state, cache_key.clone())?)
         }
     } else {
-        Arc::new(build_contract_event_index(state, cache_key.clone()))
+        Arc::new(build_contract_event_index(state, cache_key.clone())?)
     };
     if let Ok(mut guard) = CONTRACT_EVENT_INDEX.write() {
         if let Some(existing) = guard.as_ref() {
@@ -37303,7 +37256,7 @@ fn collect_contract_event_page(
     (items, matched)
 }
 fn tx_field_value(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     field: &str,
 ) -> Option<String> {
     match field {
@@ -37316,9 +37269,6 @@ fn tx_field_value(
             }
             iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(_) => {
                 "sealed_reveal".to_owned()
-            }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::Time(_) => {
-                "time".to_owned()
             }
         }),
         // authority account id string if External entrypoint
@@ -37334,7 +37284,6 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
                 Some(reveal.signed_transaction().authority().to_string())
             }
-            _ => None,
         },
         // creation timestamp if External entrypoint
         "timestamp_ms" => match &tx.entrypoint() {
@@ -37351,7 +37300,6 @@ fn tx_field_value(
                     reveal.signed_transaction().creation_time().as_millis()
                 ))
             }
-            _ => None,
         },
         // entrypoint hash always available
         "entrypoint_hash" => Some(format!("{}", tx.entrypoint_hash())),
@@ -37381,14 +37329,13 @@ fn tx_field_value(
                     .metadata()
                     .get(&name)
                     .map(|json| json.get().clone()),
-                _ => None,
-            }
+                }
         }
         _ => None,
     }
 }
 fn tx_metadata_json_value(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     key: &str,
 ) -> Option<norito::json::Value> {
     let name: iroha_model_base::name::Name = key.parse().ok()?;
@@ -37396,7 +37343,9 @@ fn tx_metadata_json_value(
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             signed.metadata().get(&name).map(|json| json.get().clone())
         }
-        _ => None,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().metadata()
+            .get(&name).map(|json| json.get().clone()),
+        TransactionEntrypoint::SealedCommitment(_) => None,
     }?;
     norito::json::from_str(&raw).ok()
 }
@@ -37409,7 +37358,7 @@ fn exact_json_number_text(number: &norito::json::native::Number) -> String {
     }
 }
 fn tx_metadata_string(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     key: &str,
 ) -> Option<String> {
     match tx_metadata_json_value(tx, key)? {
@@ -37420,7 +37369,7 @@ fn tx_metadata_string(
         value => norito::json::to_json(&value).ok(),
     }
 }
-fn tx_metadata_u64(tx: &iroha_data_model::query::CommittedTransaction, key: &str) -> Option<u64> {
+fn tx_metadata_u64(tx: &impl HistoryTransaction, key: &str) -> Option<u64> {
     match tx_metadata_json_value(tx, key)? {
         norito::json::Value::Number(value) => value
             .as_u64()
@@ -37720,10 +37669,6 @@ pub(crate) fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
-        TransactionEntrypoint::Time(entry) => entry
-            .instructions
-            .iter()
-            .any(|instruction| instruction_matches_account_id(instruction, expected)),
     }
 }
 fn tx_references_domain_predicate<F>(
@@ -37746,13 +37691,6 @@ where
             matches_domain,
             asset_definition_domains,
         ),
-        TransactionEntrypoint::Time(entry) => entry.instructions.iter().any(|instruction| {
-            instruction_matches_domain_predicate(
-                instruction,
-                matches_domain,
-                asset_definition_domains,
-            )
-        }),
     }
 }
 fn tx_references_dataspace_alias(
@@ -37915,11 +37853,6 @@ fn tx_collect_asset_ids(
                 reveal.signed_transaction().instructions(),
                 &mut visit_instruction,
             );
-        }
-        TransactionEntrypoint::Time(entry) => {
-            for instr in entry.instructions.iter() {
-                visit_instruction(instr);
-            }
         }
     }
     out
@@ -38480,10 +38413,6 @@ fn tx_matches_account_history_subject(
             signed.authority().controller() == account_id.controller()
                 || executable_contains_account_id(signed.instructions(), account_id)
         }
-        TransactionEntrypoint::Time(entry) => entry
-            .instructions
-            .iter()
-            .any(|instruction| instruction_matches_account_id(instruction, account_id)),
     }
 }
 fn filter_expr_references_field(expr: &FilterExpr, field_name: &str) -> bool {
@@ -38507,7 +38436,7 @@ fn filter_expr_references_field(expr: &FilterExpr, field_name: &str) -> bool {
 }
 #[allow(clippy::ref_option)]
 fn project_tx(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
     selector: &Option<Selector>,
 ) -> TxProjection {
     // Use shared extractor to ensure parity with other filter/projection logic
@@ -38594,7 +38523,7 @@ fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito
 }
 fn contract_activity_projection_from_tx(
     height: usize,
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
 ) -> Option<ContractActivityProjection> {
     let base = project_tx(tx, &None);
     let contract_address = tx_metadata_string(tx, "contract_address")?;
@@ -38613,7 +38542,7 @@ fn contract_activity_projection_from_tx(
     })
 }
 fn tx_fee_projection(
-    tx: &iroha_data_model::query::CommittedTransaction,
+    tx: &impl HistoryTransaction,
 ) -> Option<iroha_data_model::transaction::FeePaymentIntent> {
     use iroha_data_model::transaction::TransactionEntrypoint;
     let intent = match tx.entrypoint() {
@@ -38621,7 +38550,7 @@ fn tx_fee_projection(
         TransactionEntrypoint::SealedReveal(reveal) => {
             Some(reveal.signed_transaction().fee_payment_intent().clone())
         }
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) => None,
     };
     intent
 }
@@ -39252,24 +39181,151 @@ pub(crate) fn committed_transactions_snapshot(
     iroha_core::smartcontracts::isi::tx::committed_transactions_bounded_snapshot(
         &view,
         iroha_data_model::query::dsl::CompoundPredicate::PASS,
+        iroha_core::smartcontracts::isi::tx::TransactionHistoryWorkLimits {
+            max_carrier_work: app_query_limits().max_fetch_size,
+            max_total_work: app_query_limits().max_fetch_size,
+            max_bytes: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
+                app_query_limits().max_fetch_size,
+            ),
+        },
         app_query_limits().max_fetch_size,
         defaults::torii::MAX_CONTENT_LEN.get(),
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
+struct HistoryVisibilityReads {
+    state: Arc<CoreState>,
+    height: u64,
+    anchor: Option<HashOf<BlockHeader>>,
+    reads: std::sync::Mutex<HistoryVisibilityReadState>,
+}
+struct HistoryVisibilityReadState {
+    budget: HistoryReadBudget,
+    blocks: BTreeMap<usize, Arc<SignedBlock>>,
+    error: Option<Error>,
+}
+impl HistoryVisibilityReads {
+    fn new(state: Arc<CoreState>) -> Self {
+        let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let anchor = state.committed_block_hash_at_height(height);
+        Self {
+            state,
+            height,
+            anchor,
+            reads: std::sync::Mutex::new(HistoryVisibilityReadState {
+                budget: HistoryReadBudget::new(),
+                blocks: BTreeMap::new(),
+                error: None,
+            }),
+        }
+    }
+    fn allows(
+        &self,
+        visibility: &DataspaceReadVisibility,
+        height: u64,
+        expected: Option<HashOf<BlockHeader>>,
+        source: HashOf<TransactionEntrypoint>,
+    ) -> bool {
+        if visibility.can_read_all() {
+            return true;
+        }
+        let mut reads = self
+            .reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if reads.error.is_some() {
+            return false;
+        }
+        let result = (|| -> Result<bool> {
+            if height == 0 || height > self.height {
+                return Err(conversion_error(
+                    "visibility source exceeds its captured prefix".into(),
+                ));
+            }
+            let height = usize::try_from(height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| conversion_error("visibility height exceeds host range".into()))?;
+            if !reads.blocks.contains_key(&height.get()) {
+                let block = reads.budget.read(&self.state, height)?;
+                reads.blocks.insert(height.get(), block);
+            }
+            let block = reads
+                .blocks
+                .get(&height.get())
+                .expect("inserted authenticated carrier");
+            if expected.is_some_and(|hash| hash != block.hash()) {
+                return Err(conversion_error(
+                    "visibility carrier differs from the projected source".into(),
+                ));
+            }
+            Ok(visibility.allows_external_entrypoint_hash(block, source))
+        })();
+        match result {
+            Ok(allowed) => allowed,
+            Err(error) => {
+                reads.error = Some(error);
+                false
+            }
+        }
+    }
+    fn refuse(&self, message: &str) -> bool {
+        let mut reads = self
+            .reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if reads.error.is_none() {
+            reads.error = Some(conversion_error(message.into()));
+        }
+        false
+    }
+    // Consuming finish is mandatory on every successful or early-return response;
+    // bool filter callbacks cannot turn a read refusal into a partial successful page.
+    fn finish(self) -> Result<()> {
+        let reads = self
+            .reads
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(error) = reads.error {
+            return Err(error);
+        }
+        if (self.height != 0 && self.anchor.is_none())
+            || self.state.committed_block_hash_at_height(self.height) != self.anchor
+        {
+            return Err(conversion_error(
+                "visibility history prefix changed during projection".into(),
+            ));
+        }
+        for (height, block) in reads.blocks {
+            if self.state.committed_block_hash_at_height(height as u64) != Some(block.hash()) {
+                return Err(conversion_error(
+                    "visibility carrier changed during projection".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 fn committed_transaction_is_visible(
-    state: &CoreState,
+    reads: &HistoryVisibilityReads,
     visibility: &DataspaceReadVisibility,
     transaction: &iroha_data_model::query::CommittedTransaction,
 ) -> bool {
     if visibility.can_read_all() {
         return true;
     }
-    state
-        .block_by_hash(transaction.block_hash)
-        .is_some_and(|block| {
-            committed_transaction_is_visible_in_block(visibility, transaction, &block)
-        })
+    let Some(height) = reads
+        .state
+        .committed_block_height_for_hash(transaction.block_hash)
+    else {
+        return reads.refuse("projected transaction has no canonical carrier");
+    };
+    reads.allows(
+        visibility,
+        height.get() as u64,
+        Some(transaction.block_hash),
+        *transaction.entrypoint_hash(),
+    )
 }
 fn committed_transaction_is_visible_in_block(
     visibility: &DataspaceReadVisibility,
@@ -39339,6 +39395,9 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
     allowed_asset_definition_id: Option<AssetDefinitionId>,
     visibility: DataspaceReadVisibility,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     use iroha_data_model::query::dsl::CompoundPredicate;
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -39389,7 +39448,7 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
         let rows = committed_txs
             .iter()
             .filter(|_| subject_visible)
-            .filter(|tx| committed_transaction_is_visible(state.as_ref(), &visibility, tx))
+            .filter(|tx| committed_transaction_is_visible(visibility_reads, &visibility, tx))
             .filter(|tx| tx_matches_account_history_subject(tx, &account_id))
             .filter(|tx| {
                 allowed_asset_selector
@@ -39457,7 +39516,7 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
                     if !subject_visible {
                         return None;
                     }
-                    if !committed_transaction_is_visible(state.as_ref(), &visibility, tx) {
+                    if !committed_transaction_is_visible(visibility_reads, &visibility, tx) {
                         return None;
                     }
                     if !tx_matches_account_history_subject(tx, &account_id) {
@@ -39492,7 +39551,7 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
                 if !subject_visible {
                     continue;
                 }
-                if !committed_transaction_is_visible(state.as_ref(), &visibility, tx) {
+                if !committed_transaction_is_visible(visibility_reads, &visibility, tx) {
                     continue;
                 }
                 if !predicate.applies(tx) {
@@ -39672,6 +39731,10 @@ pub(crate) async fn handle_v1_account_transactions_with_visibility_policy(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// POST /v1/transactions/query
 ///
@@ -39755,6 +39818,9 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     visibility: Option<TxHistoryVisibilityScope>,
     dataspace_visibility: Option<DataspaceReadVisibility>,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     use iroha_data_model::query::dsl::CompoundPredicate;
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -39795,7 +39861,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
             .filter(|tx| {
                 dataspace_visibility
                     .as_ref()
-                    .is_none_or(|scope| committed_transaction_is_visible(state.as_ref(), scope, tx))
+                    .is_none_or(|scope| committed_transaction_is_visible(visibility_reads, scope, tx))
             })
             .filter(|tx| {
                 visibility
@@ -39858,7 +39924,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
                 count_mode,
                 |tx| {
                     if dataspace_visibility.as_ref().is_some_and(|scope| {
-                        !committed_transaction_is_visible(state.as_ref(), scope, tx)
+                        !committed_transaction_is_visible(visibility_reads, scope, tx)
                     }) {
                         return None;
                     }
@@ -39947,7 +40013,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
                 count_mode,
                 |tx| {
                     if dataspace_visibility.as_ref().is_some_and(|scope| {
-                        !committed_transaction_is_visible(state.as_ref(), scope, tx)
+                        !committed_transaction_is_visible(visibility_reads, scope, tx)
                     }) {
                         return None;
                     }
@@ -40000,6 +40066,10 @@ async fn handle_v1_transactions_query_scoped_with_policy(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
 #[iroha_futures::telemetry_future]
@@ -40045,6 +40115,9 @@ pub(crate) async fn handle_v1_account_transactions_get_with_visibility_policy(
     allowed_asset_definition_id: Option<AssetDefinitionId>,
     visibility: DataspaceReadVisibility,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(feature = "telemetry")]
@@ -40064,7 +40137,6 @@ pub(crate) async fn handle_v1_account_transactions_get_with_visibility_policy(
     let query_subject = account_id;
     let count_mode =
         app_transaction_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
-    let visibility_state = Arc::clone(&state);
     let page = {
         let limits = app_query_limits();
         let world = state.world_view();
@@ -40098,7 +40170,7 @@ pub(crate) async fn handle_v1_account_transactions_get_with_visibility_policy(
                         return None;
                     }
                     if !committed_transaction_is_visible(
-                        visibility_state.as_ref(),
+                        visibility_reads,
                         &visibility,
                         tx,
                     ) {
@@ -40148,6 +40220,10 @@ pub(crate) async fn handle_v1_account_transactions_get_with_visibility_policy(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 fn account_history_projection_matches_asset_selector(
     projection: &AccountHistoryProjection,
@@ -40192,6 +40268,9 @@ pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
     allowed_asset_definition_id: Option<AssetDefinitionId>,
     visibility: DataspaceReadVisibility,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(feature = "telemetry")]
@@ -40238,7 +40317,6 @@ pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
         let filtered = positions.into_iter().filter_map({
             let index = Arc::clone(&snapshot);
             let asset_filter = asset_filter.clone();
-            let state = Arc::clone(&state);
             move |position| {
                 if !subject_visible {
                     return None;
@@ -40250,7 +40328,7 @@ pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
                         .zip(projection.tx_hash.as_deref())
                         .is_some_and(|(height, hash)| {
                             committed_entrypoint_is_visible(
-                                state.as_ref(),
+                                visibility_reads,
                                 &visibility,
                                 height,
                                 hash,
@@ -40325,6 +40403,10 @@ pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
         norito::json::Value::from("account_history_index"),
     );
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
 #[iroha_futures::telemetry_future]
@@ -40336,6 +40418,9 @@ pub async fn handle_v1_transactions_history_get(
     dataspace_visibility: DataspaceReadVisibility,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(not(feature = "telemetry"))]
@@ -40345,7 +40430,6 @@ pub async fn handle_v1_transactions_history_get(
     let cap = app_query_page_cap(&state);
     let count_mode =
         app_transaction_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
-    let visibility_state = Arc::clone(&state);
     let page = {
         let limits = app_query_limits();
         let world = state.world_view();
@@ -40370,11 +40454,10 @@ pub async fn handle_v1_transactions_history_get(
             {
                 let visibility = visibility.clone();
                 let dataspace_visibility = dataspace_visibility.clone();
-                let visibility_state = Arc::clone(&visibility_state);
                 let asset_filter = asset_filter.clone();
                 move |tx| {
                     if !committed_transaction_is_visible(
-                        visibility_state.as_ref(),
+                        visibility_reads,
                         &dataspace_visibility,
                         tx,
                     ) {
@@ -40422,6 +40505,10 @@ pub async fn handle_v1_transactions_history_get(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
@@ -40431,6 +40518,9 @@ pub async fn handle_v1_contracts_activity_get(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(not(feature = "telemetry"))]
@@ -40463,7 +40553,7 @@ pub async fn handle_v1_contracts_activity_get(
             fetch_cap,
             |projection| {
                 contract_activity_projection_is_visible(
-                    state.as_ref(),
+                    visibility_reads,
                     &visibility,
                     projection,
                 )
@@ -40499,6 +40589,10 @@ pub async fn handle_v1_contracts_activity_get(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// GET `/v1/contracts/events` — generic contract event feed derived from committed transaction metadata.
 #[iroha_futures::telemetry_future]
@@ -40508,6 +40602,9 @@ pub async fn handle_v1_contracts_events_get(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
     #[cfg(not(feature = "telemetry"))]
@@ -40536,7 +40633,7 @@ pub async fn handle_v1_contracts_events_get(
             fetch_cap,
             |projection| {
                 contract_event_projection_is_visible(
-                    state.as_ref(),
+                    visibility_reads,
                     &visibility,
                     projection,
                 )
@@ -40572,6 +40669,10 @@ pub async fn handle_v1_contracts_events_get(
     top.insert("items".into(), norito::json::Value::Array(items_json));
     insert_page_metadata(&mut top, &page, count_mode);
     pretty_json_response(&top)
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 /// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
@@ -40752,14 +40853,14 @@ mod sse_filter_tests {
         );
         let filters = event_filters_from_expr(&expr);
         assert!(!filters.is_empty());
-        let header = BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(7_u64), None, None, 0, 0);
         let ev_block_committed: EventBox = BlockEvent {
             header,
             status: BlockStatus::Committed,
         }
         .into();
         let ev_block_created: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(8_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(8_u64), None, None, 0, 0),
             status: BlockStatus::Created,
         }
         .into();
@@ -40768,12 +40869,12 @@ mod sse_filter_tests {
     }
     routing_test! { sync contract_projection_waits_for_applied_block
         let committed: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(7_u64), None, None, 0, 0),
             status: BlockStatus::Committed,
         }
         .into();
         let applied: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(7_u64), None, None, 0, 0),
             status: BlockStatus::Applied,
         }
         .into();
@@ -40788,7 +40889,7 @@ mod sse_filter_tests {
             applied_block_heights(&EventBox::PipelineBatch(vec![
                 applied_event.clone(),
                 PipelineEventBox::Block(BlockEvent {
-                    header: BlockHeader::new(nonzero!(8_u64), None, None, None, 0, 0),
+                    header: BlockHeader::new(nonzero!(8_u64), None, None, 0, 0),
                     status: BlockStatus::Applied,
                 }),
                 applied_event,
@@ -40920,13 +41021,13 @@ mod sse_filter_tests {
         .into();
         // Matching block (Committed)
         let ev_block_committed: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(9_u64), None, None, 0, 0),
             status: BlockStatus::Committed,
         }
         .into();
         // Non-matching block (Created)
         let ev_block_created: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(10_u64), None, None, 0, 0),
             status: BlockStatus::Created,
         }
         .into();
@@ -40996,13 +41097,13 @@ mod sse_filter_tests {
         assert!(!filters.is_empty());
         // Non-committed block should match
         let ev_block_created: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(11_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(11_u64), None, None, 0, 0),
             status: BlockStatus::Created,
         }
         .into();
         // Committed block should not match
         let ev_block_committed: EventBox = BlockEvent {
-            header: BlockHeader::new(nonzero!(12_u64), None, None, None, 0, 0),
+            header: BlockHeader::new(nonzero!(12_u64), None, None, 0, 0),
             status: BlockStatus::Committed,
         }
         .into();
@@ -41070,9 +41171,6 @@ mod tx_query_filter_tests {
     use iroha_executor_data_model::isi::multisig::{MultisigCancel, MultisigPropose};
     use iroha_primitives::{const_vec::ConstVec, json::Json};
     use norito::json;
-    fn dummy_block_hash() -> GenericHashOf<dm::BlockHeader> {
-        GenericHashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]))
-    }
     #[track_caller]
     fn account_with_key() -> (dm::AccountId, KeyPair) {
         let caller = std::panic::Location::caller();
@@ -41104,14 +41202,47 @@ mod tx_query_filter_tests {
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
-    fn dummy_proof<T>() -> iroha_crypto::MerkleProof<T> {
-        iroha_crypto::MerkleProof::from_audit_path(0, Vec::new())
+    // Structural filter fixtures authenticate their two Merkle joins. They do not
+    // claim finalized storage, business execution, or an independently trusted QC.
+    fn committed_transaction_fixture(
+        signed: dm::SignedTransaction,
+        keypair: &KeyPair,
+        result: dm::TransactionResult,
+    ) -> iroha_data_model::query::CommittedTransaction {
+        let created_ms = u64::try_from(signed.creation_time().as_millis()).unwrap();
+        let header = dm::BlockHeader::new(
+            std::num::NonZeroU64::new(1).unwrap(), None, None,
+            created_ms.checked_add(1).unwrap(), 0,
+        );
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(signed);
+        let mut block = builder.build_with_signature(0, keypair.private_key());
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0, result, completions: Vec::new(),
+                },
+            )],
+        );
+        let entrypoint = block.network_entrypoint_at(0).unwrap().clone();
+        let output = block.execution_outputs()[0].clone();
+        let transaction = iroha_data_model::query::CommittedTransaction {
+            block_hash: block.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            entrypoint_proof: block.network_input_proof(0).unwrap(),
+            entrypoint,
+            output_hash: HashOf::new(&output),
+            output_proof: block.output_proof(0).unwrap(),
+            output,
+        };
+        assert!(transaction.verify_inclusion_in_block(&block));
+        transaction
     }
     fn build_external_tx(
         authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
-        entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
         metadata: iroha_model_base::metadata::Metadata,
         fee_payment: dm::FeePaymentIntent,
@@ -41126,11 +41257,6 @@ mod tx_query_filter_tests {
         builder = builder.with_metadata(metadata);
         builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(Vec::new())));
         let signed = builder.sign(keypair.private_key());
-        let entry = dm::TransactionEntrypoint::External(signed);
-        let entry_hash = entry_hash_override.unwrap_or_else(|| {
-            // Use a stable dummy hash for entrypoint if not overridden
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]))
-        });
         let result = if result_ok {
             dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()))
         } else {
@@ -41138,31 +41264,18 @@ mod tx_query_filter_tests {
                 dm::ValidationFail::InternalError("x".into()),
             )))
         };
-        iroha_data_model::query::CommittedTransaction {
-            block_hash: dummy_block_hash(),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: dummy_proof(),
-            entrypoint: entry,
-            result_hash: GenericHashOf::from_untyped_unchecked(Hash::prehashed(
-                [0x22; Hash::LENGTH],
-            )),
-            result_proof: dummy_proof(),
-            result,
-            merge_inclusion: None,
-        }
+        committed_transaction_fixture(signed, keypair, result)
     }
     fn make_external_tx(
         authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
-        entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
     ) -> iroha_data_model::query::CommittedTransaction {
         build_external_tx(
             authority,
             keypair,
             created_ms,
-            entry_hash_override,
             result_ok,
             iroha_model_base::metadata::Metadata::default(),
             dm::FeePaymentIntent::authority(Vec::new(), None),
@@ -41172,7 +41285,6 @@ mod tx_query_filter_tests {
         authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
-        entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
         metadata: iroha_model_base::metadata::Metadata,
     ) -> iroha_data_model::query::CommittedTransaction {
@@ -41180,7 +41292,6 @@ mod tx_query_filter_tests {
             authority,
             keypair,
             created_ms,
-            entry_hash_override,
             result_ok,
             metadata,
             dm::FeePaymentIntent::authority(Vec::new(), None),
@@ -41201,7 +41312,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1,
-            None,
             true,
             iroha_model_base::metadata::Metadata::default(),
             authority_intent.clone(),
@@ -41217,7 +41327,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             2,
-            None,
             true,
             iroha_model_base::metadata::Metadata::default(),
             sponsor_intent.clone(),
@@ -41251,22 +41360,8 @@ mod tx_query_filter_tests {
         builder.set_creation_time(core::time::Duration::from_millis(created_ms));
         builder = builder.with_instructions(instructions);
         let signed = builder.sign(keypair.private_key());
-        let entry = dm::TransactionEntrypoint::External(signed);
-        let entry_hash =
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
         let result = dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()));
-        iroha_data_model::query::CommittedTransaction {
-            block_hash: dummy_block_hash(),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: dummy_proof(),
-            entrypoint: entry,
-            result_hash: GenericHashOf::from_untyped_unchecked(Hash::prehashed(
-                [0x22; Hash::LENGTH],
-            )),
-            result_proof: dummy_proof(),
-            result,
-            merge_inclusion: None,
-        }
+        committed_transaction_fixture(signed, keypair, result)
     }
     routing_test! { sync tx_history_visibility_dataspace_wide_matches_dataspace_alias
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
@@ -41316,7 +41411,6 @@ mod tx_query_filter_tests {
             after: iroha_core::kura::KaigiSignalCandidatePosition::new(
                 1,
                 0,
-                0,
                 block_hash,
                 entrypoint_hash,
             )
@@ -41358,14 +41452,14 @@ mod tx_query_filter_tests {
             block: None,
             asset_id: Some(asset_id.clone()),
         };
-        assert!(filters.matches(signed, 1, &tx.result));
+        assert!(filters.matches(signed, 1, tx.result()));
         let filters = ExplorerTransactionFilters {
             authority: None,
             status: None,
             block: None,
             asset_id: Some(other_asset_id),
         };
-        assert!(!filters.matches(signed, 1, &tx.result));
+        assert!(!filters.matches(signed, 1, tx.result()));
     }
     routing_test! { sync instruction_matches_asset_id_handles_mint_assets
         let (authority, _) = account_with_key();
@@ -41882,8 +41976,8 @@ mod tx_query_filter_tests {
     routing_test! { sync filter_authority_eq_matches
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
-        let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
-        let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
+        let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, true);
+        let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, false);
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("authority".into()),
             norito::json::Value::String(a.to_string()),
@@ -41895,8 +41989,8 @@ mod tx_query_filter_tests {
         use iroha_data_model::query::dsl::EvaluatePredicate;
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
-        let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
-        let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
+        let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, true);
+        let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, false);
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("authority".into()),
             norito::json::Value::String(a.to_string()),
@@ -41909,7 +42003,7 @@ mod tx_query_filter_tests {
         let (account, kp) = account_with_key();
         let mut meta = iroha_model_base::metadata::Metadata::default();
         meta.insert("display_name".parse().unwrap(), Json::new("Alice"));
-        let tx = make_external_tx_with_metadata(&account, &kp, 1_710_000_000_000, None, true, meta);
+        let tx = make_external_tx_with_metadata(&account, &kp, 1_710_000_000_000, true, meta);
         let expr_eq = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("metadata.display_name".into()),
             json_value(&"Alice"),
@@ -41930,7 +42024,7 @@ mod tx_query_filter_tests {
         let mut meta_null = iroha_model_base::metadata::Metadata::default();
         meta_null.insert("note".parse().unwrap(), Json::new(json::Value::Null));
         let tx_null =
-            make_external_tx_with_metadata(&account, &kp, 1_710_000_000_500, None, true, meta_null);
+            make_external_tx_with_metadata(&account, &kp, 1_710_000_000_500, true, meta_null);
         let expr_is_null =
             crate::filter::FilterExpr::IsNull(crate::filter::FieldPath("metadata.note".into()));
         assert!(filter_tx(&expr_is_null, &tx_null));
@@ -42010,7 +42104,7 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync filter_timestamp_range_matches
         let (a, kp) = account_with_key();
-        let tx = make_external_tx(&a, &kp, 1_710_000_000_000, None, true);
+        let tx = make_external_tx(&a, &kp, 1_710_000_000_000, true);
         let gte = crate::filter::FilterExpr::Gte(
             crate::filter::FieldPath("timestamp_ms".into()),
             norito::json::Value::from(1_700_000_000_000u64),
@@ -42025,7 +42119,7 @@ mod tx_query_filter_tests {
     routing_test! { sync filter_timestamp_membership_uses_numeric_values
         let (a, kp) = account_with_key();
         let timestamp_ms = 1_710_000_000_000_u64;
-        let tx = make_external_tx(&a, &kp, timestamp_ms, None, true);
+        let tx = make_external_tx(&a, &kp, timestamp_ms, true);
         let matching_values = vec![norito::json::Value::from(timestamp_ms)];
         let other_values = vec![norito::json::Value::from(timestamp_ms + 1)];
         let matching_in = crate::filter::FilterExpr::In(
@@ -42052,13 +42146,10 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync filter_entrypoint_hash_in_matches_only_target
         let (a, kp) = account_with_key();
-        let h_match: GenericHashOf<dm::TransactionEntrypoint> =
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
-        let h_other: GenericHashOf<dm::TransactionEntrypoint> =
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
-        let tx_ok = make_external_tx(&a, &kp, 1710, Some(h_match), true);
-        let tx_no = make_external_tx(&a, &kp, 1710, Some(h_other), true);
-        let h_match_str = format!("{}", h_match);
+        let tx_ok = make_external_tx(&a, &kp, 1710, true);
+        let tx_no = make_external_tx(&a, &kp, 1711, true);
+        assert_ne!(tx_ok.entrypoint_hash, tx_no.entrypoint_hash);
+        let h_match_str = tx_ok.entrypoint_hash.to_string();
         let expr = crate::filter::FilterExpr::In(
             crate::filter::FieldPath("entrypoint_hash".into()),
             vec![norito::json::Value::String(h_match_str)],
@@ -42068,13 +42159,10 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync filter_entrypoint_hash_ne_is_exact_eq_negation
         let (a, kp) = account_with_key();
-        let target_hash: GenericHashOf<dm::TransactionEntrypoint> =
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
-        let other_hash: GenericHashOf<dm::TransactionEntrypoint> =
-            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x88; Hash::LENGTH]));
-        let matching_tx = make_external_tx(&a, &kp, 1710, Some(target_hash), true);
-        let other_tx = make_external_tx(&a, &kp, 1710, Some(other_hash), true);
-        let expected = norito::json::Value::from(target_hash.to_string());
+        let matching_tx = make_external_tx(&a, &kp, 1710, true);
+        let other_tx = make_external_tx(&a, &kp, 1711, true);
+        assert_ne!(matching_tx.entrypoint_hash, other_tx.entrypoint_hash);
+        let expected = norito::json::Value::from(matching_tx.entrypoint_hash.to_string());
         let eq = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("entrypoint_hash".into()),
             expected.clone(),
@@ -42098,17 +42186,23 @@ mod tx_query_filter_tests {
             100,
             vec![dm::Log::new(dm::Level::INFO, "ok".to_owned()).into()],
         );
-        let mut tx_false = make_external_tx_with_instructions(
+        let tx_false = make_external_tx_with_instructions(
             &a,
             &kp,
             101,
             vec![dm::Log::new(dm::Level::INFO, "rejected".to_owned()).into()],
         );
-        tx_false.result = dm::TransactionResult::new(Err(
-            dm::TransactionRejectionReason::Validation(dm::ValidationFail::InternalError(
-                "rejected".into(),
+        let dm::TransactionEntrypoint::External(signed) = tx_false.entrypoint else {
+            panic!("expected external rejected filter fixture");
+        };
+        let tx_false = committed_transaction_fixture(
+            signed, &kp,
+            dm::TransactionResult::new(Err(
+                dm::TransactionRejectionReason::Validation(dm::ValidationFail::InternalError(
+                    "rejected".into(),
+                )),
             )),
-        ));
+        );
         let true_values = vec![norito::json::Value::Bool(true)];
         let in_true = crate::filter::FilterExpr::In(
             crate::filter::FieldPath("result_ok".into()),
@@ -42126,8 +42220,8 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync filter_result_ok_eq_matches
         let (a, kp) = account_with_key();
-        let tx_true = make_external_tx(&a, &kp, 100, None, true);
-        let tx_false = make_external_tx(&a, &kp, 100, None, false);
+        let tx_true = make_external_tx(&a, &kp, 100, true);
+        let tx_false = make_external_tx(&a, &kp, 100, false);
         let expr_true = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("result_ok".into()),
             norito::json::Value::Bool(true),
@@ -42144,9 +42238,9 @@ mod tx_query_filter_tests {
     routing_test! { sync filter_not_and_or_across_fields
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
-        let tx_a = make_external_tx(&a, &kp_a, 1500, None, true);
-        let tx_b = make_external_tx(&b, &kp_b, 900, None, true);
-        let tx_c = make_external_tx(&b, &kp_b, 2500, None, false);
+        let tx_a = make_external_tx(&a, &kp_a, 1500, true);
+        let tx_b = make_external_tx(&b, &kp_b, 900, true);
+        let tx_c = make_external_tx(&b, &kp_b, 2500, false);
         // NOT(authority == a) OR timestamp_ms > 2000
         let expr = crate::filter::FilterExpr::Or(vec![
             crate::filter::FilterExpr::Not(Box::new(crate::filter::FilterExpr::Eq(
@@ -42193,7 +42287,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_700_000_000_100,
-            None,
             true,
             metadata,
         );
@@ -42252,7 +42345,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_700_000_000_100,
-            None,
             true,
             signal_metadata(None),
         );
@@ -42277,7 +42369,6 @@ mod tx_query_filter_tests {
                 &authority,
                 &keypair,
                 1_700_000_000_100,
-                None,
                 true,
                 signal_metadata(Some(open_kind)),
             );
@@ -42293,7 +42384,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_700_000_000_100,
-            None,
             true,
             signal_metadata(Some("AnSwEr")),
         );
@@ -42309,7 +42399,6 @@ mod tx_query_filter_tests {
                 &authority,
                 &keypair,
                 1_700_000_000_100,
-                None,
                 true,
                 signal_metadata(Some(malformed)),
             );
@@ -42358,7 +42447,6 @@ mod tx_query_filter_tests {
                 &authority,
                 &keypair,
                 1_700_000_000_100,
-                None,
                 true,
                 metadata,
             );
@@ -42392,7 +42480,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_700_000_000_100,
-            None,
             true,
             metadata,
         );
@@ -42440,7 +42527,6 @@ mod tx_query_filter_tests {
                 &authority,
                 &keypair,
                 1_700_000_000_100,
-                None,
                 true,
                 signal_metadata(schema),
             );
@@ -42465,7 +42551,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_700_000_000_100,
-            None,
             false,
             metadata,
         );
@@ -42490,7 +42575,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             carrier_at_ms,
-            None,
             true,
             metadata,
         );
@@ -42522,7 +42606,6 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             transaction_at_ms,
-            None,
             true,
             metadata,
         );
@@ -42591,7 +42674,7 @@ mod tx_query_filter_tests {
             )
             .expect("derive unique non-signal history authority");
             let outsider = dm::AccountId::new(keypair.public_key().clone());
-            let transaction = make_external_tx(&outsider, &keypair, index + 2, None, true);
+            let transaction = make_external_tx(&outsider, &keypair, index + 2, true);
             let Some(_signal_json) =
                 kaigi_signal_metadata_for_call(&transaction, &call_literal)
             else {
@@ -42629,8 +42712,8 @@ mod tx_query_filter_tests {
         );
         let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host);
         let record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
-        let first_tx = make_external_tx(&first_outsider, &first_keypair, 2, None, true);
-        let second_tx = make_external_tx(&second_outsider, &second_keypair, 3, None, true);
+        let first_tx = make_external_tx(&first_outsider, &first_keypair, 2, true);
+        let second_tx = make_external_tx(&second_outsider, &second_keypair, 3, true);
         let world = iroha_core::state::World::default();
         let world = world.view();
         let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
@@ -42717,10 +42800,10 @@ mod tx_query_filter_tests {
         let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host.clone());
         let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
         record.push_participant(participant.clone());
-        let host_tx = make_external_tx(&host, &host_keypair, 10, None, true);
+        let host_tx = make_external_tx(&host, &host_keypair, 10, true);
         let participant_tx =
-            make_external_tx(&participant, &participant_keypair, 11, None, true);
-        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 12, None, true);
+            make_external_tx(&participant, &participant_keypair, 11, true);
+        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 12, true);
         let host_account = dm::Account::new(host.clone()).build(&host);
         let participant_account = dm::Account::new(participant.clone()).build(&host);
         let outsider_account = dm::Account::new(outsider.clone()).build(&host);
@@ -42804,9 +42887,9 @@ mod tx_query_filter_tests {
             iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host.clone());
         let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
         record.push_participant(participant.clone());
-        let host_tx = make_external_tx(&host, &host_keypair, 10, None, true);
+        let host_tx = make_external_tx(&host, &host_keypair, 10, true);
         let participant_tx =
-            make_external_tx(&participant, &participant_keypair, 11, None, true);
+            make_external_tx(&participant, &participant_keypair, 11, true);
         let world = iroha_core::state::World::default();
         let world = world.view();
         let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
@@ -42958,24 +43041,22 @@ mod tx_query_filter_tests {
             iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, retired_host.clone());
         let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
         record.push_participant(retired_participant.clone());
-        let host_tx = make_external_tx(&active_host, &active_host_keypair, 10, None, true);
+        let host_tx = make_external_tx(&active_host, &active_host_keypair, 10, true);
         let participant_tx = make_external_tx(
             &active_participant,
             &active_participant_keypair,
             11,
-            None,
             true,
         );
         let retired_host_tx =
-            make_external_tx(&retired_host, &retired_host_keypair, 12, None, true);
+            make_external_tx(&retired_host, &retired_host_keypair, 12, true);
         let retired_participant_tx = make_external_tx(
             &retired_participant,
             &retired_participant_keypair,
             13,
-            None,
             true,
         );
-        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 14, None, true);
+        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 14, true);
         let world = world.view();
         let allowed_lineages =
             kaigi_signal_allowed_active_lineages(&world, &catalog, &record, 50)
@@ -43068,12 +43149,11 @@ mod tx_query_filter_tests {
         let expired_record =
             iroha_data_model::kaigi::KaigiRecord::from_new(&expired_template, 1);
         let expired_direct_tx =
-            make_external_tx(&expired_host, &expired_host_keypair, 15, None, true);
+            make_external_tx(&expired_host, &expired_host_keypair, 15, true);
         let expired_successor_tx = make_external_tx(
             &expired_successor,
             &expired_successor_keypair,
             16,
-            None,
             true,
         );
         let expired_allowed_lineages =
@@ -45186,7 +45266,7 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
         // Build a block and execute a VerifyProof ISI in it
-        let header = dm::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let header = dm::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
         // Capture latest block before opening a state block to avoid view deadlocks.
         let latest_block = {
             let view = state.view();
@@ -45499,19 +45579,40 @@ pub fn handle_v1_contracts_events_sse(
                                             return Some((Ok(ev), state));
                                         };
                                         let current_visibility = visibility.current_visibility();
-                                        for projection in contract_event_projections_for_height_range(
-                                            state.state.as_ref(),
-                                            first_height,
-                                            last_height,
+                                        let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state.state));
+                                        let visibility_reads = &visibility_owner;
+                                        let Some(expected_end_hash) = state.state.committed_block_hash_at_height(height) else {
+                                            state.terminal = true;
+                                            return Some((Ok(stream_error_event("stream_history_unavailable", "Canonical event anchor is unavailable.", None)), state));
+                                        };
+                                        let projections = match contract_event_projections_for_height_range(
+                                            state.state.as_ref(), first_height, last_height, expected_end_hash,
                                         ) {
+                                            Ok(projections) => projections,
+                                            Err(error) => {
+                                                iroha_logger::warn!(%error, "contract event history read failed");
+                                                state.pending.clear();
+                                                state.terminal = true;
+                                                let ev = stream_error_event("stream_history_unavailable",
+                                                    "Canonical contract event history is unavailable or exceeds its serving limits.", None);
+                                                return Some((Ok(ev), state));
+                                            }
+                                        };
+                                        for projection in projections {
                                             if contract_event_projection_is_visible(
-                                                state.state.as_ref(),
+                                                visibility_reads,
                                                 &current_visibility,
                                                 &projection,
                                             ) && contract_event_matches(&projection, &query)
                                             {
                                                 state.pending.push_back(projection);
                                             }
+                                        }
+                                        if let Err(error) = visibility_owner.finish() {
+                                            iroha_logger::warn!(%error, "contract event visibility read failed");
+                                            state.pending.clear();
+                                            state.terminal = true;
+                                            return Some((Ok(stream_error_event("stream_history_unavailable", "Canonical event visibility is unavailable.", None)), state));
                                         }
                                         state.last_block_height = Some(height);
                                     }
@@ -45557,47 +45658,32 @@ pub fn handle_v1_contracts_events_sse(
 }
 
 fn committed_entrypoint_is_visible(
-    state: &CoreState,
-    visibility: &DataspaceReadVisibility,
-    block_height: u64,
-    entrypoint_hash: &str,
+    reads: &HistoryVisibilityReads, visibility: &DataspaceReadVisibility,
+    block_height: u64, entrypoint_hash: &str,
 ) -> bool {
-    if visibility.can_read_all() {
-        return true;
-    }
-    let Ok(height) = usize::try_from(block_height) else {
-        return false;
-    };
-    let Some(height) = NonZeroUsize::new(height) else {
-        return false;
-    };
-    let Some(block) = state.block_by_height(height) else {
-        return false;
-    };
-    let Ok(entrypoint_hash) = entrypoint_hash.parse::<HashOf<TransactionEntrypoint>>() else {
-        return false;
-    };
-    visibility.allows_external_entrypoint_hash(&block, entrypoint_hash)
+    if visibility.can_read_all() { return true; }
+    let Ok(hash) = entrypoint_hash.parse() else { return reads.refuse("projected source hash is malformed"); };
+    reads.allows(visibility, block_height, None, hash)
 }
 fn contract_activity_projection_is_visible(
-    state: &CoreState,
+    reads: &HistoryVisibilityReads,
     visibility: &DataspaceReadVisibility,
     projection: &ContractActivityProjection,
 ) -> bool {
     committed_entrypoint_is_visible(
-        state,
+        reads,
         visibility,
         projection.block_height,
         &projection.entrypoint_hash,
     )
 }
 fn contract_event_projection_is_visible(
-    state: &CoreState,
+    reads: &HistoryVisibilityReads,
     visibility: &DataspaceReadVisibility,
     projection: &ContractEventProjection,
 ) -> bool {
     committed_entrypoint_is_visible(
-        state,
+        reads,
         visibility,
         projection.block_height,
         &projection.tx_hash_hex,
@@ -45877,9 +45963,17 @@ fn explorer_stream(
                                     if !explorer_height_is_new(state.last_block_height, height) {
                                         continue;
                                     }
-                                    if let Some(pending) = explorer_pending_block(&state.kura, height) {
-                                        state.last_block_height = Some(height);
-                                        state.pending = Some(pending);
+                                    match explorer_pending_block(&state.kura, height) {
+                                        Ok(pending) => {
+                                            state.last_block_height = Some(height);
+                                            state.pending = Some(pending);
+                                        }
+                                        Err(error) => {
+                                            iroha_logger::warn!(%error, "Explorer finalized history read failed");
+                                            state.terminal = true;
+                                            return Some((Ok(stream_error_event("stream_history_unavailable",
+                                                "Canonical Explorer history is unavailable or exceeds its serving limits.", None)), state));
+                                        }
                                     }
                                 }
                             }
@@ -45935,7 +46029,7 @@ struct ExplorerPendingBlock {
     instruction_index: usize,
     block_emitted: bool,
 }
-fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlock> {
+fn explorer_pending_block(kura: &Kura, height: u64) -> Result<ExplorerPendingBlock> {
     let height_usize: usize = match height.try_into() {
         Ok(value) => value,
         Err(_) => {
@@ -45943,7 +46037,7 @@ fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlo
                 height,
                 "failed to emit explorer SSE payload: block height exceeds host pointer width"
             );
-            return None;
+            return Err(conversion_error("invalid Explorer carrier height".into()));
         }
     };
     let Some(nonzero_height) = NonZeroUsize::new(height_usize) else {
@@ -45951,10 +46045,16 @@ fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlo
             height,
             "failed to emit explorer SSE payload: block height must be at least 1"
         );
-        return None;
+        return Err(conversion_error("invalid Explorer carrier height".into()));
     };
-    Some(ExplorerPendingBlock {
-        block: kura.get_block(nonzero_height)?,
+    let hash = kura.get_durable_block_hash(nonzero_height).ok_or_else(explorer_not_found)?;
+    let maximum = app_query_limits().max_fetch_size;
+    let carrier = iroha_core::smartcontracts::isi::tx::read_finalized_execution_carrier(
+        kura, nonzero_height, hash, maximum,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(maximum),
+    ).map_err(history_query_error)?;
+    Ok(ExplorerPendingBlock {
+        block: carrier.into_block(),
         height,
         entrypoint_index: 0,
         current_entrypoint: None,
@@ -45999,7 +46099,7 @@ impl ExplorerPendingBlock {
         &mut self,
         visibility: &DataspaceReadVisibility,
     ) -> Option<String> {
-        while self.entrypoint_index < self.block.external_entrypoint_count() {
+        while self.entrypoint_index < self.block.network_entrypoint_count() {
             let index = self.entrypoint_index;
             self.entrypoint_index = self.entrypoint_index.saturating_add(1);
             if !visibility.allows_external_entrypoint(&self.block, index) {
@@ -46033,14 +46133,14 @@ impl ExplorerPendingBlock {
     ) -> Option<String> {
         loop {
             if self.current_entrypoint.is_none() {
-                while self.entrypoint_index < self.block.external_entrypoint_count() {
+                while self.entrypoint_index < self.block.network_entrypoint_count() {
                     let index = self.entrypoint_index;
                     self.entrypoint_index = self.entrypoint_index.saturating_add(1);
                     if !visibility.allows_external_entrypoint(&self.block, index) {
                         continue;
                     }
                     let Some((entrypoint_hash, _)) =
-                        self.block.external_signed_transaction_at(index)
+                        network_signed_transaction_at(&self.block, index)
                     else {
                         continue;
                     };
@@ -46049,10 +46149,7 @@ impl ExplorerPendingBlock {
                 }
             }
             let (entrypoint_index, entrypoint_hash) = self.current_entrypoint?;
-            let transaction = self
-                .block
-                .external_signed_transaction_ref_at(entrypoint_index)?;
-            let result = self.block.results().nth(entrypoint_index)?;
+            let (_, transaction, result) = external_signed_transaction_result_at(&self.block, entrypoint_index)?;
             let Some(instruction) = transaction
                 .instructions()
                 .explicit_instructions()
@@ -49208,7 +49305,6 @@ mod validation_fee_torii_ingress_tests {
     fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(height).expect("height"),
-            None,
             None,
             None,
             timestamp_ms,
@@ -53260,6 +53356,9 @@ fn load_swap_fill_rollup(
     visibility: &DataspaceReadVisibility,
     params: &ContractRollupSwapsFillsParams,
 ) -> Result<SwapFillRollup> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = (|| {
     let telemetry = MaybeTelemetry::disabled();
     let (authority_id, authority) = parse_account_literal_with_state(
         state.as_ref(),
@@ -53291,7 +53390,7 @@ fn load_swap_fill_rollup(
         // Scope the source sequence before applying the caller's authority,
         // contract, module, and event-kind selectors.
         .filter(|projection| {
-            contract_event_projection_is_visible(state.as_ref(), visibility, projection)
+            contract_event_projection_is_visible(visibility_reads, visibility, projection)
         })
         .filter(|projection| {
             projection.result_ok
@@ -53388,6 +53487,10 @@ fn load_swap_fill_rollup(
         total: stitched.len(),
         items: stitched,
     })
+
+    })();
+    visibility_owner.finish()?;
+    response
 }
 fn swap_fill_record_matches_projection(
     record: &SwapFillRollupItem,
@@ -54350,6 +54453,9 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
     crate::NoritoQuery(params): crate::NoritoQuery<UranaiMarketHistoryParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     if params.market_id.trim().is_empty() {
         return Err(Error::AppQueryValidation {
             code: "invalid_market_id",
@@ -54377,7 +54483,7 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
             count_mode,
             |projection| {
                 contract_event_projection_is_visible(
-                    state.as_ref(),
+                    visibility_reads,
                     &visibility,
                     projection,
                 )
@@ -54385,6 +54491,10 @@ pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
         ),
         "{}",
     ))
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 pub async fn handle_v1_contracts_rollups_trader_activity_get(
     state: Arc<CoreState>,
@@ -54392,6 +54502,9 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         params.limit,
@@ -54409,7 +54522,7 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
         &params,
         pagination,
         |projection| {
-            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+            contract_event_projection_is_visible(visibility_reads, &visibility, projection)
         },
     );
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
@@ -54426,6 +54539,10 @@ pub async fn handle_v1_contracts_rollups_trader_activity_get(
     );
     insert_page_metadata(&mut top, &page, count_mode);
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 pub async fn handle_v1_contracts_rollups_trader_account_get(
     state: Arc<CoreState>,
@@ -54433,6 +54550,9 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
     crate::NoritoQuery(params): crate::NoritoQuery<TraderRollupAccountParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     let fills = load_swap_fill_rollup(
         Arc::clone(&state),
         &visibility,
@@ -54476,7 +54596,7 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         &activity_params,
         pagination,
         |projection| {
-            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+            contract_event_projection_is_visible(visibility_reads, &visibility, projection)
         },
     );
     let activity_items = activity_projections
@@ -54507,6 +54627,10 @@ pub async fn handle_v1_contracts_rollups_trader_account_get(
         )),
     );
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 async fn handle_v1_contracts_rollups_module_get(
     state: Arc<CoreState>,
@@ -54516,6 +54640,9 @@ async fn handle_v1_contracts_rollups_module_get(
     endpoint: &'static str,
     rollup_kind: &'static str,
 ) -> Result<axum::response::Response> {
+    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
+    let visibility_reads = &visibility_owner;
+    let response = async {
     params.module = Some(module.to_owned());
     params.result_ok = Some(params.result_ok.unwrap_or(true));
     let cap = app_query_page_cap(&state);
@@ -54527,7 +54654,7 @@ async fn handle_v1_contracts_rollups_module_get(
         &params,
         pagination,
         |projection| {
-            contract_event_projection_is_visible(state.as_ref(), &visibility, projection)
+            contract_event_projection_is_visible(visibility_reads, &visibility, projection)
         },
     );
     let page = page_result_from_counted_items(items, total, params.offset, count_mode);
@@ -54554,6 +54681,10 @@ async fn handle_v1_contracts_rollups_module_get(
     );
     insert_page_metadata(&mut top, &page, count_mode);
     Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
+
+    }.await;
+    visibility_owner.finish()?;
+    response
 }
 pub async fn handle_v1_contracts_rollups_intents_get(
     state: Arc<CoreState>,
@@ -56450,7 +56581,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let collateral_def_id: AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f2");
     let latest_block = state.view().latest_block();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     Register::account(Account::new(initiator_id.clone()))
@@ -62956,7 +63087,6 @@ mod space_directory_manifest_helper_tests {
             nonzero_ext::nonzero!(1_u64),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -65409,6 +65539,16 @@ pub async fn handle_v1_explorer_instruction_detail(
     );
     response
 }
+// Borrow a signed payload at a canonical Network source index. Internal rows have no index here.
+fn network_signed_transaction_at(block: &SignedBlock, index: usize) -> Option<(HashOf<TransactionEntrypoint>, &SignedTransaction)> {
+    let source = block.network_entrypoint_at(index)?;
+    let signed = match source {
+        TransactionEntrypoint::External(signed) => signed,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+    };
+    Some((source.hash(), signed))
+}
 fn external_signed_transaction_results(
     block: &SignedBlock,
 ) -> impl Iterator<
@@ -65419,7 +65559,7 @@ fn external_signed_transaction_results(
         &TransactionResult,
     ),
 > + '_ {
-    (0..block.external_entrypoint_count()).filter_map(move |index| {
+    (0..block.network_entrypoint_count()).filter_map(move |index| {
         external_signed_transaction_result_at(block, index)
             .map(|(hash, transaction, result)| (index, hash, transaction, result))
     })
@@ -65432,8 +65572,17 @@ fn external_signed_transaction_result_at(
     &SignedTransaction,
     &TransactionResult,
 )> {
-    let (entrypoint_hash, signed) = block.external_signed_transaction_at(index)?;
-    let result = block.results().nth(index)?;
+    // The caller owns a complete carrier validated by the finalized reader.
+    // Do not repeat whole-tree validation for every projected row.
+    let source = block.network_entrypoint_at(index)?;
+    let signed = match source {
+        TransactionEntrypoint::External(signed) => signed,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+    };
+    let entrypoint_hash = source.hash();
+    let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
+    let result = &output.result;
     Some((entrypoint_hash, signed, result))
 }
 fn resolve_explorer_history_entrypoint(
@@ -65445,9 +65594,8 @@ fn resolve_explorer_history_entrypoint(
         return Ok(0);
     };
     let entrypoint_index = resolve_unique_explorer_history_entrypoint_index(
-        (0..block.external_entrypoint_count()).map(|entrypoint_index| {
-            block
-                .external_signed_transaction_at(entrypoint_index)
+        (0..block.network_entrypoint_count()).map(|entrypoint_index| {
+            network_signed_transaction_at(block, entrypoint_index)
                 .map(|(entrypoint_hash, _)| entrypoint_hash)
         }),
         target,
@@ -65515,6 +65663,7 @@ fn collect_transaction_summaries(
             crate::explorer::ExplorerCursorError::InvalidKey,
         ));
     }
+    let mut read_budget = HistoryReadBudget::new();
     let mut out = Vec::with_capacity(scope.limit);
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
@@ -65538,12 +65687,10 @@ fn collect_transaction_summaries(
             .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
         let nonzero_height = NonZeroUsize::new(height_usize)
             .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
+        let block = read_budget.read(state, nonzero_height)?;
         let block_ref = block.as_ref();
         scanned_blocks = scanned_blocks.saturating_add(1);
-        let external_total = block_ref.external_entrypoint_count();
+        let external_total = block_ref.network_entrypoint_count();
         let start_index = resolve_explorer_history_entrypoint(block_ref, visibility, position)?;
         let next_block_position = height
             .checked_sub(1)
@@ -65562,7 +65709,7 @@ fn collect_transaction_summaries(
                 continue;
             }
             let Some((entrypoint_hash, _)) =
-                block_ref.external_signed_transaction_at(entrypoint_index)
+                network_signed_transaction_at(block_ref, entrypoint_index)
             else {
                 continue;
             };
@@ -65590,6 +65737,9 @@ fn collect_transaction_summaries(
             }
         }
         scan_position = next_block_position;
+    }
+    if explorer_snapshot_hash(state, scope.snapshot_height) != scope.snapshot_hash {
+        return Err(conversion_error("canonical Explorer history changed during projection".into()));
     }
     let pagination = explorer_history_meta(collection, query, &scope, next_visible_position)?;
     Ok((out, pagination))
@@ -65619,7 +65769,10 @@ fn collect_instruction_history(
         if let Some(target) = filters.transaction_hash.as_ref().copied() {
             let Some(height) = indexed_transaction_height(state, scope.snapshot_height, target)
             else {
-                let pagination = explorer_history_meta(collection, query, &scope, None)?;
+                if explorer_snapshot_hash(state, scope.snapshot_height) != scope.snapshot_hash {
+        return Err(conversion_error("canonical Explorer history changed during projection".into()));
+    }
+    let pagination = explorer_history_meta(collection, query, &scope, None)?;
                 return Ok((Vec::new(), pagination));
             };
             if filters.block.is_some_and(|expected| expected != height) {
@@ -65649,6 +65802,7 @@ fn collect_instruction_history(
             crate::explorer::ExplorerCursorError::InvalidKey,
         ));
     }
+    let mut read_budget = HistoryReadBudget::new();
     let mut out = Vec::with_capacity(scope.limit);
     let mut scanned_blocks = 0_usize;
     let mut scanned_candidates = 0_usize;
@@ -65667,12 +65821,10 @@ fn collect_instruction_history(
             .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
         let nonzero_height = NonZeroUsize::new(height_usize)
             .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = state
-            .block_by_height(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
+        let block = read_budget.read(state, nonzero_height)?;
         let block_ref = block.as_ref();
         scanned_blocks = scanned_blocks.saturating_add(1);
-        let external_total = block_ref.external_entrypoint_count();
+        let external_total = block_ref.network_entrypoint_count();
         let start_entrypoint =
             resolve_explorer_history_entrypoint(block_ref, visibility, position)?;
         let next_block_position = height
@@ -65698,7 +65850,7 @@ fn collect_instruction_history(
                 continue;
             }
             let Some((entrypoint_hash, _)) =
-                block_ref.external_signed_transaction_at(entrypoint_index)
+                network_signed_transaction_at(block_ref, entrypoint_index)
             else {
                 continue;
             };
@@ -65858,9 +66010,7 @@ fn transaction_detail_at_height(
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
     };
-    let Some(block) = state.block_by_height(nonzero_height) else {
-        return Ok(None);
-    };
+    let block = HistoryReadBudget::new().read(state, nonzero_height)?;
     let block_ref = block.as_ref();
     for (entrypoint_index, entrypoint_hash, tx, result) in
         external_signed_transaction_results(block_ref)
@@ -65889,9 +66039,7 @@ fn instruction_detail_at_height(
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
     };
-    let Some(block) = state.block_by_height(nonzero_height) else {
-        return Ok(None);
-    };
+    let block = HistoryReadBudget::new().read(state, nonzero_height)?;
     let block_ref = block.as_ref();
     for (entrypoint_index, entrypoint_hash, tx, result) in
         external_signed_transaction_results(block_ref)
@@ -66448,17 +66596,17 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         })
         .collect();
     let cutoff_ms = series_start_ms;
-    let kura = view.kura();
     let max_height = view.height() as u64;
+    let anchor = view.block_hashes().last().copied();
+    drop(view);
+    let mut read_budget = HistoryReadBudget::new();
     if max_height > 0 {
         let mut height = max_height;
         loop {
             let Some(nonzero_height) = nonzero_height(height) else {
                 break;
             };
-            let Some(block) = kura.get_block(nonzero_height) else {
-                break;
-            };
+            let block = read_budget.read(state.as_ref(), nonzero_height)?;
             let block_ref = block.as_ref();
             let block_ms: u64 = block_ref
                 .header()
@@ -66691,6 +66839,9 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             }
         })
         .collect();
+    if state.committed_block_hash_at_height(max_height) != anchor {
+        return Err(conversion_error("canonical econometrics history changed during projection".into()));
+    }
     let dto = crate::explorer::ExplorerAssetDefinitionEconometricsDto {
         definition_id: definition_id.to_string(),
         computed_at_ms: now_ms,
@@ -69076,7 +69227,7 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
     {
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.public_lane_validators_mut_for_testing().insert(
@@ -73977,3 +74128,7 @@ pub async fn handle_status(
 // Textual inclusion keeps every routing test at its original module path.
 include!("tests/routing_account_filter_candidates.rs");
 include!("tests/routing.rs");
+
+#[cfg(all(test, feature = "app_api"))]
+#[path = "routing/canonical_network_history_tests.rs"]
+mod canonical_network_history_tests;

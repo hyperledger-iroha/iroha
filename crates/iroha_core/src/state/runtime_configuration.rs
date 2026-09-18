@@ -52,13 +52,14 @@ impl State {
     /// applied to the current state. A textual dataspace namespace also cannot
     /// be retired until all asset-definition alias bindings in that namespace
     /// are explicitly cleared. Configured catalog baselines are retained; effective
-    /// dataspaces may change after genesis only through the protected runtime catalog.
+    /// dataspaces must equal that baseline plus protected runtime additions. Establish
+    /// a pre-genesis baseline through [`Self::set_nexus_from_config`].
     pub fn set_nexus(
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         self.ensure_config_catalog_mutation_is_pre_genesis(&nexus.lane_catalog, false)?;
-        let installed = self.nexus.read().clone();
+        let installed = self.nexus_snapshot();
         nexus.configured_dataspace_catalog = installed.configured_dataspace_catalog.clone();
         let runtime = runtime_catalog_from_world(&self.world.view())?;
         if let Some(runtime) = runtime.as_ref() {
@@ -69,16 +70,12 @@ impl State {
                     "runtime Nexus setter cannot change committed physical dataspaces",
                 ));
             }
-        } else if nexus.dataspace_catalog != installed.dataspace_catalog {
-            let durable_height = self
-                .kura
-                .exact_durable_blocks_count()
-                .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
-            if self.block_hashes.committed_height() != 0 || durable_height != 0 {
-                return Err(runtime_catalog_invalid(
-                    "physical dataspace changes after genesis require a catalog transition",
-                ));
-            }
+        } else if nexus.dataspace_catalog != nexus.configured_dataspace_catalog {
+            // Reject before geometry or any runtime publication: this setter
+            // cannot establish a second physical catalog authority even at H0.
+            return Err(runtime_catalog_invalid(
+                "ordinary Nexus setter cannot change the physical dataspace baseline; use set_nexus_from_config before genesis",
+            ));
         }
         let configured_lane_catalog = installed.configured_lane_catalog;
         self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog, None)

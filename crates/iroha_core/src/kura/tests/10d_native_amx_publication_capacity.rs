@@ -71,15 +71,9 @@ fn native_amx_startup_reserves_journal_routes_without_publishing_live_geometry()
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("read-only journal route reservation before State geometry");
-    assert_eq!(
-        reopened
-            .lane_storage_entries
-            .lock()
-            .keys()
-            .copied()
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE],
-        "reservation reads must not publish secondary lane geometry"
+    assert!(
+        reopened.lane_storage_entries.lock().is_empty(),
+        "reservation reads must not publish any active lane geometry"
     );
     assert_eq!(
         reopened
@@ -135,7 +129,7 @@ fn native_amx_startup_rejects_changed_or_moving_physical_binding_without_growth(
             kura.seal_native_amx_reservation_pair_move_for_test(&entry)
                 .expect("stage exact paired move seal");
         } else {
-            kura.install_lane_incarnation_marker_for_test(
+            kura.substitute_lane_marker_identity_for_test(
                 &entry,
                 Hash::new(b"wrong Native reservation incarnation"),
                 0,
@@ -294,8 +288,7 @@ fn native_amx_publication_capacity_fixture_with_route_count(
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("first height"),
         None,
-        None,
-        None,
+        iroha_crypto::MerkleTree::root_from_typed_leaves(original.network_input_hashes()),
         40,
         6,
     );
@@ -309,18 +302,8 @@ fn native_amx_publication_capacity_fixture_with_route_count(
         header,
         original.external_transactions().cloned().collect(),
     );
-    let entrypoints = contexts
-        .iter()
-        .map(|context| context.entrypoint_hash)
-        .collect::<Vec<_>>();
     block.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entrypoints,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default()); entrypoints.len()],
-        )
-        .expect("retain all real Native transaction results");
+    attach_ok_results_to_block(&mut block);
     let signature = BlockSignature::new(
         0,
         SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
@@ -376,13 +359,17 @@ fn native_amx_publication_capacity_fixture_with_route_count(
         .expect("persistent Kura with authentic configured catalog");
     assert_eq!(
         kura.lane_storage_entries.lock().len(),
-        1,
-        "the constructor must leave secondary geometry unpublished"
+        0,
+        "canonical-only constructor must leave all State geometry unpublished"
     );
-    let requested_incarnations = configured_routes
+    let mut requested_incarnations = configured_routes
         .iter()
         .map(|(lane, (_, incarnation))| (*lane, *incarnation))
         .collect::<BTreeMap<_, _>>();
+    requested_incarnations.insert(
+        LaneId::new(1),
+        Hash::new(b"kura-autonomous-view-incarnation"),
+    );
     // The real configured-primary anchor and journaled transition own every
     // secondary directory and marker. Restart must not depend on a test-only
     // live map or an incarnation marker without its durable geometry binding.
@@ -829,14 +816,10 @@ fn native_amx_reserved_capacity_cannot_be_spent_by_autonomous_claim_staging() {
         .kura
         .lane_storage_entry(lane.lane_id)
         .expect("configured competitor storage");
-    fixture
-        .kura
-        .install_lane_incarnation_marker_for_test(
-            &entry,
-            payload.origin_proposal.descriptor.lane_incarnation,
-            0,
-        )
-        .expect("activate only the competing route; preserve all Native incarnations");
+    assert_eq!(
+        entry.incarnation, payload.origin_proposal.descriptor.lane_incarnation,
+        "the competitor uses its original journal-admitted identity"
+    );
     fixture
         .kura
         .store_block(Arc::clone(&fixture.block))
@@ -975,22 +958,6 @@ fn native_amx_replay_test_complete_publication(
     );
 }
 
-fn native_amx_replay_test_geometry_maps(
-    kura: &Kura,
-    lane_config: &RuntimeLaneConfig,
-) -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-    lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            let (incarnation, activation) = kura
-                .active_lane_incarnation_marker(entry)
-                .expect("authenticate each original journal-published route");
-            ((entry.lane_id, incarnation), (entry.lane_id, activation))
-        })
-        .unzip()
-}
-
 #[test]
 fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_replay() {
     let NativeAmxPublicationCapacityFixture {
@@ -1001,17 +968,19 @@ fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_re
         finality,
         lane_config,
     } = native_amx_publication_capacity_fixture();
-    let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
     kura.store_block(Arc::clone(&block))
         .expect("store real Native carrier");
     let _finality_receipt = kura
         .store_v2_finality_artifact(&finality)
         .expect("persist real finality");
     native_amx_replay_test_complete_publication(&kura, &block, &finality);
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("cold open a fully completed Native tip");
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .rewind_native_amx_fixture_geometry_before_replay_for_test()
         .expect("real pre-genesis geometry restore must not infer new tip obligations");
@@ -1037,6 +1006,7 @@ fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_re
             .lock()
             .is_empty()
     );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .expect("forward replay the exact retained configured geometry");
@@ -1072,7 +1042,7 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
             finality,
             lane_config,
         } = native_amx_publication_capacity_fixture();
-        let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+        let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
         kura.store_block(Arc::clone(&block))
             .expect("store indexed Native carrier");
         let _finality_receipt = kura
@@ -1099,10 +1069,12 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
                 .values()
                 .all(|route| !route.cleanup_complete)
         );
+        let network_id = kura.bound_lane_storage_network().unwrap();
         drop(kura);
         let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("reconstruct all three indexed routes before State geometry");
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .rewind_native_amx_fixture_geometry_before_replay_for_test()
             .expect("preserve pending publication while rewinding to the genesis cursor");
@@ -1143,6 +1115,7 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
             .expect("reconstructed exact carrier"),
             carrier
         );
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
             .expect("move exact retained pairs forward into live geometry");
@@ -1365,8 +1338,8 @@ fn native_amx_retained_replay_pair_corruption_is_rejected_without_recovery_growt
                 .expect("open exact retained block or merge bytes");
             std::io::Write::write_all(&mut file, &[0xA5]).expect("change one retained byte digest");
         } else {
-            kura.clear_native_amx_retained_pair_seal_for_test(lane, fault_index == 2)
-                .expect("clear exactly one authenticated paired-seal field");
+            kura.corrupt_native_amx_retained_pair_seal_for_test(lane, fault_index == 2)
+                .expect("corrupt exactly one original unsealed marker field");
         }
         let store_root = kura.store_root.clone();
         let corrupted = snapshot_regular_files_recursively(&store_root);
@@ -1394,7 +1367,7 @@ fn native_amx_completed_repair_retains_exact_owner_across_interruption_and_reope
         finality,
         lane_config,
     } = native_amx_publication_capacity_fixture();
-    let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
     kura.store_block(Arc::clone(&block))
         .expect("store actual Native carrier");
     let _finality_receipt = kura
@@ -1453,6 +1426,7 @@ fn native_amx_completed_repair_retains_exact_owner_across_interruption_and_reope
         .native_amx_publication_capacity_reserved_bytes()
         .unwrap();
     assert!(reserved > 0);
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -1470,6 +1444,7 @@ fn native_amx_completed_repair_retains_exact_owner_across_interruption_and_reope
             .origin,
         NativeAmxPublicationIndexOriginV1::CompletedRepair
     );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .expect("restore only authenticated route geometry");
@@ -1920,8 +1895,7 @@ fn native_amx_completed_repair_successor_for_one_route(
     let header = BlockHeader::new(
         NonZeroU64::new(height).unwrap(),
         Some(fixture.block.hash()),
-        None,
-        None,
+        iroha_crypto::MerkleTree::root_from_typed_leaves(hashes.iter().copied()),
         fixture
             .block
             .header()
@@ -1938,13 +1912,7 @@ fn native_amx_completed_repair_successor_for_one_route(
     );
     let mut block = SignedBlock::presigned(signature, header, transactions);
     block.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default()); hashes.len()],
-        )
-        .unwrap();
+    attach_ok_results_to_block(&mut block);
     block
         .replace_signatures(
             [BlockSignature::new(
@@ -2023,7 +1991,7 @@ fn native_amx_partial_completed_repair_preserves_later_route_across_cold_reopen(
         native_amx_completed_repair_successor_for_one_route(&fixture, b);
     native_amx_complete_exact_fixture_carrier(&fixture.kura, &second, &second_finality, 1);
     let (incarnations, activations) =
-        native_amx_replay_test_geometry_maps(&fixture.kura, &fixture.lane_config);
+        active_fixture_geometry_maps(&fixture.kura, &fixture.lane_config);
     let NativeAmxPublicationCapacityFixture {
         _temp_dir,
         kura,
@@ -2124,6 +2092,7 @@ fn native_amx_partial_completed_repair_preserves_later_route_across_cold_reopen(
     let b_manifest_bytes = fs::read(&b_manifest).unwrap();
     fs::remove_file(&b_manifest).expect("lose the non-target terminal proof after admission");
     let store_root = kura.store_root.clone();
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let damaged = snapshot_regular_files_recursively(&store_root);
@@ -2137,8 +2106,8 @@ fn native_amx_partial_completed_repair_preserves_later_route_across_cold_reopen(
         .expect("restart derives the exact partial repair through journal physical targets");
     assert_eq!(
         reopened.lane_storage_entries.lock().len(),
-        1,
-        "repair reconstruction must not publish the secondary live State geometry"
+        0,
+        "repair reconstruction must not publish any live State geometry"
     );
     assert_eq!(
         reopened
@@ -2146,6 +2115,7 @@ fn native_amx_partial_completed_repair_preserves_later_route_across_cold_reopen(
             .unwrap(),
         reserved
     );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .unwrap();
@@ -2403,32 +2373,68 @@ fn native_amx_completed_repair_recovers_actual_synced_temporary_on_restart() {
         reserved_before_write,
         index,
     } = native_amx_completed_repair_after_actual_temp_sync();
-    let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+    let network_id = kura.bound_lane_storage_network().unwrap();
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
     let temp_path = manifest_path.with_extension("norito.tmp");
     let before_reopen = snapshot_regular_files_recursively(&kura.store_root);
-    drop(kura);
-    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("an exact retained repair index owns the canonical temporary on Strict restart");
+    // The capacity phase authenticates the owned temporary without publishing
+    // it. Complete Strict startup subsequently has retained-instance authority
+    // to promote the bytes and retire the exact finished locator before State.
+    kura.rebuild_native_amx_publication_capacity_on_startup()
+        .expect("authenticate the original repair index and its exact temporary");
     assert_eq!(
-        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
             .unwrap()
             .records[&index.carrier],
         index,
-        "restart retains the original locator"
+        "capacity authentication retains the original locator"
     );
     assert_eq!(
-        reopened
-            .native_amx_publication_capacity_reserved_bytes()
+        kura.native_amx_publication_capacity_reserved_bytes()
             .unwrap(),
         reserved_before_write - u64::try_from(manifest_bytes.len()).unwrap(),
         "physical temp bytes consume exactly their allocation, never a second reservation"
     );
     assert_eq!(
-        snapshot_regular_files_recursively(&reopened.store_root),
+        snapshot_regular_files_recursively(&kura.store_root),
         before_reopen,
-        "initial capacity authentication is read-only and precedes geometry-dependent promotion"
+        "capacity authentication itself must not mutate repair evidence"
     );
+    let mut expected_completed = before_reopen;
+    assert_eq!(
+        expected_completed.remove(temp_path.strip_prefix(&kura.store_root).unwrap()),
+        Some(manifest_bytes.clone())
+    );
+    assert!(
+        expected_completed
+            .remove(
+                &PathBuf::from(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY)
+                    .join(index.file_name().unwrap())
+            )
+            .is_some()
+    );
+    assert!(
+        expected_completed
+            .insert(
+                manifest_path
+                    .strip_prefix(&kura.store_root)
+                    .unwrap()
+                    .to_path_buf(),
+                manifest_bytes.clone()
+            )
+            .is_none()
+    );
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("an exact retained repair index owns the canonical temporary on Strict restart");
+    assert!(reopened.lane_storage_entries.lock().is_empty());
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        expected_completed,
+        "Strict startup only promotes the authenticated manifest and retires its completed index"
+    );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .unwrap();

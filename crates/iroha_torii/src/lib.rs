@@ -74,6 +74,9 @@ mod parliament_tle_release;
 pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
+#[cfg(test)]
+use iroha_data_model::events::trigger_completed::TriggerCompletedEvent;
+mod canonical_history;
 #[cfg(feature = "push")]
 mod push;
 #[doc(hidden)]
@@ -231,10 +234,10 @@ use iroha_core::{
         SoracloudRuntimeReplicaPlan, authoritative_soracloud_sequence,
     },
     state::{
-        BlockProofError, PendingQueuePlanAdmissionDisposition,
-        PendingQueuePlanAdmissionPersistenceOutcome, QueuePlanAdmissionRegistryMatch,
-        State as CoreState, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
-        WorldReadOnly,
+        BlockProofError, BlockProofLimits, BlockProofResource,
+        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome,
+        QueuePlanAdmissionRegistryMatch, State as CoreState, StateReadOnly,
+        StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
     },
     torii_proxy::{
         QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
@@ -286,8 +289,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetId,
     },
-    block::proofs::BlockProofs,
-    events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
+    events::trigger_completed::TriggerCompletedOutcome,
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
     nexus::{FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId},
     nft::NftId,
@@ -3506,94 +3508,36 @@ impl PipelineStatusCache {
         let Some(height_nz) = NonZeroUsize::new(height_usize) else {
             return BlockRecordOutcome::MissingBlock;
         };
-        let Some(block) = kura.get_block(height_nz) else {
+        let work = routing::app_query_limits().max_fetch_size;
+        let result = iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
+            kura,
+            height_nz,
+            expected_hash,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+            |entrypoint, result| {
+                let (entry_kind, rejection) = match result.as_ref() {
+                    Ok(_) => (kind, None),
+                    Err(reason) => (
+                        PipelineStatusKind::Rejected,
+                        Some(pipeline_rejection_summary(reason)),
+                    ),
+                };
+                if let Some(hash) = signed_transaction_hash_for_entrypoint(entrypoint) {
+                    self.record_entry_inner(
+                        hash,
+                        PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now),
+                    );
+                }
+            },
+        );
+        if let Err(error) = result {
             iroha_logger::debug!(
+                ?error,
                 height = height.get(),
-                "pipeline status cache skipped block: block not in kura"
+                "pipeline status cache could not authenticate finalized carrier"
             );
             return BlockRecordOutcome::MissingBlock;
-        };
-        let block_ref = block.as_ref();
-        if block_ref.hash() != expected_hash {
-            iroha_logger::debug!(
-                height = height.get(),
-                "pipeline status cache skipped block: hash mismatch"
-            );
-            return BlockRecordOutcome::HashMismatch;
-        }
-        for (index, entrypoint, result) in block_ref.entrypoint_results() {
-            if index >= block_ref.external_entrypoint_count() {
-                break;
-            }
-            let (entry_kind, rejection) = match &result.0 {
-                Ok(_) => (kind, None),
-                Err(reason) => (
-                    PipelineStatusKind::Rejected,
-                    Some(pipeline_rejection_summary(reason)),
-                ),
-            };
-            let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-            let Some(hash) = signed_transaction_hash_for_entrypoint(&entrypoint) else {
-                iroha_logger::error!(
-                    height = height.get(),
-                    "pipeline status cache found a non-signed entrypoint in the external prefix"
-                );
-                return BlockRecordOutcome::HashMismatch;
-            };
-            self.record_entry_inner(hash, incoming);
-        }
-        if let Some(reference) = block_ref
-            .execution_context()
-            .and_then(|context| context.merge_entry.as_ref())
-        {
-            let Some(entry) = (match kura.get_merge_entry_by_carrier_height(height_nz) {
-                Ok(entry) => entry,
-                Err(error) => {
-                    iroha_logger::error!(
-                        ?error,
-                        height = height.get(),
-                        "pipeline status cache rejected a certified merge carrier"
-                    );
-                    return BlockRecordOutcome::HashMismatch;
-                }
-            }) else {
-                iroha_logger::error!(
-                    height = height.get(),
-                    "pipeline status cache found a merge reference without its canonical sidecar"
-                );
-                return BlockRecordOutcome::HashMismatch;
-            };
-            if entry.execution_batch.is_some() {
-                let transactions = match certified_merge_pipeline_transactions(
-                    expected_hash,
-                    reference,
-                    &entry,
-                ) {
-                    Ok(transactions) => transactions,
-                    Err(error) => {
-                        iroha_logger::error!(
-                            ?error,
-                            height = height.get(),
-                            "pipeline status cache rejected an invalid certified merge transcript"
-                        );
-                        return BlockRecordOutcome::HashMismatch;
-                    }
-                };
-                for (_entrypoint_hash, signed_transaction_hash, transaction) in transactions {
-                    let (entry_kind, rejection) = match &transaction.result().0 {
-                        Ok(_) => (kind, None),
-                        Err(reason) => (
-                            PipelineStatusKind::Rejected,
-                            Some(pipeline_rejection_summary(reason)),
-                        ),
-                    };
-                    let incoming =
-                        PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-                    if let Some(signed_transaction_hash) = signed_transaction_hash {
-                        self.record_entry_inner(signed_transaction_hash, incoming);
-                    }
-                }
-            }
         }
         BlockRecordOutcome::Recorded
     }
@@ -17782,7 +17726,7 @@ fn signed_transaction_hash_for_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) => None,
     }
 }
 fn transaction_entrypoint_matches_indexed_identity(
@@ -40191,18 +40135,39 @@ async fn handler_ledger_headers(
         }
     }
 }
-fn finalized_block_not_found() -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-    ))
-}
 fn finalized_block_wire_internal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
-fn finalized_block_wire_fits_carrier_v1(wire_len: usize) -> bool {
-    wire_len <= iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
+fn block_proof_limits(state: &CoreState) -> BlockProofLimits {
+    let wire_limit =
+        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 as u64;
+    BlockProofLimits {
+        max_block_wire_bytes: wire_limit,
+        max_work_items: state.pipeline_snapshot().query_max_fetch_size,
+        max_response_bytes: wire_limit,
+    }
+}
+fn block_proof_capacity_response(
+    resource: BlockProofResource,
+    actual: u64,
+    limit: u64,
+) -> Response {
+    utils::respond_with_status_and_format(
+        if resource == BlockProofResource::WorkItems {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::PAYLOAD_TOO_LARGE
+        },
+        ErrorEnvelope::new(
+            "block_proof_capacity_exceeded",
+            format!(
+                "The finalized block proof exceeds its {resource:?} serving limit (at least {actual} required, {limit} admitted)."
+            ),
+        ),
+        utils::current_response_format(),
+    )
 }
 fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
     utils::respond_with_status_and_format(
@@ -40228,68 +40193,30 @@ async fn handler_ledger_executed_block_wire(
 ) -> Result<Response, Error> {
     let height = NonZeroU64::new(height)
         .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
-    let height_usize = NonZeroUsize::new(
-        height
-            .get()
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".to_owned()))?,
-    )
-    .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
-    let committed_index = height_usize.get().saturating_sub(1);
-    // Kura may already contain a staged body which has not reached the
-    // committed state journal. Snapshot the finalized hash first so a
-    // height-only storage lookup cannot publish that staged body. Release the
-    // state view before storage access and encoding; finalized hashes are
-    // immutable, and neither operation should hold the state read guard.
-    let committed_hash = {
-        let state_view = app.state.view();
-        state_view
-            .block_hashes()
-            .get(committed_index)
-            .copied()
-            .ok_or_else(finalized_block_not_found)?
+    let limits = block_proof_limits(&app.state);
+    // State captures only the committed hash journal around an exact finalized
+    // Kura read. Size admission precedes body I/O; original QC bytes are returned.
+    let wire = match app.state.executed_block_wire(height, limits) {
+        Ok(wire) => wire,
+        Err(BlockProofError::CapacityExceeded {
+            resource,
+            actual,
+            limit,
+            ..
+        }) => {
+            return Ok(
+                if matches!(
+                    resource,
+                    BlockProofResource::BlockWireBytes | BlockProofResource::ResponseBytes
+                ) {
+                    executed_block_wire_too_large_response(height)
+                } else {
+                    block_proof_capacity_response(resource, actual, limit)
+                },
+            );
+        }
+        Err(error) => return Err(map_block_proof_error(error)),
     };
-    let block = app
-        .kura
-        .get_block(height_usize)
-        .ok_or_else(finalized_block_not_found)?;
-    if block.header().height() != height {
-        return Err(finalized_block_wire_internal_error(format!(
-            "committed block slot {} contains header height {}",
-            height,
-            block.header().height()
-        )));
-    }
-    if block.hash() != committed_hash {
-        return Err(finalized_block_wire_internal_error(format!(
-            "committed block slot {height} does not match the finalized state hash"
-        )));
-    }
-    if !block.has_results() {
-        return Err(finalized_block_wire_internal_error(format!(
-            "committed block {height} has no execution results"
-        )));
-    }
-    let predicted_wire_len = norito::codec::Encode::encoded_len(block.as_ref())
-        .checked_add(1 + norito::core::Header::SIZE)
-        .ok_or_else(|| {
-            finalized_block_wire_internal_error(format!(
-                "canonical wire length overflow for committed block {height}"
-            ))
-        })?;
-    if !finalized_block_wire_fits_carrier_v1(predicted_wire_len) {
-        return Ok(executed_block_wire_too_large_response(height));
-    }
-    let wire = block.encode_wire().map_err(|error| {
-        finalized_block_wire_internal_error(format!(
-            "failed to encode committed block {height} as canonical SignedBlockWire: {error}"
-        ))
-    })?;
-    if wire.len() != predicted_wire_len {
-        return Err(finalized_block_wire_internal_error(format!(
-            "canonical wire length changed between bounded preflight and encoding for committed block {height}"
-        )));
-    }
     let mut response = Response::new(Body::from(wire));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -40304,35 +40231,54 @@ async fn handler_ledger_executed_block_wire(
 async fn handler_block_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path((height, entry_hex)): axum::extract::Path<(u64, String)>,
-) -> Result<NoritoBody<BlockProofs>, Error> {
+) -> Result<Response, Error> {
     let block_height = NonZeroU64::new(height)
         .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
     let normalized = entry_hex.trim_start_matches("0x");
     let entry_hash: HashOf<TransactionEntrypoint> = normalized
         .parse()
         .map_err(|err| conversion_error(format!("invalid entry hash: {err}")))?;
-    let proofs = app
+    let limits = block_proof_limits(&app.state);
+    let proofs = match app
         .state
-        .block_proofs_for_entry(block_height, entry_hash)
-        .map_err(map_block_proof_error)?;
-    Ok(NoritoBody(proofs))
+        .block_proofs_for_entry(block_height, entry_hash, limits)
+    {
+        Ok(proofs) => proofs,
+        Err(BlockProofError::CapacityExceeded {
+            resource,
+            actual,
+            limit,
+            ..
+        }) => {
+            return Ok(block_proof_capacity_response(resource, actual, limit));
+        }
+        Err(error) => return Err(map_block_proof_error(error)),
+    };
+    let maximum = usize::try_from(limits.max_response_bytes).map_err(|_| {
+        finalized_block_wire_internal_error("proof response limit exceeds host width")
+    })?;
+    utils::respond_with_format_bounded(proofs, ResponseFormat::Norito, maximum)
+        .map_err(|error| finalized_block_wire_internal_error(error.to_string()))
 }
+
 fn map_block_proof_error(error: BlockProofError) -> Error {
     match error {
-        BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
-            conversion_error(error.to_string())
-        }
+        BlockProofError::HeightOutOfRange(_) => conversion_error(error.to_string()),
         BlockProofError::BlockNotFound(_) | BlockProofError::EntrypointNotFound { .. } => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         }
-        BlockProofError::BlockHashMismatch { .. }
+        BlockProofError::CapacityExceeded { .. } => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        }
+        BlockProofError::Storage { .. }
+        | BlockProofError::InvalidOutputs { .. }
+        | BlockProofError::BlockHashMismatch { .. }
         | BlockProofError::BlockHeightMismatch { .. }
-        | BlockProofError::MissingResults(_)
-        | BlockProofError::ExecutionResultMissing { .. }
-        | BlockProofError::MerkleProofUnavailable { .. }
-        | BlockProofError::ExecutedBlockWireHashUnavailable(_) => Error::Query(
+        | BlockProofError::MissingResults(_) => Error::Query(
             iroha_data_model::ValidationFail::InternalError(error.to_string()),
         ),
     }

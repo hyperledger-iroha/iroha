@@ -607,7 +607,7 @@ fn install_contract_with_interface_and_lifecycle(
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next block height must fit in u64 and be non-zero");
-    let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
     let mut tx = block.transaction();
     tx.world.add_account_permission(
         authority,
@@ -794,7 +794,7 @@ seiyaku ProtectedPages {
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next permission block height");
-    let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
     let mut tx = block.transaction();
     assert!(tx.world.remove_account_permission(
         &other.subject_id(),

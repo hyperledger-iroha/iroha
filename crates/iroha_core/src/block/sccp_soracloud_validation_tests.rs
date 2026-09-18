@@ -295,7 +295,67 @@ fn sccp_state_with_account(account_id: &AccountId) -> State {
     let world = World::with([domain], [account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    State::new_with_chain(world, kura, query_handle, sccp_chain_id())
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query_handle,
+        sccp_chain_id(),
+        deterministic_test_network_id(0x04),
+    );
+    // A storage component predecessor permits ordinary source admission. It does
+    // not claim SCCP delivery, executed-state finality, or a native carrier.
+    let keypair = crate::block::checked_keypair();
+    let mut parent = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+        nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    ))
+    .build_with_signature(0, keypair.private_key());
+    parent
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .unwrap();
+    state
+        .kura()
+        .store_block(std::sync::Arc::new(parent.clone()))
+        .unwrap();
+    state.push_block_hash_for_testing(parent.hash());
+    let statuses = state
+        .nexus_snapshot()
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            (
+                lane.id,
+                crate::governance::manifest::LaneManifestStatus {
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility,
+                    storage: lane.storage,
+                    governance: None,
+                    manifest_path: None,
+                    governance_rules: None,
+                    privacy_commitments: Vec::new(),
+                },
+            )
+        })
+        .collect();
+    state.install_lane_manifests(&std::sync::Arc::new(
+        crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
+    ));
+    state
 }
 fn sccp_accepted_transaction_with_record_count(
     account_id: AccountId,
@@ -328,18 +388,20 @@ fn sccp_accepted_transaction_with_overlay(
     }
     .encode();
     bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let tx = TransactionBuilder::new(
+    let mut builder = TransactionBuilder::new(
         deterministic_test_network_id(0x04),
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::IvmProved(IvmProved {
-        bytecode: IvmBytecode::from_compiled(bytecode),
-        overlay: overlay.into(),
-        events_commitment: Hash::new(b"events"),
-        gas_policy_commitment: Hash::new(b"gas"),
-    }))
-    .sign(keypair.private_key());
+    );
+    builder.set_creation_time(Duration::from_millis(1));
+    let tx = builder
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(bytecode),
+            overlay: overlay.into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(keypair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
 fn sccp_accepted_transaction() -> AcceptedTransaction<'static> {
@@ -355,24 +417,42 @@ fn signed_sccp_block(root: Option<[u8; 32]>) -> SignedBlock {
         .unpack(|_| {})
         .into()
 }
+fn set_sccp_execution_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+) {
+    let proposal = block.canonical_resultless_proposal();
+    block
+        .set_execution_outputs(
+            outputs,
+            0,
+            BTreeMap::new(),
+            Vec::new(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::new(),
+            Vec::new(),
+            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
+        )
+        .expect("structural SCCP fixture; no State fragments executed");
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    block
+        .validate_output_merkle_cache()
+        .expect("complete fixture output tree");
+}
 fn set_single_sccp_transaction_result(
     block: &mut SignedBlock,
     result: iroha_data_model::transaction::TransactionResultInner,
 ) {
-    let hashes = block
-        .external_transactions()
-        .map(|transaction| transaction.hash_as_entrypoint())
-        .collect::<Vec<_>>();
-    block
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &hashes,
-            vec![result],
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-            AxtPolicySnapshot::default(),
-        )
-        .expect("SCCP test block entrypoint hashes should match");
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
+    assert_eq!(block.network_entrypoint_count(), 1);
+    set_sccp_execution_outputs(
+        block,
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: result.into(),
+            completions: Vec::new(),
+        })],
+    );
 }
 #[test]
 fn sccp_commitment_root_validation_accepts_matching_root() {
@@ -384,6 +464,8 @@ fn sccp_commitment_root_validation_accepts_matching_root() {
     let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
     let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
     block.set_sccp_commitment_root(root);
+    // Changing the proposal root correctly invalidates attached output caches.
+    set_single_sccp_transaction_result(&mut block, Ok(Vec::new()));
     ValidBlock::validate_sccp_commitment_root(&block)
         .expect("matching SCCP commitment root should validate");
 }
@@ -426,37 +508,59 @@ fn sccp_commitment_root_validation_rejects_short_result_vector() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .sign(plain_keypair.private_key());
-    let plain_hash = plain_tx.hash_as_entrypoint();
-    let sccp_entrypoint = sccp_accepted_transaction().entrypoint().clone();
-    let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx.clone()));
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
+    let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx));
     let leader = crate::block::checked_keypair();
-    let mut block: SignedBlock = BlockBuilder::new(vec![accepted_plain])
-        .chain(0, None)
-        .sign(leader.private_key())
-        .unpack(|_| {})
-        .into();
+    let mut block: SignedBlock =
+        BlockBuilder::new(vec![accepted_plain, sccp_accepted_transaction()])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
     block
-        .set_transaction_results(
+        .set_execution_outputs(
+            (0..2)
+                .map(|input_index| {
+                    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                        input_index,
+                        result: Ok(iroha_data_model::transaction::DataTriggerSequence::default())
+                            .into(),
+                        completions: Vec::new(),
+                    })
+                })
+                .collect(),
+            0,
+            BTreeMap::new(),
             Vec::new(),
-            &[plain_hash],
-            vec![Ok(
-                iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
+            iroha_data_model::nexus::AxtPolicySnapshot::default(),
+            BTreeSet::new(),
+            Vec::new(),
+            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
         )
-        .expect("single plain transaction result should attach");
-    block.set_external_entrypoints(vec![
-        iroha_data_model::transaction::TransactionEntrypoint::External(plain_tx),
-        sccp_entrypoint,
-    ]);
+        .expect("complete structural fixture; no State fragments executed");
+    // Decode an adversarial structural fixture through the public codec; no
+    // production mutation accessor can create an incomplete result collection.
+    #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
+    #[norito_schema(name = "iroha_core::block::tests::MutableSccpOutputBlock")]
+    struct MutableSccpOutputBlock {
+        signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
+        payload: iroha_data_model::block::BlockPayload,
+        result: Option<iroha_data_model::block::BlockResult>,
+    }
+    use norito::codec::{DecodeAll as _, Encode as _};
+    let mut forged = MutableSccpOutputBlock::decode_all(&mut block.encode().as_slice()).unwrap();
+    let result = forged.result.as_mut().expect("complete fixture outputs");
+    result.outputs.pop();
+    result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+    let block = SignedBlock::decode_all(&mut forged.encode().as_slice()).unwrap();
+    assert_eq!(block.network_entrypoint_count(), 2);
+    assert_eq!(block.execution_outputs().len(), 1);
     let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
-        "SCCP validation must reject external SCCP entrypoints without committed results",
+        "SCCP validation must reject a missing Network output even with a matching cache",
     );
     assert!(matches!(
         err,
-        BlockValidationError::SccpTransactionResultCountMismatch {
-            external_entrypoints: 2,
-            results: 1,
-        }
+        BlockValidationError::SccpInvalidExecutionOutputs { .. }
     ));
 }
 #[test]
@@ -499,9 +603,7 @@ fn sccp_commitment_root_validation_rejects_root_without_messages() {
         .sign(leader.private_key())
         .unpack(|_| {})
         .into();
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("empty block result fixture should be valid");
+    set_sccp_execution_outputs(&mut block, Vec::new());
     let err = ValidBlock::validate_sccp_commitment_root(&block)
         .expect_err("root without SCCP messages should reject");
     assert!(matches!(
@@ -663,7 +765,7 @@ fn validate_and_record_transactions_rejects_sccp_root_after_rejected_record_tx()
     let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
     let leader = crate::block::checked_keypair();
     let new_block = BlockBuilder::new(vec![accepted])
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .with_sccp_commitment_root(Some(candidate_root))
         .sign(leader.private_key())
         .unpack(|_| {});
@@ -673,15 +775,12 @@ fn validate_and_record_transactions_rejects_sccp_root_after_rejected_record_tx()
     );
     let mut state_block = state.block(new_block.header());
     let mut signed_block: SignedBlock = new_block.into();
-    let err = ValidBlock::validate_and_record_transactions(
-        &mut signed_block,
-        &mut state_block,
-        None,
-        false,
-    )
-    .expect_err("failed SCCP record must reject the signed root instead of rewriting it");
+    let err = ValidBlock::execute_block_outputs_for_test(&mut signed_block, &mut state_block, None)
+        .expect_err("failed SCCP record must reject the signed root instead of rewriting it");
     assert!(
-        signed_block.error(0).is_some(),
+        signed_block
+            .network_output_at(0)
+            .is_some_and(|(_, output)| output.result.is_err()),
         "invalid SCCP proved record should reject the transaction"
     );
     assert_eq!(
@@ -717,7 +816,7 @@ fn sccp_commitment_root_after_execution_omits_rejected_record_tx() {
     let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
     let leader = crate::block::checked_keypair();
     let new_block = BlockBuilder::new(vec![accepted])
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(new_block.header());
@@ -754,21 +853,18 @@ fn validate_and_record_transactions_rejects_sccp_root_after_duplicate_overlay_re
     let key = crate::bridge::test_sccp_outbound_message_key(&sccp_transfer_payload());
     let leader = crate::block::checked_keypair();
     let new_block = BlockBuilder::new(vec![accepted])
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .with_sccp_commitment_root(Some(candidate_root))
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(new_block.header());
     let mut signed_block: SignedBlock = new_block.into();
-    let err = ValidBlock::validate_and_record_transactions(
-        &mut signed_block,
-        &mut state_block,
-        None,
-        false,
-    )
-    .expect_err("duplicate SCCP overlay records must reject the transaction and signed root");
+    let err = ValidBlock::execute_block_outputs_for_test(&mut signed_block, &mut state_block, None)
+        .expect_err("duplicate SCCP overlay records must reject the transaction and signed root");
     assert!(
-        signed_block.error(0).is_some(),
+        signed_block
+            .network_output_at(0)
+            .is_some_and(|(_, output)| output.result.is_err()),
         "duplicate SCCP proved records should reject the transaction"
     );
     assert_eq!(
@@ -805,14 +901,17 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
-    let audit_sequence_before = crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
-        &state_block.transaction(),
-    ).expect("fixture audit sequence");
+    let audit_sequence_before =
+        crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+            &state_block.transaction(),
+        )
+        .expect("fixture audit sequence");
     let _valid = block.validate_and_record_transactions(&mut state_block);
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &state_block.transaction(),
-        ).expect("audit sequence after block execution"),
+        )
+        .expect("audit sequence after block execution"),
         audit_sequence_before,
         "local runtime output cannot advance the consensus audit sequence",
     );
@@ -826,8 +925,12 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
     assert_eq!(runtime.ordered_mailbox_call_count(), 0);
     assert_eq!(runtime_state.load_factor_bps, 77);
     assert!(world.soracloud_runtime_receipts().is_empty());
-    assert!(world.soracloud_mailbox_messages().get(&message_id).is_some());
-
+    assert!(
+        world
+            .soracloud_mailbox_messages()
+            .get(&message_id)
+            .is_some()
+    );
 }
 
 #[test]
@@ -870,14 +973,17 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
-    let audit_sequence_before = crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
-        &state_block.transaction(),
-    ).expect("fixture audit sequence");
+    let audit_sequence_before =
+        crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+            &state_block.transaction(),
+        )
+        .expect("fixture audit sequence");
     let _valid = block.validate_and_record_transactions(&mut state_block);
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &state_block.transaction(),
-        ).expect("audit sequence after block execution"),
+        )
+        .expect("audit sequence after block execution"),
         audit_sequence_before,
         "local runtime output cannot advance the consensus audit sequence",
     );
@@ -891,10 +997,21 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
     assert_eq!(runtime.ordered_mailbox_call_count(), 0);
     assert_eq!(runtime_state.load_factor_bps, 77);
     assert!(world.soracloud_runtime_receipts().is_empty());
-    assert!(world.soracloud_mailbox_messages().get(&message_id).is_some());
-    assert!(world.soracloud_service_state_entries().get(&(
-        service_name.as_ref().to_owned(),
-        binding_name.as_ref().to_owned(),
-        state_key,
-    )).is_none(), "local runtime mutations must never alter consensus state");
+    assert!(
+        world
+            .soracloud_mailbox_messages()
+            .get(&message_id)
+            .is_some()
+    );
+    assert!(
+        world
+            .soracloud_service_state_entries()
+            .get(&(
+                service_name.as_ref().to_owned(),
+                binding_name.as_ref().to_owned(),
+                state_key,
+            ))
+            .is_none(),
+        "local runtime mutations must never alter consensus state"
+    );
 }

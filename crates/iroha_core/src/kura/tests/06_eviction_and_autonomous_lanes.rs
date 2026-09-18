@@ -1122,10 +1122,9 @@ fn debug_output_new_blocks_writes_jsonl() {
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     wait_for_block_hash(&kura, 1, block.hash());
-    let blocks_dir = RuntimeLaneConfig::default()
-        .primary()
-        .blocks_dir(temp_dir.path());
-    let dump_path = blocks_dir.join("blocks.jsonl");
+    let dump_path = Kura::canonical_storage_paths(temp_dir.path())
+        .0
+        .join("blocks.jsonl");
     let contents = fs::read_to_string(&dump_path).expect("read debug block dump");
     let mut lines = contents.lines();
     let first = lines.next().expect("first JSON line");
@@ -1133,212 +1132,89 @@ fn debug_output_new_blocks_writes_jsonl() {
     let _: norito::json::Value =
         norito::json::from_slice(first.as_bytes()).expect("valid JSON line");
 }
-#[allow(clippy::too_many_lines)]
-fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<CommittedBlock> {
-    let mut blocks = Vec::new();
-    let (leader_public_key, leader_private_key) =
-        checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-    let mut topology_entries = vec![GenesisTopologyEntry::new(
-        PeerId::new(leader_public_key.clone()),
-        bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP"),
-    )];
-    topology_entries.extend((0..3).map(|_| {
-        let validator = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let pop = bls_normal_pop_prove(validator.private_key())
-            .expect("generate additional Kura fixture validator PoP");
-        GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
-    }));
-    topology_entries.sort_by(|left, right| left.peer.cmp(&right.peer));
-    let topology = Topology::new(
-        topology_entries
-            .iter()
-            .map(|entry| entry.peer.clone())
-            .collect::<Vec<_>>(),
-    );
-    let mint_finality_roster = topology_entries
-        .iter()
-        .map(
-            |entry| iroha_data_model::block::consensus_v2::ValidatorPower {
-                validator: entry.peer.clone(),
-                power: 1,
-            },
-        )
-        .collect::<Vec<_>>();
-    let mint_finality =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&mint_finality_roster);
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
-    let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("Valid");
-    let genesis_domain = Domain::new(genesis_domain_id.clone()).build(&genesis_id);
-    let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
-    let (account_id, account_keypair) = gen_account_in("wonderland");
-    let domain_id = DomainId::try_new("wonderland", "universal").expect("Valid");
-    let domain = Domain::new(domain_id.clone()).build(&genesis_id);
-    let account = Account::new(account_id.clone()).build(&genesis_id);
-    let live_query_store = {
-        let _rt_guard = rt.enter();
-        LiveQueryStore::start_test()
-    };
+// These callers test canonical Kura replacement and indexing, not State execution
+// or publication. Keep typed structural outputs and exact signed finality in the
+// storage fixture instead of attempting to publish an execution-only State seal.
+fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Arc<SignedBlock>> {
+    let _rt_guard = rt.enter();
     let config = kura_config_for_dir(temp_dir, BLOCKS_IN_MEMORY);
     let (kura, block_count) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .unwrap();
+            .expect("open replacement storage fixture");
     assert_eq!(block_count.0, 0);
-    publish_configured_catalog_baseline(&kura, &LaneCatalog::default());
-    let state = State::new(
-        World::with([domain, genesis_domain], [account, genesis_account], []),
-        Arc::clone(&kura),
-        live_query_store,
-    );
-    let genesis_validator = ManifestValidatorBinding {
-        validator: genesis_id.clone(),
-        peer_id: PeerId::new(genesis_key_pair.public_key().clone()),
-        torii_url: None,
-    };
-    let lane_manifest = LaneManifestStatus {
-        lane: LaneId::SINGLE,
-        alias: "default".to_owned(),
-        dataspace: DataSpaceId::UNIVERSAL,
-        visibility: LaneVisibility::Public,
-        storage: LaneStorageProfile::FullReplica,
-        governance: Some("genesis".to_owned()),
-        manifest_path: Some(temp_dir.path().join("lane-0-manifest.json")),
-        governance_rules: Some(GovernanceRules {
-            validators: vec![genesis_id.clone()],
-            validator_bindings: vec![genesis_validator],
-            ..GovernanceRules::default()
-        }),
-        privacy_commitments: Vec::new(),
-    };
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-        BTreeMap::from([(LaneId::SINGLE, lane_manifest)]),
-    )));
-    let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-        .with_sumeragi_v2_context_parameters(
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
-            ),
-        )
-        .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
-        .set_topology(topology_entries)
-        .build_and_sign(&genesis_key_pair)
-        .expect("genesis block should be built");
-    {
-        let time_source = TimeSource::new_system();
-        let mut voting_block = None;
-        let (valid_genesis, mut state_block) =
-            ValidBlock::validate_signed_genesis_keep_voting_block(
-                genesis.0.clone(),
-                &topology,
-                &genesis_id,
-                &time_source,
-                &state,
-                &mut voting_block,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+    establish_dummy_store_primary_anchor(&kura);
+    let block_genesis = DummyBlocks::new().next_with_results();
+    let transaction = |message: &str| {
+        AcceptedTransaction::new_unchecked(Cow::Owned(
+            TransactionBuilder::new(
+                test_network_id(b"test"),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .unpack(|_| {})
-            .unwrap();
-        let block_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-        let _events =
-            state_block.apply_without_execution(&block_genesis, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        blocks.push(block_genesis.clone());
-        kura.store_block(block_genesis.clone())
-            .expect("store genesis block");
-        wait_for_block_hash(&kura, 1, block_genesis.as_ref().hash());
-    }
-    let (max_clock_drift, tx_limits) = {
-        let view = state.view();
-        let params = view.world.parameters.get();
-        (params.sumeragi().max_clock_drift(), params.transaction())
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key()),
+        ))
     };
-    let tx1 = TransactionBuilder::new(
-        *state.network_id_ref(),
-        account_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "msg1".to_string())])
-    .sign(account_keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        *state.network_id_ref(),
-        account_id,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "msg2".to_string())])
-    .sign(account_keypair.private_key());
-    let crypto_cfg = state.crypto();
-    let tx1 = AcceptedTransaction::accept(
-        tx1,
-        state.network_id_ref(),
-        max_clock_drift,
-        tx_limits,
-        crypto_cfg.as_ref(),
-    )
-    .unwrap();
-    let tx2 = AcceptedTransaction::accept(
-        tx2,
-        state.network_id_ref(),
-        max_clock_drift,
-        tx_limits,
-        crypto_cfg.as_ref(),
-    )
-    .unwrap();
-    {
-        let unverified_block = BlockBuilder::new(vec![tx1.clone()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header());
-        let block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
+    let tx1 = transaction("replacement fixture transaction 1");
+    let tx2 = transaction("replacement fixture transaction 2");
+    assert_ne!(tx1.hash_as_entrypoint(), tx2.hash_as_entrypoint());
+    let storage_block = |transaction, view, parent: &SignedBlock| {
+        let mut block: SignedBlock = BlockBuilder::new(vec![transaction])
+            .chain(view, Some(parent))
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
             .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let block_hash = block.as_ref().hash();
-        blocks.push(block.clone());
-        kura.store_block(block).expect("store block");
-        wait_for_block_hash(&kura, 2, block_hash);
+            .into();
+        // As with DummyBlocks, this storage fixture has no independently
+        // certified lane payload; retain only its actual input routing context.
+        if let Some(external) = block
+            .execution_context()
+            .map(|context| context.external.clone())
+        {
+            block.set_execution_context(Some(BlockExecutionContextBundle::new(external)));
+        }
+        attach_ok_results_to_block(&mut block);
+        Arc::new(block)
+    };
+    let block = storage_block(tx1.clone(), 0, &block_genesis);
+    let block_soft_fork = storage_block(tx1, 1, &block_genesis);
+    let block_next = storage_block(tx2, 0, &block_soft_fork);
+    assert_ne!(block.hash(), block_soft_fork.hash());
+    assert_eq!(block.header().height(), block_soft_fork.header().height());
+    assert_eq!(block_soft_fork.header().view_change_index(), 1);
+    assert_eq!(block.header().prev_block_hash(), Some(block_genesis.hash()));
+    assert_eq!(
+        block_soft_fork.header().prev_block_hash(),
+        Some(block_genesis.hash())
+    );
+    assert_eq!(
+        block_next.header().prev_block_hash(),
+        Some(block_soft_fork.hash())
+    );
+    assert_eq!(
+        block.network_input_hashes().collect::<Vec<_>>(),
+        block_soft_fork.network_input_hashes().collect::<Vec<_>>()
+    );
+    for block in [&block_genesis, &block] {
+        kura.store_block(Arc::clone(block))
+            .expect("store fixture block");
+        wait_for_block_hash(
+            &kura,
+            usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+            block.hash(),
+        );
     }
-    {
-        let unverified_block_soft_fork = BlockBuilder::new(vec![tx1])
-            .chain(1, Some(&genesis.0))
-            .sign(&leader_private_key)
-            .unpack(|_| {});
-        let mut state_block = state.block_and_revert(unverified_block_soft_fork.header());
-        let block_soft_fork = unverified_block_soft_fork
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _events =
-            state_block.apply_without_execution(&block_soft_fork, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let soft_fork_hash = block_soft_fork.as_ref().hash();
-        blocks.push(block_soft_fork.clone());
-        kura.replace_top_block(block_soft_fork)
-            .expect("replace top block");
-        wait_for_block_hash(&kura, 2, soft_fork_hash);
-    }
-    {
-        let unverified_block_next = BlockBuilder::new(vec![tx2])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block_next.header());
-        let block_next = unverified_block_next
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _events =
-            state_block.apply_without_execution(&block_next, topology.as_ref().to_owned());
-        state_block.commit().unwrap();
-        let next_hash = block_next.as_ref().hash();
-        blocks.push(block_next.clone());
-        kura.store_block(block_next).expect("store block");
-        wait_for_block_hash(&kura, 3, next_hash);
-    }
+    kura.replace_top_block(Arc::clone(&block_soft_fork))
+        .expect("replace fixture top block");
+    wait_for_block_hash(&kura, 2, block_soft_fork.hash());
+    kura.store_block(Arc::clone(&block_next))
+        .expect("store fixture successor");
+    wait_for_block_hash(&kura, 3, block_next.hash());
+    // Authenticate only the final retained chain; the abandoned H2 was never
+    // finalized. These are the existing actual four-validator signature fixtures.
+    let artifacts = persist_v2_finality_chain_through(&kura, nonzero!(3_usize));
+    assert_eq!(artifacts.len(), 3);
+    assert_eq!(artifacts[1].subject.block_hash, block_soft_fork.hash());
+    assert_eq!(artifacts[2].subject.block_hash, block_next.hash());
     {
         let expected_count = kura.blocks_count() as u64;
         let mut store = kura.block_store.lock();
@@ -1353,8 +1229,9 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
             "durable block count should match in-memory block count before reload"
         );
     }
-    blocks
+    vec![block_genesis, block, block_soft_fork, block_next]
 }
+
 struct DummyBlocks {
     blocks: Vec<Arc<SignedBlock>>,
 }
@@ -1880,17 +1757,22 @@ fn rebind_kura_lane_payload_predecessor(
     ownership
 }
 fn attach_ok_results_to_block(block: &mut SignedBlock) {
-    let entrypoint_hashes: Vec<_> = block
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
+    let outputs = block
+        .network_entrypoints()
+        .enumerate()
+        .map(|(index, _)| {
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).expect("bounded fixture input index"),
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(
+                        DataTriggerSequence::default(),
+                    )),
+                    completions: Vec::new(),
+                },
+            )
+        })
         .collect();
-    let results = entrypoint_hashes
-        .iter()
-        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::default()))
-        .collect();
-    block
-        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
-        .expect("attach deterministic transaction results");
+    install_network_index_test_outputs(block, outputs);
     let signature = SignatureOf::try_from_hash(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
         block.header().hash(),
@@ -1971,6 +1853,7 @@ fn expect_configured_kura_fixture(
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect(open_context);
+    establish_configured_lane_markers_for_test(&kura, &lane_config);
     (temp_dir, config, lane_config, kura)
 }
 
@@ -1998,11 +1881,7 @@ fn autonomous_lane_storage_fixture() -> (TempDir, KuraConfig, RuntimeLaneConfig)
 
 type MarkedLaneBlockFixtureParts<B> = (
     (TempDir, KuraConfig, RuntimeLaneConfig),
-    (
-        LaneId,
-        iroha_config::parameters::actual::LaneConfigEntry,
-        u64,
-    ),
+    (LaneId, LaneStorageEntry, u64),
     (B, SumeragiLanePayloadOwnership, LaneBlockProposalV1),
     Arc<Kura>,
 );
@@ -2038,6 +1917,9 @@ impl MarkedLaneBlockFixture<Arc<SignedBlock>> {
             .clone();
         let proposal = lane_block_proposal_from_ownership(&ownership);
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        let lane_entry = kura
+            .lane_storage_entry(lane_id)
+            .expect("fixture's actual instance");
         Self((
             (temp_dir, config, lane_config),
             (lane_id, lane_entry, lane_block_height),
@@ -2073,6 +1955,9 @@ impl MarkedLaneBlockFixture<SignedBlock> {
             .clone();
         let proposal = lane_block_proposal_from_ownership(&ownership);
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        let lane_entry = kura
+            .lane_storage_entry(lane_id)
+            .expect("fixture's actual instance");
         Self((
             (temp_dir, config, lane_config),
             (lane_id, lane_entry, lane_block_height),
@@ -2089,7 +1974,15 @@ fn blank_kura_with_next_block() -> (Arc<Kura>, Arc<SignedBlock>) {
 }
 
 fn blank_kura_with_blocks() -> (Arc<Kura>, DummyBlocks) {
-    let kura = Kura::blank_kura_for_testing();
+    let catalog = LaneCatalog::default();
+    let config = kura_config_for_path(Path::new("isolated-kura-fixture"), BLOCKS_IN_MEMORY);
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &config,
+        &RuntimeLaneConfig::from_catalog(&catalog),
+        &catalog,
+    )
+    .expect("open an isolated configured empty store");
+    establish_dummy_store_primary_anchor(&kura);
     let blocks = DummyBlocks::new();
     (kura, blocks)
 }
@@ -2132,36 +2025,14 @@ fn reopen_test_kura_with_default_lane_geometry(
     lane_config: &RuntimeLaneConfig,
 ) -> Result<(Arc<Kura>, BlockCount)> {
     let (kura, count) = Kura::open_test_kura_with_configured_lane_config(config, lane_config)?;
-    let incarnations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            (
-                entry.lane_id,
-                Hash::new(
-                    format!(
-                        "kura-lane-incarnation:{}:{}",
-                        entry.lane_id.as_u32(),
-                        entry.dataspace_id.as_u64()
-                    )
-                    .as_bytes(),
-                ),
-            )
-        })
-        .collect();
-    let activations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| (entry.lane_id, 0))
-        .collect();
-    kura.recover_lane_geometry_journal(lane_config, &incarnations, &activations)?;
-    kura.finish_restored_lane_segments_with_geometry(lane_config)?;
+    kura.restore_published_lane_geometry_for_test(lane_config)?;
     Ok((kura, count))
 }
 
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
     publish_initial_configured_lane_geometry_for_test(kura, lane_config, &BTreeMap::new());
-    kura.replace_lane_storage_entries_for_test(lane_config);
+    kura.restore_published_lane_geometry_for_test(lane_config)
+        .expect("restore the actual published structural fixture geometry");
 }
 
 fn publish_initial_configured_lane_geometry_for_test(
@@ -2169,6 +2040,10 @@ fn publish_initial_configured_lane_geometry_for_test(
     lane_config: &RuntimeLaneConfig,
     requested_incarnations: &BTreeMap<LaneId, Hash>,
 ) {
+    if kura.lane_storage_network.lock().is_none() {
+        kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+            .expect("bind the structural fixture's explicit network");
+    }
     let (baseline, phases, _) = kura
         .lane_geometry_journal_state_for_test()
         .expect("inspect exact fixture geometry journal");
@@ -2182,7 +2057,10 @@ fn publish_initial_configured_lane_geometry_for_test(
         let incarnation = if let Some(incarnation) = requested_incarnations.get(&entry.lane_id) {
             *incarnation
         } else {
-            match kura.active_lane_incarnation_marker(entry) {
+            match kura
+                .lane_storage_entry(entry.lane_id)
+                .and_then(|stored| kura.active_lane_incarnation_marker(&stored))
+            {
                 Ok((incarnation, activation)) => {
                     assert_eq!(
                         activation, 0,
@@ -2241,6 +2119,26 @@ fn publish_initial_configured_lane_geometry_for_test(
     .expect("publish the fixture's exact lane geometry for restart");
 }
 
+fn active_fixture_geometry_maps(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+) -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
+    lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            let (incarnation, activation) = kura
+                .active_lane_incarnation_marker(
+                    &kura
+                        .lane_storage_entry(entry.lane_id)
+                        .expect("exact active identity"),
+                )
+                .expect("authenticate each original journal-published route");
+            ((entry.lane_id, incarnation), (entry.lane_id, activation))
+        })
+        .unzip()
+}
+
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {
     let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
@@ -2254,7 +2152,7 @@ fn autonomous_lane_payload_for_kura(
     signer: &KeyPair,
 ) -> (NetworkId, u64, LaneExecutablePayloadV1) {
     let transaction = TransactionBuilder::new(
-        test_network_id(b"kura-autonomous-view-checkpoint"),
+        test_network_id(b"kura-v2-finality-test"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2309,7 +2207,7 @@ fn autonomous_lane_payload_for_kura(
         ),
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let network_id = test_network_id(b"kura-autonomous-genesis");
+    let network_id = test_network_id(b"kura-v2-finality-test");
     let epoch = 7;
     let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
         proposal.descriptor.lane_id,
@@ -2386,6 +2284,8 @@ fn install_autonomous_lane_marker_for_kura(
     // A configured catalog alone is not committed geometry. Publish its initial
     // secondary lanes so restart exercises their artifacts and rejects corruption.
     let descriptor = &payload.origin_proposal.descriptor;
+    kura.bind_lane_storage_network(payload.network_id)
+        .expect("bind the actual signed autonomous fixture network");
     publish_initial_configured_lane_geometry_for_test(
         kura,
         lane_config,
@@ -2398,7 +2298,15 @@ fn install_autonomous_lane_marker_for_kura(
     // explicit; this does not publish a later catalog or replace its journal.
     kura.install_lane_incarnation_marker_for_test(entry, descriptor.lane_incarnation, 0)
         .expect("install authoritative autonomous lane marker");
-    kura.replace_lane_storage_entries_for_test(lane_config);
+    let installed = kura
+        .lane_storage_entry(descriptor.lane_id)
+        .expect("the initial publication owns the exact active fixture identity");
+    kura.require_active_lane_incarnation(
+        &installed,
+        descriptor.lane_incarnation,
+        descriptor.proposal_height,
+    )
+    .expect("authenticate the fixture marker without running unrelated recovery");
 }
 
 fn restore_autonomous_lane_fixture_geometry(
@@ -2406,33 +2314,15 @@ fn restore_autonomous_lane_fixture_geometry(
     lane_config: &RuntimeLaneConfig,
     payload: &LaneExecutablePayloadV1,
 ) -> Result<()> {
+    kura.bind_lane_storage_network(payload.network_id)?;
+    kura.restore_published_lane_geometry_for_test(lane_config)?;
     let descriptor = &payload.origin_proposal.descriptor;
-    let incarnations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            let incarnation = if entry.lane_id == descriptor.lane_id {
-                descriptor.lane_incarnation
-            } else {
-                Hash::new(
-                    format!(
-                        "kura-lane-incarnation:{}:{}",
-                        entry.lane_id.as_u32(),
-                        entry.dataspace_id.as_u64()
-                    )
-                    .as_bytes(),
-                )
-            };
-            (entry.lane_id, incarnation)
-        })
-        .collect();
-    let activations = lane_config
-        .entries()
-        .iter()
-        .map(|entry| (entry.lane_id, 0))
-        .collect();
-    kura.recover_lane_geometry_journal(lane_config, &incarnations, &activations)?;
-    kura.finish_restored_lane_segments_with_geometry(lane_config)
+    let entry = kura.lane_storage_entry(descriptor.lane_id)?;
+    kura.require_active_lane_incarnation(
+        &entry,
+        descriptor.lane_incarnation,
+        descriptor.proposal_height,
+    )
 }
 
 fn rebind_autonomous_lane_payload_for_kura(
@@ -2926,6 +2816,10 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         Some(&deliver),
         "failed replacement attempts must leave the first origin READY QC unchanged",
     );
+    let lane_entry = reopened
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &reopened.store_root,
@@ -2950,11 +2844,11 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+    let payload = historical_capacity_bound_payload_for_fixture(&payload, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, network_id, epoch)
-        .expect("persist autonomous payload");
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     let availability =
         durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
     kura.persist_lane_payload_availability_certificate(lane_id, 1, availability, network_id, epoch)
@@ -3028,7 +2922,9 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore the actual published structural fixture geometry");
     assert_eq!(
         reopened
             .read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)
@@ -3327,26 +3223,44 @@ fn first_admission_carrier_read_distinguishes_remote_body_from_missing_or_corrup
     let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
-    assert!(matches!(kura.read_first_admission_carrier(height, blocks[1].hash()),
-        Err(Error::MissingV2FinalityArtifact { height: 2 })));
+    assert!(matches!(
+        kura.read_first_admission_carrier(height, blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
     let (_, payload_len) = advertise_required_replicas(&kura, height);
-    let local = kura.read_first_admission_carrier(height, blocks[1].hash()).unwrap();
+    let local = kura
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .unwrap();
     assert_eq!(local.body.as_deref(), Some(blocks[1].as_ref()));
-    assert!(kura.read_first_admission_carrier(height, blocks[2].hash()).is_err());
+    assert!(
+        kura.read_first_admission_carrier(height, blocks[2].hash())
+            .is_err()
+    );
     assert!(kura.evict_block_bodies(payload_len).unwrap() >= payload_len);
-    kura.remove_evicted_block_sidecar_for_testing(height).unwrap();
-    let remote = kura.read_first_admission_carrier(height, blocks[1].hash()).unwrap();
+    kura.remove_evicted_block_sidecar_for_testing(height)
+        .unwrap();
+    let remote = kura
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .unwrap();
     assert!(remote.body.is_none());
-    assert_eq!(remote.finality, local.finality, "body absence retains exact QC/proposal and executed-wire identities");
+    assert_eq!(
+        remote.finality, local.finality,
+        "body absence retains exact QC/proposal and executed-wire identities"
+    );
     let path = kura.v2_finality_artifact_path_for_testing(2);
     let exact = fs::read(&path).unwrap();
     fs::remove_file(&path).unwrap();
-    assert!(matches!(kura.read_first_admission_carrier(height, blocks[1].hash()),
-        Err(Error::MissingV2FinalityArtifact { height: 2 })));
+    assert!(matches!(
+        kura.read_first_admission_carrier(height, blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
     let mut corrupt = exact;
     corrupt[0] ^= 1;
     fs::write(&path, &corrupt).unwrap();
-    assert!(kura.read_first_admission_carrier(height, blocks[1].hash()).is_err());
+    assert!(
+        kura.read_first_admission_carrier(height, blocks[1].hash())
+            .is_err()
+    );
     assert_eq!(fs::read(path).unwrap(), corrupt);
 }
 
@@ -3359,11 +3273,18 @@ fn first_admission_carrier_read_rejects_occupied_body_corruption_even_with_warm_
     assert_eq!(kura.get_block(height).as_deref(), Some(blocks[1].as_ref()));
     let (path, slot) = {
         let mut store = kura.block_store.lock();
-        (store.path_to_blockchain.join(DATA_FILE_NAME), store.read_block_index(1).unwrap())
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).unwrap(),
+        )
     };
     let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.seek(SeekFrom::Start(slot.start)).unwrap();
-    file.write_all(&vec![0; usize::try_from(slot.length).unwrap()]).unwrap();
-    assert!(kura.read_first_admission_carrier(height, blocks[1].hash()).is_err(),
-        "occupied corruption cannot become CanonicalBodyRecoveryRequired");
+    file.write_all(&vec![0; usize::try_from(slot.length).unwrap()])
+        .unwrap();
+    assert!(
+        kura.read_first_admission_carrier(height, blocks[1].hash())
+            .is_err(),
+        "occupied corruption cannot become CanonicalBodyRecoveryRequired"
+    );
 }

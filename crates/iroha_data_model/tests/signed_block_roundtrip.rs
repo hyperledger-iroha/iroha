@@ -85,8 +85,8 @@ fn signed_block_roundtrip_via_norito() {
         "header merkle root must match recomputed transaction merkle tree"
     );
     assert!(
-        block.header().result_merkle_root().is_none(),
-        "result merkle root remains unset for empty results"
+        block.output_merkle_commitment().is_none(),
+        "proposal carries no output commitment"
     );
     let tx_sig_len = {
         let tx = block.external_transactions().next().expect("tx");

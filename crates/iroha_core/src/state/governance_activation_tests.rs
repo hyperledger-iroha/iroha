@@ -170,7 +170,7 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut first_block = state.block(first_header);
     {
         let mut transaction = first_block.transaction();
@@ -187,7 +187,7 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
     first_block
         .commit_empty_block_for_testing()
         .expect("commit scheduled program");
-    let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let second_block = state.block(second_header);
     let activated = second_block
         .world
@@ -226,7 +226,7 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut first_block = state.block(first_header);
     {
         let mut transaction = first_block.transaction();
@@ -249,7 +249,7 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     first_block
         .commit_empty_block_for_testing()
         .expect("commit scheduled program");
-    let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let second_block = state.block(second_header);
     let deferred = second_block
         .world
@@ -267,12 +267,12 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     second_block
         .commit_empty_block_for_testing()
         .expect("commit deferred activation");
-    let third_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
+    let third_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 0, 0);
     state
         .block(third_header)
         .commit_empty_block_for_testing()
         .expect("commit final lease height");
-    let fourth_header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
+    let fourth_header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, 0, 0);
     let fourth_block = state.block(fourth_header);
     let activated = fourth_block
         .world

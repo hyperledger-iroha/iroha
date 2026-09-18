@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from sumeragi_v2_multilane_geometry_evidence_contract import _code
+
 AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
   'method',
@@ -176,32 +178,42 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    'for (height, hash) in tips',
    'Ok(match latest')),
  ('SumeragiV2NativeApplicationEvidence',
-  'crates/iroha_core/src/sumeragi/lane_planner.rs',
-  'fn',
-  'v2_known_lane_tip_for_route',
-  ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
-   'tip.lane_id == lane_id\n'
-   '                && tip.dataspace_id == dataspace_id\n'
-   '                && tip.lane_incarnation == lane_incarnation',
-   '.read_latest_native_amx_participant_application_receipt(lane_id)\n'
-   '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
-   'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {',
-   'if descriptor.dataspace_id != dataspace_id\n'
-   '                    || descriptor.lane_incarnation != lane_incarnation\n'
-   '                    || latest_receipt.application_block_height >= proposal_height',
-   '} else if matching.is_empty() {',
-   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
-   'if hashes.len() > 1 {\n        return Ok(None);\n    }'),
-  ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
-   '.read_latest_native_amx_participant_application_receipt(lane_id)',
-   'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {',
-   'return Ok(None);',
-   'crate::kura::NativeAmxLatestReceiptObservation::Applied(latest_receipt) => {',
-   'if descriptor.dataspace_id != dataspace_id',
-   '} else if matching.is_empty() {',
-   'return Ok(None);',
-   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
-   'if hashes.len() > 1')),
+ 'crates/iroha_core/src/sumeragi/lane_planner.rs',
+ 'fn',
+ 'v2_known_lane_tip_for_route',
+ ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
+  'tip.lane_id == lane_id\n'
+  '                && tip.dataspace_id == dataspace_id\n'
+  '                && tip.lane_incarnation == lane_incarnation',
+  'if !kura.emergency_fast_startup_enabled()',
+  '.read_native_amx_participant_application_history(lane_id)\n'
+  '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
+  '.entries()\n            .next_back()\n            .map(|(_, observation)| observation)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)',
+  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(',
+  'if descriptor.dataspace_id != dataspace_id\n'
+  '                    || descriptor.lane_incarnation != lane_incarnation\n'
+  '                    || latest_receipt.application_block_height >= proposal_height',
+  '} else if matching.is_empty() {',
+  'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
+  'if hashes.len() > 1 {\n        return Ok(None);\n    }'),
+ ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
+  '.read_native_amx_participant_application_history(lane_id)\n'
+  '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
+  '.entries()\n            .next_back()\n            .map(|(_, observation)| observation)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)',
+  'return Ok(None);',
+  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(',
+  'if descriptor.dataspace_id != dataspace_id',
+  'return Ok(None);',
+  '} else if matching.is_empty() {',
+  'return Ok(None);',
+  'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
+  'if hashes.len() > 1')),
  ('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
   'fn',
@@ -593,14 +605,12 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    'retire_autonomous_payload_batch(&losing_pending)',
    'let canonical_recovery = (|| -> crate::kura::Result<bool> {',
    'Ok(canonical_v2_lane_payload_matches_kura(',
-   'let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {\n'
-   '            return V2LaneIngressOutcome::Rejected;\n'
-   '        };'),
+   'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {'),
   ('if !origin_matches || block.header().height().get() != self.context.height',
    'external_queue_plan_synced_entrypoint_index(block).is_some()',
    'return V2LaneIngressOutcome::Rejected;',
    'let canonical_recovery = (|| -> crate::kura::Result<bool> {',
-   'let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery)',
+   'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {',
    'retain_pending_certified_merge_entry_for_locked_carrier(',
    'retire_autonomous_payload_batch(&losing_pending)')),
  ('SumeragiV2NativeApplicationEvidence',
@@ -719,6 +729,41 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
             errors.append(f"{path}: authority/recovery item {symbol} violates order at {token!r}")
             break
         cursor = index + len(token)
+
+
+    code = _code(item)
+    if symbol == "v2_known_lane_tip_for_route":
+        # Every authenticated occupied but incomplete highest slot must abstain;
+        # no pending repair may be filtered out to expose an older Applied slot.
+        pending = """Some(
+            crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)
+            | crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)
+            | crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),
+        ) => { return Ok(None); }"""
+        current = """if descriptor.dataspace_id != dataspace_id
+            || descriptor.lane_incarnation != lane_incarnation
+            || latest_receipt.application_block_height >= proposal_height
+            { return Ok(None); } matching.push(LaneBlockTip {"""
+        for predicate in (pending, current):
+            if _code(predicate) not in code:
+                errors.append("Native lane tip must abstain on the highest pending, stale or future application")
+        if code.count(_code("read_native_amx_participant_application_history(")) != 1:
+            errors.append("Native lane tip must read one authenticated complete history")
+    if symbol == "V2LaneWorkAdapter::bind_locked_global_body_from_origin":
+        # The storage failure may be logged, but cannot become a successful
+        # canonical match or reach any retention/reservation mutation.
+        rejection = """let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                if empty_merge_body {
+                    iroha_logger::warn!(?subject, ?error,
+                        "rejected empty merge carrier after canonical Kura read");
+                }
+                return V2LaneIngressOutcome::Rejected;
+            }
+        };"""
+        if _code(rejection) not in code:
+            errors.append("canonical recovery storage failure must reject before mutation")
 
 
 def validate_authority_recovery_contract(

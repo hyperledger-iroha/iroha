@@ -1260,7 +1260,7 @@ async fn trusted_internal_transaction_read_requires_exact_hash_and_account_invol
     ));
     let (block, entrypoint_hash) = make_signed_block(1, None);
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let expected = crate::routing::committed_transactions_snapshot(app.state.as_ref())
         .expect("committed transaction snapshot")
@@ -1529,11 +1529,11 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
     assert_route_unavailable_response(&response);
 }
 #[test]
-fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
+fn trigger_completion_query_projects_only_authenticated_persisted_calls() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let response = super::trigger_completion_query_response(
         &app,
@@ -1545,13 +1545,12 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
     assert_eq!(response.completions.len(), 1);
     let record = response.completions.first().expect("completion");
-    assert_eq!(record.source, "reconstructed_result");
+    assert_eq!(record.source, "execution_output");
     assert_eq!(record.block_height, 1);
     assert_eq!(record.entrypoint_index, Some(0));
     assert_eq!(record.completion.trigger_id, sample.trigger_id.to_string());
@@ -1559,21 +1558,20 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
         record.completion.trigger_execution_hash,
         sample.entrypoint_hash.to_string()
     );
-    let without_reconstruction = super::trigger_completion_query_response(
+    let missing_call = super::trigger_completion_query_response(
         &app,
         &TriggerCompletionQuery {
             id: None,
-            entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+            entrypoint_hash: Some(Hash::new(b"missing execution call").to_string()),
             outcome: None,
             from_height: Some(1),
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(false),
         },
     )
     .expect("query response");
-    assert!(without_reconstruction.completions.is_empty());
+    assert!(missing_call.completions.is_empty());
     let persisted_response = super::trigger_completion_query_response(
         &app,
         &TriggerCompletionQuery {
@@ -1584,13 +1582,12 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
     assert_eq!(persisted_response.completions.len(), 1);
     let persisted = persisted_response.completions.first().expect("completion");
-    assert_eq!(persisted.source, "block_result");
+    assert_eq!(persisted.source, "execution_output");
     assert_eq!(
         persisted.completion.trigger_execution_hash,
         sample.trigger_execution_hash.to_string()
@@ -1599,26 +1596,29 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
 #[test]
 fn trigger_completion_record_visit_stops_without_buffering_the_block() {
     let mut sample = make_persisted_data_trigger_completion_block(1, None);
-    sample.block.set_trigger_completions(vec![
-        TriggerCompletedEvent::new(
-            sample.trigger_id.clone(),
-            sample.trigger_execution_hash,
-            0,
-            TriggerCompletedOutcome::Success,
-        ),
-        TriggerCompletedEvent::new(
-            sample.trigger_id.clone(),
-            sample.trigger_execution_hash,
-            1,
-            TriggerCompletedOutcome::Success,
-        ),
-    ]);
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, InvocationCompletionV1};
+    let mut rows = sample.block.execution_outputs().to_vec();
+    let ExecutionOutputV1::Network(row) = &mut rows[0] else {
+        unreachable!()
+    };
+    let step = DataTriggerStep {
+        id: sample.trigger_id.clone(),
+        instructions: ExecutionStep(ConstVec::new_empty()),
+    };
+    row.result =
+        iroha_data_model::transaction::TransactionResult::new(Ok(vec![step.clone(), step]));
+    row.completions.push(InvocationCompletionV1 {
+        trigger_id: sample.trigger_id.clone(),
+        callback_index: 1,
+        outcome: TriggerCompletedOutcome::Success,
+    });
+    crate::test_utils::attach_fixture_execution_outputs(&mut sample.block, rows);
     let mut visited = 0_u8;
-    let completed =
-        super::visit_trigger_completion_records_for_block(&sample.block, 1, false, None, |_| {
-            visited = visited.saturating_add(1);
-            false
-        });
+    let completed = super::visit_trigger_completion_records_for_block(&sample.block, 1, |_| {
+        visited = visited.saturating_add(1);
+        false
+    })
+    .unwrap();
     assert!(!completed);
     assert_eq!(
         visited, 1,
@@ -1630,16 +1630,13 @@ fn trigger_completion_query_caps_explicit_from_height() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let mut prev_hash = Some(block_hash);
     for height in 2..=4 {
-        let mut block = make_empty_signed_block(height, prev_hash, 0);
-        block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("empty test block should accept empty results");
+        let block = make_empty_signed_block(height, prev_hash, 0);
         let header = block.header();
-        let hash = store_block(&app, block);
+        let hash = store_finalized_history_fixture(&app, block);
         record_committed_block_hash_for_test(&app, header, hash);
         prev_hash = Some(hash);
     }
@@ -1653,7 +1650,6 @@ fn trigger_completion_query_caps_explicit_from_height() {
             to_height: Some(4),
             limit: Some(10),
             scan_limit_blocks: Some(2),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
@@ -1670,7 +1666,6 @@ fn trigger_completion_query_caps_explicit_from_height() {
             to_height: Some(4),
             limit: Some(10),
             scan_limit_blocks: Some(2),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
@@ -1684,9 +1679,16 @@ fn canonical_outcome_test_fixture(
     let app = mk_app_state_for_tests();
     let (mut block, entrypoint_hash) = make_signed_block(1, None);
     if let Some(reason) = rejection {
-        block
-            .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![Err(reason)])
-            .expect("replace the fixture's execution result before canonical storage");
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Err(reason)),
+                    completions: vec![],
+                },
+            )],
+        );
     }
     let hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     (app, hash)
@@ -1698,7 +1700,7 @@ fn append_canonical_outcome_test_block(
 ) {
     let block = make_empty_signed_block(2, Some(anchor.block_hash), 10);
     let header = block.header();
-    let block_hash = store_block(app, block);
+    let block_hash = store_finalized_history_fixture(app, block);
     record_committed_block_hash_for_test(app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     let membership = if rebind_transaction {
@@ -1894,23 +1896,26 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
         .expect("indexed transaction");
     let canonical = app.kura.get_block(anchor.height).expect("canonical block");
     let mut replacement = canonical.as_ref().clone();
-    replacement
-        .set_transaction_results(
-            Vec::new(),
-            &[anchor.entrypoint_hash],
-            vec![Err(TransactionRejectionReason::Validation(
-                ValidationFail::TooComplex,
-            ))],
-        )
-        .expect("construct a substituted result-bearing block");
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut replacement,
+        vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: iroha_data_model::transaction::TransactionResult::new(Err(
+                    TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                )),
+                completions: vec![],
+            },
+        )],
+    );
     assert_eq!(
         replacement.hash(),
         canonical.hash(),
         "header hash omits execution results"
     );
     assert_ne!(
-        replacement.header().result_merkle_root(),
-        canonical.header().result_merkle_root()
+        replacement.output_merkle_commitment(),
+        canonical.output_merkle_commitment()
     );
     assert_ne!(
         replacement.encode_wire().expect("replacement wire"),
@@ -1949,10 +1954,13 @@ async fn canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cac
     journal.commit_for_tests();
     let error = pipeline_status_terminal_or_state_entry(&app, &hash)
         .expect_err("a cached terminal result must not mask canonical authentication failure");
-    assert!(
-        query_conversion_message(&error)
-            .expect("projection error")
-            .contains("does not match the committed State journal")
+    let unavailable = iroha_data_model::query::error::QueryExecutionFail::Conversion(
+        "canonical Network transaction history is inconsistent: finalized carrier is unavailable".to_owned(),
+    );
+    assert_eq!(
+        query_conversion_message(&error).expect("projection error"),
+        format!("committed transaction status projection is inconsistent: {unavailable}"),
+        "an unavailable exact canonical hash cannot inherit a cached terminal result",
     );
     assert_eq!(
         app.pipeline_status_cache
@@ -1970,7 +1978,7 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
@@ -2002,7 +2010,7 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     let app = mk_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let bogus_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         [0x76; Hash::LENGTH],
@@ -2035,7 +2043,11 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     else {
         panic!("inconsistent committed membership must fail closed");
     };
-    assert!(message.contains("absent from its external body and has no merge reference"));
+    assert_eq!(
+        message,
+        format!("committed transaction status projection is inconsistent: transaction {bogus_hash} is absent from its finalized carrier"),
+        "authenticated output absence must not be confused with missing finality",
+    );
 }
 #[tokio::test]
 async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
@@ -2045,7 +2057,7 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     let tx_hashes: HashSet<_> = [sample.entrypoint_hash].into_iter().collect();
@@ -2097,7 +2109,7 @@ fn store_and_index_transaction_details_block(
         usize::try_from(header.height().get()).expect("transaction-details height fits usize"),
     )
     .expect("transaction-details height is nonzero");
-    let block_hash = store_block(app, block);
+    let block_hash = store_finalized_history_fixture(app, block);
     record_committed_block_hash_for_test(app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     state_block
@@ -2263,12 +2275,13 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         amount: Quantity::from(7_u32),
         status: AssetBatchTransferLegStatus::Applied,
     };
-    block
-        .set_batch_transfer_outcomes(std::collections::BTreeMap::from([(
-            entrypoint_hash,
-            vec![outcome.clone()],
-        )]))
-        .expect("attach batch receipt to transaction-details fixture");
+    let mut outputs = block.execution_outputs().to_vec();
+    let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+        &mut outputs[0] else { unreachable!("single Network fixture") };
+    assert_eq!(output.input_index, 0);
+    assert_eq!(block.network_entrypoint_at(0).unwrap().hash(), entrypoint_hash);
+    output.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
+    crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
     let signed_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     let public = pipeline_status_response(
         app.clone(),
@@ -2308,6 +2321,22 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             )
             .expect("typed transaction-details canonical Norito");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+            details.transaction.output()
+        else {
+            panic!("transaction details must carry a Network output");
+        };
+        assert_eq!(
+            output.input_index,
+            details.transaction.entrypoint_proof().leaf_index()
+        );
+        assert_eq!(
+            output.input_index,
+            details.transaction.output_proof().leaf_index()
+        );
+        let details_json = norito::json::to_value(&details).unwrap();
+        assert_eq!(details_json.as_object().unwrap().len(), 2);
+        assert!(details_json.get("trigger_completions").is_none());
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),
             &[outcome.clone()]
@@ -2453,14 +2482,10 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                 ),
                 "{label}: a queued target must not establish committed read authority"
             );
-            let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-            let signature = checked_torii_test_block_signature(
-                0,
-                &sender_key,
-                &header,
-                "sign native beneficiary details block",
-            );
-            let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
+            let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+            builder.push_transaction(transaction);
+            let mut block = builder.build_with_signature(0, sender_key.private_key());
             let result = if applied {
                 Ok(DataTriggerSequence::default())
             } else {
@@ -2468,9 +2493,16 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                     ValidationFail::NotPermitted("native beneficiary fixture rejected".to_owned()),
                 ))
             };
-            block
-                .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![result])
-                .expect("bind actual committed native result");
+            crate::test_utils::attach_fixture_execution_outputs(
+                &mut block,
+                vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: iroha_data_model::transaction::TransactionResult::new(result),
+                        completions: vec![],
+                    },
+                )],
+            );
             store_and_index_transaction_details_block(&app, block, entrypoint_hash);
             for (caller_label, key_pair, allowed) in [
                 ("sender", &sender_key, true),
@@ -2633,7 +2665,7 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
     let signed_entrypoint_alias =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
@@ -2697,7 +2729,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     app.pipeline_status_cache.record_entry(
         tx_hash,
@@ -2735,7 +2767,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
@@ -2869,10 +2901,9 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
         .state
         .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
         .expect("committed fixture block")
-        .header()
-        .result_merkle_root()
-        .map(|hash| Hash::prehashed(*hash.as_ref()))
-        .expect("fixture result root");
+        .output_merkle_commitment()
+        .map(|commitment| Hash::prehashed(*commitment.root().as_ref()))
+        .expect("fixture output root");
     assert_ne!(
         expected_root, result_root,
         "the result Merkle root must be an adversarially distinct fallback candidate"
@@ -3109,47 +3140,70 @@ async fn ledger_state_endpoints_reject_forged_v2_finality_signature() {
             .expect_err("forged finality proof must fail closed");
     assert_ledger_state_handler_status(proof_error, StatusCode::INTERNAL_SERVER_ERROR);
 }
+include!("committed_network_proof_support.rs");
+
 #[tokio::test]
 async fn block_proof_handler_emits_norito() {
-    let app = mk_app_state_for_tests();
-    let (block, entry_hash) = make_signed_block(1, None);
-    let expected_block_hash = block.hash();
-    let expected_executed_wire_hash = block
-        .executed_block_wire_hash()
-        .expect("executed block wire hash");
-    let expected_entry_commitment = block
-        .full_entry_merkle_commitment()
-        .expect("full entry commitment");
-    let expected_result_commitment = block.result_merkle_commitment().expect("result commitment");
-    store_block(&app, block);
-    let entry_hex = hex::encode(entry_hash.as_ref());
-    let resp = super::handler_block_proof(State(app), axum::extract::Path((1, entry_hex)))
+    use iroha_data_model::block::{
+        execution_output::ExecutionOutputV1,
+        proofs::{BlockProofs, TrustedBlockProofAnchor},
+    };
+    let (app, block, artifact) = committed_network_proof_app_for_test();
+    let fixture_context = artifact.context_id();
+    let expected_entry_commitment = block.network_input_merkle_commitment().unwrap();
+    let expected_output_commitment = block.output_merkle_commitment().unwrap();
+    assert_eq!(expected_entry_commitment.leaf_count().get(), 2);
+    assert_eq!(expected_output_commitment.leaf_count().get(), 4);
+    for (index, entry) in block.network_entrypoints().enumerate() {
+        let entry_hash = entry.hash();
+        let entry_hex = hex::encode(entry_hash.as_ref());
+        let resp = super::handler_block_proof(
+            State(Arc::clone(&app)),
+            axum::extract::Path((1, entry_hex)),
+        )
         .await
-        .expect("ok")
-        .into_response();
-    assert_eq!(
-        resp.headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .map(HeaderValue::as_bytes),
-        Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
-    );
-    let bytes = torii_body_bytes(resp, "norito payload").await;
-    let archived = norito::from_bytes::<BlockProofs>(&bytes).expect("archive decode");
-    let proofs: BlockProofs = norito::core::DeserializePayload::deserialize(archived);
-    assert_eq!(proofs.block_height.get(), 1);
-    assert_eq!(proofs.block_hash, expected_block_hash);
-    assert_eq!(proofs.executed_block_wire_hash, expected_executed_wire_hash);
-    assert_eq!(proofs.entry_hash, entry_hash);
-    assert_eq!(proofs.entry_commitment, expected_entry_commitment);
-    assert!(proofs.entry_proof.verify(&expected_entry_commitment));
-    assert_eq!(proofs.result_commitment, expected_result_commitment);
-    let result_proof = proofs.result_proof;
-    assert_eq!(
-        proofs.entry_proof.proof().leaf_index(),
-        result_proof.proof().leaf_index()
-    );
-    assert!(result_proof.verify(&expected_result_commitment));
-    assert!(proofs.fastpq_transcripts.is_empty());
+        .expect("exact finalized Network proof");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let bytes = torii_body_bytes(resp, "norito payload").await;
+        let proofs: BlockProofs = norito::decode_canonical(&bytes).expect("canonical proof frame");
+        assert_eq!(proofs.block_height.get(), 1);
+        assert_eq!(proofs.block_hash, block.hash());
+        assert_eq!(
+            proofs.executed_block_wire_hash,
+            block.executed_block_wire_hash().unwrap()
+        );
+        assert_eq!(proofs.entry_hash, entry_hash);
+        assert_eq!(proofs.entry_commitment, expected_entry_commitment);
+        assert!(proofs.entry_proof.verify(&expected_entry_commitment));
+        assert_eq!(proofs.output_commitment, expected_output_commitment);
+        assert!(proofs.output_proof.verify(&expected_output_commitment));
+        assert_eq!(
+            proofs.output_proof.output(),
+            &block.execution_outputs()[index]
+        );
+        let ExecutionOutputV1::Network(row) = proofs.output_proof.output() else {
+            panic!("Network proof")
+        };
+        assert_eq!(usize::try_from(row.input_index).unwrap(), index);
+        assert_eq!(proofs.entry_proof.proof().leaf_index(), row.input_index);
+        assert_eq!(proofs.output_proof.proof().leaf_index(), row.input_index);
+        assert_eq!(row.result.is_err(), index == 1);
+        assert!(proofs.fastpq_transcripts.is_empty());
+        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            &block,
+            &artifact,
+            fixture_context,
+            &entry_hash,
+        )
+        .unwrap();
+        assert!(proofs.verify(&anchor));
+    }
 }
 const EXECUTED_BLOCK_WIRE_TEST_OWNER_STACK_BYTES: usize = 8 * 1024 * 1024;
 fn run_executed_block_wire_handler_test<F, Fut>(name: &'static str, test: F)
@@ -3175,17 +3229,21 @@ where
 #[test]
 fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
     run_executed_block_wire_handler_test("executed-wire-canonical", || async {
-        let app = mk_app_state_for_tests();
-        let (block, _) = make_signed_block(1, None);
-        let header = block.header();
+        let (app, block, artifact) = committed_network_proof_app_for_test();
         let expected_wire = block.encode_wire().expect("canonical executed wire");
-        let block_hash = store_block(&app, block);
-        record_committed_block_hash_for_test(&app, header, block_hash);
+        let commitment = &artifact.commit_qc.execution_commitment;
+        assert_eq!(
+            commitment.executed_block_wire_hash,
+            Hash::new(&expected_wire)
+        );
+        assert_eq!(
+            commitment.executed_block_wire_len,
+            u64::try_from(expected_wire.len()).unwrap()
+        );
         let response =
             super::handler_ledger_executed_block_wire(State(app), axum::extract::Path(1))
                 .await
-                .expect("finalized block wire")
-                .into_response();
+                .expect("finalized block wire");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
@@ -3203,6 +3261,10 @@ fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
         );
         let actual_wire = torii_body_bytes(response, "wire body").await;
         assert_eq!(actual_wire.as_ref(), expected_wire.as_slice());
+        assert_eq!(
+            Hash::new(actual_wire.as_ref()),
+            commitment.executed_block_wire_hash
+        );
     });
 }
 #[test]
@@ -3289,20 +3351,38 @@ fn executed_block_wire_handler_fails_closed_on_hash_and_execution_shape_drift() 
     });
 }
 #[test]
-fn executed_block_wire_carrier_bound_is_exact() {
-    let maximum =
-        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1;
-    assert!(super::finalized_block_wire_fits_carrier_v1(maximum));
-    assert!(!super::finalized_block_wire_fits_carrier_v1(
-        maximum.saturating_add(1)
-    ));
+fn block_proof_capacity_responses_distinguish_work_from_bytes() {
+    for resource in [
+        BlockProofResource::BlockWireBytes,
+        BlockProofResource::ResponseBytes,
+    ] {
+        assert_eq!(
+            super::block_proof_capacity_response(resource, 33, 32).status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
     assert_eq!(
-        super::executed_block_wire_too_large_response(
-            NonZeroU64::new(1).expect("non-zero height"),
-        )
-        .status(),
-        StatusCode::PAYLOAD_TOO_LARGE,
+        super::block_proof_capacity_response(BlockProofResource::WorkItems, 7, 6).status(),
+        StatusCode::TOO_MANY_REQUESTS
     );
+    assert_eq!(
+        super::executed_block_wire_too_large_response(NonZeroU64::new(1).unwrap()).status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+#[test]
+fn block_proof_limits_use_the_configured_query_work_ceiling() {
+    let app = mk_app_state_for_tests();
+    let limits = super::block_proof_limits(&app.state);
+    assert_eq!(
+        limits.max_work_items,
+        app.state.pipeline_snapshot().query_max_fetch_size
+    );
+    assert_eq!(
+        limits.max_block_wire_bytes,
+        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 as u64
+    );
+    assert_eq!(limits.max_response_bytes, limits.max_block_wire_bytes);
 }
 #[test]
 fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
@@ -3337,16 +3417,15 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
             requested: height,
             actual: other_height,
         },
+        BlockProofError::Storage {
+            block_height: height,
+            reason: "bad finalized wire".into(),
+        },
+        BlockProofError::InvalidOutputs {
+            block_height: height,
+            reason: "bad complete source join".into(),
+        },
         BlockProofError::MissingResults(height),
-        BlockProofError::ExecutionResultMissing {
-            entry_hash,
-            block_height: height,
-        },
-        BlockProofError::MerkleProofUnavailable {
-            entry_hash,
-            block_height: height,
-        },
-        BlockProofError::ExecutedBlockWireHashUnavailable(height),
     ] {
         assert_eq!(
             super::map_block_proof_error(error).into_response().status(),
