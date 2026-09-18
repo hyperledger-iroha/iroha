@@ -50,6 +50,13 @@ impl Fixture {
     }
 
     fn build_with_epoch(epoch: u64) -> Self {
+        Self::build_with_epoch_and_instructions(epoch, Vec::new())
+    }
+
+    fn build_with_epoch_and_instructions(
+        epoch: u64,
+        instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    ) -> Self {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let genesis = key(101, Algorithm::Ed25519);
         let canary = key(102, Algorithm::Ed25519);
@@ -85,11 +92,15 @@ impl Fixture {
         npos.evidence_horizon_blocks = epoch;
         npos.slashing_delay_blocks = 1;
         npos.validate().unwrap();
-        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(CHAIN_ID.into(), ".")
+        let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(CHAIN_ID.into(), ".")
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
-            .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
+            .append_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        for instruction in instructions {
+            builder = builder.append_instruction(instruction);
+        }
+        let manifest = builder
             .build_raw()
             .unwrap()
             .with_chain_discriminant(CHAIN_DISCRIMINANT)
@@ -281,6 +292,31 @@ fn execute_fixture_genesis(
 pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     let fixture = Fixture::new();
     (fixture.block, fixture.genesis)
+}
+
+/// Reuse native genesis execution with an explicit grant, leaving the default fixture unchanged.
+pub(crate) fn deployment_genesis_administrator_fixture() -> (SignedBlock, KeyPair) {
+    static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
+    let fixture = FIXTURE.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("epoch-administrator-genesis-fixture".into())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let administrator =
+                    AccountId::new(key(101, Algorithm::Ed25519).public_key().clone());
+                let permission = iroha_data_model::permission::Permission::new(
+                    "CanSetParameters".parse().unwrap(),
+                    iroha_primitives::json::Json::from(norito::json::Value::Null),
+                );
+                let grant =
+                    iroha_data_model::isi::Grant::account_permission(permission, administrator);
+                Fixture::build_with_epoch_and_instructions(20, vec![grant.into()])
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    });
+    (fixture.block.clone(), fixture.genesis.clone())
 }
 
 #[test]

@@ -1002,6 +1002,44 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
         )
     }
 }
+/// Passive identity of the one Apply owned by native interrupted-tip replay.
+/// It cannot execute an effect or release a runtime pending binding.
+#[derive(Debug)]
+#[must_use = "pending Kura comparison must join its exact lifecycle census"]
+pub(in crate::sumeragi) struct PendingKuraApplyComparisonV1 {
+    expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+    candidate: CandidateAdmission,
+}
+impl PendingKuraApplyComparisonV1 {
+    /// Authenticate the complete original standalone Apply row without rewriting it.
+    pub(super) fn matches_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        self.candidate.replay_authority_is_exact(context)
+            && RecoveredDecisionApplyCandidateLineageV1::candidate_matches_record(
+                &self.candidate,
+                record,
+                OwnerId::new(self.candidate.causal_root, record.ordinal()),
+                None,
+                super::schema::DurableContinuation::None,
+            )
+            && record.ordinal() != 0
+    }
+    /// Borrow inert comparison data only inside lifecycle census and settlement.
+    pub(super) const fn candidate(&self) -> &CandidateAdmission {
+        &self.candidate
+    }
+    /// Rejoin the native expectation that remains owned by the PendingKura driver.
+    pub(super) fn matches_expected(
+        &self,
+        expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+    ) -> bool {
+        self.expected == expected
+    }
+}
+
 impl RecoveredDecisionApplyReplayLineageV1 {
     /// Derive the closed body lineage from one exact recovered Decision Fetch.
     ///
@@ -1198,6 +1236,37 @@ impl RecoveredDecisionApplyReplayLineageV1 {
                 candidate.payload,
             ) == Some(true))
         .then_some(candidate)
+    }
+    /// Project a comparison-only Apply while native PendingKura retains execution.
+    /// The original WAL and same-store BodyFrame independently fix its authority.
+    pub(in crate::sumeragi) fn project_pending_kura_comparison(
+        &self,
+        verified: &VerifiedHeightContext,
+        expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<PendingKuraApplyComparisonV1> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if !self.is_stage_closed(context)
+            || expected.context_id() != verified.context().id()
+            || expected.height() != verified.context().height
+            || !matches!(effect, AdapterEffect::Apply { subject, .. } if subject.block_hash == expected.block_hash())
+        {
+            return None;
+        }
+        let candidate = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context, verified, effect, pending,
+            )
+            .ok()?,
+            DurablePayloadReference::BodyFrame(self.body.body_frame.durable_reference()),
+            self.apply.clone(),
+        )?;
+        Some(PendingKuraApplyComparisonV1 {
+            expected,
+            candidate,
+        })
     }
     /// Consume the inert replay family into the sole fixed reducer-derived
     /// Store/Validate/Apply logical lineage.
@@ -4747,6 +4816,7 @@ pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
     entries: Vec<PreparedDurableCertifiedBodyPipelineStartupEntryV1>,
     replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
     output_frontier: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
+    pending_kura_apply: Option<PendingKuraApplyComparisonV1>,
 }
 /// One heap-owned prepared carrier, retained through registry installation errors.
 pub(super) enum PreparedDurableCertifiedBodyPipelineWorkV1 {
@@ -5076,6 +5146,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
             entries,
             replay_steps,
             output_frontier: None,
+            pending_kura_apply: None,
         })
     }
     #[cfg(test)]
@@ -5228,6 +5299,20 @@ impl PreparedDurableCertifiedBodyPipelineWorkV1 {
     }
 }
 impl PreparedDurableCertifiedBodyPipelineStartupV1 {
+    /// Retain the factory's passive comparison until the exact storage assembly.
+    pub(super) fn with_pending_kura_apply(
+        mut self,
+        pending: Option<PendingKuraApplyComparisonV1>,
+    ) -> Self {
+        self.pending_kura_apply = pending;
+        self
+    }
+    /// Transfer the passive comparison exactly once into the owner-held census.
+    pub(super) fn take_pending_kura_apply(&mut self) -> Option<PendingKuraApplyComparisonV1> {
+        self.pending_kura_apply.take()
+    }
+}
+impl PreparedDurableCertifiedBodyPipelineStartupV1 {
     /// Borrow only the installed WAL frontier retained after exact adapter replay.
     pub(super) const fn output_frontier(
         &self,
@@ -5335,6 +5420,7 @@ impl PreparedDurableCertifiedBodyPipelineStartupV1 {
     ) -> Result<(), Self> {
         let mut addresses = std::collections::BTreeSet::new();
         if !registry.is_empty()
+            || self.pending_kura_apply.is_some()
             || self.entries.iter().any(|entry| {
                 entry.candidate.is_some()
                     || !addresses.insert(entry.work.address())

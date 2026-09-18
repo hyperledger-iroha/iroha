@@ -1,4 +1,4 @@
-/// Complete move-only census of non-WAL lifecycle output rows recovered at cold open.
+/// Complete move-only census of cold outputs and the passive interrupted Apply.
 ///
 /// Entries remain keyed by their immutable LedgerV1 ordinal.  The candidate
 /// clone admitted into the logical coordinator is comparison-only; executable
@@ -7,6 +7,9 @@
 #[must_use = "cold lifecycle output recovery must be installed or retained intact"]
 pub(in crate::sumeragi) struct PreparedLifecycleOutputRecoveryV1 {
     entries: BTreeMap<u128, super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1>,
+    // Passive: the native PendingKura executor, never ordinary output settlement,
+    // owns execution. This exact row survives until verified application and fsync.
+    pending_apply: Option<(u128, super::PendingKuraApplyComparisonV1)>,
 }
 
 /// Copy seal for one cold-open Broadcast retained outside the concrete registry.
@@ -131,21 +134,70 @@ impl PreparedLifecycleOutputRecoveryV1 {
                 );
             }
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            pending_apply: None,
+        })
+    }
+
+    fn attach_pending_apply(
+        &mut self,
+        ledger: &LifecycleLedgerV1,
+        comparison: super::PendingKuraApplyComparisonV1,
+    ) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
+        let mut live = ledger.records().iter().filter(|record| {
+            record.terminal() == Some(None)
+                && record.work_class() == Some(LifecycleWorkClass::Apply)
+        });
+        let Some(record) = live.next() else {
+            return Ok(());
+        };
+        if live.next().is_some()
+            || !comparison.matches_record(ledger.context(), record)
+            || self.pending_apply.is_some()
+            || self.entries.contains_key(&record.ordinal())
+        {
+            return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                "pending Kura retained Apply does not match its exact Decision and BodyFrame",
+            ));
+        }
+        self.pending_apply = Some((record.ordinal(), comparison));
+        Ok(())
+    }
+
+    fn owns_candidate(&self, candidate: &CandidateAdmission) -> bool {
+        self.pending_apply
+            .as_ref()
+            .is_some_and(|(_, comparison)| comparison.candidate() == candidate)
     }
 
     fn owns_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
-        self.entries.get(&record.ordinal()).is_some_and(|output| {
-            output.owner() == record.owner()
-                && record.key() == Some(output.candidate().key)
-                && record.work_class() == Some(output.candidate().work_class)
-                && record.stage() == Some(output.candidate().stage)
-                && record.terminal() == Some(None)
-                && record.reconstruction_source() == output.candidate().reconstruction_source
-                && record.durable_payload() == Some(output.candidate().payload)
-                && record.continuation() == Some(DurableContinuation::None)
-                && record.replay_matches_candidate(output.candidate())
-        })
+        self.pending_apply
+            .as_ref()
+            .is_some_and(|(ordinal, comparison)| {
+                *ordinal == record.ordinal()
+                    && record.owner() == OwnerId::new(comparison.candidate().causal_root, *ordinal)
+                    && record.key() == Some(comparison.candidate().key)
+                    && record.work_class() == Some(LifecycleWorkClass::Apply)
+                    && record.stage() == Some(comparison.candidate().stage)
+                    && record.terminal() == Some(None)
+                    && record.reconstruction_source()
+                        == comparison.candidate().reconstruction_source
+                    && record.durable_payload() == Some(comparison.candidate().payload)
+                    && record.continuation() == Some(DurableContinuation::None)
+                    && record.replay_matches_candidate(comparison.candidate())
+            })
+            || self.entries.get(&record.ordinal()).is_some_and(|output| {
+                output.owner() == record.owner()
+                    && record.key() == Some(output.candidate().key)
+                    && record.work_class() == Some(output.candidate().work_class)
+                    && record.stage() == Some(output.candidate().stage)
+                    && record.terminal() == Some(None)
+                    && record.reconstruction_source() == output.candidate().reconstruction_source
+                    && record.durable_payload() == Some(output.candidate().payload)
+                    && record.continuation() == Some(DurableContinuation::None)
+                    && record.replay_matches_candidate(output.candidate())
+            })
     }
 
     fn splice_candidates(
@@ -157,6 +209,12 @@ impl PreparedLifecycleOutputRecoveryV1 {
                 || output.candidate().initial_state != super::InitialLifecycleState::Ready
         }) {
             return false;
+        }
+        if let Some((_, comparison)) = &self.pending_apply {
+            if candidates.contains_key(&comparison.candidate().key) {
+                return false;
+            }
+            candidates.insert(comparison.candidate().key, comparison.candidate().clone());
         }
         for output in self.entries.values() {
             let candidate = output.candidate().clone();
@@ -174,9 +232,9 @@ impl PreparedLifecycleOutputRecoveryV1 {
             .filter(|output| output.requires_rejected_body_marker())
     }
 
-    /// Return whether the cold census contains no executable output owner.
+    /// Return whether no cold output or passive interrupted Apply remains.
     pub(in crate::sumeragi) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.pending_apply.is_none()
     }
 
     /// Project the complete authenticated cold-output ordinal census.
@@ -184,14 +242,28 @@ impl PreparedLifecycleOutputRecoveryV1 {
         &self,
         coordinator: &LifecycleCoordinator,
     ) -> Option<BTreeSet<u128>> {
-        self.entries
-            .iter()
-            .all(|(ordinal, output)| {
-                *ordinal == output.ordinal()
-                    && coordinator.ready_index.contains(ordinal)
-                    && recovered_output_matches_ready_coordinator_row(coordinator, output)
-            })
-            .then(|| self.entries.keys().copied().collect())
+        let mut ordinals: BTreeSet<_> = self.entries.keys().copied().collect();
+        if !self.entries.iter().all(|(ordinal, output)| {
+            *ordinal == output.ordinal()
+                && coordinator.ready_index.contains(ordinal)
+                && recovered_output_matches_ready_coordinator_row(coordinator, output)
+        }) {
+            return None;
+        }
+        if let Some((ordinal, comparison)) = &self.pending_apply {
+            if !coordinator.ready_index.contains(ordinal)
+                || !recovered_candidate_matches_ready_coordinator_row(
+                    coordinator,
+                    comparison.candidate(),
+                    OwnerId::new(comparison.candidate().causal_root, *ordinal),
+                    *ordinal,
+                )
+                || !ordinals.insert(*ordinal)
+            {
+                return None;
+            }
+        }
+        Some(ordinals)
     }
 }
 
@@ -243,11 +315,11 @@ impl super::ProductionLifecycleOwnerV1 {
         )
     }
 
-    /// Return whether an authenticated cold output still awaits exact settlement.
+    /// Return whether a cold output or passive interrupted Apply awaits settlement.
     pub(in crate::sumeragi) fn has_recovered_lifecycle_outputs(&self) -> bool {
         self.recovered_lifecycle_outputs
             .as_ref()
-            .is_some_and(|outputs| !outputs.entries.is_empty())
+            .is_some_and(|outputs| !outputs.is_empty())
     }
 
     /// Return only the number of authenticated cold output owners retained by
@@ -255,7 +327,9 @@ impl super::ProductionLifecycleOwnerV1 {
     pub(in crate::sumeragi) fn recovered_lifecycle_output_count(&self) -> usize {
         self.recovered_lifecycle_outputs
             .as_ref()
-            .map_or(0, |outputs| outputs.entries.len())
+            .map_or(0, |outputs| {
+                outputs.entries.len() + usize::from(outputs.pending_apply.is_some())
+            })
     }
 
     /// Authenticate one Ready cold-open Broadcast retained outside the registry.
@@ -301,6 +375,72 @@ impl super::ProductionLifecycleOwnerV1 {
         })
     }
 
+    /// Terminalize only the exact surviving Apply after native replay proves StateApplied.
+    /// The passive holder remains intact through every failure before terminal fsync.
+    pub(super) fn settle_pending_kura_apply(
+        &mut self,
+        installed: &crate::sumeragi::v2::InstalledPendingKuraApplyV1,
+        executor: &crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        services: &crate::sumeragi::v2_worker::ProductionV2Services,
+    ) -> Result<(), &'static str> {
+        if !executor.ready_to_finish()
+            || !executor
+                .pending_kura_apply_recovery_evidence()
+                .is_some_and(|evidence| {
+                    evidence.stage()
+                        == crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
+                })
+            || !services.matches_installed_pending_kura_tip(installed.expected())
+        {
+            return Err("pending Kura Apply has no exact completed application");
+        }
+        let Some(outputs) = self.recovered_lifecycle_outputs.as_mut() else {
+            return Ok(());
+        };
+        let Some((ordinal, comparison)) = outputs.pending_apply.as_ref() else {
+            return Ok(());
+        };
+        let ordinal = *ordinal;
+        if !comparison.matches_expected(installed.expected())
+            || self.coordinator.active_lease.is_some()
+            || !self.coordinator.ready_index.contains(&ordinal)
+            || !recovered_candidate_matches_ready_coordinator_row(
+                &self.coordinator,
+                comparison.candidate(),
+                OwnerId::new(comparison.candidate().causal_root, ordinal),
+                ordinal,
+            )
+        {
+            return Err("pending Kura Apply changed its retained lifecycle row");
+        }
+        let mut staged = self.coordinator.stage_durable_transaction();
+        if staged
+            .finish_terminal(ordinal, TerminalOutcome::Advanced)
+            .is_err()
+            || !recovered_terminal_successor_is_exact(
+                &self.coordinator,
+                &staged,
+                ordinal,
+                TerminalOutcome::Advanced,
+            )
+        {
+            return Err("pending Kura Apply could not form its exact terminal successor");
+        }
+        if self
+            .coordinator
+            .persist_exact_staged_successor(&staged)
+            .is_err()
+        {
+            self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err("pending Kura Apply terminal ledger fsync failed");
+        }
+        self.coordinator = staged;
+        drop(outputs.pending_apply.take());
+        Ok(())
+    }
+
     /// Execute and terminalize the oldest eligible authenticated cold output.
     ///
     /// The carrier remains in the owner through service I/O and the exact
@@ -325,6 +465,11 @@ impl super::ProductionLifecycleOwnerV1 {
         let Some(outputs) = recovered_lifecycle_outputs.as_mut() else {
             return Ok(RecoveredLifecycleOutputSettlementV1::Empty);
         };
+        if outputs.pending_apply.is_some() {
+            // Only the closed-ingress PendingKura driver may settle this row.
+            // Ordinary output recovery cannot execute it or bypass local Apply.
+            return Ok(RecoveredLifecycleOutputSettlementV1::Deferred);
+        }
         let Some((&ordinal, output)) = outputs.entries.first_key_value() else {
             return Ok(RecoveredLifecycleOutputSettlementV1::Empty);
         };
@@ -392,8 +537,20 @@ fn recovered_output_matches_ready_coordinator_row(
     coordinator: &LifecycleCoordinator,
     output: &super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1,
 ) -> bool {
-    let candidate = output.candidate();
-    let ordinal = output.ordinal();
+    recovered_candidate_matches_ready_coordinator_row(
+        coordinator,
+        output.candidate(),
+        output.owner(),
+        output.ordinal(),
+    )
+}
+
+fn recovered_candidate_matches_ready_coordinator_row(
+    coordinator: &LifecycleCoordinator,
+    candidate: &CandidateAdmission,
+    owner: OwnerId,
+    ordinal: u128,
+) -> bool {
     let (Some(record), Some(metadata)) = (
         coordinator.records.get(&ordinal),
         coordinator.durable_records.get(&ordinal),
@@ -405,7 +562,7 @@ fn recovered_output_matches_ready_coordinator_row(
     };
     coordinator.fault.is_none()
         && candidate.initial_state == super::InitialLifecycleState::Ready
-        && record.owner == output.owner()
+        && record.owner == owner
         && record.owner.causal_root() == candidate.causal_root
         && record.ordinal == ordinal
         && record.key == candidate.key
@@ -427,7 +584,20 @@ fn recovered_output_terminal_successor_is_exact(
     staged: &LifecycleCoordinator,
     output: &super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1,
 ) -> bool {
-    let ordinal = output.ordinal();
+    recovered_terminal_successor_is_exact(
+        current,
+        staged,
+        output.ordinal(),
+        output.terminal_outcome(),
+    )
+}
+
+fn recovered_terminal_successor_is_exact(
+    current: &LifecycleCoordinator,
+    staged: &LifecycleCoordinator,
+    ordinal: u128,
+    outcome: TerminalOutcome,
+) -> bool {
     let (Some(current_record), Some(staged_record)) =
         (current.records.get(&ordinal), staged.records.get(&ordinal))
     else {
@@ -444,7 +614,7 @@ fn recovered_output_terminal_successor_is_exact(
         && staged_record.stage == current_record.stage
         && staged_record.physical_slots == current_record.physical_slots
         && staged_record.episode == current_record.episode
-        && staged_record.state == super::LifecycleState::Terminal(output.terminal_outcome())
+        && staged_record.state == super::LifecycleState::Terminal(outcome)
         && !staged.ready_index.contains(&ordinal)
         && staged.key_index == current.key_index
         && staged.owner_index == current.owner_index

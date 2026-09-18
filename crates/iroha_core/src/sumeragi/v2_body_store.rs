@@ -2379,6 +2379,40 @@ impl RevalidatedV2BodyStore {
     pub(in crate::sumeragi) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         self.0.instance_identity()
     }
+    /// Join native interrupted-tip evidence to this exact semantically replayed body.
+    /// No receipt, executable binding, or detached marker escapes this comparison.
+    pub(in crate::sumeragi) fn pending_kura_apply_comparison(
+        &self,
+        verified: &super::v2::VerifiedHeightContext,
+        replay: &super::v2::RecoveredPendingKuraApplyReplayV1,
+    ) -> Option<super::v2_lifecycle_coordinator::PendingKuraApplyComparisonV1> {
+        self.0.ensure_recovered_markers_revalidated().ok()?;
+        if !self.matches_context(verified.context()) {
+            return None;
+        }
+        let mut matched = None;
+        for (key, validated) in &self.0.validated {
+            let durable = self.0.entries.get(key)?;
+            let manifest = self.0.manifests.get(key)?;
+            if validated.durable() != durable || *key != (durable.round(), durable.subject()) {
+                return None;
+            }
+            let Some(comparison) = super::v2_runtime::project_pending_kura_passive_apply(
+                verified, replay, manifest, validated,
+            ) else {
+                continue;
+            };
+            let envelope = self.0.load_envelope(durable).ok()?;
+            if envelope.manifest != *manifest
+                || envelope.context_id != verified.context().id()
+                || matched.is_some()
+            {
+                return None;
+            }
+            matched = Some(comparison);
+        }
+        matched
+    }
     /// Return whether this revalidated store owns the exact successful marker
     /// needed to replace a recovered Decision Fetch with Apply.
     pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(

@@ -495,7 +495,7 @@ pub(super) async fn prepare(
         "beacon fixture deadline after genesis preparation"
     );
     let epoch_schedule = super::epoch_maintenance::prepare_schedule(
-        &directory, kagami, &roster, network_id, deadline,
+        &directory, kagami, &roster, network_id, &genesis_public_key, deadline,
     ).await?;
     Ok(Prepared {
         directory,

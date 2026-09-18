@@ -3499,6 +3499,7 @@ impl ConcreteLifecycleWorkRegistry {
                         LifecycleWorkClass::Broadcast
                             | LifecycleWorkClass::EquivocationReport
                             | LifecycleWorkClass::InvalidBodyReport
+                            | LifecycleWorkClass::Apply
                     )
                     || extra.contains_record(record)
             })

@@ -25,6 +25,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import taira_update as runner
 import taira_validator_unit as renderer
+import taira_epoch_supervisor_unit as supervisor_renderer
 
 # In a normal checkout these resolve to the same scripts directory. Keeping
 # dependencies module-owned also permits an isolated source overlay in review.
@@ -78,6 +79,55 @@ def fixture():
     return build,prior
 
 
+
+def supervisor_binding(commit, cli, network):
+    trust_bytes = json.dumps({'genesis': 'fixture', 'network_id': network}, sort_keys=True)
+    trust_sha = runner.sha(trust_bytes.encode())
+    policy = {'schema_version': 1, 'intent': {'authorization': 'until_stopped',
+        'network_id': network, 'administrator': 'fixture-admin', 'payment_asset': 'fixture-asset',
+        'transaction_fee_maximum': '1', 'first_epoch': 1, 'batch_epochs': 16,
+        'operation_timeout_ms': 1000}, 'release_source_commit': commit, 'iroha_sha256': 'b' * 64,
+        'kagami': {'path': str(Path(cli).with_name('kagami')), 'sha256': 'b' * 64},
+        'observation_trust_sha256': trust_sha, 'provision_timeout_ms': 1000}
+    policy_bytes = json.dumps(policy, sort_keys=True)
+    policy_sha = runner.sha(policy_bytes.encode())
+    generation = '/var/lib/taira-epoch-supervisor/generations/' + policy_sha
+    spec = {'schema_version': 1, 'cli': str(cli), 'admin_config': generation + '/administrator.toml',
+        'operator_key': generation + '/http-operator.key', 'policy': generation + '/policy.json',
+        'trust': generation + '/trust.json', 'custody': generation + '/custody.json',
+        'journal_dir': '/var/lib/taira-epoch-supervisor/journals', 'timeout_ms': 1000}
+    unit_bytes = supervisor_renderer.render(spec).decode()
+    custody_bytes = json.dumps({'schema_version': 1, 'seeds': [
+        {'validator': 'validator-' + str(index), 'path': '/fixture/seed-' + str(index)}
+        for index in range(4)]}, sort_keys=True)
+    return {'schema_version': 1, 'release_source_commit': commit, 'network_id': network,
+        'iroha_sha256': 'b' * 64, 'kagami_sha256': 'b' * 64, 'unit_spec': spec,
+        'unit_bytes': unit_bytes, 'unit_sha256': runner.sha(unit_bytes.encode()),
+        'policy_bytes': policy_bytes, 'policy_sha256': policy_sha,
+        'observation_trust_bytes': trust_bytes, 'observation_trust_sha256': trust_sha,
+        'custody_bytes': custody_bytes, 'custody_sha256': runner.sha(custody_bytes.encode())}
+
+
+def supervisor_transition(build, value, operation, state='stopped'):
+    after_cli = Path(value['runtime_root']) / ('release-' + build['commit'] + '-' + operation) / 'bin/iroha'
+    before = None if state == 'absent' else supervisor_binding(value['current']['commit'],
+            Path(value['current']['daemon']).with_name('iroha'), value['network_id'])
+    after = supervisor_binding(build['commit'], after_cli, value['network_id'])
+    return {'schema': 'taira.epoch-supervisor-update.v1', 'operation': operation,
+        'original_service_state': state, 'successor_service_state': 'running' if state == 'absent' else state,
+        'before': before, 'installed': before,
+        'after': after,
+        'native_provisioning_receipt': {'path': str(Path(after['unit_spec']['policy']).parent / 'provisioning-receipt.json'), 'sha256': 'f' * 64}}
+
+
+def make_plan_with_supervisor(build, value, prior, guest, operation, failed_start=None):
+    supervisor = supervisor_transition(build, value, operation)
+    if failed_start is not None and failed_start.get('attempts'):
+        record_ref = failed_start['attempts'][-1]['records']['failure.json']
+        supervisor['installed'] = json.loads(Path(record_ref['path']).read_bytes())['epoch_supervisor_installed']
+    return runner.make_plan(build, value, prior, guest, operation, failed_start, supervisor=supervisor)
+
+
 def plan_for(build=None, prior=None, value=None, failed_start=None):
     global guest
     if build is None or prior is None:
@@ -85,7 +135,7 @@ def plan_for(build=None, prior=None, value=None, failed_start=None):
         build=default_build if build is None else build
         prior=default_prior if prior is None else prior
     guest=fresh_guest()
-    return runner.make_plan(build, deployment() if value is None else value, prior, guest,
+    return make_plan_with_supervisor(build, deployment() if value is None else value, prior, guest,
                             OPERATION, failed_start)
 
 
@@ -93,7 +143,7 @@ def failed_fixture(value=None, prior=None):
     build, default_prior = fixture()
     value = deployment() if value is None else value
     prior = default_prior if prior is None else prior
-    failed = runner.make_plan(build, value, prior, fresh_guest(), 'update-' + '2' * 32)
+    failed = make_plan_with_supervisor(build, value, prior, fresh_guest(), 'update-' + '2' * 32)
     before = [{'role': role, 'unit_stamp': [1, 2, 0o100600, 0, 0, 1, 3, 4, 5],
                'config_stamp': [1, 4], 'state_root_identity': [1, 8], 'current_target': 'unchanged',
                'public': {'commit': value['current']['commit'], 'network_id': value['network_id'],
@@ -110,8 +160,39 @@ def failed_fixture(value=None, prior=None):
                'start-intent.json': {'units': [f'iroha3d-{role}.service' for role in value['roles']],
                                     'automatic_old_binary_rollback_after_start': False},
                'failure.json': {'error': 'native startup failure', 'new_start_attempted': True,
-                                'installed_units': value['roles']}}
+                   'validator_stop_attempted': True, 'validator_stop_confirmed': True,
+                   'installed_units': value['roles']}}
+    add_supervisor_records(failed, records)
     return failed, records
+
+
+def supervisor_host_receipt(plan, action, *, state='stopped'):
+    wrapper = plan['epoch_supervisor']
+    return {'schema': 'iroha.taira.epoch-supervisor-host.v1', 'action': action,
+        'operation': plan['operation'], 'policy_sha256': wrapper['after']['policy_sha256'],
+        'unit_sha256': wrapper['after']['unit_sha256'],
+        'provisioning_receipt': wrapper['native_provisioning_receipt'],
+        'installed_policy_sha256': None if wrapper['installed'] is None else wrapper['installed']['policy_sha256'],
+        'journal': {'path': '/var/lib/taira-epoch-supervisor/journals', 'device': 1, 'inode': 9,
+                    'uid': 0, 'gid': 0, 'mode': 0o700},
+        'worker': None, 'status': None, 'service_state': state}
+
+
+def add_supervisor_records(plan, records):
+    value = plan['epoch_supervisor']
+    original = {'original_service_state': value['original_service_state'],
+        'successor_service_state': value['successor_service_state'], 'original_binding': value['before'],
+        'installed_binding': plan['epoch_supervisor_installed'], 'journal_identity': [1, 9],
+        'native_preflight': supervisor_host_receipt(plan, 'preflight'),
+        'native_observation': supervisor_host_receipt(plan, 'observe')}
+    records['failure.json']['epoch_supervisor_installed'] = value['installed']
+    records['epoch-supervisor-original.json'] = original
+    records['epoch-supervisor-pause-intent.json'] = {'unit': 'iroha-taira-epoch-supervisor.service',
+        'operation': plan['operation'], 'original_service_state': value['original_service_state'],
+        'journal_identity': original['journal_identity']}
+    records['epoch-supervisor-paused.json'] = {'operation': plan['operation'],
+        'journal_identity': original['journal_identity'], 'native_quiescence': supervisor_host_receipt(plan, 'quiescence')}
+    return original
 
 
 def write_failed_reference(directory, records):
@@ -136,7 +217,7 @@ def failed_chain_fixture(directory, commits=('a', 'c'), historical_second=False)
     entries = []
     for index, source in enumerate(commits):
         build['commit'] = source * 40
-        failed = runner.make_plan(copy.deepcopy(build), deployment(), prior, fresh_guest(),
+        failed = make_plan_with_supervisor(copy.deepcopy(build), deployment(), prior, fresh_guest(),
             'update-' + f'{index + 2:032x}', copy.deepcopy(chain) if index else None)
         if historical_second and index == 1:
             first = chain['attempts'][0]
@@ -145,6 +226,7 @@ def failed_chain_fixture(directory, commits=('a', 'c'), historical_second=False)
                 'installed': failed['failed_start']['installed']}
         records = copy.deepcopy(template)
         records['intent.json'] = failed
+        add_supervisor_records(failed, records)
         for before, checkpoint in zip(records['before.json'], records['checkpoint-stopped.json']):
             before['systemd']['InvocationID'] = f'{index + 10:032x}'
             checkpoint['invocation_id'] = before['systemd']['InvocationID']
@@ -163,12 +245,14 @@ def local_inputs(directory):
     value['current'].update(local_plan=str(prior_path),local_plan_sha256=runner.sha(prior_raw))
     deployment_path=root/'deployment.json';deployment_path.write_text(json.dumps(value))
     build_path=root/'result.json';build_path.write_text(json.dumps(build))
+    (root/'supervisor.json').write_text(json.dumps(supervisor_transition(build, value, OPERATION)))
     return value,build,deployment_path,build_path
 
 
 def cli_argv(deployment_path,build_path,output):
     return ['taira_update.py','--deployment',str(deployment_path),'--prepared-result',str(build_path),
-            '--output',str(output),'--plan-only']
+            '--output',str(output),'--operation',OPERATION,
+            '--supervisor-plan',str(deployment_path.parent/'supervisor.json'),'--plan-only']
 
 
 class CoordinatorTests(unittest.TestCase):
@@ -185,6 +269,8 @@ class CoordinatorTests(unittest.TestCase):
             reference_path.write_text(json.dumps(reference))
             build['commit'] = 'c' * 40
             result.write_text(json.dumps(build))
+            (descriptor.parent/'supervisor.json').write_text(
+                json.dumps(supervisor_transition(build, value, OPERATION)))
             output = descriptor.parent / 'corrective.json'
             with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
                               ['--failed-start-chain', str(reference_path)]), \
@@ -255,7 +341,7 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(plan['build_result_path'],str(result))
             self.assertEqual(plan['build_result_sha256'],runner.sha(result.read_bytes()))
             self.assertEqual(plan['deployment'],value)
-            self.assertEqual([row['name'] for row in plan['artifacts']],['iroha3d_taira','iroha'])
+            self.assertEqual([row['name'] for row in plan['artifacts']],['iroha3d_taira','iroha','kagami'])
             self.assertEqual([row['role'] for row in plan['units']],value['roles'])
             self.assertEqual(stat.S_IMODE(output.stat().st_mode),0o600)
             prior=json.loads(Path(value['current']['local_plan']).read_bytes())
@@ -353,11 +439,13 @@ class CoordinatorTests(unittest.TestCase):
             actual_fstat=os.fstat
             def root_stat(fd):
                 value=actual_fstat(fd)
-                return SimpleNamespace(st_mode=value.st_mode,st_uid=0,st_nlink=value.st_nlink,
+                return SimpleNamespace(st_mode=value.st_mode,st_uid=0,st_gid=0,st_nlink=value.st_nlink,
                                        st_dev=value.st_dev,st_ino=value.st_ino)
             def root_stamp(path,directory=False):
                 value=Path(path).lstat()
-                return [value.st_dev,value.st_ino,value.st_mode,0,value.st_gid,value.st_nlink]
+                return [value.st_dev,value.st_ino,value.st_mode,0,0,value.st_nlink]
+            guest.SUPERVISOR_STATE_ROOT=root/'supervisor'
+            guest.SUPERVISOR_STATE_ROOT.mkdir(mode=0o700)
             held=os.open(path,os.O_RDWR|os.O_CREAT,0o600)
             try:
                 fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -369,7 +457,7 @@ class CoordinatorTests(unittest.TestCase):
             alias=root/'shared-lock';os.link(path,alias)
             with patch.object(guest,'stamp',side_effect=root_stamp), \
                  patch.object(guest.os,'fstat',side_effect=root_stat),patch.object(guest,'apply') as apply:
-                with self.assertRaisesRegex(RuntimeError,'invalid guest update lock'):guest.apply_locked(plan)
+                with self.assertRaisesRegex(RuntimeError,'invalid guest deployment lock'):guest.apply_locked(plan)
                 apply.assert_not_called()
                 alias.unlink()
                 guest.apply_locked(plan)
@@ -393,7 +481,7 @@ class CoordinatorTests(unittest.TestCase):
     def test_plan_selects_daemon_and_same_revision_cli_from_completed_build_and_exact_four_units(self):
         build, metadata = fixture()
         plan = plan_for(build, metadata)
-        self.assertEqual([a['name'] for a in plan['artifacts']], ['iroha3d_taira', 'iroha'])
+        self.assertEqual([a['name'] for a in plan['artifacts']], ['iroha3d_taira', 'iroha', 'kagami'])
         self.assertEqual(len(plan['units']), 4)
         for row in plan['units']:
             self.assertEqual(guest.replace_daemon(base64.b64decode(row['before']), row['role']),
@@ -979,7 +1067,7 @@ class CoordinatorTests(unittest.TestCase):
             fake.touch()
             original_open = guest.os.open
             stack.enter_context(patch.object(guest.os, 'open', side_effect=lambda path, flags, *a:
-                                            original_open(fake if path in (guest.DAEMON, guest.CLI) else path, flags, *a)))
+                                            original_open(fake if path in (guest.DAEMON, guest.CLI, guest.KAGAMI) else path, flags, *a)))
             stack.enter_context(patch.object(guest, 'sync'))
             stack.enter_context(patch.object(guest, 'write_new'))
             def record(name, value):
@@ -988,6 +1076,37 @@ class CoordinatorTests(unittest.TestCase):
                 records[name] = value
             stack.enter_context(patch.object(guest, 'record', side_effect=record))
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
+            def capture_supervisor(value):
+                events.append('supervisor-capture')
+                if failure == 'supervisor-capture': raise RuntimeError('injected supervisor capture')
+                records.setdefault('failure.json', {})
+                original = add_supervisor_records(value, records)
+                records.pop('failure.json')
+                records.pop('epoch-supervisor-pause-intent.json')
+                records.pop('epoch-supervisor-paused.json')
+                return original
+            def pause_supervisor(value, original):
+                events.append('supervisor-pause')
+                if failure == 'supervisor-pause': raise RuntimeError('injected ambiguous supervisor pause')
+                records.setdefault('failure.json', {})
+                add_supervisor_records(value, records)
+                records.pop('failure.json')
+            def resume_supervisor(value, original):
+                events.append('supervisor-resume')
+                self.assertIn('cohort-ready.json', records)
+                if failure == 'supervisor-resume': raise RuntimeError('injected supervisor resume')
+                return {'original_service_state': value['epoch_supervisor']['original_service_state'],
+                        'running': False, 'native_guard_retained': True}
+            def contain_supervisor(value):
+                events.append('supervisor-contain')
+                if failure == 'supervisor-contain': raise RuntimeError('injected supervisor containment')
+                return {'native_guard_retained': True}
+            stack.enter_context(patch.object(guest, 'supervisor_capture', side_effect=capture_supervisor))
+            stack.enter_context(patch.object(guest, 'supervisor_pause', side_effect=pause_supervisor))
+            stack.enter_context(patch.object(guest, 'supervisor_resume', side_effect=resume_supervisor))
+            stack.enter_context(patch.object(guest, 'supervisor_contain', side_effect=contain_supervisor))
+            stack.enter_context(patch.object(guest, 'supervisor_installed_binding', return_value=plan['epoch_supervisor']['installed']))
+
             stack.enter_context(patch.object(guest, 'public_probe', return_value=b'Ready'))
             now = [0.0]
             stack.enter_context(patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]))
@@ -1024,7 +1143,12 @@ class CoordinatorTests(unittest.TestCase):
                 return (running(unit.removeprefix('iroha3d-').removesuffix('.service'))
                         if 'start' in events and 'failed-start-stop' not in events else paused)
             stack.enter_context(patch.object(guest, 'systemd', side_effect=systemd))
-            stack.enter_context(patch.object(guest, 'stop_all', side_effect=lambda: events.append('stop-all') or [{'unit': unit, 'systemd': paused} for unit in guest.UNITS]))
+            def stop_cohort():
+                events.append('stop-all')
+                self.assertIn('supervisor-pause', events)
+                if failure == 'partial-stop': raise RuntimeError('injected partial validator stop')
+                return [{'unit': unit, 'systemd': paused} for unit in guest.UNITS]
+            stack.enter_context(patch.object(guest, 'stop_all', side_effect=stop_cohort))
             def checkpoint(row, *, stopped, prior):
                 self.assertTrue(stopped)
                 self.assertEqual(row['systemd']['InvocationID'], 'f' * 32)
@@ -1160,7 +1284,7 @@ class CoordinatorTests(unittest.TestCase):
                 build, prior = fixture()
                 build['commit'] = 'c' * 40
                 recovery_guest = fresh_guest()
-                plan = runner.make_plan(build, deployment(), prior, recovery_guest,
+                plan = make_plan_with_supervisor(build, deployment(), prior, recovery_guest,
                                         'update-' + '3' * 32, reference)
                 baseline = root / deployment()['current']['attempt_name']
                 baseline.mkdir()
@@ -1266,6 +1390,32 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'one deployment'):
                 local_guest.configure({'deployment':value,'commit':commit,'operation':operation})
         self.assertEqual(len(set(paths)),2)
+
+
+    def test_supervisor_pause_and_partial_validator_stop_require_read_only_reconciliation(self):
+        for failure in ('supervisor-pause', 'partial-stop'):
+            with self.subTest(failure=failure):
+                events, records, units, plan = self.simulate(failure)
+                self.assertNotIn('start', events)
+                self.assertNotIn('rollback-reload', events)
+                self.assertFalse(any(name.startswith('install-') for name in events))
+                self.assertEqual('stop-all' in events, failure == 'partial-stop')
+                self.assertTrue(records['reconciliation-required.json']['recovery_only'])
+                self.assertFalse(records['reconciliation-required.json']['automatic_manager_retry'])
+                for row in plan['units']:
+                    self.assertEqual(units[row['role']], base64.b64decode(row['before']))
+
+    def test_supervisor_is_resumed_only_after_qualified_cohort_and_failure_contains_both(self):
+        events, records, _, _ = self.simulate()
+        self.assertLess(events.index('supervisor-pause'), events.index('stop-all'))
+        self.assertLess(events.index('public-doctor'), events.index('supervisor-resume'))
+        for failure in ('supervisor-resume', 'failure-record'):
+            with self.subTest(failure=failure):
+                events, records, _, _ = self.simulate(failure)
+                self.assertIn('supervisor-contain', events)
+                self.assertIn('failed-start-stop', events)
+                self.assertNotIn('rollback-start', events)
+                self.assertNotIn('result.json', records)
 
 
 class CohortProgressTests(unittest.TestCase):
@@ -1840,8 +1990,8 @@ class FailedStartChainTests(unittest.TestCase):
             self.assertNotEqual(entries[-1][1]['checkpoint-stopped.json'][0]['invocation_id'],
                                 entries[-1][1]['checkpoint-stopped.json'][0]['proof_invocation_id'])
 
-    def test_same_commit_binary_identity_is_enforced_for_both_artifacts(self):
-        for index in (0, 1):
+    def test_same_commit_binary_identity_is_enforced_for_all_three_artifacts(self):
+        for index in (0, 1, 2):
             for field, value in (('sha256', 'd' * 64), ('size', 2_000_001), ('package', 'foreign')):
                 with self.subTest(index=index, field=field), tempfile.TemporaryDirectory() as temporary:
                     build, prior, chain, _ = failed_chain_fixture(temporary)
@@ -1851,7 +2001,7 @@ class FailedStartChainTests(unittest.TestCase):
                     remote.assert_not_called()
 
     def test_nonadjacent_source_reuse_cannot_change_binary_identity(self):
-        for artifact in (0, 1):
+        for artifact in (0, 1, 2):
             with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
                 build, prior, chain, _ = failed_chain_fixture(temporary)
                 build['commit'] = 'a' * 40
@@ -1860,7 +2010,7 @@ class FailedStartChainTests(unittest.TestCase):
                     plan_for(build, prior, failed_start=chain)
 
     def test_historical_nonadjacent_source_reuse_is_revalidated(self):
-        for artifact in (0, 1):
+        for artifact in (0, 1, 2):
             with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
                 build, prior, chain, entries = failed_chain_fixture(temporary, commits=('a', 'c', 'a'))
                 entries[-1][0]['artifacts'][artifact]['sha256'] = 'd' * 64
@@ -1935,7 +2085,7 @@ class FailedStartChainTests(unittest.TestCase):
             with patch.object(local_guest, 'MAX_FAILED_START_CHAIN_BYTES', 1), \
                  patch.object(runner.subprocess, 'run') as remote:
                 with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
-                    runner.make_plan(build, deployment(), prior, local_guest, OPERATION, chain)
+                    make_plan_with_supervisor(build, deployment(), prior, local_guest, OPERATION, chain)
             remote.assert_not_called()
 
     def test_completed_baseline_source_and_old_operational_reference_are_rejected(self):
@@ -2008,6 +2158,382 @@ class FailedStartChainTests(unittest.TestCase):
                         with self.assertRaises((RuntimeError, FileNotFoundError)):
                             guest.retained_attempt(plan)
                     record.assert_not_called(); stop.assert_not_called()
+
+
+class KagamiArtifactAdmissionTests(unittest.TestCase):
+    def test_kagami_identity_is_mandatory_before_any_plan_or_host_action(self):
+        for mutation in ('missing', 'duplicate', 'package', 'digest', 'size', 'boolean_size'):
+            with self.subTest(mutation=mutation):
+                build, prior = fixture()
+                row = build['artifacts'][2]
+                if mutation == 'missing': build['artifacts'].pop(2)
+                elif mutation == 'duplicate': build['artifacts'][3] = dict(row)
+                elif mutation == 'package': row['package'] = 'iroha_cli'
+                elif mutation == 'digest': row['sha256'] = 'invalid'
+                elif mutation == 'size': row['size'] = 0
+                else: row['size'] = True
+                with patch.object(runner.subprocess, 'run') as remote:
+                    with self.assertRaises(RuntimeError): plan_for(build, prior)
+                remote.assert_not_called()
+
+    def test_ordered_three_artifact_guest_identity_rejects_omission_reorder_and_substitution(self):
+        plan = plan_for()
+        value = fresh_guest()
+        identity = value.artifact_identity(plan['artifacts'])
+        self.assertEqual(tuple(row[0] for row in identity), ('iroha3d_taira', 'iroha', 'kagami'))
+        for rows in (plan['artifacts'][:2], list(reversed(plan['artifacts'])),
+                     [*plan['artifacts'][:2], dict(plan['artifacts'][1])]):
+            with self.subTest(rows=rows):
+                with self.assertRaises(RuntimeError): value.artifact_identity(rows)
+
+    def test_kagami_transfer_is_exact_release_path_and_native_stream(self):
+        plan = plan_for()
+        tree = ast.parse(runner.transfer_code('kagami', False, plan))
+        code = ast.unparse(tree)
+        self.assertIn("bins / 'kagami'", code)
+        self.assertIn('os.O_EXCL | os.O_NOFOLLOW', code)
+        self.assertIn("os.execv('/bin/cat', ['/bin/cat'])", code)
+        self.assertNotIn('read_bytes', code)
+        self.assertEqual(str(guest.KAGAMI), str(guest.DAEMON.with_name('kagami')))
+        with self.assertRaises(RuntimeError): runner.transfer_code('../kagami', False, plan)
+
+
+class EpochSupervisorReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.guest = fresh_guest()
+        self.argv = ('/retained/bin/iroha', 'taira', 'epoch-maintenance', 'supervise')
+        self.policy = 'a' * 64
+        self.network = 'hash:fixture'
+        self.worker = {'boot_id': '12345678-1234-1234-1234-123456789012',
+                       'pid': 42, 'start_time_ticks': 700}
+        self.observed = {'worker': self.worker, 'systemd': {'InvocationID': 'b' * 32}}
+        self.report = {'schema_version': 1, 'policy_sha256': self.policy,
+                       'worker': dict(self.worker), 'schedule_first_epoch': 999,
+                       'schedule_sha256': 'f' * 64, 'completion': {
+                           'schema_version': 1, 'network_id': self.network, 'target_epoch': 1000,
+                           'transaction_hash': 'c' * 64, 'applied_height': 11000,
+                           'parameter_sha256': 'd' * 64, 'carrier_sha256': 'e' * 64}}
+
+    def test_fresh_worker_completion_is_admitted_without_batch_end_cursor(self):
+        with patch.object(self.guest, 'supervisor_worker', return_value=self.observed) as worker, \
+             patch.object(self.guest, 'supervisor_public_ready_file', return_value=self.report) as read:
+            result = self.guest.supervisor_ready_structure(self.policy, self.argv, self.network)
+        self.assertEqual(worker.call_count, 2)
+        self.assertEqual(read.call_args.args[0].name,
+                         'ready-' + self.policy + '-12345678-1234-1234-1234-123456789012-42-700.json')
+        self.assertEqual(result['completion'], self.report['completion'])
+        self.assertFalse(result['python_authenticated_finality'])
+
+    def test_missing_readiness_is_pending_only_for_unchanged_worker(self):
+        with patch.object(self.guest, 'supervisor_worker', return_value=self.observed), \
+             patch.object(self.guest, 'supervisor_public_ready_file', side_effect=FileNotFoundError):
+            self.assertIsNone(self.guest.supervisor_ready_structure(self.policy, self.argv, self.network))
+        changed = dict(self.observed, worker=dict(self.worker, start_time_ticks=701))
+        with patch.object(self.guest, 'supervisor_worker', side_effect=[self.observed, changed]), \
+             patch.object(self.guest, 'supervisor_public_ready_file', side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(RuntimeError, 'changed'):
+                self.guest.supervisor_ready_structure(self.policy, self.argv, self.network)
+
+    def test_stale_foreign_malformed_and_restarted_ready_workers_are_rejected(self):
+        for mutation in ('old_pid', 'old_boot', 'old_start', 'policy', 'network', 'unknown',
+                         'unknown_completion', 'missing_completion', 'bool_epoch', 'zero_height',
+                         'bad_hash', 'bool_version', 'worker_changed'):
+            with self.subTest(mutation=mutation):
+                value = copy.deepcopy(self.report)
+                if mutation == 'old_pid': value['worker']['pid'] -= 1
+                elif mutation == 'old_boot': value['worker']['boot_id'] = '00000000-0000-0000-0000-000000000000'
+                elif mutation == 'old_start': value['worker']['start_time_ticks'] -= 1
+                elif mutation == 'policy': value['policy_sha256'] = 'f' * 64
+                elif mutation == 'network': value['completion']['network_id'] = 'hash:foreign'
+                elif mutation == 'unknown': value['extra'] = True
+                elif mutation == 'unknown_completion': value['completion']['extra'] = True
+                elif mutation == 'missing_completion': value['completion'].pop('carrier_sha256')
+                elif mutation == 'bool_epoch': value['completion']['target_epoch'] = True
+                elif mutation == 'zero_height': value['completion']['applied_height'] = 0
+                elif mutation == 'bad_hash': value['completion']['transaction_hash'] = 'bad'
+                elif mutation == 'bool_version': value['schema_version'] = True
+                changed = dict(self.observed, worker=dict(self.worker, start_time_ticks=701))
+                workers = [self.observed, changed if mutation == 'worker_changed' else self.observed]
+                with patch.object(self.guest, 'supervisor_worker', side_effect=workers), \
+                     patch.object(self.guest, 'supervisor_public_ready_file', return_value=value):
+                    with self.assertRaises(RuntimeError):
+                        self.guest.supervisor_ready_structure(self.policy, self.argv, self.network)
+
+    def test_worker_requires_exact_process_and_stable_systemd_identity(self):
+        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                 'NRestarts': '0', 'InvocationID': 'a' * 32, 'MainPID': '42'}
+        boot = self.worker['boot_id'].encode() + b'\n'
+        argv = b'\0'.join(value.encode() for value in self.argv) + b'\0'
+        def proc(path, limit):
+            return boot if path.name == 'boot_id' else argv
+        with patch.object(self.guest, 'systemd', return_value=props), \
+             patch.object(self.guest, 'cohort_process_start_time', return_value=700), \
+             patch.object(self.guest, 'read_bounded_proc', side_effect=proc), \
+             patch.object(self.guest.os, 'readlink', return_value=self.argv[0]):
+            self.assertEqual(self.guest.supervisor_worker(self.argv)['worker'], self.worker)
+        for field, value in (('NRestarts', '-1'), ('MainPID', '0'), ('ControlPID', '2'),
+                             ('InvocationID', 'invalid'), ('ActiveState', 'failed')):
+            with patch.object(self.guest, 'systemd', return_value=dict(props, **{field: value})):
+                with self.assertRaises(RuntimeError): self.guest.supervisor_worker(self.argv)
+
+
+class EpochSupervisorTransitionTests(unittest.TestCase):
+    def setUp(self):
+        self.guest = fresh_guest()
+        self.build, self.prior = fixture()
+        self.value = deployment()
+
+    def test_original_intent_and_explicit_first_install_choice_are_mandatory(self):
+        for state in ('running', 'stopped', 'absent'):
+            valid = supervisor_transition(self.build, self.value, OPERATION, state)
+            self.guest.validate_supervisor_update(valid, self.value, OPERATION,
+                                                  self.build['commit'], self.build['artifacts'][:3])
+            for change in ('missing_successor', 'mismatched_existing', 'missing_installed'):
+                if change == 'mismatched_existing' and state == 'absent': continue
+                with self.subTest(state=state, change=change):
+                    value = copy.deepcopy(valid)
+                    if change == 'missing_successor': value.pop('successor_service_state')
+                    elif change == 'missing_installed': value.pop('installed')
+                    else: value['successor_service_state'] = 'running' if state == 'stopped' else 'stopped'
+                    with self.assertRaises(RuntimeError):
+                        self.guest.validate_supervisor_update(value, self.value, OPERATION,
+                            self.build['commit'], self.build['artifacts'][:3])
+
+    def test_native_authentication_is_required_and_uses_remaining_original_deadline(self):
+        value = supervisor_transition(self.build, self.value, OPERATION)
+        binding = value['after']
+        worker = {'boot_id': '12345678-1234-1234-1234-123456789012', 'pid': 42, 'start_time_ticks': 70}
+        completion = {'schema_version': 1, 'network_id': self.value['network_id'],
+            'target_epoch': 9, 'applied_height': 900, 'transaction_hash': 'a'*64,
+            'parameter_sha256': 'b'*64, 'carrier_sha256': 'c'*64}
+        observation = {'worker': worker, 'systemd': {'InvocationID': 'd' * 32, 'NRestarts': '2'}}
+        structure = {'worker': worker, 'completion': completion, 'observation': observation}
+        report = {'schema_version': 1, 'policy_sha256': binding['policy_sha256'], 'worker': worker,
+                  'initial_completion': completion, 'current_completion': dict(completion, target_epoch=10)}
+        with patch.object(self.guest, 'supervisor_ready_structure', return_value=structure), \
+             patch.object(self.guest, 'supervisor_worker', return_value=observation) as observe, \
+             patch.object(self.guest.time, 'monotonic', return_value=10), \
+             patch.object(self.guest, 'command', return_value=json.dumps(report).encode()) as command:
+            result = self.guest.supervisor_readiness(binding, 10.25)
+            self.assertEqual(result['native_authenticated_status'], report)
+            argv = command.call_args.args[0]
+            self.assertIn('supervisor-status', argv)
+            self.assertNotIn('--custody', argv)
+            self.assertEqual(argv[-2:], ['--timeout-ms', '250'])
+            self.assertEqual(command.call_args.kwargs['timeout'], 0.25)
+            observe.return_value = {'worker': worker, 'systemd': dict(observation['systemd'], NRestarts='3')}
+            with self.assertRaisesRegex(RuntimeError, 'worker changed'):
+                self.guest.supervisor_readiness(binding, 10.25)
+            observe.return_value = observation
+            command.side_effect = RuntimeError('native current proof rejected')
+            with self.assertRaisesRegex(RuntimeError, 'native current proof rejected'):
+                self.guest.supervisor_readiness(binding, 10.25)
+            command.side_effect = None
+            command.return_value = json.dumps(dict(report, initial_completion=dict(completion, target_epoch=8))).encode()
+            with self.assertRaisesRegex(RuntimeError, 'initial completion'):
+                self.guest.supervisor_readiness(binding, 10.25)
+            command.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, 'deadline exhausted'):
+                self.guest.supervisor_readiness(binding, 10)
+            command.assert_not_called()
+
+    def test_retained_native_guard_is_held_until_deliberate_eof(self):
+        import time
+        for early in (False, True):
+            with self.subTest(early=early), tempfile.TemporaryDirectory() as directory:
+                guest = fresh_guest()
+                guest.ATTEMPT = Path(directory)
+                fd = os.open(directory, os.O_RDONLY)
+                guest.DEPLOYMENT_LOCK_FD = fd
+                script = 'import sys;print("{}",flush=True);' + ('sys.exit(0)' if early else 'sys.stdin.buffer.read()')
+                try:
+                    with patch.object(guest, 'supervisor_native_argv', return_value=[sys.executable, '-c', script]), \
+                         patch.object(guest, 'supervisor_native_validate', return_value={'fixture': 'held'}), \
+                         patch.object(guest, 'record'):
+                        if early:
+                            try:
+                                guest.supervisor_guard_acquire({})
+                                guest.SUPERVISOR_GUARD.wait(timeout=5)
+                                with self.assertRaisesRegex(RuntimeError, 'exited'):
+                                    guest.supervisor_guard_check()
+                            except RuntimeError as error:
+                                self.assertIn('exited', str(error))
+                            finally:
+                                guest.supervisor_guard_release(require_success=False)
+                        else:
+                            guest.supervisor_guard_acquire({})
+                            child = guest.SUPERVISOR_GUARD
+                            guest.supervisor_guard_check()
+                            self.assertIsNone(child.poll())
+                            guest.supervisor_guard_release()
+                            self.assertEqual(child.returncode, 0)
+                            self.assertIsNone(guest.SUPERVISOR_GUARD)
+                finally:
+                    os.close(fd)
+
+
+    def test_native_host_receipt_binds_closed_action_generation_and_journal(self):
+        plan = plan_for()
+        report = supervisor_host_receipt(plan, 'quiescence')
+        with patch.object(self.guest, 'stamp', return_value=[1, 9, 0o40700, 0, 0]):
+            self.assertEqual(self.guest.supervisor_native_validate(json.dumps(report).encode(),
+                'quiescence', plan), report)
+            for field in ('unknown', 'operation', 'policy_sha256', 'unit_sha256',
+                          'installed_policy_sha256', 'receipt', 'journal_inode', 'journal_mode',
+                          'journal_uid_bool', 'running', 'worker', 'status'):
+                with self.subTest(field=field):
+                    value = copy.deepcopy(report)
+                    if field == 'unknown': value['unknown'] = True
+                    elif field == 'receipt': value['provisioning_receipt']['sha256'] = '0'*64
+                    elif field == 'journal_inode': value['journal']['inode'] += 1
+                    elif field == 'journal_mode': value['journal']['mode'] = 0o755
+                    elif field == 'journal_uid_bool': value['journal']['uid'] = False
+                    elif field == 'running': value['service_state'] = 'running'
+                    elif field in ('worker', 'status'): value[field] = {}
+                    else: value[field] = 'different'
+                    with self.assertRaises(RuntimeError):
+                        self.guest.supervisor_native_validate(json.dumps(value).encode(), 'quiescence', plan)
+
+    def test_first_install_and_existing_stopped_intent_never_infer_start(self):
+        for original_state, desired in (('absent', 'stopped'), ('absent', 'running'),
+                                        ('stopped', 'stopped'), ('running', 'running')):
+            with self.subTest(original=original_state, desired=desired):
+                guest = fresh_guest()
+                wrapper = supervisor_transition(self.build, self.value, OPERATION, original_state)
+                wrapper['successor_service_state'] = desired
+                plan = {'epoch_supervisor': wrapper, 'epoch_supervisor_installed': wrapper['installed'],
+                        'operation': OPERATION}
+                original = {'original_service_state': original_state,
+                    'successor_service_state': desired, 'journal_identity': [1, 9]}
+                guest.SUPERVISOR_GUARD = object()
+                events = []
+                with patch.object(guest, 'supervisor_native_report', return_value={}), \
+                     patch.object(guest, 'supervisor_guard_check'), \
+                     patch.object(guest, 'supervisor_guard_release', side_effect=lambda: events.append('release')), \
+                     patch.object(guest, 'record'), \
+                     patch.object(guest, 'stamp', return_value=[1, 9, 0o40700, 0, 0]), \
+                     patch.object(guest, 'write_new') as write, \
+                     patch.object(guest, 'install_unit') as install, \
+                     patch.object(guest.os.path, 'lexists', return_value=False), \
+                     patch.object(guest, 'command', side_effect=lambda argv, **kw: events.append(kw['name'])), \
+                     patch.object(guest, 'supervisor_readiness', return_value={'native_proof': True}) as ready, \
+                     patch.object(guest.time, 'monotonic', return_value=10):
+                    result = guest.supervisor_resume(plan, original)
+                    self.assertEqual(result['running'], desired == 'running')
+                    self.assertEqual(result['original_service_state'], original_state)
+                    self.assertEqual(write.call_count, int(original_state == 'absent'))
+                    self.assertEqual(install.call_count, int(original_state != 'absent'))
+                    if desired == 'running':
+                        self.assertLess(events.index('release'), events.index('epoch-supervisor-start'))
+                        ready.assert_called_once_with(wrapper['after'], 11.0)
+                    else:
+                        self.assertNotIn('release', events)
+                        self.assertNotIn('epoch-supervisor-start', events)
+                        ready.assert_not_called()
+
+    def test_shared_deployment_lock_and_any_reset_marker_block_before_apply(self):
+        guest = fresh_guest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root/'runtime'; runtime.mkdir()
+            supervisor = root/'supervisor'; supervisor.mkdir(mode=0o700)
+            guest.SUPERVISOR_STATE_ROOT = supervisor
+            plan = {'deployment': {'runtime_root': str(runtime)}}
+            real_fstat = os.fstat
+            def owned(fd):
+                info = real_fstat(fd)
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_gid=0,
+                    st_nlink=info.st_nlink, st_dev=info.st_dev, st_ino=info.st_ino)
+            def stamped(path, directory=False):
+                info = Path(path).lstat()
+                return [info.st_dev, info.st_ino, info.st_mode, 0, 0, info.st_nlink]
+            with patch.object(guest.os, 'fstat', side_effect=owned), \
+                 patch.object(guest, 'stamp', side_effect=stamped), patch.object(guest, 'apply') as apply:
+                fd = os.open(supervisor/'.deployment.lock', os.O_RDWR|os.O_CREAT, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    with self.assertRaises(BlockingIOError): guest.apply_locked(plan)
+                finally:
+                    os.close(fd)
+                marker = supervisor/'.reset-owner.json'
+                marker.symlink_to(supervisor/'missing')
+                with self.assertRaisesRegex(RuntimeError, 'retained reset owner'):
+                    guest.apply_locked(plan)
+                self.assertTrue(marker.is_symlink())
+                apply.assert_not_called()
+                self.assertIsNone(guest.DEPLOYMENT_LOCK_FD)
+
+
+class ArtifactPreparationPhaseTests(unittest.TestCase):
+    def test_preparation_is_explicit_and_separate_from_apply_or_plan_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, descriptor, result = local_inputs(directory)
+            args = cli_argv(descriptor, result, descriptor.parent/'output')
+            for invalid in (args + ['--prepare-artifacts'],
+                            [value for value in args if value != '--plan-only'] + ['--prepare-artifacts']):
+                with patch.object(sys, 'argv', invalid), patch.object(runner.subprocess, 'run') as remote, \
+                     patch.object(runner.subprocess, 'check_output') as observation:
+                    with self.assertRaisesRegex(RuntimeError, 'prepare-artifacts is separate'):
+                        runner.main()
+                    remote.assert_not_called(); observation.assert_not_called()
+            clean = ['taira_update.py', '--prepare-artifacts', '--deployment', str(descriptor),
+                '--prepared-result', str(result), '--operation', OPERATION,
+                '--output', str(descriptor.parent/'prepared-output')]
+            with patch.object(sys, 'argv', clean), \
+                 patch.object(runner.subprocess, 'check_output', return_value='optimizations'), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
+                 patch.object(runner, 'prepare_artifacts') as prepare, \
+                 patch.object(runner, 'make_plan') as plan, patch.object(runner, 'apply_plan') as apply:
+                runner.main()
+                prepare.assert_called_once(); plan.assert_not_called(); apply.assert_not_called()
+
+    def test_verification_requires_all_exact_preprovisioned_artifacts_and_never_creates_missing_file(self):
+        guest = fresh_guest()
+        plan = plan_for()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            state = root/'supervisor'; state.mkdir(mode=0o700)
+            (state/'.deployment.lock').touch(mode=0o600)
+            runtime = root/'runtime'; runtime.mkdir(mode=0o700)
+            plan['deployment']['runtime_root'] = str(runtime)
+            release = runtime/runner.release_name(plan); release.mkdir(mode=0o700)
+            bins = release/'bin'; bins.mkdir(mode=0o700)
+            for item in plan['artifacts']:
+                with (bins/item['name']).open('wb') as out: out.truncate(item['size'])
+                (bins/item['name']).chmod(0o755)
+            guest.SUPERVISOR_STATE_ROOT = state
+            real_fstat = os.fstat
+            def owned(fd):
+                info=real_fstat(fd)
+                return SimpleNamespace(st_mode=info.st_mode,st_uid=0,st_gid=0,
+                    st_nlink=info.st_nlink,st_dev=info.st_dev,st_ino=info.st_ino)
+            def stamp(path,directory=False):
+                path=Path(path); info=path.lstat()
+                if path.resolve()!=path or (not directory and info.st_nlink!=1):
+                    raise RuntimeError('fixture public path custody differs')
+                return [info.st_dev,info.st_ino,info.st_mode,0,0,info.st_nlink,
+                        info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+            with patch.object(guest.os, 'geteuid', return_value=0), \
+                 patch.object(guest.os, 'fstat', side_effect=owned), \
+                 patch.object(guest, 'stamp', side_effect=stamp), \
+                 patch.object(guest, 'native_digest', return_value='b'*64) as digest, \
+                 redirect_stdout(io.StringIO()) as output:
+                guest.verify_prepared_artifacts(plan)
+                report=json.loads(output.getvalue())
+                self.assertFalse(report['runtime_mutated'])
+                self.assertEqual(digest.call_count,3)
+                kagami=bins/'kagami'
+                kagami.chmod(0o775)
+                with self.assertRaisesRegex(RuntimeError,'custody differ'):
+                    guest.verify_prepared_artifacts(plan)
+                kagami.chmod(0o755)
+                digest.return_value='f'*64
+                with self.assertRaisesRegex(RuntimeError,'bytes or custody differ'):
+                    guest.verify_prepared_artifacts(plan)
+                digest.return_value='b'*64
+                kagami.unlink()
+                with self.assertRaises(FileNotFoundError): guest.verify_prepared_artifacts(plan)
+                self.assertFalse(kagami.exists())
 
 
 if __name__ == '__main__':

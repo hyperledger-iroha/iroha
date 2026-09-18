@@ -18,7 +18,17 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 1030
+# Existing Mac census 852/1030, plus eight inspector, nine supervisor, five quiescence,
+# seven generation-admission, nineteen reset integration and two PendingKura controls. Linux additionally
+# selects OpenSSH, native worker identity and three Linux generation controls.
+EXPECTED_BEACON_NETWORK_TEST = (
+    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
+    if sys.platform == "linux" else
+    'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
+)
+PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -61,7 +71,7 @@ class BeaconGateTests(unittest.TestCase):
             'dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts',
             'dataspace_deploy_cli::phase_failure_summary_excludes_signed_payloads',
         )
-        expensive = 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
+        expensive = EXPECTED_BEACON_NETWORK_TEST
         observation = [leaf for _, leaves in gate.NETWORK_OBSERVATION_STAGES for leaf in leaves]
         for scope in gate.QUALIFICATION_SCOPES:
             selected = [leaf for _, leaves in gate.qualification_stages(scope)['network'] for leaf in leaves]
@@ -187,7 +197,7 @@ class BeaconGateTests(unittest.TestCase):
         self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
 
     def test_real_beacon_fixture_replaces_clean_client_and_keeps_root_check_before_startup(self):
-        real = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        real = EXPECTED_BEACON_NETWORK_TEST
         root = "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody"
         exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
         seam = "taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity"
@@ -474,7 +484,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
             ),
         }
-        real = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        real = EXPECTED_BEACON_NETWORK_TEST
         self.assertEqual([name for _, names in gate.BEACON_NETWORK_STAGES for name in names], [real])
         observations = [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names]
         for scope in gate.QUALIFICATION_SCOPES:
@@ -491,9 +501,175 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                             self.assertEqual(observations.count(name), 1)
                             self.assertLess(selected.index(name), selected.index(real))
 
+    def test_beacon_history_and_epoch_supervisor_controls_are_exact_required_and_focused(self):
+        required = {
+            'kagami': (
+                'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
+                'kura::beacon_history::tests::beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects',
+                'kura::beacon_history::tests::beacon_history_requires_exact_bounded_range_and_preserves_read_only_journals',
+                'kura::beacon_history::tests::beacon_history_rejects_malformed_sidecars_and_preserves_their_source',
+                'kura::beacon_history::tests::beacon_history_rejects_block_height_mismatch_without_publishing_partial_json',
+                'kura::beacon_history::tests::beacon_history_never_emits_opaque_install_state_or_unrelated_parameter_payloads',
+                'kura::beacon_history::tests::beacon_history_cli_exposes_explicit_bounded_scope',
+            ),
+            'cli': (
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_partial_initialization_never_replaces_retained_dispatch',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_readiness_rechecks_transition_after_completion_wait',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_retains_original_trust_across_explicit_release_observation',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_status_parser_has_no_seed_or_mutation_inputs',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_policy_schedule_and_custody_reject_wrong_public_authority',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_readiness_names_bind_policy_and_process_incarnation',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_rolling_batches_retain_one_epoch_overlap_and_checked_bounds',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_custody_rejects_changed_shared_and_wrong_length_seed_files',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_worker_lock_and_cursor_preserve_exclusive_restart_state',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_excludes_active_worker_until_drop',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_never_repairs_missing_lock',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_symlink_parent_and_child',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_parent_and_child_rebinding',
+            ),
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, regressions in required.items():
+                names = [name for _, tests in selected[harness] for name in tests]
+                for regression in regressions:
+                    with self.subTest(scope=scope, harness=harness, regression=regression):
+                        self.assertEqual(names.count(regression), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+                        listing = "\n".join(name + ": test" for name in names if name != regression)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, selected[harness])
+
+    def test_generation_reset_and_beacon_root_controls_are_exact_and_platform_required(self):
+        required = {
+            "core": (
+                'sumeragi::v2::tests::pending_kura_standalone_apply_recovers_real_kura_shutdown_cut',
+                'sumeragi::v2::tests::pending_kura_standalone_apply_rejects_foreign_owner_without_mutation',
+                'sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies',
+            ),
+            "cli": (
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_and_missing_genesis_grant',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_shared_operator_key',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_trust_and_network',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_custody',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_requires_bounded_closed_schemas',
+                'taira_public_reset::executor_model::tests::epoch_supervisor_pause_and_start_are_explicit_ordered_barriers',
+                'taira_public_reset::executor_model::tests::epoch_supervisor_pause_failure_prevents_validator_stop',
+                'taira_public_reset::executor_model::tests::maintenance_admin_admission_rejects_canary_operator_and_network_substitution',
+                'taira_public_reset::executor_model::tests::old_inventory_shape_and_seven_artifact_closure_are_rejected',
+                'taira_public_reset::inputs::tests::maintenance_grant_requires_registration_and_survives_no_revocation',
+                'taira_public_reset::inputs::tests::ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry',
+                'taira_public_reset::host::epoch_supervisor::tests::unit_matches_independent_python_golden_and_exact_native_argv',
+                'taira_public_reset::host::epoch_supervisor::tests::first_install_pause_requires_genuine_manager_absence',
+                'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_seed_role_mapping',
+                'taira_public_reset::host::epoch_supervisor::tests::status_argv_contains_only_readonly_native_operation_and_exact_worker',
+                'taira_public_reset::host::epoch_supervisor::tests::paths_reject_expansion_and_finite_reset_aliases',
+                'taira_public_reset::host::epoch_supervisor::tests::native_status_rejects_previous_worker_or_changed_manager_incarnation',
+                'taira_public_reset::host::tests::epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_rejects_shared_wrong_mode_length_and_symlink',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_held_descriptor_rejects_rebinding_and_changed_content',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_retention_is_exact_idempotent_and_never_overwrites',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_invalid_body_does_not_create_retained_paths',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_fifo_is_rejected_without_waiting_for_a_writer',
+                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_partial_staging_never_becomes_or_blocks_final',
+            ),
+            "kagami": (
+                'kura::beacon_history::tests::beacon_history_separates_external_and_time_execution_roots_without_weakening_results',
+            ),
+        }
+        linux_only = (
+            'taira_public_reset::host::epoch_generation::linux::tests::preparation_requires_explicit_installed_and_successor_intent',
+            'taira_public_reset::host::epoch_generation::linux::tests::generation_binding_rejects_alternate_cli_and_private_path',
+            'taira_public_reset::host::epoch_generation::linux::tests::service_intent_never_infers_activation_from_original_absence',
+        )
+        affected_existing = (
+            'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
+            'taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan',
+            'taira_public_reset::host::tests::host_receipt_names_cover_every_action_and_artifact_role',
+            'taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job',
+            'taira_public_reset::host::tests::manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline',
+            'taira_public_reset::host::tests::manager_evidence_keeps_unexecuted_and_running_operations_pending',
+            'taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity',
+        )
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("integration_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                selected = selected_gate.qualification_stages(scope)
+                for harness, regressions in required.items():
+                    names = [name for _, tests in selected[harness] for name in tests]
+                    expected = regressions + (linux_only if harness == "cli" and platform == "linux" else ())
+                    for regression in expected:
+                        with self.subTest(platform=platform, scope=scope, harness=harness, regression=regression):
+                            self.assertEqual(names.count(regression), 1)
+                            focused = selected_gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                            self.assertEqual(tuple(focused), (harness,))
+                            self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+                            listing = "\n".join(name + ": test" for name in names if name != regression)
+                            with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                                selected_gate.require_tests(listing, selected[harness])
+                cli_names = [name for _, tests in selected["cli"] for name in tests]
+                for regression in affected_existing:
+                    self.assertEqual(cli_names.count(regression), 1)
+                if platform == "darwin":
+                    for regression in linux_only:
+                        self.assertNotIn(regression, cli_names)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
+                            selected_gate.focused_regression_stages(scope, ("cli=" + regression,))
+
+    def test_epoch_supervisor_platform_census_and_exact_network_fixture(self):
+        linux_identity = 'taira_public_reset::host::epoch_worker_process_identity_binds_current_kernel_incarnation'
+        openssh = "taira_public_reset::host::tests::openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network"
+        fixtures = {
+            "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
+            "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
+        }
+        for platform, counts in (("darwin", (902, 1080)), ("linux", (907, 1085))):
+            spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with self.subTest(platform=platform), patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+                for scope, count in zip(gate.QUALIFICATION_SCOPES, counts):
+                    selected = selected_gate.qualification_stages(scope)
+                    names = [name for _, tests in selected["cli"] for name in tests]
+                    self.assertEqual(selected_gate.selected_regression_count(scope), count)
+                    network = [name for _, tests in selected["network"] for name in tests]
+                    expensive = [name for _, tests in selected_gate.BEACON_NETWORK_STAGES for name in tests]
+                    self.assertEqual(expensive, [fixtures[platform]])
+                    self.assertEqual(network.count(fixtures[platform]), 1)
+                    other = fixtures["linux" if platform == "darwin" else "darwin"]
+                    self.assertNotIn(other, network)
+                    self.assertEqual(network[-1], fixtures[platform])
+                    focus = selected_gate.focused_regression_stages(scope, ("network=" + fixtures[platform],))
+                    self.assertEqual([name for _, tests in focus["network"] for name in tests], expensive)
+                    with self.assertRaisesRegex(selected_gate.CheckError, "not selected in this scope"):
+                        selected_gate.focused_regression_stages(scope, ("network=" + other,))
+                    # Retaining only the other platform's expensive case never satisfies this gate.
+                    listing = "\n".join(name + ": test" for name in network if name != fixtures[platform])
+                    listing += "\n" + other + ": test"
+                    with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                        selected_gate.require_tests(listing, selected["network"])
+                    for regression in (linux_identity, openssh):
+                        self.assertEqual(names.count(regression), int(platform == "linux"))
+                    if platform == "linux":
+                        focused = selected_gate.focused_regression_stages(scope, ("cli=" + linux_identity,))
+                        self.assertEqual([name for _, tests in focused["cli"] for name in tests], [linux_identity])
+                        listing = "\n".join(name + ": test" for name in names if name != linux_identity)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, selected["cli"])
+
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 852)
+        self.assertEqual(gate.selected_regression_count(), EXPECTED_BASIC_REGRESSION_COUNT)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -600,7 +776,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
-            "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
+            EXPECTED_BEACON_NETWORK_TEST,
         ]
         self.assertEqual([test for _, tests in basic["network"] for test in tests], basic_network)
         self.assertEqual([test for _, tests in full["network"] for test in tests],
@@ -631,7 +807,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "core": "state::runtime_catalog_tests::runtime_catalog_final_overlay_rechecks_late_validator_invalidation",
             "config-unit": "parameters::actual::tests::sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy",
             "daemon": "startup_runtime_catalog_tests::startup_catalog_handoff_includes_additions_committed_during_replay",
-            "network": "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
+            "network": EXPECTED_BEACON_NETWORK_TEST,
         }
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
@@ -903,6 +1079,12 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
             self.assertCountEqual(executed, expected)
+            first_network = next(index for index, row in enumerate(executed) if row[0] == "network")
+            for index, (harness, regression) in enumerate(executed):
+                if (regression.startswith("kura::beacon_history::tests::")
+                        or regression.startswith("taira_dataspace_deploy::epoch_maintenance::")
+                        or regression.startswith("taira_public_reset::")):
+                    self.assertLess(index, first_network, (harness, regression))
             cli_start = next(index for index, row in enumerate(executed) if row[0] == "cli")
             startup = {"core": gate.CORE_STARTUP_STAGES, "torii-unit": gate.TORII_STARTUP_STAGES,
                        "daemon": gate.DAEMON_STARTUP_STAGES}
@@ -1000,7 +1182,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.env = {"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         self.core = "state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
         self.cli = next(name for _, names in gate.STAGES for name in names)
-        self.network = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        self.network = EXPECTED_BEACON_NETWORK_TEST
         for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
             mock = patch.object(gate, name)
             mock.start()
@@ -1701,7 +1883,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_one_real_custody_case_preserves_catalog_and_both_route_sequences_in_each_scope(self):
-        catalog = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        catalog = EXPECTED_BEACON_NETWORK_TEST
         for scope in gate.QUALIFICATION_SCOPES:
             with self.subTest(scope=scope):
                 stages = gate.qualification_stages(scope)["network"]
@@ -1733,7 +1915,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_failed_real_custody_case_is_reported_once_without_another_network_start(self):
         stages = gate.NETWORK_STAGES
         expected = [name for _, names in stages for name in names]
-        catalog = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        catalog = EXPECTED_BEACON_NETWORK_TEST
         seen = []
         def native(command, **kwargs):
             if "--list" in command:

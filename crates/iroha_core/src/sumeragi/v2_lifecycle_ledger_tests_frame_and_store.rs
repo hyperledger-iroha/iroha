@@ -2156,3 +2156,17 @@ fn opaque_or_noncanonical_certified_serve_references_are_rejected() {
         Err(LifecycleLedgerError::InvalidLedger(_))
     ));
 }
+
+
+impl LifecycleLedgerRecordV1 {
+    /// Change only owner coordinates for the PendingKura wrong-authority regression.
+    pub(in crate::sumeragi) fn with_pending_kura_foreign_owner_for_test(
+        mut self,
+        owner: OwnerId,
+    ) -> Self {
+        self.causal_root = *owner.causal_root().digest().as_bytes();
+        self.owner_first_ordinal = owner.first_admission_ordinal();
+        self.reconstruction_source = *owner.causal_root().digest().as_bytes();
+        self
+    }
+}

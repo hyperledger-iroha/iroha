@@ -8,8 +8,8 @@ use super::{
     ProductionLifecycleOwnerStartupErrorV1, RecoveredAdapterStartup,
     RecoveredLifecycleLocalProposalAttemptV1, RecoveredLifecycleOwnerFactoryInputsV1,
     RecoveredLifecycleStorageAuthorityV1, RecoveredWalDecisionFetch,
-    RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalFrameIdentity,
-    RecoveredWalStartupAuthorityV1, VerifiedHeightContext,
+    RecoveredWalDecisionFetchPendingMintPermit, RecoveredWalDecisionFetchReplayEvidenceV1,
+    RecoveredWalFrameIdentity, RecoveredWalStartupAuthorityV1, VerifiedHeightContext, wire,
 };
 use crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1;
 
@@ -191,6 +191,54 @@ impl InstalledPendingKuraApplyV1 {
         &self,
     ) -> crate::sumeragi::v2_recovery::PendingKuraApply {
         self.expected
+    }
+}
+
+impl RecoveredPendingKuraApplyReplayV1 {
+    /// Project only the inert identity of this native replay's exact Apply.
+    /// Runtime bindings stay local and cannot create a second executable owner.
+    pub(in crate::sumeragi) fn project_passive_lifecycle_apply(
+        &self,
+        permit: RecoveredWalDecisionFetchPendingMintPermit,
+        verified: &VerifiedHeightContext,
+        manifest: &wire::PayloadManifest,
+        validated: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    ) -> Option<crate::sumeragi::v2_lifecycle_coordinator::PendingKuraApplyComparisonV1> {
+        let AdapterEffect::FetchBody {
+            tag,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } = &self.fetch.effect
+        else {
+            return None;
+        };
+        if self.expected.context_id() != verified.context().id()
+            || self.expected.height() != verified.context().height
+            || self.expected.block_hash() != subject.block_hash
+            || validated.execution_commitment() != certificate.execution_commitment
+            || validated.durable().subject() != *subject
+        {
+            return None;
+        }
+        let lineage = crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionApplyReplayLineageV1::from_sealed_recovered_decision(
+            &self.fetch.replay_evidence, verified, self.fetch.wal_identity,
+            &self.fetch.effect, manifest, validated.durable(),
+        )?;
+        let fetch_pending = self.fetch.replay_evidence.reconstruct_pending(
+            permit,
+            verified,
+            self.fetch.wal_identity,
+            &self.fetch.effect,
+        )?;
+        let apply = AdapterEffect::Apply {
+            tag: *tag,
+            subject: *subject,
+            certificate: certificate.clone(),
+        };
+        let apply_pending =
+            fetch_pending.project_decision_fetch_apply_source(&self.fetch.effect, &apply)?;
+        lineage.project_pending_kura_comparison(verified, self.expected, &apply, &apply_pending)
     }
 }
 
@@ -1327,11 +1375,12 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
             )
     }
 
-    /// Open only the storage lifecycle branch and attach the pending-tip replay seal.
+    /// Open the closed-ingress storage branch and attach the pending-tip replay seal.
     ///
-    /// The embedded ordinary authority was replaced with `None` by the exact
-    /// classifier above. The resulting owner therefore cannot install a live
-    /// recovered Fetch row before the closed-ingress interrupted-tip path runs.
+    /// The embedded ordinary authority is `None`. Native Decision/BodyFrame
+    /// comparison may retain its exact surviving Apply row as passive work,
+    /// while the complete Fetch stays solely owned by interrupted-tip replay.
+    /// No ordinary Fetch or Apply executable carrier enters this owner.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(
         self,
@@ -1342,11 +1391,12 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let Self { startup, replay } = self;
         startup
-            .open_production_lifecycle_owner_v1(
+            .open_production_lifecycle_owner_with_pending_kura_v1(
                 config,
                 reply_route_source_capacity,
                 factory_inputs,
                 body_store,
+                Some(&replay),
             )
             .map(|owner| owner.with_pending_kura_apply_replay(replay))
     }

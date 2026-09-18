@@ -1066,3 +1066,222 @@ fn cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output()
         Some(Some(TerminalOutcome::Cancelled))
     );
 }
+
+impl super::super::ProductionLifecycleOwnerV1 {
+    /// Retain only historical validation. Ordinary Decision admission must create Apply.
+    pub(in crate::sumeragi) fn persist_pending_kura_released_validate_for_test(
+        verified: &VerifiedHeightContext,
+        manifest: &wire::PayloadManifest,
+        durable: &DurableBodyReceipt,
+        root: &Path,
+    ) {
+        let context = super::super::projection::lifecycle_context(verified.context());
+        let tag = EventTag::new(
+            verified.context().height,
+            manifest.round.view,
+            Generation::INITIAL,
+        );
+        let validate = super::super::replay_authority::exact_local_body_record_fixture(
+            context,
+            tag,
+            manifest.clone(),
+            durable,
+            LifecycleStageKind::ValidateBody,
+        )
+        .expect("bind the real released Validate body");
+        let causal_root = CausalRoot::new(LifecycleDigest::new(
+            *Hash::new(b"pending Kura standalone Apply historical Validate").as_ref(),
+        ));
+        let record = LifecycleLedgerRecordV1::new(
+            validate.key,
+            OwnerId::new(causal_root, 41),
+            41,
+            validate.work_class,
+            validate.stage,
+            Some(TerminalOutcome::Advanced),
+            causal_root.digest(),
+            validate.payload,
+            validate.authority,
+            DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("construct historical terminal Validate");
+        let ledger = LifecycleLedgerV1::new(context, 41, vec![record], BTreeMap::new())
+            .expect("construct released Validate prefix");
+        let (store, _) =
+            LifecycleLedgerStoreV1::open(root, context).expect("open released Validate prefix");
+        store
+            .persist(&ledger)
+            .expect("persist released Validate prefix");
+    }
+
+    /// Capture the Apply actually published by ordinary DecisionReleasedApply.
+    pub(in crate::sumeragi) fn snapshot_pending_kura_standalone_apply_for_test(
+        &self,
+        root: &Path,
+    ) -> LifecycleLedgerV1 {
+        let (_, ledger) = LifecycleLedgerStoreV1::open(root, self.coordinator.active_context)
+            .expect("read ordinary admitted Apply");
+        let applies = ledger
+            .records()
+            .iter()
+            .filter(|row| row.work_class() == Some(LifecycleWorkClass::Apply))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            applies.len(),
+            1,
+            "ordinary admission publishes one actual Apply"
+        );
+        let apply = applies[0];
+        assert_eq!(
+            ledger.records().len(),
+            2,
+            "only original Validate and new standalone Apply"
+        );
+        assert_eq!(apply.owner().first_admission_ordinal(), apply.ordinal());
+        assert_eq!(apply.terminal(), Some(None));
+        assert_eq!(apply.continuation(), Some(DurableContinuation::None));
+        let actual = &self.coordinator.records[&apply.ordinal()];
+        assert_eq!(actual.owner, apply.owner());
+        assert_eq!(actual.state, super::super::LifecycleState::Ready);
+        let carriers = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census()
+            .1
+            .into_iter()
+            .filter(|(ordinal, _)| *ordinal == apply.ordinal())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            carriers,
+            vec![(apply.ordinal(), "DurableRecoveredDecisionApply")]
+        );
+        ledger
+    }
+
+    /// Require byte-preserving passive admission and no duplicate executable owner.
+    pub(in crate::sumeragi) fn assert_pending_kura_passive_apply_for_test(
+        &mut self,
+        before: &LifecycleLedgerV1,
+        root: &Path,
+    ) {
+        Self::assert_pending_kura_apply_progress_for_test(before, root, false);
+        let apply = before
+            .records()
+            .iter()
+            .find(|row| row.work_class() == Some(LifecycleWorkClass::Apply))
+            .expect("one original standalone Apply");
+        let actual = &self.coordinator.records[&apply.ordinal()];
+        assert_eq!(actual.owner, apply.owner());
+        assert_eq!(actual.key, apply.key().expect("original Apply key"));
+        assert_eq!(actual.state, super::super::LifecycleState::Ready);
+        assert!(self.coordinator.ready_index.contains(&apply.ordinal()));
+        let carriers = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census()
+            .1;
+        assert!(
+            carriers
+                .iter()
+                .all(|(ordinal, _)| *ordinal != apply.ordinal()),
+            "native PendingKura is the sole executable Apply owner"
+        );
+        assert_eq!(
+            self.exact_lifecycle_output_ordinals_for_registry_census(),
+            Some(BTreeSet::from([apply.ordinal()]))
+        );
+        assert!(self.has_recovered_lifecycle_outputs());
+        assert_eq!(self.recovered_lifecycle_output_count(), 1);
+        let calls = std::cell::Cell::new(0);
+        assert_eq!(
+            self.settle_next_recovered_lifecycle_output(|_| {
+                calls.set(calls.get() + 1);
+                Ok::<_, &'static str>(
+                    super::super::concrete_admission::LifecycleOutputServiceDispositionV1::Accepted,
+                )
+            })
+            .expect("ordinary output drain retains passive Apply"),
+            RecoveredLifecycleOutputSettlementV1::Deferred
+        );
+        assert_eq!(
+            calls.get(),
+            0,
+            "output service cannot execute pending Apply"
+        );
+        Self::assert_pending_kura_apply_progress_for_test(before, root, false);
+    }
+
+    /// Verify no mutation before StateApplied and only exact Apply terminalization after it.
+    pub(in crate::sumeragi) fn assert_pending_kura_apply_progress_for_test(
+        before: &LifecycleLedgerV1,
+        root: &Path,
+        completed: bool,
+    ) {
+        let (_, actual) = LifecycleLedgerStoreV1::open(root, before.context())
+            .expect("read retained standalone Apply ledger");
+        if !completed {
+            assert_eq!(
+                actual, *before,
+                "unfinished replay cannot change the retained ledger"
+            );
+            return;
+        }
+        let apply = before
+            .records()
+            .iter()
+            .find(|row| row.work_class() == Some(LifecycleWorkClass::Apply))
+            .expect("the original Apply is retained");
+        let expected = LifecycleLedgerV1::new(
+            before.context(),
+            before.high_water(),
+            before
+                .records()
+                .iter()
+                .map(|row| {
+                    if row.ordinal() == apply.ordinal() {
+                        row.clone()
+                            .with_terminal_for_test(Some(TerminalOutcome::Advanced))
+                    } else {
+                        row.clone()
+                    }
+                })
+                .collect(),
+            BTreeMap::new(),
+        )
+        .expect("exact terminal successor preserves every unrelated row");
+        assert_eq!(
+            actual, expected,
+            "only the native Apply's terminal state may advance"
+        );
+    }
+
+    /// Replace only owner identity in an otherwise genuine ordinary-admission row.
+    pub(in crate::sumeragi) fn replace_pending_kura_apply_owner_for_test(
+        before: &LifecycleLedgerV1,
+        root: &Path,
+    ) {
+        let wrong = CausalRoot::new(LifecycleDigest::new(
+            *Hash::new(b"foreign owner cannot borrow pending Kura Decision").as_ref(),
+        ));
+        let rows = before
+            .records()
+            .iter()
+            .map(|row| {
+                if row.work_class() != Some(LifecycleWorkClass::Apply) {
+                    return row.clone();
+                }
+                assert_ne!(wrong, row.owner().causal_root());
+                row.clone()
+                    .with_pending_kura_foreign_owner_for_test(OwnerId::new(wrong, row.ordinal()))
+            })
+            .collect();
+        let changed =
+            LifecycleLedgerV1::new(before.context(), before.high_water(), rows, BTreeMap::new())
+                .expect("construct exact wrong-owner control ledger");
+        let (store, _) = LifecycleLedgerStoreV1::open(root, before.context())
+            .expect("open wrong-owner control ledger");
+        store
+            .persist(&changed)
+            .expect("persist wrong-owner control ledger");
+    }
+}

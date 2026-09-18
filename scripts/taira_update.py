@@ -3,14 +3,14 @@
 
 Requires completed maintained preparation and an owner-public deployment record.
 --plan-only contacts no host. The default command
-transfers the daemon and matching CLI via native cat/SSH and executes the reviewed guest
-controller. No secret files are read. Failed attempts are never overwritten.
+requires previously prepared same-release daemon, CLI and Kagami and executes
+the reviewed guest controller. --prepare-artifacts creates those exact binaries
+via native cat/SSH before native supervisor generation materialization. No secret files are read. Failed attempts are never overwritten.
 An explicit --failed-start-chain authenticates every failed startup since the
 completed deployment. Unchanged binaries can be retried in a fresh operation.
 """
 import argparse
 import fcntl
-import secrets
 from urllib.parse import urlsplit
 import taira_retry as retry
 from taira_update_guest import COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS
@@ -114,7 +114,8 @@ def validate_build(build, commit):
     need(len(rows) == 4 and {row.get('name') for row in rows}
          == {'iroha3d_taira', 'iroha', 'kagami', 'sorafs-node'}, 'maintained four-artifact result required')
     selected = []
-    for name, package in [('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli')]:
+    for name, package in [('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli'),
+                          ('kagami', 'iroha_kagami')]:
         artifact = next(row for row in rows if row['name'] == name)
         need(artifact.get('package') == package and re.fullmatch('[0-9a-f]{64}', artifact.get('sha256', ''))
              and type(artifact.get('size')) is int and 1_000_000 < artifact['size'] < 1024 ** 3,
@@ -139,10 +140,10 @@ def failed_start_inputs(reference, deployment, prior, guest, operation, candidat
 
     installed, entries = guest.validate_failed_start_chain(
         reference, deployment, prior, operation, load_attempt, candidate=candidate)
-    return dict(reference, installed=installed), entries[-1][0]
+    return dict(reference, installed=installed), entries[-1][0], entries[-1][1]['failure.json']['epoch_supervisor_installed']
 
 
-def make_plan(build, deployment, prior, guest, operation, failed_start=None):
+def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, supervisor):
     commit = build['commit']
     artifacts = validate_build(build, commit)
     current = deployment['current']
@@ -156,12 +157,27 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None):
     need([row['role'] for row in prior['units']] == deployment['roles'], 'predecessor cohort differs')
     value = {'schema':'taira.daemon-update.plan.v1', 'commit':commit,
              'network_id':deployment['network_id'], 'artifacts':artifacts,
-             'operation':operation, 'deployment':deployment}
+             'operation':operation, 'deployment':deployment,
+             'epoch_supervisor':supervisor}
     installed_plan = prior
     if failed_start is not None:
-        value['failed_start'], installed_plan = failed_start_inputs(
+        value['failed_start'], installed_plan, supervisor_installed = failed_start_inputs(
             failed_start, deployment, prior, guest, operation, value)
     guest.validate_candidate_transition(commit, artifacts, current['commit'], installed_plan)
+    guest.validate_supervisor_update(supervisor, deployment, operation, commit, artifacts)
+    if failed_start is not None:
+        previous = installed_plan['epoch_supervisor']
+        need(previous['original_service_state'] == supervisor['original_service_state']
+             and previous['successor_service_state'] == supervisor['successor_service_state']
+             and previous['before'] == supervisor['before'],
+             'failed supervisor transition changed original operator intent')
+        need(supervisor['installed'] == supervisor_installed,
+             'supervisor installed binding differs from retained failure observation')
+        value['epoch_supervisor_installed'] = supervisor_installed
+    else:
+        need(supervisor['installed'] == supervisor['before'],
+             'initial supervisor installed binding differs from original')
+        value['epoch_supervisor_installed'] = supervisor['before']
     guest.configure(value)
     units = []
     for row in installed_plan['units']:
@@ -176,7 +192,12 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None):
         guest_sha256=sha(read_public(HERE / 'taira_update_guest.py')),
         runner_sha256=sha(read_public(HERE / 'taira_update.py')),
         renderer_sha256=deployment['renderer_sha256'], secret_contents_read=False,
-        transaction_submission=False)
+        transaction_submission=supervisor['successor_service_state'] == 'running',
+        python_transaction_submission=False)
+    unit_renderer = module(HERE / 'taira_epoch_supervisor_unit.py', 'epoch_supervisor_renderer')
+    need(unit_renderer.render(supervisor['after']['unit_spec']).decode() == supervisor['after']['unit_bytes'],
+         'successor supervisor unit differs from the shared fixed renderer')
+    value['epoch_supervisor_renderer_sha256'] = sha(read_public(HERE / 'taira_epoch_supervisor_unit.py'))
     return value
 
 
@@ -197,16 +218,28 @@ def successor_deployment(plan, raw, output):
 
 
 def transfer_code(name, create_release, plan):
-    need(name in ('iroha3d_taira', 'iroha'), 'unexpected transfer artifact')
+    need(name in ('iroha3d_taira', 'iroha', 'kagami'), 'unexpected transfer artifact')
     # stdin is inherited directly from the local artifact descriptor. Python
     # controls descriptors/paths only; /bin/cat owns the binary stream.
     return f'''
-import os,stat
+import os,stat,fcntl
 from pathlib import Path
 base=Path({plan['deployment']['runtime_root']!r})
 assert os.geteuid()==0 and base.resolve()==base
 for ancestor in [base,*base.parents]:
  s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
+state=Path('/var/lib/taira-epoch-supervisor')
+for ancestor in state.parents:
+ s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
+state.mkdir(mode=0o700,exist_ok=True)
+s=state.lstat();assert state.resolve()==state and stat.S_ISDIR(s.st_mode) and s.st_uid==s.st_gid==0 and stat.S_IMODE(s.st_mode)==0o700
+lock_path=state/'.deployment.lock'
+lock=os.open(lock_path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.st_nlink==1 and stat.S_IMODE(s.st_mode)==0o600
+fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+t=lock_path.lstat();assert (s.st_dev,s.st_ino)==(t.st_dev,t.st_ino)
+assert not os.path.lexists(state/'.reset-owner.json')
+os.set_inheritable(lock,True)
 release=base/{release_name(plan)!r}
 bins=release/'bin'
 if {create_release!r}:
@@ -226,6 +259,65 @@ def artifact_transfer_argv(approved, remote_transfer):
     return [approved[0], '-C', *approved[1:-1], remote_transfer]
 
 
+def retained_artifacts(artifacts):
+    """Admit local immutable producer outputs without reading binary bodies."""
+    retained = []
+    for artifact in artifacts:
+        path = Path(artifact['path'])
+        info = path.lstat()
+        need(path.resolve() == path and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+             and info.st_nlink == 1 and not info.st_mode & 0o222 and info.st_size == artifact['size'],
+             'candidate must be the retained read-only build artifact')
+        digest = subprocess.check_output(['/usr/bin/shasum', '-a', '256', str(path)], text=True).split()[0]
+        need(digest == artifact['sha256'], 'retained candidate artifact differs')
+        retained.append((artifact, path))
+    return retained
+
+
+def verify_prepared_remote(plan, argv, output):
+    source = read_public(HERE / 'taira_update_guest.py')
+    payload = source + b'\nverify_prepared_artifacts(' + repr(plan).encode() + b')\n'
+    with (output / 'prepared-artifacts.stdout.json').open('xb') as out, \
+         (output / 'prepared-artifacts.stderr').open('xb') as err:
+        result = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=300)
+    need(result.returncode == 0, 'preprovisioned candidate verification failed; no missing-file fallback')
+    report = retry.decode(read_public(output / 'prepared-artifacts.stdout.json'))
+    need(report == {'schema': 'taira.prepared-update-artifacts.v1',
+        'operation': plan['operation'], 'commit': plan['commit'],
+        'artifacts': plan['artifacts'], 'runtime_mutated': False},
+        'native prepared artifact verification receipt differs')
+    return report
+
+
+def prepare_artifacts(args, deployment, build_raw):
+    """Explicit create-new artifact phase before native generation materialization."""
+    build = retry.decode(build_raw)
+    artifacts = validate_build(build, build['commit'])
+    need(re.fullmatch('update-[0-9a-f]{32}', args.operation)
+         and args.operation != deployment['current']['attempt_name']
+         and build['commit'] != deployment['current']['commit'], 'fresh candidate operation required')
+    need(not args.output.exists(), 'fresh artifact preparation output required')
+    plan = {'schema': 'taira.update-artifact-preparation.v1', 'operation': args.operation,
+        'commit': build['commit'], 'deployment': deployment, 'artifacts': artifacts,
+        'build_result_path': str(args.prepared_result), 'build_result_sha256': sha(build_raw),
+        'runner_sha256': sha(read_public(HERE / 'taira_update.py')),
+        'guest_sha256': sha(read_public(HERE / 'taira_update_guest.py'))}
+    retained = retained_artifacts(artifacts)
+    argv = retry.validate_ssh(deployment['guest_ssh'])
+    args.output.mkdir(mode=0o700)
+    write_new(args.output / 'artifact-preparation.json', (json.dumps(plan, sort_keys=True) + '\n').encode())
+    for index, (artifact, path) in enumerate(retained):
+        remote = shlex.join(['/usr/bin/python3', '-I', '-c', transfer_code(artifact['name'], index == 0, plan)])
+        with path.open('rb') as source, (args.output / (artifact['name'] + '-transfer.stderr')).open('xb') as error:
+            result = subprocess.run(artifact_transfer_argv(argv, remote), stdin=source,
+                stdout=subprocess.DEVNULL, stderr=error, timeout=300)
+        need(result.returncode == 0, 'native artifact preparation failed; retain partial release for inspection')
+        write_new(args.output / (artifact['name'] + '-transfer.json'),
+            json.dumps({'exit_code': 0, 'name': artifact['name'], 'size': artifact['size']}).encode())
+    report = verify_prepared_remote(plan, argv, args.output)
+    print(json.dumps(report | {'next_action': 'native epoch-supervisor-host materialize using the prepared candidate CLI'}))
+
+
 def apply_plan(args):
     raw = read_public(args.plan)
     need(sha(raw) == args.plan_sha256, 'reviewed plan digest differs')
@@ -240,43 +332,33 @@ def apply_plan(args):
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
+    need(sha(read_public(HERE / 'taira_epoch_supervisor_unit.py')) == plan['epoch_supervisor_renderer_sha256'],
+         'reviewed supervisor renderer changed')
+    guest = module(HERE / 'taira_update_guest.py', 'runtime_update_supervisor_validation')
+    guest.validate_supervisor_update(plan['epoch_supervisor'], plan['deployment'],
+                                    plan['operation'], plan['commit'], plan['artifacts'])
     if 'failed_start' in plan:
         current = plan['deployment']['current']
         prior = retry.decode(retry.public_record(current['local_plan'], current['local_plan_sha256']))
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_recovery_validation')
         reference = {key: value for key, value in plan['failed_start'].items() if key != 'installed'}
         rebound = make_plan(json.loads(build_raw), plan['deployment'], prior, guest,
-                            plan['operation'], reference)
+                            plan['operation'], reference, supervisor=plan['epoch_supervisor'])
         need(rebound['failed_start'] == plan['failed_start'] and rebound['units'] == plan['units']
              and rebound['retained_predecessor'] == plan['retained_predecessor'],
              'failed-start recovery plan differs from its public inputs')
+        need(rebound['epoch_supervisor_installed'] == plan['epoch_supervisor_installed'],
+             'failed-start supervisor installed closure differs')
     need(args.output.is_absolute() and args.output.parent.resolve() == args.output.parent
          and not args.output.exists(), 'fresh absolute local output required')
     argv = retry.validate_ssh(plan['deployment']['guest_ssh'])
     artifacts = plan['artifacts']
-    need([row['name'] for row in artifacts] == ['iroha3d_taira', 'iroha'],
-         'exact candidate daemon and same-revision CLI required')
-    retained = []
-    for artifact in artifacts:
-        path = Path(artifact['path'])
-        info = path.lstat()
-        need(path.resolve() == path and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
-             and info.st_nlink == 1 and not info.st_mode & 0o222 and info.st_size == artifact['size'],
-             'candidate must be the retained read-only build artifact')
-        digest = subprocess.check_output(['/usr/bin/shasum', '-a', '256', str(path)], text=True).split()[0]
-        need(digest == artifact['sha256'], 'retained candidate artifact differs')
-        retained.append((artifact, path))
+    need([row['name'] for row in artifacts] == ['iroha3d_taira', 'iroha', 'kagami'],
+         'exact same-release daemon, CLI and Kagami required')
+    retained_artifacts(artifacts)
     args.output.mkdir(mode=0o700)
     write_new(args.output / 'plan.json', raw)
-    for index, (artifact, path) in enumerate(retained):
-        remote_transfer = shlex.join(['/usr/bin/python3', '-I', '-c',
-                                      transfer_code(artifact['name'], index == 0, plan)])
-        with path.open('rb') as source, (args.output / (artifact['name'] + '-transfer.stderr')).open('xb') as error:
-            transferred = subprocess.run(artifact_transfer_argv(argv, remote_transfer), stdin=source,
-                                         stdout=subprocess.DEVNULL, stderr=error, timeout=300)
-        need(transferred.returncode == 0, 'native transfer failed; preserve partial candidate release and inspect')
-        write_new(args.output / (artifact['name'] + '-transfer.json'),
-                  json.dumps({'exit_code': 0, 'name': artifact['name'], 'size': artifact['size']}).encode())
+    verify_prepared_remote(plan, argv, args.output)
     guest_source = read_public(HERE / 'taira_update_guest.py')
     payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b')\n'
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
@@ -300,10 +382,20 @@ def main():
     parser.add_argument('--deployment', type=Path, required=True)
     parser.add_argument('--prepared-result', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--operation', required=True,
+                        help='explicit fresh update-<32hex> already bound by supervisor preparation')
+    parser.add_argument('--supervisor-plan', type=Path,
+                        help='public immutable preprovisioned supervisor transition and native receipt')
+    parser.add_argument('--prepare-artifacts', action='store_true',
+                        help='create and verify the exact three candidate binaries before native materialize')
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
     parser.add_argument('--failed-start-chain', type=Path,
                         help='ordered digest-bound failed attempts since the last completed deployment')
     args = parser.parse_args()
+    need((args.prepare_artifacts and args.supervisor_plan is None and not args.plan_only
+          and args.failed_start_chain is None)
+         or (not args.prepare_artifacts and args.supervisor_plan is not None),
+         'prepare-artifacts is separate; normal apply and plan-only require a supervisor plan')
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
          == 'optimizations', 'only optimizations is allowed')
@@ -321,13 +413,17 @@ def main():
              and stat.S_IMODE(info.st_mode) == 0o600, 'invalid local deployment lock')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         build_raw = read_public(args.prepared_result)
+        if args.prepare_artifacts:
+            prepare_artifacts(args, deployment, build_raw)
+            return
         prior_raw = retry.public_record(deployment['current']['local_plan'],
                                         deployment['current']['local_plan_sha256'])
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_guest')
         value = make_plan(retry.decode(build_raw), deployment, retry.decode(prior_raw), guest,
-                          'update-' + secrets.token_hex(16),
+                          args.operation,
                           retry.decode(read_public(args.failed_start_chain))
-                          if args.failed_start_chain is not None else None)
+                          if args.failed_start_chain is not None else None,
+                          supervisor=retry.decode(read_public(args.supervisor_plan)))
         value.update(build_result_path=str(args.prepared_result), build_result_sha256=sha(build_raw))
         raw = (json.dumps(value, sort_keys=True)+'\n').encode()
         if args.plan_only:

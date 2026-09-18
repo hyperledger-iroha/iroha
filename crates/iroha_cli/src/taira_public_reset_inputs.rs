@@ -5,8 +5,8 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use norito::codec::Encode as _;
 use zeroize::Zeroizing;
 
-/// The unsigned topology/intent contract omits generated beacon authority.
-/// Unknown fields, including a caller-supplied beacon_bootstrap, are rejected.
+/// The unsigned topology/intent contract omits generated beacon and supervisor plans.
+/// Unknown fields, including inline beacon_bootstrap or epoch_supervisor, are rejected.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct UnsignedInventoryDraftV1 {
@@ -33,6 +33,8 @@ struct UnsignedInventoryDraftV1 {
     timeouts: TimeoutsV1,
     artifact_closure_sha256: String,
     runtime_client_config_sha256: String,
+    maintenance_admin_config_sha256: String,
+    maintenance_admin_identity: MaintenanceAdminIdentityV1,
     onboarding_token_sha256: String,
     validator_client_configs_sha256: String,
     #[norito(required)]
@@ -40,7 +42,11 @@ struct UnsignedInventoryDraftV1 {
 }
 
 impl UnsignedInventoryDraftV1 {
-    fn into_inventory(self, beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1) -> InventoryV1 {
+    fn into_inventory(
+        self,
+        beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
+        epoch_supervisor: host::epoch_supervisor::EpochSupervisorPlanV1,
+    ) -> InventoryV1 {
         InventoryV1 {
             schema: self.schema,
             qualification_scope: self.qualification_scope,
@@ -67,6 +73,9 @@ impl UnsignedInventoryDraftV1 {
             validator_client_configs_sha256: self.validator_client_configs_sha256,
             inrou_stage_tree_sha256: self.inrou_stage_tree_sha256,
             beacon_bootstrap,
+            epoch_supervisor,
+            maintenance_admin_config_sha256: self.maintenance_admin_config_sha256,
+            maintenance_admin_identity: self.maintenance_admin_identity,
         }
     }
 }
@@ -101,6 +110,15 @@ pub(super) struct LocalInputs {
     public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     runtime_client_config: PathBuf,
+    /// Separate native maintenance owner; authenticated genesis must register and grant it.
+    #[arg(long, value_name = "PATH")]
+    maintenance_admin_config: PathBuf,
+    /// Original held seed files, in the exact signed sorted validator mapping.
+    #[arg(long, value_name = "PATH", num_args = 4)]
+    epoch_seed_sources: Vec<PathBuf>,
+    /// Closed public single-service plan including explicit until-stopped policy and exact bytes.
+    #[arg(long, value_name = "PATH")]
+    epoch_supervisor_plan: PathBuf,
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
@@ -224,7 +242,11 @@ pub(super) fn assemble(args: &Assemble) -> Result<()> {
         &args.local.beacon_validator_unit,
         &public.genesis_public_key,
     )?;
-    let mut inventory = draft.into_inventory(plan);
+    let (epoch_supervisor, _) = read_json::<host::epoch_supervisor::EpochSupervisorPlanV1>(
+        &args.local.epoch_supervisor_plan,
+        "epoch supervisor plan",
+    )?;
+    let mut inventory = draft.into_inventory(plan, epoch_supervisor);
     derive_inventory(&mut inventory, &args.local)?;
     revalidate_pinned(&input, "inventory draft")?;
     write_new_private(&args.output, &assembled_inventory_bytes(&inventory)?)
@@ -369,6 +391,14 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
         &public.genesis_public_key,
     )?;
     derive_runtime_stage(inventory, inputs)?;
+    derive_maintenance_admin(inventory, inputs)?;
+    let (epoch_supervisor, _) = read_json::<host::epoch_supervisor::EpochSupervisorPlanV1>(
+        &inputs.epoch_supervisor_plan,
+        "epoch supervisor plan",
+    )?;
+    inventory.epoch_supervisor = epoch_supervisor;
+    host::epoch_supervisor::validate_plan(inventory)?;
+    validate_original_epoch_seed_sources(inventory, inputs)?;
     let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);
     validate_inventory(inventory)?;
@@ -610,6 +640,174 @@ fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Re
     Ok(())
 }
 
+/// Admit separate administrator material only through native pinned config custody.
+/// Public genesis permission evidence is a prerequisite, not a substitute for the
+/// supervisor worker's fresh effective-permission check before every dispatch.
+/// Pin original seeds by custody and identity only. Public artifacts never contain seed digests.
+fn validate_original_epoch_seed_sources(
+    inventory: &InventoryV1,
+    inputs: &LocalInputs,
+) -> Result<()> {
+    let sources = &inventory.epoch_supervisor.original_seed_sources;
+    if inputs.epoch_seed_sources.len() != 4 || sources.len() != 4 {
+        return Err(eyre!(
+            "epoch supervisor requires four explicitly mapped original seed files"
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    #[cfg(unix)]
+    let mut inodes = BTreeSet::new();
+    for (path, source) in inputs.epoch_seed_sources.iter().zip(sources) {
+        if path != Path::new(&source.path) || !paths.insert(path) {
+            return Err(eyre!(
+                "original epoch seed path differs from the signed public mapping"
+            ));
+        }
+        let input = pin_owner_private_file(path, "original epoch seed")?;
+        if input.snapshot.len != 32 || path.canonicalize()? != *path {
+            return Err(eyre!(
+                "original epoch seed must be a canonical direct 32-byte private file"
+            ));
+        }
+        #[cfg(unix)]
+        if input.snapshot.mode & 0o7777 != 0o600
+            || !inodes.insert((input.snapshot.dev, input.snapshot.ino))
+        {
+            return Err(eyre!(
+                "original epoch seeds require distinct owner0600 files"
+            ));
+        }
+        revalidate_pinned(&input, "original epoch seed")?;
+    }
+    Ok(())
+}
+
+fn derive_maintenance_admin(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result<()> {
+    if inputs.maintenance_admin_config == inputs.runtime_client_config
+        || inputs.maintenance_admin_config == inputs.validator_operator_key
+        || inputs
+            .validator_client_config
+            .contains(&inputs.maintenance_admin_config)
+    {
+        return Err(eyre!(
+            "maintenance administrator input must be separate from canary/operator/validator inputs"
+        ));
+    }
+    let admin = pin_owner_private_file(
+        &inputs.maintenance_admin_config,
+        "maintenance administrator config",
+    )?;
+    let config = host::load_client_config_for_inventory(
+        &admin,
+        "maintenance administrator config",
+        inventory,
+    )?;
+    let public = public_inputs::load(&inputs.public_inputs)?;
+    let manifest_path = inputs.public_inputs.join("genesis.json");
+    let (manifest, manifest_bytes) = read_json::<iroha_genesis::RawGenesisTransaction>(
+        &manifest_path,
+        "maintenance authenticated genesis manifest",
+    )?;
+    let wire_path = inputs.public_inputs.join("genesis.signed.nrt");
+    let (wire_file, wire_snapshot) =
+        open_pinned_regular(&wire_path, "maintenance authenticated signed genesis")?;
+    let wire = PinnedInput {
+        path: wire_path,
+        file: wire_file,
+        snapshot: wire_snapshot,
+    };
+    let wire_bytes = pinned_bytes(&wire, 64 * 1024 * 1024)?;
+    if sha256_hex(&manifest_bytes) != public.raw_manifest_sha256
+        || sha256_hex(&wire_bytes) != public.signed_genesis_sha256
+        || public.genesis_hash != inventory.next_genesis_hash
+    {
+        return Err(eyre!(
+            "maintenance genesis inputs differ from the authenticated public bundle"
+        ));
+    }
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &wire_bytes,
+        &manifest,
+        &public.genesis_public_key,
+        public.network_id.into_genesis_hash(),
+    )?;
+    validate_genesis_maintenance_grant(&manifest, &config.account)?;
+    let identity = MaintenanceAdminIdentityV1 {
+        account_id: config.account.to_string(),
+        public_key: config.key_pair.public_key().to_string(),
+        network_id: config.network_id.to_string(),
+        genesis_hash: public.genesis_hash,
+        chain_discriminant: config.account_chain_discriminant,
+        torii_origin: config.torii_api_url.as_str().to_owned(),
+    };
+    inventory.maintenance_admin_config_sha256 =
+        host::hash_pinned_input(&admin, "maintenance administrator config", None)?;
+    inventory.maintenance_admin_identity = identity;
+    validate_maintenance_admin_identity(inventory)?;
+    revalidate_pinned(&admin, "maintenance administrator config")?;
+    revalidate_pinned(&wire, "maintenance authenticated signed genesis")?;
+    Ok(())
+}
+
+/// Require explicit signed account registration and a surviving direct grant.
+/// Role inheritance and genesis signer status never imply maintenance authority.
+fn validate_genesis_maintenance_grant(
+    manifest: &iroha_genesis::RawGenesisTransaction,
+    account: &AccountId,
+) -> Result<()> {
+    validate_maintenance_grant_instructions(manifest.instructions(), account)
+}
+
+fn validate_maintenance_grant_instructions<'a>(
+    instructions: impl IntoIterator<Item = &'a iroha_data_model::isi::InstructionBox>,
+    account: &AccountId,
+) -> Result<()> {
+    use iroha_data_model::{
+        Identifiable as _,
+        isi::{GrantBox, RegisterBox, RevokeBox, UnregisterBox},
+    };
+    let mut registered = false;
+    let mut granted = false;
+    for instruction in instructions {
+        if let Some(RegisterBox::Account(register)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            if register.object().id() == account {
+                registered = true;
+            }
+        }
+        if let Some(UnregisterBox::Account(unregister)) =
+            instruction.as_any().downcast_ref::<UnregisterBox>()
+        {
+            if unregister.object() == account {
+                registered = false;
+                granted = false;
+            }
+        }
+        if let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>() {
+            if grant.destination() == account
+                && grant.object().name() == "CanSetParameters"
+                && grant.object().payload().get() == "null"
+            {
+                granted = registered;
+            }
+        }
+        if let Some(RevokeBox::Permission(revoke)) =
+            instruction.as_any().downcast_ref::<RevokeBox>()
+        {
+            if revoke.destination() == account && revoke.object().name() == "CanSetParameters" {
+                granted = false;
+            }
+        }
+    }
+    if !registered || !granted {
+        return Err(eyre!(
+            "authenticated signed genesis must register the exact maintenance administrator and grant CanSetParameters"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_taira_genesis_mode(
     mode: iroha::data_model::parameter::system::SumeragiConsensusMode,
 ) -> Result<()> {
@@ -647,6 +845,10 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
+        epoch_supervisor_authorization: "until_stopped".to_owned(),
+        epoch_supervisor_policy_sha256: inventory.epoch_supervisor.policy_sha256.clone(),
+        maintenance_admin_config_sha256: inventory.maintenance_admin_config_sha256.clone(),
+        maintenance_admin_identity: inventory.maintenance_admin_identity.clone(),
         qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),
