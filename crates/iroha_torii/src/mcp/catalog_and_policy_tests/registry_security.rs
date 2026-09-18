@@ -626,7 +626,7 @@ async fn retired_async_job_methods_fail_as_unknown_without_retained_state() {
 #[tokio::test]
 async fn tools_list_list_changed_tracks_toolset_version() {
     let app = mk_app_state_for_tests();
-    let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+    let visible_tools = visible_tools_for_app(&app);
     let version = compute_toolset_version(&visible_tools);
     let same_version = norito::json!({ "toolsetVersion": version });
     let same_response = handle_tools_list(

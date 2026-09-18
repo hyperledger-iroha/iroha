@@ -10,8 +10,9 @@ use iroha_data_model::NetworkId;
 const SCHEMA: &str = "iroha.taira.public-reset.public-inputs.v1";
 const MAX_GENESIS_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IDENTITY_BYTES: u64 = 1024;
-const OUTPUT_FILES: [&str; 4] = [
+const OUTPUT_FILES: [&str; 5] = [
     "genesis.signed.nrt",
+    "genesis.json",
     "genesis.hash",
     "canary-onboarding-request.json",
     "public-inputs.json",
@@ -24,8 +25,16 @@ pub(super) struct PreparePublicInputs {
     #[arg(long, value_name = "DIR")]
     localnet_dir: PathBuf,
     /// Canonical public key file for the reset's separately generated canary account.
-    #[arg(long, value_name = "PATH")]
-    canary_public_key: PathBuf,
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "inventory_draft",
+        conflicts_with = "inventory_draft"
+    )]
+    canary_public_key: Option<PathBuf>,
+    /// Explicit unsigned draft; native account parsing derives its public canary key.
+    #[arg(long, value_name = "PATH", conflicts_with = "canary_public_key")]
+    inventory_draft: Option<PathBuf>,
     /// Atomic public bundle under an existing owner-only parent directory.
     /// Repeating the same request verifies and reuses an identical completed bundle.
     #[arg(long, value_name = "DIR")]
@@ -41,6 +50,7 @@ pub(super) struct PublicInputsV1 {
     /// Consensus genesis identity; distinct from the SHA256 of the signed wire file.
     pub(super) genesis_hash: String,
     pub(super) signed_genesis_sha256: String,
+    pub(super) raw_manifest_sha256: String,
     pub(super) genesis_public_key: PublicKey,
     pub(super) canary_public_key: PublicKey,
     pub(super) canary_onboarding_request: AccountOnboardingPlanRequestV1,
@@ -81,6 +91,7 @@ fn canonical_public_key(bytes: &[u8]) -> Result<PublicKey> {
 
 fn derive(
     wire: &[u8],
+    manifest_bytes: &[u8],
     network_bytes: &[u8],
     genesis_key_bytes: &[u8],
     canary_key_bytes: &[u8],
@@ -110,6 +121,18 @@ fn derive(
         "signed genesis hash differs from checked network identity",
     )?;
     inputs::validate_taira_genesis_mode(metadata.mode)?;
+    require(
+        !manifest_bytes.is_empty() && manifest_bytes.len() as u64 <= MAX_JSON_BYTES,
+        "public raw genesis manifest exceeds its bound",
+    )?;
+    let manifest: iroha_genesis::RawGenesisTransaction = json::from_slice(manifest_bytes)?;
+    iroha_genesis::validate_prepared_genesis_bundle(
+        wire,
+        &manifest,
+        &genesis_key,
+        network.into_genesis_hash(),
+    )
+    .wrap_err("raw genesis manifest differs from signed genesis")?;
     let account = AccountId::new(canary_key.clone());
     let request = AccountOnboardingPlanRequestV1::try_new(
         crate::taira::canary_alias(&canary_key),
@@ -121,6 +144,7 @@ fn derive(
         network_id: network,
         genesis_hash: genesis_hash.to_string(),
         signed_genesis_sha256: sha256_hex(wire),
+        raw_manifest_sha256: sha256_hex(manifest_bytes),
         genesis_public_key: genesis_key,
         canary_public_key: canary_key,
         canary_onboarding_request: request,
@@ -173,8 +197,10 @@ pub(super) fn load(directory: &Path) -> Result<PublicInputsV1> {
         public_file(&directory.join("public-inputs.json"), MAX_JSON_BYTES)?;
     let record: PublicInputsV1 = json::from_slice(&record_bytes)?;
     let (wire_pin, wire) = public_file(&directory.join("genesis.signed.nrt"), MAX_GENESIS_BYTES)?;
+    let (manifest_pin, manifest) = public_file(&directory.join("genesis.json"), MAX_JSON_BYTES)?;
     let derived = derive(
         &wire,
+        &manifest,
         format!("{}\n", record.network_id).as_bytes(),
         format!("{}\n", record.genesis_public_key).as_bytes(),
         format!("{}\n", record.canary_public_key).as_bytes(),
@@ -205,7 +231,7 @@ pub(super) fn load(directory: &Path) -> Result<PublicInputsV1> {
         )?;
         revalidate_pinned(&pin, "public input bundle artifact")?;
     }
-    for pin in [&record_pin, &wire_pin] {
+    for pin in [&record_pin, &wire_pin, &manifest_pin] {
         #[cfg(unix)]
         require(
             pin.snapshot.mode & 0o7777 == 0o644,
@@ -219,6 +245,7 @@ pub(super) fn load(directory: &Path) -> Result<PublicInputsV1> {
 /// Atomically produce a bundle, or verify an identical completed prior invocation.
 #[cfg(unix)]
 pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Result<()> {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
     validate_absolute_normal_path(&args.localnet_dir, "generated network directory")?;
     validate_owner_private_dir(&args.localnet_dir, "generated network directory")?;
     validate_absolute_normal_path(&args.output_dir, "public input output")?;
@@ -241,16 +268,59 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
             args.localnet_dir.join("genesis.public_key"),
             MAX_IDENTITY_BYTES,
         ),
-        (args.canary_public_key.clone(), MAX_IDENTITY_BYTES),
+        (args.localnet_dir.join("genesis.json"), MAX_JSON_BYTES),
     ] {
         retained.push(public_file(&path, maximum)?);
     }
+    let (canary_bytes, draft_request) = match (&args.canary_public_key, &args.inventory_draft) {
+        (Some(path), None) => {
+            let input = public_file(path, MAX_IDENTITY_BYTES)?;
+            let bytes = input.1.clone();
+            retained.push(input);
+            (bytes, None)
+        }
+        (None, Some(path)) => {
+            let pin = pin_owner_private_file(path, "unsigned inventory draft")?;
+            let bytes = read_pinned_bytes(
+                path,
+                "unsigned inventory draft",
+                pin.file.try_clone()?,
+                &pin.snapshot,
+                MAX_JSON_BYTES,
+            )?;
+            let request = inputs::draft_canary_request(&bytes)?;
+            let account = AccountId::parse_encoded(&request.account_id)?;
+            if account.to_string() != request.account_id {
+                return Err(eyre!("draft canary account is not canonical"));
+            }
+            let key = account
+                .try_signatory()
+                .ok_or_else(|| eyre!("draft canary requires one native signatory"))?;
+            let key_bytes = format!("{key}\n").into_bytes();
+            retained.push((pin, bytes));
+            (key_bytes, Some(request))
+        }
+        _ => {
+            return Err(eyre!(
+                "select exactly one canary public key file or unsigned inventory draft"
+            ));
+        }
+    };
     let record = derive(
         &retained[0].1,
+        &retained[3].1,
         &retained[1].1,
         &retained[2].1,
-        &retained[3].1,
+        &canary_bytes,
     )?;
+    if draft_request
+        .as_ref()
+        .is_some_and(|request| request != &record.canary_onboarding_request)
+    {
+        return Err(eyre!(
+            "draft canary request differs from its canonical native public identity"
+        ));
+    }
     if args.output_dir.try_exists()? {
         require(
             load(&args.output_dir)? == record,
@@ -263,6 +333,7 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))?;
         for (name, bytes) in [
             ("genesis.signed.nrt", retained[0].1.clone()),
+            ("genesis.json", retained[3].1.clone()),
             (
                 "genesis.hash",
                 format!("{}\n", record.genesis_hash).into_bytes(),

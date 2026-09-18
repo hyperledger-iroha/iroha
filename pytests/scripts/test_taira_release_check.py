@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 874
+EXPECTED_REGRESSION_COUNT = 1030
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -53,6 +53,181 @@ def isolate_stage_fixture(stack, *, keep=()):
     for name in groups:
         if name not in keep:
             stack.enter_context(patch.object(gate, name, ()))
+
+
+class BeaconGateTests(unittest.TestCase):
+    def test_paid_genesis_authority_and_public_failure_controls_precede_network_in_both_scopes(self):
+        required = (
+            'dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts',
+            'dataspace_deploy_cli::phase_failure_summary_excludes_signed_payloads',
+        )
+        expensive = 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
+        observation = [leaf for _, leaves in gate.NETWORK_OBSERVATION_STAGES for leaf in leaves]
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = [leaf for _, leaves in gate.qualification_stages(scope)['network'] for leaf in leaves]
+            for leaf in required:
+                with self.subTest(scope=scope, regression=leaf):
+                    self.assertEqual(selected.count(leaf), 1)
+                    self.assertEqual(observation.count(leaf), 1)
+                    self.assertLess(selected.index(leaf), selected.index(expensive))
+                    focused = gate.focused_regression_stages(scope, ('network=' + leaf,))
+                    self.assertEqual(tuple(focused), ('network',))
+                    self.assertEqual([name for _, names in focused['network'] for name in names], [leaf])
+
+    def test_merge_beacon_composition_controls_are_unique_and_focused_in_both_scopes(self):
+        required = (
+            'state::tests::autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once',
+            'state::tests::autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift',
+        )
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = [name for _, names in gate.qualification_stages(scope)["core"] for name in names]
+            startup = [name for _, names in gate.CORE_STARTUP_STAGES for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
+                    self.assertEqual(startup.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, ("core=" + name,))
+                    self.assertEqual(tuple(focused), ("core",))
+                    self.assertEqual([leaf for _, names in focused["core"] for leaf in names], [name])
+
+    def test_mandatory_beacon_requires_real_work_before_activation_in_both_scopes(self):
+        required = (
+            'sumeragi::v2_candidate::tests::proposal_work_gate_rejects_beacon_pulse_only',
+            'sumeragi::v2_candidate::tests::proposal_work_gate_preserves_non_beacon_effects',
+            'sumeragi::v2_candidate::tests::mandatory_beacon_wait_requires_independent_work',
+            'sumeragi::v2_candidate::tests::mandatory_beacon_wait_releases_same_queue_prefix_for_retry',
+            'beacon::tests::threshold_beacon_deferred_mandatory_height_stays_idle_until_real_work',
+            'beacon::tests::threshold_beacon_live_v2_producer_is_bound_restartable_and_persists_effect',
+        )
+        for scope in gate.QUALIFICATION_SCOPES:
+            stages = gate.qualification_stages(scope)
+            selected = [name for _, names in stages["core"] for name in names]
+            startup = [name for _, names in gate.CORE_STARTUP_STAGES for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
+                    self.assertEqual(startup.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, ("core=" + name,))
+                    self.assertEqual(tuple(focused), ("core",))
+                    self.assertEqual([leaf for _, names in focused["core"] for leaf in names], [name])
+
+    def test_exact_height_lifecycle_controls_are_unique_and_focused_in_both_scopes(self):
+        required = {
+            'cli': (
+                'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+                'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
+                'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
+            ),
+            'daemon': (
+                'beacon_bootstrap::tests::bootstrap_records_observed_height_jumps_and_rejects_pulse_collision',
+            ),
+            'torii-unit': (
+                'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
+                'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+                'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
+                'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
+            ),
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, regressions in required.items():
+                names = [name for _, tests in selected[harness] for name in tests]
+                for regression in regressions:
+                    with self.subTest(scope=scope, harness=harness, regression=regression):
+                        self.assertEqual(names.count(regression), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+
+    def test_controller_beacon_authority_and_public_builder_controls_are_exact_in_both_scopes(self):
+        required = (
+            'tests::authorized_transaction_lifetime_uses_exact_creation_and_preserves_shorter_ttl',
+            'tests::authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl',
+            'taira::tests::final_canary_expired_window_rejects_before_fee_quote_or_dispatch',
+            'taira::tests::final_canary_submit_uses_original_deadline_after_initial_read_and_post',
+            'taira::tests::final_canary_submit_verifies_exact_proof_without_replaying_post',
+            'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
+            'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
+            'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
+            'taira_public_reset::host::beacon::tests::beacon_owned_child_deadline_retains_private_attempt',
+            'taira_public_reset::host::tests::beacon_activation_barrier_preserves_pre_ready_bootstrap_and_blocks_later_mutations',
+            'taira_public_reset::executor_model::tests::beacon_submitted_continuation_retains_exact_host_cursor_and_excludes_ledger_work',
+            'taira_public_reset::executor_model::tests::beacon_continuation_outcome_cannot_reclassify_submitted_ledger_transaction',
+            'taira_public_reset::host::beacon::tests::beacon_successful_early_child_exit_cannot_authorize_another_operation',
+            'taira_public_reset::host::beacon::tests::beacon_unit_publication_preserves_completed_inode_and_rejects_substitution',
+            'taira_public_reset::inputs::tests::unsigned_inventory_draft_forbids_generated_beacon_authority',
+            'taira_public_reset::public_inputs::tests::beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution',
+            'taira_public_reset::public_inputs::tests::public_bundle_requires_authenticated_raw_manifest_without_four_file_fallback',
+            'taira_public_reset::public_inputs::tests::public_bundle_derives_canary_from_strict_unsigned_draft_without_key_file',
+            'taira_public_reset::host::tests::host_receipt_names_cover_every_action_and_artifact_role',
+            'taira_public_reset::host::tests::recovery_intent_exposes_every_ordered_child_mutation',
+            'taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan',
+            'taira_public_reset::executor_model::tests::recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths',
+            'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
+            'taira_public_reset::inputs::tests::aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_custody_reads',
+            'taira_public_reset::public_inputs::tests::derives_native_genesis_identity_and_exact_canary_request',
+            'taira_public_reset::public_inputs::tests::rejects_wrong_network_key_and_resultless_genesis',
+            'taira_public_reset::public_inputs::tests::rejects_noncanonical_identity_and_non_ed25519_canary',
+            'taira_public_reset::public_inputs::tests::publishes_complete_public_bundle_and_reuses_identical_request',
+            'taira_public_reset::public_inputs::tests::refuses_changed_bundle_and_never_overwrites_existing_output',
+            'taira_public_reset::public_inputs::tests::rejects_symlink_input_and_partial_or_surplus_output',
+            'taira_public_reset::public_inputs::tests::cli_public_input_preparation_never_accepts_private_credentials',
+            'taira_public_reset::deployment_profile::tests::deployment_profile_binds_native_genesis_and_ordered_inventory_peers',
+            'taira_public_reset::deployment_profile::tests::deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution',
+            'tests::taira_public_reset_local_inputs_require_a_dedicated_operator_key',
+        )
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = [name for _, names in gate.qualification_stages(scope)["cli"] for name in names]
+            for regression in required:
+                with self.subTest(scope=scope, regression=regression):
+                    self.assertEqual(selected.count(regression), 1)
+                    focused = gate.focused_regression_stages(scope, ("cli=" + regression,))
+                    self.assertEqual(tuple(focused), ("cli",))
+                    self.assertEqual([name for _, names in focused["cli"] for name in names], [regression])
+        self.assertEqual(gate.HARNESS_TARGETS["cli"][3], ["-p", "iroha_cli", "--bin", "iroha"])
+
+    def test_real_beacon_fixture_replaces_clean_client_and_keeps_root_check_before_startup(self):
+        real = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        root = "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody"
+        exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
+        seam = "taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity"
+        self.assertEqual([name for _, names in gate.BEACON_NETWORK_STAGES for name in names], [real])
+        self.assertIn(root, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
+        self.assertIn(exact_height, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            network = [name for _, names in selected["network"] for name in names]
+            self.assertEqual(network.count(real), 1)
+            self.assertEqual(network.count(root), 1)
+            self.assertEqual(network.count(exact_height), 1)
+            self.assertLess(network.index(exact_height), network.index(real))
+            focused = gate.focused_regression_stages(scope, ("network=" + exact_height,))
+            self.assertEqual(tuple(focused), ("network",))
+            self.assertEqual([name for _, names in focused["network"] for name in names], [exact_height])
+            self.assertNotIn("dataspace_deploy_cli::clean_client_deploys_paid_dataspace_once_with_four_peer_finality", network)
+            for retired in (
+                "four_peer_universal_public_transaction_sequence_reaches_applied",
+                "four_peer_multiroute_public_transaction_sequence_reaches_applied",
+                "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
+            ):
+                self.assertNotIn(retired, network)
+            self.assertEqual(selected["network"], gate.NETWORK_OBSERVATION_STAGES + gate.BEACON_NETWORK_STAGES)
+            self.assertEqual([name for _, names in selected["daemon"] for name in names].count(seam), 1)
+
+    def test_beacon_setup_and_custody_run_once_in_startup_for_every_scope(self):
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, required, startup in (
+                ("core", gate.CORE_BEACON_STAGES, gate.CORE_STARTUP_STAGES),
+                ("daemon", gate.DAEMON_BEACON_STAGES, gate.DAEMON_STARTUP_STAGES),
+                ("torii-unit", gate.TORII_BEACON_STAGES, gate.TORII_STARTUP_STAGES),
+            ):
+                names = [name for _, tests in selected[harness] for name in tests]
+                for stage in required:
+                    self.assertIn(stage, startup)
+                    for name in stage[1]:
+                        with self.subTest(scope=scope, harness=harness, regression=name):
+                            self.assertEqual(names.count(name), 1)
 
 
 class SyntheticStageInventoryTests(unittest.TestCase):
@@ -95,9 +270,23 @@ class FixtureCopies(dict):
 
 
 class BasicReleaseQualificationTests(unittest.TestCase):
+    def test_faucet_policy_seven_leaves_are_selected_in_both_scopes(self):
+        expected = {'torii': ('accounts_faucet::accounts_faucet_policy_exposes_exact_public_configuration', 'accounts_faucet::accounts_faucet_policy_resolves_configured_asset_alias', 'accounts_faucet::accounts_faucet_policy_preserves_disabled_forbidden_response'), 'torii-unit': ('mcp::tests::faucet_policy_tool_is_read_only_and_runtime_gated', 'mcp::tests::faucet_policy_tool_dispatches_only_get_without_body', 'openapi::tests::faucet_policy_schema_is_exact_public_discovery'), 'torii-shared': ('route_catalog::tests::account_faucet_policy_is_public_read_only_discovery',)}
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, names in expected.items():
+                actual = [name for _, stage in selected[harness] for name in stage]
+                for name in names:
+                    self.assertEqual(actual.count(name), 1)
+                    self.assertEqual(tuple(gate.focused_regression_stages(scope, (harness + "=" + name,))), (harness,))
+        self.assertEqual(gate.HARNESS_TARGETS["torii-shared"][3], ["-p", "iroha_torii_shared", "--lib"])
+
+
     def test_both_scopes_require_geometry_writer_and_profile_recovery(self):
         required = {
             "client": (
+                "blocking::tests::borrowed_async_client_reuses_keepalive_connection_between_blocking_calls",
+                "blocking::tests::background_tasks_progress_with_a_clone_and_cancel_after_final_owner_drop",
                 "client::evidence_http_tests::bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress",
                 "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress",
                 "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http",
@@ -116,6 +305,16 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "client::tests::typed_account_alias_reads_map_not_found_to_none",
             ),
             "torii-unit": (
+                'tests_runtime_handlers::canonical_outcome_releases_state_snapshot_before_kura_authentication',
+                'tests_runtime_handlers::canonical_outcome_preserves_exact_committed_rejection',
+                'tests_runtime_handlers::canonical_outcome_absent_membership_never_authenticates',
+                'tests_runtime_handlers::canonical_outcome_accepts_unrelated_state_append_after_authentication',
+                'tests_runtime_handlers::canonical_outcome_rejects_removed_membership_after_authentication',
+                'tests_runtime_handlers::canonical_outcome_rejects_rebound_membership_after_authentication',
+                'tests_runtime_handlers::canonical_outcome_rejects_replaced_journal_after_authentication',
+                'tests_runtime_handlers::canonical_outcome_rejects_missing_journal_after_authentication',
+                'tests_runtime_handlers::canonical_outcome_rejects_result_substitution_under_the_same_header_hash',
+                'tests_runtime_handlers::canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cache',
                 "routing::bridge_finality_attestation_progress_tests::exact_tip_snapshot_races_are_bound_negotiated_progress",
                 "routing::bridge_finality_attestation_progress_tests::proof_identity_and_signature_failures_are_never_tip_progress",
                 "routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code",
@@ -136,6 +335,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "aliases::tests::alias_error_details_roundtrip_and_reject_unknown_fields",
             ),
             "cli": (
+                'taira_dataspace_deploy::profile::tests::retained_profile_export_uses_native_trust_and_exact_input_hashes',
+                'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_unbound_or_malformed_public_inputs',
+                'taira_dataspace_deploy::profile::tests::retained_profile_export_rejects_changed_linked_and_unsafe_files',
+                'taira_dataspace_deploy::profile::tests::retained_profile_export_dispatch_rejects_credential_and_transaction_globals',
                 "taira_dataspace_deploy::tests::saved_apply_emits_report_before_rejecting_incomplete_success",
                 "taira_dataspace_deploy::tests::saved_report_preserves_output_failure",
                 "taira_dataspace_deploy::finality::tests::deployment_attestation_progress_retries_only_exact_sdk_type",
@@ -161,6 +364,21 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "taira_dataspace_deploy::tests::completion_deadline_rejects_a_late_success",
             ),
             "core": (
+                'kura::tests::autonomous_latest_snapshot_reuses_validated_current_cursor',
+                'kura::tests::autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix',
+                'kura::tests::certified_lane_block_read_rejects_qc_signature_mismatch',
+                'kura::tests::certified_lane_block_read_rejects_qc_body_mismatch',
+                'sumeragi::v2_runner::tests::open_preflight_batch_services_queued_prepare_and_commit_before_reaudit',
+                'sumeragi::v2_runner::tests::open_preflight_batch_preserves_budget_completion_yield_and_errors',
+                'sumeragi::v2_runner::tests::open_preflight_batch_does_not_admit_global_traffic_as_lane_recovery',
+                'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity',
+                'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity',
+                'sumeragi::v2_lane_work::tests::finalized_carrier_nonmember_cache_invalid_commit_certificate_rolls_back_hydration',
+                'sumeragi::v2_lane_work::tests::global_validator_outside_lane_committee_uses_canonical_replica_for_rollover',
+                'kura::tests::certified_lane_block_rejects_foreign_active_dataspace',
+                'kura::tests::autonomous_completion_missing_view_state_keeps_full_payload_validation',
+                'kura::tests::autonomous_completion_selected_view_validates_artifact_once',
+                'sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain',
                 "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age",
                 "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
                 "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_closed_drained_cut_rejects_each_stale_lane_account",
@@ -213,9 +431,69 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     with self.subTest(scope=scope, harness=harness, regression=name):
                         self.assertEqual(selected.count(name), 1)
 
+    def test_both_scopes_require_exact_epoch_derivation_and_schedule_controls(self):
+        required = (
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::derived_parameter_matches_core_and_binds_network_epoch_and_order',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::public_context_rejects_malformed_network_epoch_count_order_and_duplicates',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::parser_exposes_only_public_arguments_and_numeric_pipe_descriptor',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::seed_reader_enforces_exact_bound_and_wipes_success_rejections_and_unwind',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::read_errors_are_redacted_and_partial_seeds_are_wiped',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::buffered_output_failures_are_returned',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::inherited_descriptor_ownership_is_closed',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json',
+            'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap',
+        )
+        self.assertEqual(gate.HARNESS_TARGETS["kagami"][3],
+                         ["-p", "iroha_kagami", "--bin", "kagami"])
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = [name for _, names in gate.qualification_stages(scope)["kagami"]
+                        for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, ("kagami=" + name,))
+                    self.assertEqual(tuple(focused), ("kagami",))
+                    self.assertEqual([value for _, names in focused["kagami"]
+                                      for value in names], [name])
+
+    def test_both_scopes_require_epoch_maintenance_controls_before_network_startup(self):
+        required = {
+            "cli": (
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_schedule_rejects_wrong_epoch_network_and_membership',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_waits_for_actual_epoch_and_preserves_carrier_deadline',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_preparation_binds_single_parameter_fee_and_original_lifetime',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_journal_preserves_one_dispatch_across_schedule_renewal',
+                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_staking_preflight_rejects_fallback_and_changed_tenure',
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
+            ),
+            "network": (
+                'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
+                'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+            ),
+        }
+        real = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
+        self.assertEqual([name for _, names in gate.BEACON_NETWORK_STAGES for name in names], [real])
+        observations = [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names]
+        for scope in gate.QUALIFICATION_SCOPES:
+            stages = gate.qualification_stages(scope)
+            for harness, regressions in required.items():
+                selected = [name for _, names in stages[harness] for name in names]
+                for name in regressions:
+                    with self.subTest(scope=scope, harness=harness, regression=name):
+                        self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        self.assertEqual([value for _, names in focused[harness] for value in names], [name])
+                        if harness == "network":
+                            self.assertEqual(observations.count(name), 1)
+                            self.assertLess(selected.index(name), selected.index(real))
+
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 694)
+        self.assertEqual(gate.selected_regression_count(), 852)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -309,6 +587,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertTrue(full["proof-flows"])
         self.assertEqual(basic["network"], gate.BASIC_NETWORK_STAGES)
         basic_network = [
+            "dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts",
+            "dataspace_deploy_cli::phase_failure_summary_excludes_signed_payloads",
             "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
             "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
             "runtime_catalog_transition::permission_page_tests::permission_page_rejects_saturation_and_duplicate_items",
@@ -316,17 +596,22 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "status_observation_tests::status_observation_retries_typed_busy_json_and_norito_with_remaining_budget",
             "status_observation_tests::status_observation_stops_at_original_deadline_during_retry_after",
             "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
-            "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
-            "dataspace_deploy_cli::clean_client_deploys_paid_dataspace_once_with_four_peer_finality",
-            "four_peer_universal_public_transaction_sequence_reaches_applied",
+            "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
+            "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+            'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
+            'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+            "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
         ]
         self.assertEqual([test for _, tests in basic["network"] for test in tests], basic_network)
         self.assertEqual([test for _, tests in full["network"] for test in tests],
-                         basic_network + ["four_peer_multiroute_public_transaction_sequence_reaches_applied"])
+                         basic_network)
         for stage in gate.TORII_STARTUP_STAGES:
             self.assertIn(stage, basic["torii-unit"])
-        for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
-            self.assertIn(stage, full["core"])
+        # A promoted basic check keeps its original full-scope position.
+        full_core = [name for _, names in full["core"] for name in names]
+        for _, names in gate.CORE_ADMISSION_STARTUP_STAGES:
+            for name in names:
+                self.assertEqual(full_core.count(name), 1)
 
     def test_both_scopes_require_exact_terminal_history_and_shared_outcome_recovery(self):
         required = (
@@ -346,7 +631,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "core": "state::runtime_catalog_tests::runtime_catalog_final_overlay_rechecks_late_validator_invalidation",
             "config-unit": "parameters::actual::tests::sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy",
             "daemon": "startup_runtime_catalog_tests::startup_catalog_handoff_includes_additions_committed_during_replay",
-            "network": "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay",
+            "network": "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse",
         }
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
@@ -715,7 +1000,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.env = {"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         self.core = "state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
         self.cli = next(name for _, names in gate.STAGES for name in names)
-        self.network = "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay"
+        self.network = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
         for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
             mock = patch.object(gate, name)
             mock.start()
@@ -1012,7 +1297,12 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.require_tests("\n".join(f"{name}: test" for name in names[1:]), stages)
 
     def test_native_devex_scope_controller_and_absence_contracts_are_mandatory(self):
-        required = {'cli': ['taira_public_reset::executor_model::tests::qualification_scope_requires_exact_nullable_inrou_closure',
+        required = {'cli': ['taira_public_reset::executor_model::tests::occupied_service_state_is_explicit_strict_and_signed',
+                 'taira_public_reset::executor_model::tests::stopped_state_identity_survives_archive_restore_and_rejects_substitution',
+                 'taira_public_reset::host::tests::stopped_predecessor_absence_checks_cgroup_and_escaped_references',
+                 'taira_public_reset::host::tests::prior_service_state_never_restarts_stopped_or_falls_back_from_running',
+                 'taira_public_reset::host::occupied::tests::stopped_unit_admission_requires_the_exact_prior_or_durable_successor',
+                 'taira_public_reset::executor_model::tests::qualification_scope_requires_exact_nullable_inrou_closure',
                  'taira_public_reset::executor_model::tests::qualification_scope_reopens_exact_durable_execution_boundaries',
                  'taira_public_reset::inputs::tests::candidate_runtime_scope_requires_disabled_core_and_exact_full_owner',
                  'taira_dataspace_deploy::tests::manifest_binds_native_identity_and_spending_limits',
@@ -1032,7 +1322,13 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  'taira_public_reset::deployment_profile::tests::deployment_profile_binds_native_genesis_and_ordered_inventory_peers',
                  'taira_public_reset::deployment_profile::tests::deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution',
                  'taira_public_reset::deployment_profile::tests::deployment_profile_command_parses_without_private_or_runtime_arguments'],
-         'core': ['sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
+         'core': ['zk::zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
+                  'zk::zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
+                  'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
+                  'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
+                  'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
+                  'zk::debug_backend_tests::halo2_ivm_execution_rejects_relabelled_demo_verifying_key',
+                  'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
          'torii-unit': ['sns::tests::registration_absence_http_response_is_typed_and_other_not_found_is_not',
                         'openapi::tests::sns_name_absence_openapi_is_typed_and_selector_bound'],
          'torii-shared': ['sns::tests::missing_registration_response_requires_exact_fields_and_selector'],
@@ -1281,10 +1577,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         git.assert_not_called()
         compile.assert_not_called()
 
-    def test_network_build_accepts_only_both_real_binary_artifacts(self):
+    def test_network_build_requires_distinct_standard_and_taira_shipping_launchers(self):
         events = [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
                    "profile": {"test": False}, "executable": "/warm/" + name}
-                  for name in ("iroha3d", "iroha")]
+                  for name in ("iroha3d", "iroha", "iroha3d_taira")]
         for selected, accepted in ((events, True), (events[:1], False),
                                    ([event | {"profile": {"test": True}} for event in events], False)):
             child = MagicMock()
@@ -1296,17 +1592,62 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: {name: row["executable"] for name, row in rows.items()}), contextlib.redirect_stdout(io.StringIO()):
                 if accepted:
                     result = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
-                    self.assertEqual(result, {"iroha3d": "/warm/iroha3d", "iroha": "/warm/iroha"})
+                    self.assertEqual(result, {"iroha3d": "/warm/iroha3d", "iroha": "/warm/iroha", "taira-launcher": "/warm/iroha3d_taira"})
                 else:
                     with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
                         gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
             self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
             self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
-            self.assertNotIn("iroha3d_taira", spawn.call_args.args[0])
+            self.assertIn("iroha3d_taira", spawn.call_args.args[0])
+
+    def test_beacon_fixture_daemon_has_a_separate_explicit_feature_build(self):
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha3d", "kind": ["bin"]},
+                 "profile": {"test": False}, "executable": "/warm/iroha3d"}
+        child = MagicMock()
+        child.stdout = io.StringIO(json.dumps(event))
+        child.wait.return_value = 0
+        process = MagicMock()
+        process.__enter__.return_value = child
+        with patch.object(gate.subprocess, "Popen", return_value=process) as spawn, \
+             patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
+             contextlib.redirect_stdout(io.StringIO()):
+            records = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"},
+                                                     (77,), message_control=True)
+        self.assertEqual(set(records), {"iroha3d-message-control"})
+        command = spawn.call_args.args[0]
+        self.assertEqual(command[command.index("--features") + 1], "irohad/test-network-message-control")
+        self.assertEqual(command.count("--bin"), 1)
+        self.assertNotIn("iroha3d_taira", command)
+        self.assertNotIn("--target-dir", command)
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
+
+    def test_beacon_fixture_output_requires_private_direct_non_git_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            private = parent / "private"
+            with patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private)}):
+                self.assertEqual(gate.beacon_fixture_root(), private)
+                self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+                private.chmod(0o755)
+                with self.assertRaisesRegex(gate.CheckError, "owner-only"):
+                    gate.beacon_fixture_root()
+                private.chmod(0o700)
+                subprocess.run(["git", "init", "--quiet", str(private)], check=True)
+                with self.assertRaisesRegex(gate.CheckError, "outside a Git"):
+                    gate.beacon_fixture_root()
+            alias = parent / "alias"
+            alias.symlink_to(private, target_is_directory=True)
+            with patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(alias)}):
+                with self.assertRaisesRegex(gate.CheckError, "absolute direct path"):
+                    gate.beacon_fixture_root()
+            with patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": "relative"}):
+                with self.assertRaisesRegex(gate.CheckError, "absolute direct path"):
+                    gate.beacon_fixture_root()
 
     def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
         env = {"CARGO_TARGET_DIR": "/warm"}
-        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client"})), \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha3d-message-control": "/warm/control"})) as binaries, \
+             patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")) as private, \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
              patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
@@ -1316,15 +1657,51 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS", "IROHA_TEST_NETWORK_KEEP_DIRS"):
             self.assertEqual(selected[key], "1")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
+        self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD_TAIRA"], "/warm/taira")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHA"], "/warm/client")
         self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
         self.assertEqual(tuple(stage for call in run.call_args_list for stage in call.args[3]),
                          gate.BASIC_NETWORK_STAGES)
         self.assertTrue(all(call.args[4] == (77, 88) for call in run.call_args_list))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
+        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"message_control": True}])
+        private.assert_called_once_with()
+        for call in run.call_args_list:
+            beacon = call.args[3] == gate.BEACON_NETWORK_STAGES
+            self.assertEqual("KAGAMI_BIN" in call.args[2], beacon)
+            self.assertEqual("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL" in call.args[2], beacon)
+            if beacon:
+                self.assertEqual(call.args[2]["KAGAMI_BIN"], "/warm/kagami")
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"], "/warm/control")
+                self.assertEqual(call.args[2]["TAIRA_TESTNET_BEACON_FIXTURE_DIR"], "/private/beacon")
 
-    def test_catalog_recovery_precedes_all_other_expensive_network_cases(self):
-        catalog = "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay"
+    def test_beacon_fixture_missing_kagami_stops_without_build_fallback(self):
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira"})) as binaries, \
+             patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
+             patch.object(gate, "beacon_fixture_root") as custody, \
+             patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "isolated shipping Kagami"):
+                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (),
+                                        harness="/network", stages=gate.BEACON_NETWORK_STAGES)
+        binaries.assert_called_once_with(Path("/frozen"), {"CARGO_TARGET_DIR": "/warm"}, ())
+        custody.assert_not_called()
+        run.assert_not_called()
+
+    def test_beacon_fixture_custody_failure_stops_before_feature_build_or_execution(self):
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami"})) as binaries, \
+             patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
+             patch.object(gate, "beacon_fixture_root", side_effect=gate.CheckError("untrusted fixture custody")), \
+             patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "untrusted fixture custody"):
+                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (),
+                                        harness="/network", stages=gate.BEACON_NETWORK_STAGES)
+        binaries.assert_called_once_with(Path("/frozen"), {"CARGO_TARGET_DIR": "/warm"}, ())
+        run.assert_not_called()
+
+    def test_one_real_custody_case_preserves_catalog_and_both_route_sequences_in_each_scope(self):
+        catalog = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
         for scope in gate.QUALIFICATION_SCOPES:
             with self.subTest(scope=scope):
                 stages = gate.qualification_stages(scope)["network"]
@@ -1332,11 +1709,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 observations = [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names]
                 self.assertEqual(expected[:len(observations)], observations)
                 expensive = expected[len(observations):]
-                self.assertEqual(expensive, [catalog,
-                    "dataspace_deploy_cli::clean_client_deploys_paid_dataspace_once_with_four_peer_finality",
-                    "four_peer_universal_public_transaction_sequence_reaches_applied"]
-                    + (["four_peer_multiroute_public_transaction_sequence_reaches_applied"]
-                       if scope == "full" else []))
+                self.assertEqual(expensive, [catalog])
                 self.assertEqual(len(expected), len(set(expected)))
                 seen = []
                 def native(command, **kwargs):
@@ -1348,7 +1721,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                   "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
                     return subprocess.CompletedProcess(command, 0, output, "")
                 with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                        "iroha3d": "/node", "iroha": "/cli"})), \
+                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+                     patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
                      patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
                      patch.object(gate.subprocess, "run", side_effect=native), \
                      contextlib.redirect_stdout(io.StringIO()):
@@ -1356,10 +1730,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                             harness="/network", stages=stages)
                 self.assertEqual(seen, expected, "every selected test must execute exactly once")
 
-    def test_failed_catalog_recovery_stops_later_network_fixtures(self):
+    def test_failed_real_custody_case_is_reported_once_without_another_network_start(self):
         stages = gate.NETWORK_STAGES
         expected = [name for _, names in stages for name in names]
-        catalog = "runtime_catalog_transition::four_peer_committed_catalog_transition_preserves_history_and_replay"
+        catalog = "production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse"
         seen = []
         def native(command, **kwargs):
             if "--list" in command:
@@ -1370,7 +1744,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0,
                 f"test {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                "iroha3d": "/node", "iroha": "/cli"})), \
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+             patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
              patch.object(gate.subprocess, "run", side_effect=native), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1391,7 +1766,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             seen.append(command[1])
             return subprocess.CompletedProcess(command, 101, "independent observation failed\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                "iroha3d": "/node", "iroha": "/cli"})), \
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira"})), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
              patch.object(gate.subprocess, "run", side_effect=native), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1585,7 +1960,7 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
         fsm.assert_not_called()
 
     def test_capacity_is_checked_again_after_builds_before_starting_peers(self):
-        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/node", "iroha": "/cli"})), \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira"})), \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/harness")), \
              patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
              patch.object(gate, "run_stages") as run, patch.object(gate.tempfile, "mkdtemp") as fixture:
@@ -1688,7 +2063,7 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
             ("test codegen", lambda: gate.compile_test_harnesses(Path("/frozen"), {"CARGO": "/unused"}, harnesses=("config",)),
              [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
             ("shipping codegen", lambda: gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/unused"}, ()),
-             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha")]),
+             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
         )
         for phase, operation, events in phases:
             for code in (0, 101):
@@ -1840,7 +2215,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
 
     def test_shipping_failure_still_reports_work_without_returning_test_artifacts(self):
         events = [CargoBuildProgressTests.event(name, "bin", test=False, fresh=False)
-                  for name in ("iroha3d", "iroha")]
+                  for name in ("iroha3d", "iroha", "iroha3d_taira")]
         events += [CargoBuildProgressTests.event("unexpected", "bin", test=True)]
         output = io.StringIO()
         with patch.object(gate.subprocess, "Popen", return_value=self.process(
@@ -1851,7 +2226,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         isolate.assert_not_called()
         report = CargoBuildProgressTests.reports(output)[-1]
         self.assertEqual(report["phase"], "shipping codegen")
-        self.assertEqual(report["observed_targets"], ["bin:iroha", "bin:iroha3d"])
+        self.assertEqual(report["observed_targets"], ["bin:iroha", "bin:iroha3d", "bin:iroha3d_taira"])
         self.assertEqual(report["state"], "Cargo exited 101")
 
     def test_incomplete_ambiguous_wrong_profile_or_shared_artifacts_fail_closed(self):
@@ -2017,11 +2392,12 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             for child in path.iterdir():
                 child.chmod(0o600)
 
-    def artifact(self, selection="iroha", payload=b"#!/bin/sh\nexit 0\n"):
-        if selection in ("iroha", "iroha3d"):
+    def artifact(self, selection="iroha", payload=b"#!/bin/sh\nexit 0\n", *, shipping=False):
+        if selection in ("iroha", "iroha3d") or shipping:
             package = "iroha_cli" if selection == "iroha" else "irohad"
-            name, kind, is_test = selection, "bin", False
-            executable = self.target / "debug" / selection
+            name = "iroha3d_taira" if selection == "taira-launcher" else selection
+            kind, is_test = "bin", False
+            executable = self.target / "debug" / name
         else:
             _, name, kind, arguments = gate.HARNESS_TARGETS[selection]
             package, is_test = arguments[1], True
@@ -2485,10 +2861,10 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 self.assertNotEqual(path, str(executable))
                 self.assertTrue(Path(path).parent.name.startswith("taira-native-artifacts-"))
                 self.assertEqual(Path(path).read_bytes(), executable.read_bytes())
-        rows = [self.artifact(selection) for selection in ("iroha3d", "iroha")]
+        rows = [self.artifact(selection, shipping=True) for selection in ("iroha3d", "iroha", "taira-launcher")]
         with patch.object(gate.subprocess, "Popen", return_value=self.process([row[2] for row in rows])):
             copied = gate.compile_network_binaries(self.source, self.env, (77,))
-        self.assertEqual(set(copied), {"iroha3d", "iroha"})
+        self.assertEqual(set(copied), {"iroha3d", "iroha", "taira-launcher"})
         for selection, path in copied.items():
             self.assertNotEqual(path, str(self.target / "debug" / selection))
         self.assert_profile_unlocked()
@@ -2564,12 +2940,12 @@ class NativeArtifactIsolationTests(unittest.TestCase):
     def test_network_copies_live_through_real_children_then_retain_only_published_cli(self):
         child_payload = (f"#!{sys.executable}\nimport os, sys\nfrom pathlib import Path\n"
                          "assert Path(sys.argv[0]).is_file()\n"
-                         "for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHA'):\n"
+                         "for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHAD_TAIRA', 'TEST_NETWORK_BIN_IROHA'):\n"
                          "    assert Path(os.environ[key]).is_file()\n"
                          "print('native child completed')\n").encode()
         for succeeds in (True, False):
             with self.subTest(succeeds=succeeds):
-                rows = {name: self.artifact(name, child_payload)[1] for name in ("iroha", "iroha3d")}
+                rows = {name: self.artifact(name, child_payload, shipping=True)[1] for name in ("iroha", "iroha3d", "taira-launcher")}
                 copies = self.isolate(rows)
                 output = Path(copies["iroha"]).parent
                 output.chmod(0o700)
@@ -2580,7 +2956,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     "if '--list' in sys.argv: print('fixture: test'); sys.exit(0)\n"
                     "log = Path(os.environ['TEST_NETWORK_TMP_DIR']) / 'native.log'\n"
                     "with log.open('w') as stream:\n"
-                    "    for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHA'):\n"
+                    "    for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHAD_TAIRA', 'TEST_NETWORK_BIN_IROHA'):\n"
                     "        subprocess.run([os.environ[key]], check=True, stdout=stream)\n"
                     + ("print('test fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;')\n"
                        if succeeds else "print('network fixture failed after children'); sys.exit(101)\n")).encode()
@@ -2599,7 +2975,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 self.assertEqual(unrecorded.read_bytes(), b"leave unowned files")
                 logs = list(self.target.glob("taira-consensus-check-*/native.log"))
                 self.assertEqual(len(logs), 1 if succeeds else 2)
-                self.assertTrue(all(log.read_text() == "native child completed\nnative child completed\n"
+                self.assertTrue(all(log.read_text() == "native child completed\nnative child completed\nnative child completed\n"
                                     for log in logs))
                 self.assertIsNone(copies.directory_fd)
                 if not succeeds:

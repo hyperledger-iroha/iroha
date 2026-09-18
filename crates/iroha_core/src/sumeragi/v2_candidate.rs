@@ -112,6 +112,9 @@ pub(crate) struct CandidateAttachments {
     pub(crate) da_pin_intents: Option<DaPinIntentBundle>,
     /// Deterministic NPoS state effects for this height.
     pub(crate) npos_consensus_effects: Option<NposConsensusEffects>,
+    /// The exact mandatory pulse is not reconstructed yet. A complete useful
+    /// snapshot returns before signing, retaining its queue and lane owners.
+    pub(crate) required_beacon_pulse_pending: bool,
     /// SCCP root derived by deterministic execution, when applicable.
     pub(crate) sccp_commitment_root: Option<[u8; 32]>,
     /// Exact stripped application header certified by an autonomous merge
@@ -379,6 +382,9 @@ pub(crate) enum CandidateAssemblyOutcome {
     Assembled(AssembledV2Candidate),
     /// The queue snapshot and internal providers contained no proposal work.
     NoProposalWork(CandidateScanReport),
+    /// Independently useful work exists, but its mandatory pulse is not ready.
+    /// No body is signed and the selection lease is released without consumption.
+    AwaitingRequiredBeacon(CandidateScanReport),
     /// A complete provider snapshot is temporarily unavailable, even with no selected rows.
     WorkDeferred {
         /// Queue observations made before the provider deferred.
@@ -618,6 +624,13 @@ impl V2CandidateAssembler {
                 }
                 validate_request(&request)?;
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
+            }
+            if request.attachments.required_beacon_pulse_pending {
+                if request.queue.transaction_selection_durability_faulted() {
+                    return Err(CandidateError::RestartRequired);
+                }
+                validate_request(&request)?;
+                return Ok(CandidateAssemblyOutcome::AwaitingRequiredBeacon(report));
             }
             let mut builder = self.prepare_block_builder(
                 request.context,
@@ -1093,6 +1106,11 @@ impl V2CandidateAssembler {
         Ok((block, canonical_wire, events))
     }
 }
+// A mandatory beacon pulse accompanies independently useful ledger work; it
+// must never manufacture the carrier whose height requests that same pulse.
+fn npos_effects_have_independent_proposal_work(effects: &NposConsensusEffects) -> bool {
+    !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()
+}
 fn candidate_has_proposal_work(
     selected: &[CandidateRecord],
     attachments: &CandidateAttachments,
@@ -1112,7 +1130,7 @@ fn candidate_has_proposal_work(
         || attachments
             .npos_consensus_effects
             .as_ref()
-            .is_some_and(|effects| !effects.is_empty())
+            .is_some_and(npos_effects_have_independent_proposal_work)
         || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
@@ -1146,7 +1164,7 @@ pub(crate) fn candidate_block_has_proposal_work(
             .is_some_and(|bundle| !bundle.is_empty())
         || block
             .npos_consensus_effects()
-            .is_some_and(|effects| !effects.is_empty())
+            .is_some_and(npos_effects_have_independent_proposal_work)
         || block.header().sccp_commitment_root().is_some()
         || time_trigger_clock_progress_required
         || state.deterministic_start_work_pending(&block.header()) == Some(true)
@@ -3134,6 +3152,241 @@ pub(super) mod tests {
         assert_eq!(bound_report.inspected, 1);
         assert_eq!(bound_report.routable, 1);
         assert_eq!(bound_report.work_deferred, 1);
+    }
+    // Eligibility deliberately does not verify the pulse: the block validator
+    // retains that separate cryptographic boundary. The beacon producer tests
+    // exercise this gate with a genuinely reconstructed threshold signature.
+    fn pulse_only_effects_fixture() -> NposConsensusEffects {
+        use iroha_data_model::consensus::{
+            FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
+        };
+        NposConsensusEffects {
+            finalized_global_beacon_pulse: Some(FinalizedGlobalThresholdBeaconPulseV1 {
+                version: 1,
+                network_id: crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+                session_id: [1; 32],
+                roster_hash: [2; 32],
+                transcript_hash: [3; 32],
+                height: 3,
+                round: 0,
+                finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
+                    height: 2,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::new(b"pulse parent")),
+                },
+                signature: [4; 48],
+                seed: [5; 32],
+                pulse_id: [6; 32],
+            }),
+            ..NposConsensusEffects::default()
+        }
+    }
+    #[test]
+    fn mandatory_beacon_wait_requires_independent_work() {
+        let pending = CandidateAttachments {
+            required_beacon_pulse_pending: true,
+            ..CandidateAttachments::default()
+        };
+        assert!(matches!(
+            assemble_empty_snapshot_candidate(pending.clone()),
+            CandidateAssemblyOutcome::NoProposalWork(_)
+        ));
+        let useful = CandidateAttachments {
+            time_trigger_clock_progress_required: true,
+            ..pending
+        };
+        assert!(matches!(
+            assemble_empty_snapshot_candidate(useful),
+            CandidateAssemblyOutcome::AwaitingRequiredBeacon(_)
+        ));
+    }
+    #[test]
+    fn mandatory_beacon_wait_releases_same_queue_prefix_for_retry() {
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        let mut world = state.world.block();
+        let account_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("deterministic queued authority");
+        let authority = AccountId::new(account_key.public_key().clone());
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let transaction = TransactionBuilder::new_with_time_source(
+            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            authority,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .sign(account_key.private_key());
+        let transaction = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let expected = transaction.hash_as_entrypoint();
+        world.commit();
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        context.validate().expect("expanded fixture DA limits");
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        queue
+            .push(transaction, state.view())
+            .expect("admit the exact ordinary entry");
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8)).expect("limits"),
+            time_source,
+        );
+        let blocked_signing = ConsensusOutputGuard::isolated();
+        blocked_signing.activate_restart_required();
+        // A pending pulse must return before touching the body-signing boundary.
+        let pending = assembler
+            .assemble(CandidateRequest {
+                context: &context,
+                directive,
+                local_validator,
+                parent: CandidateParent::Snapshot(&anchor),
+                state: &state,
+                queue: &queue,
+                key_pair: &key,
+                output_guard: &blocked_signing,
+                attachments: CandidateAttachments {
+                    required_beacon_pulse_pending: true,
+                    ..CandidateAttachments::default()
+                },
+                work_provider: SingleRouteWorkProvider,
+            })
+            .expect("pending beacon does not sign");
+        let CandidateAssemblyOutcome::AwaitingRequiredBeacon(report) = pending else {
+            panic!("useful FIFO entry must demand its mandatory pulse");
+        };
+        assert_eq!(report.selected, 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.live_lane_reservations().is_empty());
+        assert!(!queue.transaction_selection_durability_faulted());
+        {
+            let state_view = state.view();
+            let (retained, lease) = queue
+                .bounded_pending_snapshot(&state_view, nonzero(8))
+                .expect("pending attempt released its lease");
+            assert_eq!(
+                retained
+                    .iter()
+                    .map(AcceptedTransaction::hash_as_entrypoint)
+                    .collect::<Vec<_>>(),
+                vec![expected]
+            );
+            drop(lease);
+        }
+        let output_guard = ConsensusOutputGuard::isolated();
+        let effects = pulse_only_effects_fixture();
+        let resumed = assembler
+            .assemble(CandidateRequest {
+                context: &context,
+                directive,
+                local_validator,
+                parent: CandidateParent::Snapshot(&anchor),
+                state: &state,
+                queue: &queue,
+                key_pair: &key,
+                output_guard: &output_guard,
+                attachments: CandidateAttachments {
+                    npos_consensus_effects: Some(effects.clone()),
+                    ..CandidateAttachments::default()
+                },
+                work_provider: SingleRouteWorkProvider,
+            })
+            .expect("same retained work resumes once the pulse is available");
+        let CandidateAssemblyOutcome::Assembled(candidate) = resumed else {
+            panic!("retained useful work with pulse must assemble");
+        };
+        assert_eq!(
+            candidate
+                .block()
+                .external_entrypoints_cloned()
+                .map(|entry| entry.hash())
+                .collect::<Vec<_>>(),
+            vec![expected]
+        );
+        assert_eq!(candidate.block().npos_consensus_effects(), Some(&effects));
+        drop(candidate);
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "proposal assembly never consumes the transaction"
+        );
+    }
+    #[test]
+    fn proposal_work_gate_rejects_beacon_pulse_only() {
+        let effects = pulse_only_effects_fixture();
+        assert!(!effects.is_empty(), "the wire effect is retained");
+        let attachments = CandidateAttachments {
+            npos_consensus_effects: Some(effects),
+            ..CandidateAttachments::default()
+        };
+        assert!(!candidate_has_proposal_work(
+            &[],
+            &attachments,
+            &PreparedCandidateWork::default()
+        ));
+        assert!(matches!(
+            assemble_empty_snapshot_candidate(attachments.clone()),
+            CandidateAssemblyOutcome::NoProposalWork(_)
+        ));
+        let useful = CandidateAttachments {
+            time_trigger_clock_progress_required: true,
+            ..attachments
+        };
+        let CandidateAssemblyOutcome::Assembled(candidate) =
+            assemble_empty_snapshot_candidate(useful.clone())
+        else {
+            panic!("independent due clock work must retain the pulse in its carrier");
+        };
+        assert_eq!(
+            candidate.block().npos_consensus_effects(),
+            useful.npos_consensus_effects.as_ref()
+        );
+    }
+    #[test]
+    fn proposal_work_gate_preserves_non_beacon_effects() {
+        use iroha_data_model::consensus::{
+            NposMarkConsensusEvidenceAppliedAction, NposPenaltyAction,
+        };
+        let mut effects = pulse_only_effects_fixture();
+        effects
+            .penalty_actions
+            .push(NposPenaltyAction::MarkConsensusEvidenceApplied(
+                NposMarkConsensusEvidenceAppliedAction {
+                    evidence_key: Hash::new(b"genuine admitted evidence"),
+                    height: 3,
+                },
+            ));
+        let attachments = CandidateAttachments {
+            npos_consensus_effects: Some(effects),
+            ..CandidateAttachments::default()
+        };
+        assert!(candidate_has_proposal_work(
+            &[],
+            &attachments,
+            &PreparedCandidateWork::default()
+        ));
+        let CandidateAssemblyOutcome::Assembled(candidate) =
+            assemble_empty_snapshot_candidate(attachments.clone())
+        else {
+            panic!("deterministic evidence application remains independent work");
+        };
+        assert_eq!(
+            candidate.block().npos_consensus_effects(),
+            attachments.npos_consensus_effects.as_ref()
+        );
     }
     #[test]
     fn proposal_work_gate_normalizes_empty_control_bundles() {

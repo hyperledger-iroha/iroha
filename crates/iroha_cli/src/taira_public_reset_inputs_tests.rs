@@ -335,6 +335,8 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
     inventory.validators.pop();
     let inputs = LocalInputs {
         public_inputs: PathBuf::from("/missing"),
+        beacon_inputs: PathBuf::from("/missing"),
+        beacon_validator_unit: vec![],
         runtime_client_config: PathBuf::from("/missing"),
         validator_client_config: vec![],
         onboarding_token: PathBuf::from("/missing"),
@@ -386,6 +388,11 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
     }
     let local = || LocalInputs {
         public_inputs: absent.join("public-inputs"),
+        beacon_inputs: absent.join("beacon-inputs.json"),
+        beacon_validator_unit: VALIDATOR_SLUGS
+            .iter()
+            .map(|slug| absent.join(format!("{slug}.beacon.service")))
+            .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()
@@ -409,18 +416,27 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         expected,
     );
     assert_eq!(
-        validate_inventory(&inventory)
-            .expect_err("signed inventory admission must reject the same budget")
+        validate_inventory_structure(&inventory)
+            .expect_err("structural inventory admission must reject the same budget")
             .to_string(),
         expected,
     );
 
     let draft = root.join("draft.json");
+    // Preserve Taira account encoding from the guarded native inventory writer.
+    let mut unsigned: json::Value =
+        json::from_slice(&canonical_inventory_bytes(&inventory).unwrap()).unwrap();
+    unsigned.as_object_mut().unwrap().remove("beacon_bootstrap");
+    let draft_bytes = canonical_bytes(&unsigned).unwrap();
+    let _ =
+        decode_inventory_draft(&draft_bytes).expect("exact unsigned fixture before budget checks");
+    write_new_private(&draft, &draft_bytes).expect("private unsigned draft");
+    let signed_inventory = root.join("signed-inventory.json");
     write_new_private(
-        &draft,
-        &canonical_inventory_bytes(&inventory).expect("typed draft"),
+        &signed_inventory,
+        &canonical_inventory_bytes(&inventory).unwrap(),
     )
-    .expect("private retained draft");
+    .unwrap();
     let output = root.join("inventory.json");
     assert_eq!(
         assemble(&Assemble {
@@ -433,18 +449,15 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         expected,
     );
     let authorization = root.join("authorization.json");
-    assert_eq!(
-        authorize(&Authorize {
-            inventory: draft,
-            local: local(),
-            trusted_public_key: absent.join("owner-public-key.json"),
-            signing_key_fd: 0,
-            output: authorization.clone(),
-        })
-        .expect_err("authorization must reject before reading absent custody or invalid signer FD")
-        .to_string(),
-        expected,
-    );
+    let error = authorize(&Authorize {
+        inventory: signed_inventory,
+        local: local(),
+        trusted_public_key: absent.join("owner-public-key.json"),
+        signing_key_fd: 0,
+        output: authorization.clone(),
+    })
+    .expect_err("authorization must reject before reading absent custody or invalid signer FD");
+    assert_compiled_admission_error(&error, expected);
     assert!(!absent.exists());
     assert!(!output.exists());
     assert!(!authorization.exists());
@@ -467,7 +480,8 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         rollback_secs: 120,
     };
     validate_timeout_policy(&inventory).expect("complete deployment timeout policy");
-    validate_inventory(&inventory).expect("deployment defaults pass structural admission");
+    validate_inventory_structure(&inventory)
+        .expect("deployment defaults pass structural admission");
     assert_eq!(
         execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
         16_680_000,
@@ -574,4 +588,27 @@ fn candidate_runtime_scope_requires_disabled_core_and_exact_full_owner() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn unsigned_inventory_draft_forbids_generated_beacon_authority() {
+    let inventory = sample_inventory_fixture();
+    let signed = canonical_inventory_bytes(&inventory).unwrap();
+    assert!(decode_inventory_draft(&signed).is_err());
+    // Preserve the Taira-scoped wire AccountIds from the canonical inventory.
+    let mut value: json::Value = json::from_slice(&signed).unwrap();
+    value.as_object_mut().unwrap().remove("beacon_bootstrap");
+    let bytes = canonical_bytes(&value).unwrap();
+    let (draft, _guard) = decode_inventory_draft(&bytes).unwrap();
+    let reconstructed = draft.into_inventory(inventory.beacon_bootstrap.clone());
+    assert_eq!(canonical_inventory_bytes(&reconstructed).unwrap(), signed);
+    assert!(
+        decode_inventory(&bytes, "unsigned draft").is_err(),
+        "unsigned input never admits as signed inventory"
+    );
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("beacon_bootstrap".into(), json::Value::Null);
+    assert!(decode_inventory_draft(&canonical_bytes(&value).unwrap()).is_err());
 }

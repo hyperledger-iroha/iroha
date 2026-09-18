@@ -3355,3 +3355,6 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
     }
 }
 include!("part_5b_sccp_bundle.rs");
+
+#[cfg(feature = "connect")]
+include!("part_5_threshold_key_lifecycle.rs");

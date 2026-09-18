@@ -9,7 +9,29 @@ enum DecidedLaneRecoveryIngressPreparation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecidedLaneRecoveryIngressDrainMode {
     OpenPreflight,
+    OpenPreflightBatch { physical_cut: u128 },
     FinalizedClosedPrefix,
+}
+
+/// Service a finite, already-admitted recovery prefix before repeating the full
+/// durable lane audit. The callback retains Completion priority, checked ingress
+/// admission, and exact output ownership for each occurrence; false yields to
+/// the outer lifecycle owner without authorizing another dequeue.
+fn drain_open_preflight_recovery_batch<E>(
+    receiver: &FairV2Ingress,
+    limit: usize,
+    mut service_one: impl FnMut(DecidedLaneRecoveryIngressDrainMode) -> Result<bool, E>,
+) -> Result<usize, E> {
+    let physical_cut = receiver.next_physical_admission_ordinal();
+    let budget = receiver.len().min(limit);
+    let mut drained = 0;
+    for _ in 0..budget {
+        if !service_one(DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut })? {
+            break;
+        }
+        drained += 1;
+    }
+    Ok(drained)
 }
 
 /// Dequeue at most one lane-local occurrence while a lifecycle owner blocks ordinary ingress.
@@ -471,25 +493,13 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn drain_decided_lane_recovery_ingress(
+/// Select one occurrence with the same fair gate and exact terminal authority;
+/// a batch additionally excludes arrivals beyond its captured physical prefix.
+fn select_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,
-    executor: &V2EffectExecutor,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-    active_view: wire::View,
-    kura: &Kura,
-    block_sync_server: &mut V2BlockSyncServer,
+    active_height: wire::Height,
     mode: DecidedLaneRecoveryIngressDrainMode,
-) -> Result<Option<DecidedLaneRecoveryDrainCommitOutcome>, V2RunnerError> {
-    let decided_subject = executor
-        .local_proposal_directive()?
-        .decided_subject()
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "terminal lane recovery ingress lost its durable Decision subject".to_owned(),
-            )
-        })?;
+) -> Result<Option<(InboundBlockMessage, DecidedLaneRecoveryDrainAuthorization)>, V2RunnerError> {
     let mut authorization = None;
     let mut authorization_error = None;
     let inbound = receiver
@@ -497,8 +507,15 @@ fn drain_decided_lane_recovery_ingress(
             if authorization_error.is_some() {
                 return false;
             }
-            let preparation =
-                prepare_decided_lane_recovery_ingress(inbound, executor.context().height);
+            if let DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut } = mode
+                && !inbound
+                    .ingress_ownership()
+                    .and_then(|ownership| ownership.physical_admission_ordinal())
+                    .is_some_and(|ordinal| u128::from(ordinal) < physical_cut)
+            {
+                return false;
+            }
+            let preparation = prepare_decided_lane_recovery_ingress(inbound, active_height);
             let candidate = authorize_decided_lane_recovery_drain(preparation);
             if authorization.replace(candidate).is_some() {
                 authorization_error = Some(
@@ -522,6 +539,33 @@ fn drain_decided_lane_recovery_ingress(
             "terminal recovery checked dequeue lost its pre-drain authorization".to_owned(),
         )
     })?;
+    Ok(Some((inbound, authorization)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_decided_lane_recovery_ingress(
+    receiver: &FairV2Ingress,
+    executor: &V2EffectExecutor,
+    services: &mut ProductionV2Services,
+    lane_work: &mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    kura: &Kura,
+    block_sync_server: &mut V2BlockSyncServer,
+    mode: DecidedLaneRecoveryIngressDrainMode,
+) -> Result<Option<DecidedLaneRecoveryDrainCommitOutcome>, V2RunnerError> {
+    let decided_subject = executor
+        .local_proposal_directive()?
+        .decided_subject()
+        .ok_or_else(|| {
+            V2RunnerError::Service(
+                "terminal lane recovery ingress lost its durable Decision subject".to_owned(),
+            )
+        })?;
+    let Some((inbound, authorization)) =
+        select_decided_lane_recovery_ingress(receiver, executor.context().height, mode)?
+    else {
+        return Ok(None);
+    };
     let mut committer = ProductionDecidedLaneRecoveryDrainCommitter {
         receiver,
         inbound: Some(inbound),
@@ -540,28 +584,7 @@ fn drain_decided_lane_recovery_ingress(
     // intentionally dropped. The durable Decision and finality tuple are the
     // only global reducer authority. An exact current-height Serve is answered
     // directly from that tuple so a body-missing validator can cross Apply;
-    // no lifecycle reducer or Producer authority is reopened. The caller
-    // bounds how many independently checked occurrences precede preflight.
+    // no lifecycle reducer or Producer authority is reopened. The caller keeps
+    // terminal Completion priority between individually checked occurrences.
     Ok(Some(outcome))
-}
-
-/// Service a bounded recovery burst before repeating the durable lane audit.
-///
-/// One occurrence per expensive preflight can leave an already-admitted quorum
-/// behind continuously arriving retransmissions. Every occurrence still uses
-/// the exact checked dequeue and publishes its owned effects before the next;
-/// the finite cap guarantees that durable preflight is revisited.
-fn service_decided_lane_recovery_ingress_batch(
-    limit: usize,
-    mut service_one: impl FnMut() -> Result<bool, V2RunnerError>,
-) -> Result<usize, V2RunnerError> {
-    const MAX_RECOVERY_INGRESS_BATCH: usize = 16;
-    let mut drained = 0;
-    for _ in 0..limit.clamp(1, MAX_RECOVERY_INGRESS_BATCH) {
-        if !service_one()? {
-            break;
-        }
-        drained += 1;
-    }
-    Ok(drained)
 }

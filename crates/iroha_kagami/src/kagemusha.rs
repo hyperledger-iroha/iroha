@@ -127,6 +127,10 @@ enum Command {
     #[cfg(unix)]
     #[command(name = "derive-mint-finality-next-epoch-v1")]
     DeriveMintFinalityNextEpochV1(derive_mint_finality_next_epoch_v1::Args),
+    /// Derive a bounded public epoch-maintenance schedule from one inherited seed pipe.
+    #[cfg(unix)]
+    #[command(name = "derive-mint-finality-epoch-schedule-v1")]
+    DeriveMintFinalityEpochScheduleV1(derive_mint_finality_next_epoch_v1::ScheduleArgs),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -173,6 +177,10 @@ impl<T: Write> RunArgs<T> for Args {
             #[cfg(unix)]
             Command::DeriveMintFinalityNextEpochV1(args) => {
                 derive_mint_finality_next_epoch_v1::run(args, writer)
+            }
+            #[cfg(unix)]
+            Command::DeriveMintFinalityEpochScheduleV1(args) => {
+                derive_mint_finality_next_epoch_v1::run_schedule(args, writer)
             }
         }
     }

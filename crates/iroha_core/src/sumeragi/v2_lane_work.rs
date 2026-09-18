@@ -14056,8 +14056,7 @@ impl V2LaneWorkAdapter {
             else {
                 continue;
             };
-            Kura::validate_certified_lane_block_artifact(&artifact)
-                .map_err(|error| V2LaneWorkError::Persistence(error.to_owned()))?;
+            // The strict reader validated both QC aggregates on this owned artifact.
             if artifact.prepare_qc.payload_availability_qc.is_none() {
                 continue;
             }
@@ -15448,8 +15447,9 @@ impl V2LaneWorkAdapter {
                     descriptor.lane_block_height,
                 ))?
             {
+                // The strict completion reader already authenticated this exact certificate.
+                // Keep the independent historical proposal and signer-PoP bindings below.
                 if certified.proposal != *proposal
-                    || Kura::validate_certified_lane_block_artifact(&certified).is_err()
                     || certified.signer_pops.iter().any(|(key, pop)| {
                         descriptor
                             .validator_set

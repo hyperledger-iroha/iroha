@@ -27,6 +27,9 @@ use tokio::time::{Instant, sleep, timeout_at};
 mod dataspace_deploy_cli;
 #[path = "support/multiroute.rs"]
 mod multiroute;
+#[cfg(unix)]
+#[path = "support/production_beacon_bootstrap.rs"]
+mod production_beacon_bootstrap;
 #[path = "support/runtime_catalog_transition.rs"]
 mod runtime_catalog_transition;
 
@@ -35,13 +38,14 @@ mod runtime_catalog_transition;
 // same finite budget as startup/restart while preserving exact Applied checks.
 const FUNCTIONAL_FINALITY_TIMEOUT: Duration = Duration::from_secs(180);
 
-// A fresh classified telemetry snapshot has a deliberately short server-side
-// acquisition budget. Its typed 503 is a retryable read, not a finality verdict.
-// Reuse the caller's absolute deadline and never retry admission or other errors.
+// A classified status read has a 500ms server deadline independent of this
+// fixture's absolute phase deadline. Retry only that exact typed read failure;
+// every other producer failure remains evidence, never a finality verdict.
 async fn validator_status_until(
     client: &iroha::client::Client,
     deadline: Instant,
 ) -> Result<iroha_torii_shared::status::Status> {
+    let mut last_retryable = None;
     timeout_at(deadline, async {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -54,23 +58,17 @@ async fn validator_status_until(
                 iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
             match builder.build()?.status().get().await {
                 Ok(status) => return Ok(status),
-                Err(error) => {
-                    let iroha::Error::Http {
-                        operation: "diagnostic.status",
-                        status: 503,
-                        retry_after,
-                        body,
-                    } = &error
-                    else {
-                        return Err(error.into());
-                    };
-                    // Torii negotiates typed errors in both JSON and Norito.
-                    let envelope = json::from_slice::<iroha_torii_shared::ErrorEnvelope>(body)
-                        .ok()
-                        .or_else(|| norito::decode_from_bytes(body).ok());
-                    if !envelope.is_some_and(|error| error.code == "status_metrics_unavailable") {
-                        return Err(error.into());
+                Err(iroha::Error::StatusUnavailable {
+                    reason: Some(iroha::StatusFailureReason::DeadlineElapsed),
+                    retry_after,
+                }) => {
+                    if last_retryable.is_none() {
+                        eprintln!(
+                            "validator status read retry: reason=status_deadline_elapsed remaining={:.3}s",
+                            deadline.saturating_duration_since(Instant::now()).as_secs_f64()
+                        );
                     }
+                    last_retryable = Some(iroha::StatusFailureReason::DeadlineElapsed);
                     sleep(
                         retry_after
                             .unwrap_or_default()
@@ -78,11 +76,17 @@ async fn validator_status_until(
                     )
                     .await;
                 }
+                Err(error) => return Err(error.into()),
             }
         }
     })
     .await
-    .wrap_err("validator status observation exceeded its deadline")?
+    .wrap_err_with(|| {
+        format!(
+            "validator status observation exceeded its deadline; last retryable reason={}",
+            last_retryable.map_or("none", iroha::StatusFailureReason::code)
+        )
+    })?
 }
 
 // This fixture uses a fixed loopback HTTP listener, so a bounded status-line
@@ -295,179 +299,6 @@ async fn restart_validator_from_applied_snapshot(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> Result<()> {
-    public_transaction_sequence_reaches_applied(false).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_universal_public_transaction_sequence_reaches_applied() -> Result<()> {
-    public_transaction_sequence_reaches_applied(true).await
-}
-
-async fn public_transaction_sequence_reaches_applied(universal_route: bool) -> Result<()> {
-    init_instruction_registry();
-    for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
-        let binary = std::env::var_os(variable)
-            .ok_or_else(|| eyre!("{variable} must name the prebuilt native executable"))?;
-        ensure!(
-            Path::new(&binary).is_file(),
-            "{variable} must name an existing executable file"
-        );
-    }
-    let startup_deadline = Instant::now() + Duration::from_secs(180);
-    let network = timeout_at(
-        startup_deadline,
-        tokio::task::spawn_blocking(move || {
-            multiroute::network_builder()
-                .with_config_layer(|layer| {
-                    layer
-                        .write(["torii", "mcp", "enabled"], true)
-                        .write(["torii", "mcp", "profile"], "writer")
-                        .write(
-                            ["torii", "mcp", "allow_tool_prefixes"],
-                            toml::Value::Array(vec![toml::Value::String("iroha.".to_owned())]),
-                        )
-                        .write(["snapshot", "mode"], "read_write")
-                        .write(["snapshot", "store_dir"], "./storage/snapshot")
-                        .write(["snapshot", "create_every_ms"], 1_000_i64)
-                        .write(["logger", "format"], "json")
-                        .write(["logger", "level"], "INFO");
-                })
-                .with_base_seed_if_unset(if universal_route {
-                    "four_peer_universal_public_transaction_sequence_reaches_applied"
-                } else {
-                    "four_peer_multiroute_public_transaction_sequence_reaches_applied"
-                })
-                .build()
-        }),
-    )
-    .await
-    .wrap_err("four-peer genesis preparation exceeded its deadline")?
-    .wrap_err("four-peer genesis preparation failed")?;
-    let result = async {
-        timeout_at(startup_deadline, async {
-            network.start_all().await?;
-            network.ensure_blocks(1).await?;
-            Ok::<(), eyre::Report>(())
-        })
-        .await
-        .wrap_err("four-peer startup exceeded its deadline")??;
-        ensure!(network.peers().len() == 4, "the fixture must start all four validators");
-        let initial = timeout_at(startup_deadline, try_join_all(network.peers().iter().map(|peer| async move {
-            let client = peer.client().client().clone();
-            validator_status_until(&client, startup_deadline).await
-        }))).await.wrap_err("four-peer startup observation exceeded its deadline")??;
-        ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
-        verify_basic_public_doctor(&network.peers()[0]).await?;
-        // Both scopes retain the same four-validator, three-dataspace topology.
-        // Basic BPNG traffic uses the funded universal default-route account;
-        // the full scope also exercises ALICE's explicit lane-1/dataspace-1 route.
-        let fixture_client = if universal_route {
-            let key_pair = multiroute::universal_route_key_pair();
-            let account_id = AccountId::new(key_pair.public_key().clone());
-            ensure!(account_id != *iroha_test_samples::ALICE_ID
-                && account_id != *iroha_test_samples::BOB_ID,
-                "universal fixture account must not match an explicit account route");
-            network.peers()[0].client_for(&account_id, key_pair.private_key().clone())
-        } else {
-            network.client()
-        };
-        let mut builder = fixture_client.client().to_builder();
-        builder.transaction_status_timeout = FUNCTIONAL_FINALITY_TIMEOUT;
-        // Public QueuePlan certification uses the SDK's routed request budget.
-        builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
-        let client = builder.build()?;
-        let account = client.account_client()?;
-        let mut preceding_applied_height = 1;
-        // Exercise admission, autonomous execution and height rollover repeatedly.
-        // A successful first transaction alone does not qualify continued progress.
-        for sequence in 1..=3 {
-        // Public Torii ingress requires signature-bound QueuePlanSynced admission.
-        // Internal Ordinary work has separate Core candidate-provider regressions.
-        let mut payload = account.prepare_transaction(
-            AccountTransactionDraft::new(
-                vec![InstructionBox::from(Log::new(Level::INFO, format!("strict Taira public transaction {sequence}")))],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ).with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-        )?;
-        let quote = account.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload }).await?;
-        ensure!(payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent), "fee quote changed the selected payer or gas bound");
-        payload.fee_payment = quote.intent;
-        let transaction = account.sign_transaction(payload)?;
-        let expected_hash = transaction.hash();
-        let submitted_hash = account.submit_transaction_and_wait(&transaction).await
-            .wrap_err("the exact public transaction did not reach state-resolved Applied")?;
-        ensure!(submitted_hash == expected_hash, "submission returned a different signed transaction hash");
-        let expected_hex = expected_hash
-            .as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        // The all-peer observation deadline starts after SDK reconciliation;
-        // it must not cancel a potentially durable public admission.
-        let observation_deadline = Instant::now() + Duration::from_secs(90);
-        let result = timeout_at(observation_deadline, async {
-        loop {
-            let observations = try_join_all(network.peers().iter().map(|peer| async move {
-                let observation_client = peer.client().client().clone();
-                // Global status can use Torii's routed/fanout budget. Bound each
-                // read by the same observation deadline, never an arbitrary
-                // shorter timeout or a new deadline for each peer/request.
-                let bounded_client = move || -> Result<iroha::client::Client> {
-                    let remaining = observation_deadline.saturating_duration_since(Instant::now());
-                    ensure!(!remaining.is_zero(), "four-peer public transaction observation exceeded its fixed 90-second deadline");
-                    let mut builder = observation_client.to_builder();
-                    builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
-                    Ok(builder.build()?)
-                };
-                let global = bounded_client()?.fetch_transaction_status_response_global(expected_hash).await?;
-                // Global lookups may fan out to another validator. Prove this
-                // peer's own committed state before counting it as applied.
-                let status = validator_status_until(&bounded_client()?, observation_deadline).await?;
-                let local = read_on_dedicated_thread(move || {
-                    // Recompute after thread scheduling, immediately before
-                    // the blocking request takes its remaining I/O budget.
-                    bounded_client()?.get_transaction_status_response_local(expected_hash)
-                }).await?;
-                Ok::<_, eyre::Report>((status.blocks, global, local))
-            })).await?;
-            let all_applied = observations.iter().all(|(height, global, local)| {
-                [("global", global), ("local", local)].iter().all(|(scope, response)| response.as_ref().is_some_and(|response| {
-                    response.hash == expected_hex
-                        && response.scope == *scope
-                        && response.resolved_from == "state"
-                        && response.status.kind == "Applied"
-                        && response.status.block_height.is_some_and(|applied| applied > 1 && *height >= applied)
-                }))
-            });
-            if all_applied {
-                let applied_height = observations[0].1.as_ref().unwrap().status.block_height;
-                ensure!(observations.iter().all(|(_, global, local)| global.as_ref().unwrap().status.block_height == applied_height && local.as_ref().unwrap().status.block_height == applied_height), "peers disagree on the exact transaction's applied height");
-                eprintln!("Taira four-peer public transaction Applied in local and global state: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _, _)| *height).collect::<Vec<_>>());
-                return Ok(applied_height.expect("all observations have an Applied height"));
-            }
-            eprintln!("waiting for all four peers to apply exact public transaction {expected_hex}: {observations:?}");
-            sleep(Duration::from_millis(200)).await;
-        }
-    }).await;
-        let applied_height = result.map_err(|_| {
-            eyre!("four-peer public transaction observation exceeded its fixed 90-second deadline")
-        })??;
-        ensure!(applied_height > preceding_applied_height, "each sequential transaction must reach a later committed height");
-        preceding_applied_height = applied_height;
-        if sequence == 2 {
-            restart_validator_from_applied_snapshot(&network, applied_height).await?;
-        }
-        }
-        Ok(())
-    }
-    .await;
-    network.shutdown().await;
-    result
-}
-
 #[cfg(test)]
 mod status_observation_tests {
     use super::*;
@@ -479,7 +310,7 @@ mod status_observation_tests {
 
     #[derive(Debug)]
     struct StatusTransport {
-        responses: Mutex<VecDeque<(u16, Vec<u8>, Option<&'static str>)>>,
+        responses: Mutex<VecDeque<(u16, Vec<u8>, Option<&'static str>, Option<&'static str>)>>,
         request_budgets: Mutex<Vec<Duration>>,
     }
 
@@ -500,7 +331,7 @@ mod status_observation_tests {
                     .lock()
                     .unwrap()
                     .push(request.timeout.unwrap());
-                let (status, body, retry_after) = self
+                let (status, body, retry_after, reason) = self
                     .responses
                     .lock()
                     .unwrap()
@@ -511,6 +342,9 @@ mod status_observation_tests {
                     .header("content-type", "application/json");
                 if let Some(retry_after) = retry_after {
                     response = response.header("retry-after", retry_after);
+                }
+                if let Some(reason) = reason {
+                    response = response.header("x-iroha-reject-code", reason);
                 }
                 Ok(response.body(body)?)
             })
@@ -544,7 +378,7 @@ mod status_observation_tests {
     }
 
     fn transport(
-        responses: impl IntoIterator<Item = (u16, Vec<u8>, Option<&'static str>)>,
+        responses: impl IntoIterator<Item = (u16, Vec<u8>, Option<&'static str>, Option<&'static str>)>,
     ) -> Arc<StatusTransport> {
         Arc::new(StatusTransport {
             responses: Mutex::new(responses.into_iter().collect()),
@@ -554,15 +388,25 @@ mod status_observation_tests {
 
     #[tokio::test]
     async fn status_observation_retries_typed_busy_json_and_norito_with_remaining_budget() {
-        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_metrics_unavailable", "busy");
+        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_deadline_elapsed", "busy");
         let status = iroha_torii_shared::status::Status {
             blocks: 4,
             ..Default::default()
         };
         let transport = transport([
-            (503, json::to_vec(&envelope).unwrap(), None),
-            (503, norito::to_bytes(&envelope).unwrap(), None),
-            (200, json::to_vec(&status).unwrap(), None),
+            (
+                503,
+                json::to_vec(&envelope).unwrap(),
+                None,
+                Some("status_deadline_elapsed"),
+            ),
+            (
+                503,
+                norito::to_bytes(&envelope).unwrap(),
+                None,
+                Some("status_deadline_elapsed"),
+            ),
+            (200, json::to_vec(&status).unwrap(), None, None),
         ]);
         let client = client(transport.clone());
         let budget = Duration::from_secs(5);
@@ -581,8 +425,13 @@ mod status_observation_tests {
 
     #[tokio::test]
     async fn status_observation_stops_at_original_deadline_during_retry_after() {
-        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_metrics_unavailable", "busy");
-        let transport = transport([(503, json::to_vec(&envelope).unwrap(), Some("60"))]);
+        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_deadline_elapsed", "busy");
+        let transport = transport([(
+            503,
+            json::to_vec(&envelope).unwrap(),
+            Some("60"),
+            Some("status_deadline_elapsed"),
+        )]);
         let client = client(transport.clone());
         let result = tokio::time::timeout(
             Duration::from_secs(2),
@@ -590,46 +439,75 @@ mod status_observation_tests {
         )
         .await
         .expect("Retry-After must remain bounded by the existing deadline");
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("exceeded its deadline")
-        );
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("exceeded its deadline"));
+        assert!(error.contains("last retryable reason=status_deadline_elapsed"));
         assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn status_observation_propagates_auth_other_service_and_decode_failures() {
-        for (status, body) in [
-            (
-                401,
-                br#"{"code":"operator_signature_missing","message":"unauthorized"}"#.to_vec(),
-            ),
-            (
-                503,
-                br#"{"code":"another_service_unavailable","message":"unavailable"}"#.to_vec(),
-            ),
-            (503, b"malformed service error".to_vec()),
-            (200, b"malformed status".to_vec()),
+        use iroha::StatusFailureReason;
+        for reason in [
+            StatusFailureReason::Disabled,
+            StatusFailureReason::MailboxUnavailable,
+            StatusFailureReason::ActorClosed,
+            StatusFailureReason::StateUnavailable,
+            StatusFailureReason::CheckpointChanged,
+            StatusFailureReason::MissingBlock,
+            StatusFailureReason::JournalMismatch,
+            StatusFailureReason::CounterOverflow,
+            StatusFailureReason::CounterMismatch,
+            StatusFailureReason::MetricsStale,
+            StatusFailureReason::ProfileRestricted,
         ] {
-            let transport = transport([(status, body, None)]);
+            let transport = transport([(503, Vec::new(), None, Some(reason.code()))]);
             let client = client(transport.clone());
             let error = validator_status_until(&client, Instant::now() + Duration::from_secs(5))
                 .await
                 .unwrap_err();
-            if status == 200 {
-                assert!(matches!(
+            assert!(matches!(
+                error.downcast_ref::<iroha::Error>(),
+                Some(iroha::Error::StatusUnavailable { reason: Some(actual), .. }) if *actual == reason
+            ));
+            assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
+        }
+        for (status, body, reason) in [
+            (401, b"unauthorized".to_vec(), None),
+            // A recognized code at another HTTP status is not retry authority.
+            (429, Vec::new(), Some("status_deadline_elapsed")),
+            (503, Vec::new(), Some("another_service_unavailable")),
+            (503, Vec::new(), Some("status_metrics_unavailable")),
+            // Only the SDK's typed header classification is authoritative.
+            (
+                503,
+                br#"{"code":"status_deadline_elapsed","message":"busy"}"#.to_vec(),
+                None,
+            ),
+            (503, b"malformed service error".to_vec(), None),
+            (200, b"malformed status".to_vec(), None),
+        ] {
+            let transport = transport([(status, body, None, reason)]);
+            let client = client(transport.clone());
+            let error = validator_status_until(&client, Instant::now() + Duration::from_secs(5))
+                .await
+                .unwrap_err();
+            match status {
+                200 => assert!(matches!(
                     error.downcast_ref::<iroha::Error>(),
                     Some(iroha::Error::Decode {
                         operation: "diagnostic.status",
                         ..
                     })
-                ));
-            } else {
-                assert!(
-                    matches!(error.downcast_ref::<iroha::Error>(), Some(iroha::Error::Http { operation: "diagnostic.status", status: actual, .. }) if *actual == status)
-                );
+                )),
+                503 => assert!(matches!(
+                    error.downcast_ref::<iroha::Error>(),
+                    Some(iroha::Error::StatusUnavailable { reason: None, .. })
+                )),
+                _ => assert!(matches!(
+                    error.downcast_ref::<iroha::Error>(),
+                    Some(iroha::Error::Http { operation: "diagnostic.status", status: actual, .. }) if *actual == status
+                )),
             }
             assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
         }

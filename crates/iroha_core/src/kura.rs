@@ -36623,7 +36623,7 @@ impl Kura {
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
-                self.read_autonomous_lane_block_attempt_record_locked(
+                self.read_autonomous_lane_block_attempt_record_with_current_locked(
                     &entry,
                     lane_id,
                     pointer.lane_block_height,
@@ -36633,27 +36633,15 @@ impl Kura {
                     None,
                 )
             };
-            let Some(record) = record? else {
+            let Some((record, current)) = record? else {
                 continue;
             };
             if record.retirement.is_some() {
                 continue;
             }
             let artifact = record.artifact;
-            let current = Self::validate_autonomous_lane_block_artifact(
-                &artifact,
-                expected_network_id,
-                expected_epoch,
-            )
-            .map_err(|message| {
-                Self::invalid_lane_artifact_error(
-                    Self::autonomous_lane_route_latest_attempt_path_for_entry(
-                        &entry,
-                        &self.store_root,
-                    ),
-                    message,
-                )
-            })?;
+            // The exact read already authenticated this artifact and its current cursor.
+            // Reuse that owned pair without repeating payload, READY or NewView verification.
             if artifact
                 .executable_payload
                 .origin_proposal
@@ -36774,8 +36762,8 @@ impl Kura {
         )
         .map(|record| record.map(|(record, _current)| record))
     }
-    /// Return a cursor only for the exact retired-attempt consumer; ordinary
-    /// collection callers use the record-only projection above.
+    /// Return the current cursor authenticated with this exact attempt record.
+    /// Consumers that do not need it use the record-only projection above.
     #[allow(clippy::too_many_arguments)]
     fn read_autonomous_lane_block_attempt_record_with_current_locked(
         &self,

@@ -875,6 +875,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
+    beacon_readiness: Arc<crate::beacon::readiness::GlobalBeaconReadinessV1>,
     kagemusha_mint_finality_authority: Option<
         Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
     >,
@@ -932,6 +933,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     }
     let local_peer = common_config.peer.id().clone();
     let context = verified_context.context().clone();
+    beacon_readiness.begin_height(context.id());
     close_ingress_for_rollover(&ingress_ready, &block_rx);
     block_rx
         .configure_roster_for_context(
@@ -1293,6 +1295,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        beacon_readiness,
         kagemusha_mint_finality_authority,
         network,
         block_rx,

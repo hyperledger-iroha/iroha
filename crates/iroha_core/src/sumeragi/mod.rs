@@ -4365,7 +4365,11 @@ impl FairV2Ingress {
     /// Queued messages belong to the preceding immutable height and are
     /// discarded while the public ingress gate is closed. The caller may open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+    #[cfg(any(
+        test,
+        feature = "sumeragi-main-loop-tests",
+        feature = "iroha-core-tests"
+    ))]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -6191,7 +6195,11 @@ impl FairV2Ingress {
     /// coordinator's executor join. Once a blocked entry becomes admissible,
     /// the head-first search selects it before later entries. When every entry
     /// is rejected, the source order and total length remain unchanged.
-    #[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+    #[cfg(any(
+        test,
+        feature = "sumeragi-main-loop-tests",
+        feature = "iroha-core-tests"
+    ))]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -6669,7 +6677,8 @@ impl FairV2Ingress {
     pub(crate) fn try_recv(&self) -> Option<InboundBlockMessage> {
         self.try_recv_if(|_| true)
     }
-    #[cfg(test)]
+    /// Number of admitted messages currently owned by the bounded ingress.
+    /// Reading this scalar does not scan, dequeue, or authorize any occurrence.
     fn len(&self) -> usize {
         self.state.lock().len
     }
@@ -6767,6 +6776,7 @@ pub struct SumeragiHandle {
     output_guard: Arc<ConsensusOutputGuard>,
     emergency_fast_disabled: bool,
     startup_recovery: StartupRecovery,
+    beacon_readiness: Arc<crate::beacon::readiness::GlobalBeaconReadinessV1>,
     admission_capacity: Arc<std::sync::OnceLock<AuthenticatedAdmissionCapacityV1>>,
 }
 impl SumeragiHandle {
@@ -6788,6 +6798,7 @@ impl SumeragiHandle {
             output_guard,
             emergency_fast_disabled: false,
             startup_recovery,
+            beacon_readiness: Arc::default(),
             admission_capacity: Arc::new(std::sync::OnceLock::new()),
         }
     }
@@ -6833,6 +6844,18 @@ impl SumeragiHandle {
         !self.emergency_fast_disabled
             && self.ingress_ready.load(Ordering::Acquire)
             && !self.restart_required()
+    }
+    /// Check production beacon readiness without closing bootstrap ingress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed diagnostic while public key installation, exact provider
+    /// custody, or a fresh lifecycle/state binding is unavailable.
+    pub fn global_beacon_readiness(
+        &self,
+        state: &State,
+    ) -> Result<(), crate::beacon::readiness::GlobalBeaconReadinessErrorV1> {
+        self.beacon_readiness.check(state)
     }
     /// Observe the immutable signed RS16 layout after authenticated recovery.
     ///
@@ -7128,6 +7151,40 @@ mod emergency_fast_handle_tests {
     use iroha_crypto::KeyPair;
 
     #[test]
+    fn missing_beacon_readiness_preserves_bootstrap_ingress() {
+        let (handle, _block, lane_relay) = test_sumeragi_handle(4);
+        let state = State::new_for_testing(
+            crate::state::World::new(),
+            Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            handle.global_beacon_readiness(&state),
+            Err(crate::beacon::readiness::GlobalBeaconReadinessErrorV1::Uninitialized)
+        );
+        assert!(handle.admission_ready());
+        assert!(handle.notify_pending_queue_plan_admission());
+        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        // This test exercises the ingress owner. Certificate authentication
+        // remains the unchanged downstream lane owner's responsibility.
+        let certificate = Arc::new(vec![0x51]);
+        assert!(
+            handle
+                .try_incoming_lane_relay_owned(LaneRelayMessage::QueuePlanAdmissionCertificate {
+                    sender: sender.clone(),
+                    certificate: Arc::clone(&certificate),
+                })
+                .accepted_or_coalesced()
+        );
+        assert!(
+            matches!(lane_relay.try_recv().expect("retained admission handoff"),
+            LaneRelayMessage::QueuePlanAdmissionCertificate { sender: received, certificate: body }
+                if received == sender && body == certificate)
+        );
+        assert!(handle.admission_ready());
+    }
+
+    #[test]
     fn disabled_handle_never_opens_consensus_admission() {
         let handle = SumeragiHandle::emergency_fast_disabled();
         assert!(!handle.notify_pending_queue_plan_admission());
@@ -7144,7 +7201,11 @@ mod emergency_fast_handle_tests {
         ));
     }
 }
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -7154,7 +7215,11 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,
@@ -7414,6 +7479,7 @@ impl SumeragiStartArgs {
             startup_recovery,
         );
         let worker = SumeragiWorker {
+            beacon_readiness: Arc::clone(&handle.beacon_readiness),
             admission_capacity: Arc::clone(&handle.admission_capacity),
             build_identity,
             config,
@@ -7634,6 +7700,7 @@ impl Drop for V2StartupReplayInventoryGuard {
     }
 }
 struct SumeragiWorker {
+    beacon_readiness: Arc<crate::beacon::readiness::GlobalBeaconReadinessV1>,
     admission_capacity: Arc<std::sync::OnceLock<AuthenticatedAdmissionCapacityV1>>,
     build_identity: crate::release_identity::BuildIdentity,
     config: SumeragiConfig,

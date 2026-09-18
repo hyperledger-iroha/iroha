@@ -4,6 +4,8 @@
 Python reads public units/status and metadata only. Retained file metadata binds
 private configuration; the native daemon alone consumes config/key contents.
 No ledger removal, key/config rewrite, reset, signing, or transaction submission.
+Startup replay may expose a lower prefix; success still requires each retained
+checkpoint and a fresh anchored quorum. Heights within one process never regress.
 """
 import ast
 import base64
@@ -819,8 +821,9 @@ def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
     observations = []
     for index, (row, old, prior, minimum) in enumerate(zip(
             rows, before, verified, minimum_heights, strict=True)):
-        last_height = max(old['public']['height'],
-                          prior['public']['height'] if prior is not None and prior['public'] else 0)
+        # The stopped process's height is a completion target, not a lower
+        # bound for the new process's intermediate replay observations.
+        last_height = prior['public']['height'] if prior is not None and prior['public'] else 0
         new = observe(row, after=after, allow_unavailable=True,
                       expected_commit=commit, minimum_height=last_height)
         compare_retained_identity(old, new)
@@ -828,8 +831,6 @@ def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
         fresh = public is not None
         if fresh:
             need(public['commit'] == commit, 'candidate revision differs: ' + row['role'])
-            need(public['height'] >= old['public']['height'],
-                 'retained validator height regressed: ' + row['role'])
             if prior is not None and prior['public'] is not None:
                 need(public['height'] >= prior['public']['height'],
                      'committed catch-up height regressed: ' + row['role'])

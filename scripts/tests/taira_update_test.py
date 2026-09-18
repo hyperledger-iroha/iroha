@@ -1283,11 +1283,19 @@ class CohortProgressTests(unittest.TestCase):
 
     def run_catchup(self, sample, *, target=220, timeout=6, max_timeout=30, ready=None, systemd=None,
                     minimum_heights=None, receipts=None, digest=None):
-        def observation(row, **_kwargs):
+        def observation(row, **kwargs):
             index = guest.ROLES.index(row['role'])
             result = copy.deepcopy(self.before[index])
             try:
-                result['public']['height'] = sample(index, self.now, result)
+                height = sample(index, self.now, result)
+                # Exercise the real HTTP identity/floor checks with public
+                # fixture responses, without procfs or a live service.
+                with patch.object(guest, 'public_get', side_effect=[
+                        {'blocks': height, 'build': {'git_commit_sha': result['public']['commit']}},
+                        {'network_id': guest.NETWORK, 'chain_discriminant': 369}]):
+                    result['public'] = guest.public_identity(
+                        index, expected_commit=kwargs['expected_commit'],
+                        minimum_height=kwargs['minimum_height'])
             except guest.StartupProbeUnavailable as error:
                 result['public'] = None
                 result['public_unavailable'] = str(error)
@@ -1329,6 +1337,35 @@ class CohortProgressTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'anchored retained quorum is not ready'):
                 guest.observe_cohort(self.rows, self.before, after=True, commit=guest.OLD,
                                       retained_tip={'height': 220, 'hash': 'c' * 64})
+
+    def test_startup_replay_prefix_waits_for_all_own_tips_and_fresh_anchor(self):
+        receipts = []
+        result = self.run_catchup(
+            lambda index, now, row: (198 if now == 0 else 199) if now < 4 else 220,
+            minimum_heights=[220] * 4, receipts=receipts)
+        self.assertEqual(self.now, 6, 'two complete samples follow replay, not listener startup')
+        self.assertEqual(len(receipts), 2)
+        self.assertTrue(all(sample['quorum_roles'] == list(guest.ROLES) for sample in receipts))
+        self.assertTrue(all(sample['unverified_roles'] == [] for sample in receipts))
+        self.assertEqual([row['public']['height'] for row in result], [220] * 4)
+
+    def test_startup_replay_prefix_stall_retains_original_deadline(self):
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*unverified_roles'):
+            self.run_catchup(lambda index, now, row: 199)
+        self.assertEqual(self.now, 6)
+
+    def test_regression_between_replay_prefixes_is_permanent(self):
+        with self.assertRaisesRegex(RuntimeError, 'committed catch-up height regressed'):
+            self.run_catchup(lambda index, now, row: 199 if now == 0 else 198)
+        self.assertEqual(self.now, 2)
+
+    def test_wrong_revision_in_lower_replay_prefix_is_immediately_fatal(self):
+        def sample(index, now, row):
+            row['public']['commit'] = 'f' * 40
+            return 199
+        with self.assertRaisesRegex(RuntimeError, 'candidate revision differs'):
+            self.run_catchup(sample)
+        self.assertEqual(self.now, 0)
 
     def test_two_fresh_samples_record_each_peer_without_synthetic_height_advance(self):
         receipts = []

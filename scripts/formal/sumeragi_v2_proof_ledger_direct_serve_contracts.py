@@ -3871,11 +3871,11 @@ self.lock().lifecycle_serves.iter().map(|(&lifecycle_ordinal, tracked)| Lifecycl
 while let Some(current_turn) = outer_turns.next_current() {
     producer_claim = activated.producer_claim_projection()?;
 """)
-    require("ordinary", ordinary, "both ingress drains re-read actual owner", """
+    require("ordinary", ordinary, "all ingress drains re-read actual owner", """
 terminal_finalization_cut.as_ref(),
 )?;
 producer_claim = activated.producer_claim_projection()?;
-""", count=2)
+""", count=3)
     require("ordinary", ordinary, "Runtime refresh precedes Producer", """
 producer_claim = activated.producer_claim_projection()?;
 if producer_claim.requires_yield() {
@@ -4020,14 +4020,14 @@ block_sync_request, npos_beacon, lane_output_limit,
 )
 """, count=3)
     require("ordinary", None, "run_lifecycle_active_height",
-            "both ordinary batches preserve distinct ingress and output budgets", """
+            "all ordinary batches preserve distinct ingress and output budgets", """
 drain_lifecycle_v2_ingress(
     &mut activated, &mut active_runner, receiver, &mut lane_work,
     kura.as_ref(), &common_config.key_pair, block_sync_server, block_sync,
     &mut block_sync_request, npos_beacon, body_queue_capacity,
     control_queue_capacity, terminal_finalization_cut.as_ref(),
 )?;
-""", count=2)
+""", count=3)
 
     require("ordinary", None, "run_lifecycle_active_height",
             "sidecar ingress needs typed permit and prepared owner", """

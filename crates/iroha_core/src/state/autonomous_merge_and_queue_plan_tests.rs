@@ -2,6 +2,275 @@ include!("autonomous_merge_and_queue_plan_test_support.rs");
 include!("autonomous_merge_admission_intent_tests.rs");
 include!("autonomous_merge_gas_budget_tests.rs");
 include!("historical_merge_registry_recovery_tests.rs");
+
+state_test!(consensus_stack autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once
+    autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once_on_consensus_stack();
+);
+fn autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once_on_consensus_stack()
+ {
+    let (state, entry, carrier, context) = autonomous_merge_beacon_composition_fixture();
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("real certified execution batch");
+    let original_entry = entry.clone();
+    let pulse = carrier
+        .npos_consensus_effects()
+        .expect("pulse effects")
+        .finalized_global_beacon_pulse
+        .expect("real threshold signature");
+    assert_eq!(carrier.external_entrypoint_count(), 0);
+    assert_eq!(batch.entrypoint_count, 1);
+    let original_root = batch.write_set_root;
+    let first = staged_native_merge_beacon_block(&state, &carrier, &context);
+    let authorization = first
+        .canonical_wsv_merge_commit_authorization
+        .as_ref()
+        .expect("original QC authorization");
+    assert_eq!(authorization.write_set_root, original_root);
+    assert_eq!(
+        authorization.expected_post_state_hash,
+        batch.expected_post_state_hash
+    );
+    let seal = authorization
+        .beacon_composition
+        .as_ref()
+        .expect("native pulse composition seal");
+    let expected_composed = (
+        seal.write_set_root,
+        seal.external_event_bytes.clone(),
+        seal.publication_event_bytes.clone(),
+    );
+    assert_ne!(
+        seal.write_set_root, original_root,
+        "the pulse maps remain committed, not excluded"
+    );
+    assert_eq!(
+        first.world.global_beacon_pulses.get(&pulse.pulse_id),
+        Some(&pulse)
+    );
+    drop(first);
+    assert!(
+        state
+            .world
+            .view()
+            .global_beacon_pulses()
+            .get(&pulse.pulse_id)
+            .is_none(),
+        "abandoned reconstruction cannot publish a pulse"
+    );
+
+    let mut replayed = staged_native_merge_beacon_block(&state, &carrier, &context);
+    let seal = replayed
+        .canonical_wsv_merge_commit_authorization
+        .as_ref()
+        .unwrap()
+        .beacon_composition
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            seal.write_set_root,
+            seal.external_event_bytes.clone(),
+            seal.publication_event_bytes.clone()
+        ),
+        expected_composed,
+        "native reconstruction must produce identical complete roots and events",
+    );
+    let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut replayed).unpack(|_| {});
+    let _witness = replayed
+        .take_exec_witness()
+        .expect("native execution witness");
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    assert_eq!(committed.as_ref().hash(), carrier.hash());
+    let topology = state.commit_topology_snapshot();
+    let (_, authority) = replayed.apply_without_execution_inner(
+        &committed,
+        topology,
+        ApplyTopologyAuthority::Fixture,
+    );
+    authority.expect("native finalized composed carrier authorization");
+    commit_staged_autonomous_for_test(*replayed).expect("consume exact staged authorization once");
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(carrier.header().height().get()).unwrap()
+    );
+    assert_eq!(
+        state
+            .world
+            .view()
+            .global_beacon_pulses()
+            .get(&pulse.pulse_id),
+        Some(&pulse)
+    );
+    assert!(
+        state
+            .merge_execution_already_applied(&entry, batch)
+            .expect("exact execution marker")
+    );
+    assert_eq!(
+        entry, original_entry,
+        "the merge QC and both certified roots were never rewritten"
+    );
+    assert!(
+        ValidBlock::state_block_for_execution_for_test(&carrier, &state, &context).is_err(),
+        "a committed pulse/execution pair cannot be applied twice"
+    );
+}
+
+state_test!(consensus_stack autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift
+    autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift_on_consensus_stack();
+);
+fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift_on_consensus_stack()
+ {
+    let (state, entry, carrier, context) = autonomous_merge_beacon_composition_fixture();
+    let original = carrier
+        .npos_consensus_effects()
+        .expect("real pulse effects")
+        .clone();
+    for alteration in 0..5 {
+        let mut changed = carrier.clone();
+        let mut effects = original.clone();
+        match alteration {
+            0 => effects.finalized_global_beacon_pulse = None,
+            1 => {
+                effects
+                    .finalized_global_beacon_pulse
+                    .as_mut()
+                    .unwrap()
+                    .signature[0] ^= 1
+            }
+            2 => {
+                effects
+                    .finalized_global_beacon_pulse
+                    .as_mut()
+                    .unwrap()
+                    .finalized_chain_anchor
+                    .block_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"foreign finalized parent"))
+            }
+            3 => {
+                effects
+                    .finalized_global_beacon_pulse
+                    .as_mut()
+                    .unwrap()
+                    .session_id[0] ^= 1
+            }
+            _ => effects.penalty_actions.push(
+                iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(
+                    iroha_data_model::consensus::NposMarkConsensusEvidenceAppliedAction {
+                        evidence_key: Hash::new(b"unrelated effect"),
+                        height: context.height,
+                    },
+                ),
+            ),
+        }
+        changed.set_npos_consensus_effects(Some(effects));
+        assert!(
+            ValidBlock::state_block_for_execution_for_test(&changed, &state, &context).is_err(),
+            "native admission must reject missing, corrupt, foreign-parent, wrong-session or mixed effects: {alteration}"
+        );
+    }
+    // A successful native stage is required before each tamper control; failure
+    // cannot be explained by a mock authorization or unrelated missing metadata.
+    for alteration in 0..3 {
+        let mut staged = staged_native_merge_beacon_block(&state, &carrier, &context);
+        stage_exact_autonomous_carrier_membership_for_pre_vote(&mut staged, &carrier);
+        if alteration == 2 {
+            staged.world.external_event_buf.push(
+                BlockEvent {
+                    header: carrier.header(),
+                    status: BlockStatus::Approved,
+                }
+                .into(),
+            );
+        }
+        let (rows, hashes, results, execution_hashes) =
+            staged.execute_time_triggers(&carrier.header());
+        assert!(
+            rows.is_empty()
+                && hashes.is_empty()
+                && results.is_empty()
+                && execution_hashes.is_empty()
+        );
+        if alteration != 2 {
+            staged
+                .validate_staged_merge_execution_authorization()
+                .expect("untampered composition passes exact pre-vote validation");
+        }
+        match alteration {
+            0 => {
+                staged.world.smart_contract_state.insert(
+                    StatePath::from_str("merge_beacon_post_seal_drift").unwrap(),
+                    vec![0x91],
+                );
+            }
+            1 => {
+                let pulse_id = original.finalized_global_beacon_pulse.unwrap().pulse_id;
+                staged.world.global_beacon_pulses.remove(pulse_id);
+            }
+            _ => {}
+        }
+        assert!(
+            staged
+                .validate_staged_merge_execution_authorization()
+                .is_err(),
+            "arbitrary WSV, beacon-map or event-only drift cannot be resealed: {alteration}"
+        );
+    }
+    for event_only in [false, true] {
+        let mut staged = staged_native_merge_beacon_block(&state, &carrier, &context);
+        let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut staged).unpack(|_| {});
+        let _witness = staged
+            .take_exec_witness()
+            .expect("validated native witness");
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        // A late mutation must fail before finality metadata can seal a new root.
+        if event_only {
+            staged.world.external_event_buf.push(
+                BlockEvent {
+                    header: carrier.header(),
+                    status: BlockStatus::Approved,
+                }
+                .into(),
+            );
+        } else {
+            staged.world.smart_contract_state.insert(
+                StatePath::from_str("merge_beacon_pre_finality_drift").unwrap(),
+                vec![0x92],
+            );
+        }
+        let (events, authority) = staged.apply_without_execution_inner(
+            &committed,
+            state.commit_topology_snapshot(),
+            ApplyTopologyAuthority::Fixture,
+        );
+        assert!(
+            authority.is_err(),
+            "finalization cannot reseal post-vote WSV or event drift"
+        );
+        assert!(
+            events.is_empty(),
+            "rejected finality must not publish events"
+        );
+        assert!(
+            staged
+                .canonical_carrier_commit_metadata_authorization
+                .is_none(),
+            "rejected finality must not mint a new metadata authorization"
+        );
+    }
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert!(
+        !state
+            .merge_execution_already_applied(&entry, entry.execution_batch.as_ref().unwrap())
+            .unwrap()
+    );
+}
+
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

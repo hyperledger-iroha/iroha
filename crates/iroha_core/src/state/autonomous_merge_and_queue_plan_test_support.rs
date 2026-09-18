@@ -885,6 +885,211 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     )
 }
 
+fn install_exact_merge_beacon_fixture(
+    state: &State,
+    validators: &[KeyPair],
+    parent: &SignedBlock,
+) -> iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1 {
+    use crate::governance::parliament::{
+        ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+    };
+    use iroha_data_model::{
+        consensus::GlobalThresholdBeaconChainAnchorV1,
+        governance::types::{
+            BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
+            RiskTierV1, SortitionRequestV1, parliament_candidate_root_v1,
+        },
+        isi::governance::ParliamentSortitionRequestRegistrationV1,
+    };
+    let mut roster = validators
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    roster.sort();
+    let height = parent.header().height().get() + 1;
+    let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
+        *state.network_id_ref(),
+        &roster,
+        &[
+            GlobalThresholdBeaconChainAnchorV1 {
+                height: parent.header().height().get() - 1,
+                block_hash: parent
+                    .header()
+                    .prev_block_hash()
+                    .expect("fixture parent has predecessor"),
+            },
+            GlobalThresholdBeaconChainAnchorV1 {
+                height: height - 1,
+                block_hash: parent.hash(),
+            },
+        ],
+    );
+    let prior = pulses[0];
+    let next = pulses[1];
+    let link = crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&prior)
+        .expect("real roster-bound prior pulse");
+    let proposal_content_id = ProposalContentId::new([0x71; 32]);
+    let attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+    let body = ParliamentBody::PolicyJury;
+    let mut attempt = ParliamentAttemptStateV1::try_new(
+        GovernanceAttemptV1 {
+            id: attempt_id,
+            proposal_content_id,
+            sequence: 0,
+            risk_tier: RiskTierV1::Standard,
+            stage: GovernanceStageV1::Qualification,
+            status: GovernanceAttemptStatusV1::Active,
+        },
+        1,
+        height - 1,
+        [0x72; 32],
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: [0x73; 32],
+        }),
+        vec![RequiredParliamentBodyV1 {
+            body,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        }],
+    )
+    .expect("native pending Parliament attempt");
+    attempt
+        .complete_qualification(attempt_id)
+        .expect("qualified Parliament attempt");
+    let mut candidates = roster
+        .iter()
+        .map(|peer| AccountId::new(peer.public_key().clone()))
+        .collect::<Vec<_>>();
+    candidates.sort();
+    let request = SortitionRequestV1::try_new_canonical(
+        attempt_id,
+        BodyElectionAttemptId::derive_v1(attempt_id, body, 0),
+        body,
+        parliament_candidate_root_v1(attempt_id, body, &candidates),
+        u32::try_from(candidates.len()).expect("four native validator candidates"),
+        u32::try_from(state.gov.policy_jury_size).expect("configured Policy Jury target fits u32"),
+        1,
+        height,
+        BeaconSessionId::for_network_v1(state.network_id_ref()),
+        None,
+    )
+    .expect("exact committed request for carrier-height pulse");
+    // A Policy Jury alone is the smallest canonical required-body pipeline. The
+    // complete initial batch must be present before the native reducer persists it.
+    attempt
+        .register_sortition_request_batch(
+            attempt_id,
+            vec![ParliamentSortitionRequestRegistrationV1 {
+                sequence: 0,
+                request,
+            }],
+            candidates,
+        )
+        .expect("complete native pending request batch");
+    attempt
+        .validate()
+        .expect("canonical pending Parliament state");
+    // Prove the exact candidates and configured target admit a native assignment
+    // using the genuine next pulse, without consuming the persisted pending slot.
+    let mut drawn = attempt.clone();
+    drawn
+        .consume_sortition_pulse_batch(
+            attempt_id,
+            vec![request.id],
+            BeaconSessionId::for_network_v1(state.network_id_ref()),
+            height,
+            BeaconPulseId::new(next.pulse_id),
+            crate::beacon::global_threshold_beacon_governance_seed_v1(&next, height),
+            state.network_id_ref(),
+            &state.gov,
+        )
+        .expect("real pulse admits the configured native assignment");
+    drawn
+        .validate()
+        .expect("drawn assignment satisfies native invariants");
+    let mut world = state.world.block();
+    let old_session = *world
+        .global_beacon_active_session
+        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+        .expect("existing queue-plan fixture session");
+    world.global_beacon_key_sessions.remove(old_session);
+    let old_pulses = world
+        .global_beacon_pulses
+        .iter()
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>();
+    for id in old_pulses {
+        world.global_beacon_pulses.remove(id);
+    }
+    let old_slots = world
+        .global_beacon_pulse_slots
+        .iter()
+        .map(|(slot, _)| *slot)
+        .collect::<Vec<_>>();
+    for slot in old_slots {
+        world.global_beacon_pulse_slots.remove(slot);
+    }
+    world
+        .global_beacon_key_sessions
+        .insert(key.session.session_id, key);
+    world
+        .global_beacon_active_session
+        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, prior.session_id);
+    world.global_beacon_pulses.insert(prior.pulse_id, prior);
+    world.global_beacon_pulse_slots.insert(
+        (
+            BeaconSessionId::for_network_v1(&prior.network_id),
+            prior.height,
+        ),
+        prior.pulse_id,
+    );
+    world
+        .global_beacon_latest_pulse
+        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+    {
+        let mut transaction = world.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        transaction
+            .put_parliament_attempt(attempt)
+            .expect("persist native required-slot indexes");
+        transaction.apply();
+    }
+    world.commit();
+    next
+}
+
+fn autonomous_merge_beacon_composition_fixture() -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+) {
+    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture_with_beacon(
+        false, false, None, false, None, true,
+    );
+    let artifact = state
+        .kura
+        .v2_finality_artifact(carrier.header().height().get())
+        .expect("native carrier finality lookup")
+        .expect("native carrier finality retained");
+    artifact
+        .verify()
+        .expect("exact carrier finality is cryptographic");
+    (state, entry, carrier, artifact.height_context)
+}
+
+fn staged_native_merge_beacon_block<'state>(
+    state: &'state State,
+    carrier: &SignedBlock,
+    context: &iroha_data_model::block::consensus_v2::HeightContext,
+) -> Box<StateBlock<'state>> {
+    ValidBlock::state_block_for_execution_for_test(carrier, state, context)
+        .expect("production pulse admission and certified merge composition")
+}
+
 fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
@@ -897,11 +1102,38 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     SignedBlock,
     Option<AxtHandleReplayKey>,
 ) {
+    autonomous_merge_commit_authorization_fixture_with_beacon(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        transfer_fixture,
+        wrap_in_sealed_reveal,
+        runtime_effect,
+        false,
+    )
+}
+
+fn autonomous_merge_commit_authorization_fixture_with_beacon(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
+    runtime_effect: Option<AutonomousRuntimeEffectFixture>,
+    with_beacon: bool,
+) -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    Option<AxtHandleReplayKey>,
+) {
     let (mut state, validator_keypairs, commit_keypairs, parent) = if runtime_effect.is_some() {
         configured_runtime_effect_queue_plan_state()
     } else {
         configured_single_lane_queue_plan_state()
     };
+    // Install the exact public session/history/request before any admission,
+    // pre-execution or QC commits the parent state. Never mutate the certified base.
+    let requested_beacon = with_beacon
+        .then(|| install_exact_merge_beacon_fixture(&state, &validator_keypairs, &parent));
     let authority_height = parent.header().height().get();
     let carrier_height = authority_height
         .checked_add(1)
@@ -1078,19 +1310,25 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
     let mut carrier = certified_merge_carrier_after(&parent, &entry);
-    if transfer_fixture.is_some() || runtime_effect.is_some() || wrap_in_sealed_reveal {
-        // Count the successful source and any actual native block-start work;
-        // do not assume an instruction count or invent an empty fragment.
+    if requested_beacon.is_some()
+        || transfer_fixture.is_some()
+        || runtime_effect.is_some()
+        || wrap_in_sealed_reveal
+    {
+        // Count the source and actual native block-start work before attaching
+        // a pulse or signing/persisting the final carrier. The merge-only helper
+        // requires this effect-free precursor; native beacon composition later
+        // revalidates the final count. Never infer fragments from instructions.
         let staged = state
             .block_with_certified_merge_entry(
                 carrier.header().clone(),
                 &entry,
                 ConsensusMode::Permissioned,
             )
-            .expect("derive fragments from the exact native runtime-effect carrier and source");
+            .expect("derive fragments from the exact native certified carrier precursor");
         let committed_fragments = u64::try_from(staged.committed_fragment_count())
-            .expect("native runtime-effect fragment count fits u64");
-        if transfer_fixture.is_some() || runtime_effect.is_some() {
+            .expect("native certified fragment count fits u64");
+        if requested_beacon.is_some() || transfer_fixture.is_some() || runtime_effect.is_some() {
             assert!(
                 committed_fragments > 0,
                 "successful source must commit a fragment"
@@ -1098,6 +1336,14 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
         }
         drop(staged);
         carrier.set_committed_fragment_count(committed_fragments);
+    }
+    if let Some(pulse) = requested_beacon {
+        carrier.set_npos_consensus_effects(Some(
+            iroha_data_model::consensus::NposConsensusEffects {
+                finalized_global_beacon_pulse: Some(pulse),
+                ..Default::default()
+            },
+        ));
     }
     state
         .kura

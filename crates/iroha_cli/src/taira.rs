@@ -1,5 +1,5 @@
 //! Taira public testnet diagnostics and write canaries.
-use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_expiry};
 use eyre::{Context, Result, eyre};
 use iroha::{
     blocking::Client as BlockingIrohaClient,
@@ -174,6 +174,9 @@ pub enum Command {
     /// Plan, apply, resume, or inspect an exact dataspace and namespace deployment.
     #[command(subcommand)]
     DataspaceDeploy(crate::taira_dataspace_deploy::Command),
+    /// Maintain the independently provisioned public mint-finality roster for each epoch.
+    #[command(subcommand)]
+    EpochMaintenance(crate::taira_dataspace_deploy::epoch_maintenance::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
@@ -196,6 +199,7 @@ impl Run for Command {
         match self {
             Self::Account(cmd) => cmd.run(context),
             Self::DataspaceDeploy(cmd) => cmd.run(context),
+            Self::EpochMaintenance(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
@@ -1874,7 +1878,7 @@ fn submit_prepared_inrou_until(
 
 /// Only transport unavailability may retain a pending observation. Authorization,
 /// compatibility, decoding, and proof errors are immediately returned to the caller.
-fn observation_transport_unavailable(error: &eyre::Report) -> bool {
+pub(crate) fn observation_transport_unavailable(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
@@ -4403,9 +4407,14 @@ fn prepare_final_canary_operation(
     insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
     let instruction = Log::new(LogLevel::INFO, message);
     let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) =
-        quote_and_sign_transaction(&client, executable, fee_payment.clone(), metadata)
-            .wrap_err("failed to quote and sign exact Taira canary transaction")?;
+    let (transaction, fee_quote) = quote_and_sign_transaction_with_expiry(
+        &client,
+        executable,
+        fee_payment.clone(),
+        metadata,
+        binding.execution_expires_at_unix_ms,
+    )
+    .wrap_err("failed to quote and sign exact Taira canary transaction")?;
     let wire = transaction
         .encode_wire_v1()
         .map_err(|error| eyre!("failed to encode exact Taira canary transaction: {error}"))?;

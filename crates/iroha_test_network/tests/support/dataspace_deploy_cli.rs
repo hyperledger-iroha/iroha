@@ -3,20 +3,26 @@
 use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::release_identity::BuildIdentity;
-use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     alias_setup::{AliasDataspaceBootstrapGrantV1, AliasPlanDispositionV1, AliasTransactionPlanV1},
-    isi::SetParameter,
-    nexus::{LaneLifecycleStatusV1, NexusCatalogTransitionV1},
+    isi::{
+        RegisterBox, SetParameter,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
+    nexus::{
+        LaneCatalog, LaneLifecycleParameterV1, LaneLifecycleStatusV1, NexusCatalogTransitionV1,
+    },
     parameter::Parameter,
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::{codec::Encode as _, json::JsonSerialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 const CHAIN: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const OPERATION: &str = "clean-client-dpn";
@@ -81,37 +87,55 @@ struct Trust {
     peers: Vec<TrustPeer>,
 }
 
-/// Parse only the freshly created fixture's native configuration, never a live deployment file.
-fn fixture_trust(network: &Network, genesis_key: &KeyPair, build: BuildIdentity) -> Result<Trust> {
-    let wire = network.genesis().0.encode_wire()?;
-    let (genesis_hash, metadata) =
-        iroha_core::release_identity::genesis_identity(&wire, genesis_key.public_key())?;
+/// Serialize the same independently selected public authority for native operator workflows.
+pub(super) fn write_fixture_trust(fixture: &PaidDeploymentFixture<'_>, path: &Path) -> Result<()> {
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    let owner = iroha::config::Config::load_file(fixture.config)
+        .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
+    let (trust, _, _) = fixture_trust(fixture, &owner, fixture.build_identity)?;
+    write_private(path, &json::to_vec(&trust)?)
+}
+
+/// Exact fresh fixture inputs supplied after native beacon installation.
+pub(super) struct PaidDeploymentFixture<'a> {
+    pub binary: &'a Path,
+    /// Exact immutable harness identity admitted before the shared custody ceremony.
+    pub build_identity: BuildIdentity,
+    pub config: &'a Path,
+    pub operator: &'a Path,
+    pub root: &'a Path,
+    pub genesis_wire: &'a [u8],
+    pub genesis_public_key: &'a PublicKey,
+    pub peer_configs: &'a [PathBuf],
+    pub clients: &'a [iroha::client::Client],
+}
+
+/// Trust comes from freshly generated native files, never HTTP discovery.
+fn fixture_trust(
+    fixture: &PaidDeploymentFixture<'_>,
+    owner: &iroha::config::Config,
+    build: BuildIdentity,
+) -> Result<(Trust, LaneCatalog, BTreeMap<PeerId, AccountId>)> {
+    let (_, metadata) = iroha_core::release_identity::genesis_identity(
+        fixture.genesis_wire,
+        fixture.genesis_public_key,
+    )?;
+    let genesis = iroha_genesis::decode_signed_genesis(fixture.genesis_wire)?;
     ensure!(
-        genesis_hash == Hash::from(network.genesis().0.hash()),
-        "fixture genesis drift"
+        owner.chain.to_string() == CHAIN
+            && owner.account_chain_discriminant == 369
+            && owner.network_id == iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
+        "fixture owner must bind the exact Taira signed genesis"
     );
-    let genesis_peers = iroha_genesis::signed_genesis_validator_pops(&network.genesis().0)?;
+    let genesis_peers = iroha_genesis::signed_genesis_validator_pops(&genesis)?;
     ensure!(
-        genesis_peers.len() == 4,
-        "genesis must contain four BLS validators"
+        genesis_peers.len() == 4 && fixture.peer_configs.len() == 4 && fixture.clients.len() == 4,
+        "fixture requires exactly four BLS validators"
     );
     let mut peers = Vec::new();
-    for peer in network.peers() {
-        ensure!(
-            genesis_peers
-                .iter()
-                .any(|(key, pop)| Some(key) == peer.bls_public_key()
-                    && Some(pop.as_slice()) == peer.bls_pop()),
-            "signed genesis must bind each independently generated peer and PoP"
-        );
-        // The first run's config and extends files were just authored by NetworkPeer.
-        let log = peer
-            .latest_stdout_log_path()
-            .ok_or_else(|| eyre!("missing fixture run log"))?;
-        let config_path = log
-            .parent()
-            .ok_or_else(|| eyre!("fixture log has no parent"))?
-            .join("run-1-config.toml");
+    let mut selected = std::collections::BTreeSet::new();
+    let mut baseline = None;
+    for (config_path, client) in fixture.peer_configs.iter().zip(fixture.clients) {
         let config = ConfigReader::new()
             .without_env()
             .read_toml_with_extends(config_path)
@@ -120,29 +144,178 @@ fn fixture_trust(network: &Network, genesis_key: &KeyPair, build: BuildIdentity)
             .map_err(|error| eyre!("decode native fixture configuration: {error:?}"))?
             .parse()
             .map_err(|error| eyre!("validate native fixture configuration: {error:?}"))?;
+        let catalog = config.nexus.configured_lane_catalog.clone();
         ensure!(
-            config.common.chain.to_string() == CHAIN,
-            "fixture chain differs"
+            catalog.lanes().iter().all(|lane| lane.id != LaneId::new(6)),
+            "fixture DPN lane must be absent before deployment"
         );
-        let id = peer.network_peer_id();
-        ensure!(config.common.peer.id == id, "fixture config peer differs");
+        if let Some(expected) = &baseline {
+            ensure!(
+                &catalog == expected,
+                "fixture validators disagree on the initial catalog"
+            );
+        } else {
+            baseline = Some(catalog);
+        }
+        let id = config.common.peer.id.clone();
+        let context = client.to_builder();
+        ensure!(
+            config.common.chain == owner.chain
+                && context.chain == owner.chain
+                && context.network_id == owner.network_id
+                && context.torii_url.as_str()
+                    == format!("http://{}/", config.torii.address.value())
+                && genesis_peers.iter().any(|(key, _)| key == id.public_key())
+                && selected.insert(id.clone()),
+            "fixture must bind each distinct signed-genesis validator to its native endpoint"
+        );
         let shared = config.sumeragi.v2_config(
             Duration::from_millis(metadata.block_cadence_ms.get()),
             metadata.mode.into(),
         )?;
         peers.push(TrustPeer {
-            torii_origin: format!("{}/", peer.torii_url()),
+            torii_origin: context.torii_url.to_string(),
             node_fingerprint: Hash::new(id.encode()),
             peer_id: id,
             build_fingerprint: build.build_fingerprint(),
             config_fingerprint: shared.fingerprint(),
         });
     }
-    Ok(Trust {
-        genesis_public_key: genesis_key.public_key().clone(),
-        genesis_signed_wire_hex: hex(&wire),
-        peers,
-    })
+    let authorities = genesis_validator_authorities(
+        genesis
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => Some(instructions),
+                _ => None,
+            })
+            .flat_map(|instructions| instructions.iter()),
+        &selected,
+    )?;
+    Ok((
+        Trust {
+            genesis_public_key: fixture.genesis_public_key.clone(),
+            genesis_signed_wire_hex: hex(fixture.genesis_wire),
+            peers,
+        },
+        baseline.ok_or_else(|| eyre!("fixture catalog is absent"))?,
+        authorities,
+    ))
+}
+
+// Native Taira genesis binds runtime authority accounts to distinct BLS peers.
+// The authenticated core-lane registration, not a key-derived account guess,
+// selects the authority reused by the new restricted lane.
+fn genesis_validator_authorities<'a>(
+    instructions: impl Iterator<Item = &'a InstructionBox>,
+    peers: &BTreeSet<PeerId>,
+) -> Result<BTreeMap<PeerId, AccountId>> {
+    let mut registered = BTreeSet::new();
+    let mut activated = BTreeSet::new();
+    let mut all_bindings = BTreeMap::new();
+    let mut core_bindings = BTreeMap::new();
+    for instruction in instructions {
+        if let Some(RegisterBox::Account(account)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            registered.insert(account.object.id.clone());
+        }
+        if let Some(activation) = instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+        {
+            if activation.lane_id == LaneId::SINGLE {
+                ensure!(
+                    activated.insert(activation.validator.clone()),
+                    "duplicate signed core-lane activation"
+                );
+            }
+        }
+        if let Some(binding) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            ensure!(
+                peers.contains(&binding.peer_id),
+                "signed validator binding names a peer outside the trusted roster"
+            );
+            if let Some(previous) =
+                all_bindings.insert(binding.peer_id.clone(), binding.validator.clone())
+            {
+                ensure!(
+                    previous == binding.validator,
+                    "signed cross-lane validator authority conflicts"
+                );
+            }
+            if binding.lane_id == LaneId::SINGLE {
+                ensure!(
+                    core_bindings
+                        .insert(binding.peer_id.clone(), binding.validator.clone())
+                        .is_none(),
+                    "duplicate signed core-lane validator binding"
+                );
+            }
+        }
+    }
+    let accounts = core_bindings.values().cloned().collect::<BTreeSet<_>>();
+    ensure!(
+        peers.len() == 4
+            && core_bindings.keys().cloned().collect::<BTreeSet<_>>() == *peers
+            && accounts.len() == peers.len(),
+        "signed core-lane authorities must bind all four peers distinctly"
+    );
+    ensure!(
+        accounts.iter().all(|account| registered.contains(account)) && activated == accounts,
+        "signed core-lane authorities must be registered and activated accounts"
+    );
+    Ok(core_bindings)
+}
+
+// Only public status fields may enter failure diagnostics. Never include phase
+// instructions, prepared wire, aliases, or authenticated committed payloads.
+fn public_phase_summary(report: Option<&Value>) -> Vec<Value> {
+    report
+        .and_then(|report| report.get("verification"))
+        .and_then(|verification| verification.get("transactions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|phase| {
+            let status = |name| {
+                let observation = phase.get(name);
+                let details = observation.and_then(|value| value.get("status"));
+                let kind = details
+                    .and_then(|value| value.get("kind"))
+                    .and_then(Value::as_str);
+                let block_height = details
+                    .and_then(|value| value.get("block_height"))
+                    .and_then(Value::as_u64);
+                let scope = observation
+                    .and_then(|value| value.get("scope"))
+                    .and_then(Value::as_str);
+                let resolved_from = observation
+                    .and_then(|value| value.get("resolved_from"))
+                    .and_then(Value::as_str);
+                norito::json!({
+                    "kind": kind,
+                    "block_height": block_height,
+                    "scope": scope,
+                    "resolved_from": resolved_from
+                })
+            };
+            let phase_name = phase.get("phase").and_then(Value::as_str);
+            let state = phase.get("state").and_then(Value::as_str);
+            let transaction_hash = phase.get("transaction_hash").and_then(Value::as_str);
+            let global_status = status("global_status");
+            let peer_status = status("peer_status");
+            norito::json!({
+                "phase": phase_name,
+                "state": state,
+                "transaction_hash": transaction_hash,
+                "global_status": global_status,
+                "peer_status": peer_status
+            })
+        })
+        .collect()
 }
 
 struct Cli {
@@ -193,12 +366,13 @@ impl Cli {
             .wrap_err("native CLI did not return its typed JSON report");
         ensure!(
             output.status.success(),
-            "native CLI {operation} failed: state={:?}, verification_error={:?} (stderr is retained in the fixture log)",
+            "native CLI {operation} failed: state={:?}, verification_error={:?}, phases={:?} (stderr is retained in the fixture log)",
             report.as_ref().ok().and_then(|value| value.get("state")),
             report
                 .as_ref()
                 .ok()
-                .and_then(|value| value.get("verification_error"))
+                .and_then(|value| value.get("verification_error")),
+            public_phase_summary(report.as_ref().ok())
         );
         report
     }
@@ -227,12 +401,17 @@ fn remaining_cli_budget_keeps_original_deadline_and_never_rounds_up() {
     assert!(remaining_cli_budget_ms(deadline, deadline + Duration::from_secs(1)).is_err());
 }
 
-async fn drained(network: &Network, deadline: Instant) -> Result<Vec<(u64, u64, u64)>> {
+async fn drained(
+    clients: &[iroha::client::Client],
+    deadline: Instant,
+) -> Result<Vec<(u64, u64, u64)>> {
     timeout_at(deadline, async {
         loop {
-            let statuses = try_join_all(network.peers().iter().map(|peer| async move {
-                validator_status_until(peer.client().client(), deadline).await
-            }))
+            let statuses = try_join_all(
+                clients
+                    .iter()
+                    .map(|client| async move { validator_status_until(client, deadline).await }),
+            )
             .await?;
             if statuses.iter().all(|status| status.queue_size == 0)
                 && statuses
@@ -253,7 +432,7 @@ async fn drained(network: &Network, deadline: Instant) -> Result<Vec<(u64, u64, 
 
 fn retained_transactions(
     operation: &Path,
-    network: &Network,
+    owner: &iroha::config::Config,
     plan: &Value,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
@@ -276,8 +455,8 @@ fn retained_transactions(
         tx.verify_signature()?;
         ensure!(
             tx.encode_wire_v1()? == wire
-                && tx.authority() == &*ALICE_ID
-                && tx.network_id() == Some(&network.network_id())
+                && tx.authority() == &owner.account
+                && tx.network_id() == Some(&owner.network_id)
                 && tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
                 && hex(tx.hash().as_ref()) == text_field(&prepared, "transaction_hash")?,
             "retained transaction differs from the exact configured owner/network/wire"
@@ -387,10 +566,11 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
         text_field(report, "state")? == "completed"
             && field(report, "deployment_complete")?.as_bool() == Some(true)
             && field(report, "verification_error")?.is_null(),
-        "native deployment did not complete: state={:?}, deployment_complete={:?}, verification_error={:?}",
+        "native deployment did not complete: state={:?}, deployment_complete={:?}, verification_error={:?}, phases={:?}",
         report.get("state"),
         report.get("deployment_complete"),
-        report.get("verification_error")
+        report.get("verification_error"),
+        public_phase_summary(Some(report))
     );
     let receipt = text_field(report, "completion_receipt")?;
     ensure!(
@@ -429,143 +609,265 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn clean_client_deploys_paid_dataspace_once_with_four_peer_finality() -> Result<()> {
+pub(super) async fn run_paid_deployment(
+    fixture: PaidDeploymentFixture<'_>,
+) -> Result<HashOf<TransactionEntrypoint>> {
     use std::os::unix::fs::PermissionsExt as _;
     init_instruction_registry();
-    let cli_binary = std::env::var_os("TEST_NETWORK_BIN_IROHA")
-        .map(PathBuf::from)
-        .ok_or_else(|| eyre!("prebuilt native CLI is required"))?;
-    let daemon = std::env::var_os("TEST_NETWORK_BIN_IROHAD")
-        .map(PathBuf::from)
-        .ok_or_else(|| eyre!("prebuilt native daemon is required"))?;
     ensure!(
-        cli_binary.is_file() && daemon.is_file(),
-        "exact native executables are absent"
+        fixture.binary.is_file(),
+        "exact prebuilt native CLI is absent"
     );
-    // The maintained native graph pins this same source/version into daemon and test executable.
-    let build = iroha_core::compiled_build_identity!()?;
-    let genesis_key = KeyPair::try_random()?;
-    let operator_key = KeyPair::try_random()?;
-    let genesis_for_builder = genesis_key.clone();
-    let operator_public = operator_key.public_key().to_string();
+    let owner = iroha::config::Config::load_file(fixture.config)
+        .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
+    let (trust, expected_catalog, authorities) =
+        fixture_trust(&fixture, &owner, fixture.build_identity)?;
+    let root = fixture.root;
+    fs::create_dir(root)?;
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+    let journal = root.join("journal");
+    fs::create_dir(&journal)?;
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o700))?;
+    let cli = Cli {
+        binary: fixture.binary.to_owned(),
+        config: fixture.config.to_owned(),
+        operator: fixture.operator.to_owned(),
+    };
     let startup = Instant::now() + Duration::from_secs(180);
-    let network = timeout_at(
-        startup,
-        tokio::task::spawn_blocking(move || {
-            let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_auto_populated_trusted_peers()
-                .with_npos_consensus()
-                .with_genesis_keypair(genesis_for_builder)
-                .with_block_cadence(CADENCE)
-                .with_config_layer(move |layer| {
-                    layer
-                        .write("chain", CHAIN)
-                        .write("chain_discriminant", 369_i64)
-                        .write(["torii", "operator_signatures", "enabled"], true)
-                        .write(
-                            ["torii", "operator_signatures", "allowed_public_keys"],
-                            toml::Value::Array(vec![toml::Value::String(operator_public.clone())]),
-                        )
-                        .write(["snapshot", "mode"], "disabled")
-                        .write(["logger", "format"], "json")
-                        .write(["logger", "level"], "INFO");
-                })
-                .build()
-        }),
+    let trust_path = root.join("trust.json");
+    write_private(&trust_path, &json::to_vec(&trust)?)?;
+    let mut validators = Vec::new();
+    for peer in &trust.peers {
+        let validator = authorities
+            .get(&peer.peer_id)
+            .ok_or_else(|| eyre!("trusted peer lacks its authenticated validator authority"))?
+            .to_i105_for_discriminant(369)?;
+        let peer_id = peer.peer_id.to_string();
+        validators.push(norito::json!({"validator": validator, "peer_id": peer_id}));
+    }
+    let manifest = norito::json!({"lane": "dpn", "governance": "parliament", "version": 1,
+        "validators": validators, "quorum": 3});
+    let manifest_path = root.join("lane.json");
+    write_private(&manifest_path, &json::to_vec(&manifest)?)?;
+    let bundle = root.join("intent");
+    let payment = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+    let idle_before = drained(fixture.clients, startup).await?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    cli.run(
+        &[
+            "init",
+            "--dataspace",
+            "dpn",
+            "--lane-id",
+            "6",
+            "--lane-profile",
+            "restricted-full-replica",
+            "--account-alias",
+            "admin",
+            "--lane-manifest",
+            manifest_path.to_str().unwrap(),
+            "--trust",
+            trust_path.to_str().unwrap(),
+            "--payment-asset",
+            &payment,
+            "--alias-create-maximum",
+            "0.5",
+            "--transaction-fee-maximum",
+            "100",
+            "--lease-years",
+            "1",
+            "--quote-lifetime-secs",
+            "3600",
+            "--operation-id",
+            OPERATION,
+            "--output-dir",
+            bundle.to_str().unwrap(),
+        ],
+        deadline,
     )
-    .await
-    .wrap_err("clean-client genesis preparation timed out")??;
-    let result = async {
-        timeout_at(startup, async {
-            network.start_all().await?;
-            network.ensure_blocks(1).await?;
-            for peer in network.peers() {
-                while !validator_admission_ready(peer, startup).await {
-                    sleep(Duration::from_millis(200)).await;
-                }
-            }
-            Ok::<(), eyre::Report>(())
-        }).await.wrap_err("clean-client four-peer startup timed out")??;
-        ensure!(network.chain_id().to_string() == CHAIN && network.peers().len() == 4,
-            "canonical Taira four-peer fixture required");
-        let trust = fixture_trust(&network, &genesis_key, build)?;
-        let root = fs::canonicalize(network.env_dir())?.join("clean-client");
-        fs::create_dir(&root)?; fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-        let journal = root.join("journal");
-        fs::create_dir(&journal)?; fs::set_permissions(&journal, fs::Permissions::from_mode(0o700))?;
-        let operator = root.join("operator.key");
-        write_private(&operator, format!("{}\n", ExposedPrivateKey(operator_key.private_key().clone())).as_bytes())?;
-        let account_key = root.join("owner.key");
-        write_private(&account_key, format!("{}\n", ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone())).as_bytes())?;
-        let mut client = toml::Table::new();
-        iroha_config::base::toml::Writer::new(&mut client)
-            .write("chain", CHAIN).write("network_id", network.network_id().to_string())
-            .write("torii_url", format!("{}/", network.peers()[0].torii_url()))
-            .write(["account", "domain"], "universal").write(["account", "profile"], "taira")
-            .write(["account", "public_key"], ALICE_KEYPAIR.public_key().to_string())
-            .write(["account", "private_key_file"], account_key.to_str().unwrap())
-            .write(["transaction", "time_to_live_ms"], 600_000_i64)
-            .write(["transaction", "status_timeout_ms"], 30_000_i64)
-            .write("torii_request_timeout_ms", 30_000_i64);
-        let config = root.join("client.toml");
-        write_private(&config, toml::to_string(&client)?.as_bytes())?;
-        let cli = Cli { binary: cli_binary, config, operator };
-        let trust_path = root.join("trust.json");
-        write_private(&trust_path, &json::to_vec(&trust)?)?;
-        let mut validators = Vec::new();
-        for peer in network.peers() {
-            let validator = peer.account_id().to_i105_for_discriminant(369)?;
-            let peer_id = peer.network_peer_id().to_string();
-            validators.push(norito::json!({"validator": validator, "peer_id": peer_id}));
-        }
-        let manifest = norito::json!({"lane": "dpn", "governance": "parliament", "version": 1,
-            "validators": validators, "quorum": 3});
-        let manifest_path = root.join("lane.json");
-        write_private(&manifest_path, &json::to_vec(&manifest)?)?;
-        let bundle = root.join("intent");
-        let payment = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-        let idle_before = drained(&network, startup).await?;
-        let deadline = Instant::now() + Duration::from_secs(180);
-        cli.run(&["init", "--dataspace", "dpn", "--lane-id", "6", "--lane-profile", "restricted-full-replica",
-            "--account-alias", "admin", "--lane-manifest", manifest_path.to_str().unwrap(),
-            "--trust", trust_path.to_str().unwrap(), "--payment-asset", &payment,
-            "--alias-create-maximum", "0.5", "--transaction-fee-maximum", "100",
-            "--lease-years", "1", "--quote-lifetime-secs", "3600", "--operation-id", OPERATION,
-            "--output-dir", bundle.to_str().unwrap()], deadline).await?;
-        let deployment = bundle.join("deployment.json");
-        let plan = cli.run(&["plan", "--manifest", deployment.to_str().unwrap(),
-            "--journal-dir", journal.to_str().unwrap()], deadline).await?;
-        let baseline: LaneLifecycleStatusV1 = json::from_value(field(&plan, "baseline")?.clone())?;
-        ensure!(baseline.lanes.iter().map(|lane| lane.id).collect::<Vec<_>>() == [LaneId::new(0)],
-            "fixture should start from the native single-lane baseline");
-        ensure!(drained(&network, deadline).await? == idle_before, "init/plan submitted a transaction");
-        let operation = journal.join(OPERATION);
-        // Native apply owns phase observation and typed finality-progress waits.
-        // A failed proof or other verification error must not trigger a new child.
-        let report = cli.run(&["apply", "--journal-dir", journal.to_str().unwrap(),
-            "--operation-id", OPERATION], deadline).await
-            .wrap_err("single bounded native apply failed")?;
+    .await?;
+    let deployment = bundle.join("deployment.json");
+    let plan = cli
+        .run(
+            &[
+                "plan",
+                "--manifest",
+                deployment.to_str().unwrap(),
+                "--journal-dir",
+                journal.to_str().unwrap(),
+            ],
+            deadline,
+        )
+        .await?;
+    let baseline: LaneLifecycleStatusV1 = json::from_value(field(&plan, "baseline")?.clone())?;
+    ensure!(
+        baseline.validate()? == expected_catalog
+            && baseline.catalog_hash == LaneLifecycleParameterV1::catalog_hash(&expected_catalog),
+        "native plan baseline differs from the independently generated four-peer catalog"
+    );
+    ensure!(
+        drained(fixture.clients, deadline).await? == idle_before,
+        "init/plan submitted a transaction"
+    );
+    let operation = journal.join(OPERATION);
+    // Native apply owns phase observation and typed finality-progress waits.
+    // A failed proof or other verification error must not trigger a new child.
+    let report = cli
+        .run(
+            &[
+                "apply",
+                "--journal-dir",
+                journal.to_str().unwrap(),
+                "--operation-id",
+                OPERATION,
+            ],
+            deadline,
+        )
+        .await
+        .wrap_err("single bounded native apply failed")?;
+    assert_completed(&report, &operation, &trust)?;
+    let retained = retained_transactions(&operation, &owner, &plan)?;
+    let idle_after = drained(fixture.clients, deadline).await?;
+    for command in ["apply", "status", "apply", "status"] {
+        let report = cli
+            .run(
+                &[
+                    command,
+                    "--journal-dir",
+                    journal.to_str().unwrap(),
+                    "--operation-id",
+                    OPERATION,
+                ],
+                deadline,
+            )
+            .await?;
         assert_completed(&report, &operation, &trust)?;
-        let retained = retained_transactions(&operation, &network, &plan)?;
-        let idle_after = drained(&network, deadline).await?;
-        for command in ["apply", "status", "apply", "status"] {
-            let report = cli.run(&[command, "--journal-dir", journal.to_str().unwrap(),
-                "--operation-id", OPERATION], deadline).await?;
-            assert_completed(&report, &operation, &trust)?;
-            ensure!(retained_transactions(&operation, &network, &plan)? == retained,
-                "repetition replaced or added a retained transaction/dispatch claim");
-            ensure!(drained(&network, deadline).await? == idle_after,
-                "repetition changed committed or rejected transaction counters");
+        ensure!(
+            retained_transactions(&operation, &owner, &plan)? == retained,
+            "repetition replaced or added a retained transaction/dispatch claim"
+        );
+        ensure!(
+            drained(fixture.clients, deadline).await? == idle_after,
+            "repetition changed committed or rejected transaction counters"
+        );
+    }
+    sleep(CADENCE * 3).await;
+    ensure!(
+        drained(fixture.clients, deadline).await? == idle_after,
+        "drained idle chain produced work without a transaction"
+    );
+    eprintln!(
+        "clean client completed three paid deployment phases on all four peers; repeats and idle remained unchanged"
+    );
+    // Return the exact catalog identity already checked against owner, network,
+    // instructions, dispatch claim and all-four authenticated completion above.
+    let catalog: Value = json::from_slice(&retained["catalog.prepared.json"])?;
+    let wire = unhex(text_field(&catalog, "signed_transaction_wire_hex")?)?;
+    Ok(SignedTransaction::decode_all_versioned(&wire)?.hash_as_entrypoint())
+}
+
+#[test]
+fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{account::Account, isi::Register};
+    let mut instructions = Vec::<InstructionBox>::new();
+    let mut peers = BTreeSet::new();
+    let mut expected = BTreeMap::new();
+    for marker in 1_u8..=4 {
+        let peer = PeerId::new(
+            KeyPair::from_seed(vec![marker; 32], Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![marker + 10; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert_ne!(account, AccountId::new(peer.public_key().clone()));
+        instructions.push(Register::account(Account::new(account.clone())).into());
+        for lane in [LaneId::SINGLE, LaneId::new(3)] {
+            instructions.push(
+                RegisterPublicLaneValidator::new(
+                    lane,
+                    account.clone(),
+                    peer.clone(),
+                    account.clone(),
+                    100_u32.into(),
+                    Metadata::default(),
+                )
+                .into(),
+            );
         }
-        sleep(CADENCE * 3).await;
-        ensure!(drained(&network, deadline).await? == idle_after,
-            "drained idle chain produced work without a transaction");
-        eprintln!("clean client completed three paid deployment phases on all four peers; repeats and idle remained unchanged");
-        Ok(())
-    }.await;
-    network.shutdown().await;
-    result
+        instructions.push(
+            ActivatePublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator: account.clone(),
+            }
+            .into(),
+        );
+        peers.insert(peer.clone());
+        expected.insert(peer, account);
+    }
+    assert_eq!(
+        genesis_validator_authorities(instructions.iter(), &peers).unwrap(),
+        expected
+    );
+    // Consistent bindings on another public lane are valid; every failure below
+    // changes one prerequisite while keeping the remaining native bindings.
+    for omitted in [0, 1, 3] {
+        let mut missing = instructions.clone();
+        missing.remove(omitted);
+        assert!(genesis_validator_authorities(missing.iter(), &peers).is_err());
+    }
+    let mut duplicate = instructions.clone();
+    duplicate.push(instructions[1].clone());
+    assert!(genesis_validator_authorities(duplicate.iter(), &peers).is_err());
+    let mut conflict = instructions.clone();
+    let binding = instructions[2]
+        .as_any()
+        .downcast_ref::<RegisterPublicLaneValidator>()
+        .unwrap();
+    let mut changed = binding.clone();
+    changed.validator = AccountId::new(changed.peer_id.public_key().clone());
+    conflict[2] = changed.into();
+    assert!(genesis_validator_authorities(conflict.iter(), &peers).is_err());
+}
+
+#[test]
+fn phase_failure_summary_excludes_signed_payloads() {
+    let report = norito::json!({"verification": {"transactions": [{
+        "phase": "catalog", "state": "failed", "transaction_hash": "public-hash",
+        "instructions": ["do-not-log-instructions"], "signed_transaction_wire_hex": "do-not-log-wire",
+        "committed": {"transaction": "do-not-log-committed"},
+        "alias_plan": "do-not-log-aliases",
+        "global_status": {"scope": "global", "resolved_from": "state", "status": {"kind": "Rejected", "block_height": 10, "extra": "do-not-log-extra"}},
+        "peer_status": {"scope": "local", "resolved_from": "state", "status": {"kind": "Rejected", "block_height": 10}}
+    }]}});
+    let summary = public_phase_summary(Some(&report));
+    assert_eq!(summary.len(), 1);
+    assert_eq!(
+        summary[0].get("phase").and_then(Value::as_str),
+        Some("catalog")
+    );
+    assert_eq!(
+        summary[0]
+            .get("global_status")
+            .and_then(|v| v.get("kind"))
+            .and_then(Value::as_str),
+        Some("Rejected")
+    );
+    assert_eq!(
+        summary[0]
+            .get("peer_status")
+            .and_then(|v| v.get("block_height"))
+            .and_then(Value::as_u64),
+        Some(10)
+    );
+    assert!(
+        !String::from_utf8(json::to_vec(&summary).unwrap())
+            .unwrap()
+            .contains("do-not-log")
+    );
+    assert!(public_phase_summary(None).is_empty());
 }

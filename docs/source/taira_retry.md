@@ -113,7 +113,8 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply qualifies four-peer convergence, prepared application mutations
+Native apply runs the prepared application canary and its fresh beacon ceremony
+before readiness-dependent four-peer convergence, then qualifies prepared application mutations
 and one validator restart for signed `core_testnet` scope. The `full_inrou` scope
 also requires Inrou runtime health and all four ordered restart waves through
 these direct endpoints before staging or switching the public edge. The same retained
@@ -122,11 +123,37 @@ mutations and restart evidence flow into the release proof. After cutover,
 remain before public cutover; a failed rollback remains resumable and must be
 verified complete before another attempt is admitted.
 
-The preceding assembly's native local arguments must include
-`--public-inputs <prep>/public-inputs`. Create that verified native bundle with
-`iroha taira public-reset prepare-public-inputs` before assembly; retry retains the
-same bundle and passes it to assembly, while apply receives only its runtime
-inputs. `core_testnet` forbids `--inrou-stage-dir` and requires explicit `null` for
+The preceding assembly's `native-local-args.json` remains the exact static path
+record and must include `--public-inputs <prep>/public-inputs`. For each attempt,
+retry invokes `iroha taira public-reset prepare-public-inputs --localnet-dir
+<prep>/network --inventory-draft <attempt>/assembly/inventory-draft.json
+--output-dir <attempt>/assembly/public-inputs`. The native command validates the
+signed genesis and raw manifest and derives the canary key from the exact unsigned
+onboarding request. Its five-file public bundle includes `genesis.json`; an old
+four-file bundle is never accepted or used as a fallback. Python reads neither
+private configs nor signing keys.
+
+The unsigned draft omits the predecessor's generated `beacon_bootstrap` field.
+`prepare-beacon-inputs --inventory-draft ... --public-inputs ... --output ...`
+then generates the public request and nonce-bound four-seat credential paths.
+Retry checks the native output schema, nonce and exact validator/seat census,
+authenticates each initial unit against the retained inventory and pinned
+`unit_renderer`, and renders four final public mode0644 FD200 units selecting
+`beacon.toml`; its JSON evidence remains owner-only mode0600.
+The native request remains opaque to Python. A separate
+`native-assembly-args.json` records the fresh bundle, `--beacon-inputs` and four
+`--beacon-validator-unit` paths used identically by assemble and authorize.
+Apply receives only an explicit list of runtime input arguments; no beacon
+assembly arguments, public-bundle paths or unit inputs enter apply.
+
+After apply, seed continuity and boot checks first require the exact native
+completed and deployment-proven receipts. They bind each owner-only beacon
+activation record to that authorization, nonce/session, common bundle and signed
+final unit. Only the native-derived config hash and `beacon.toml` process binding
+replace the initial config binding; seed metadata and native identity fingerprints
+remain checked. An activation marker alone cannot authorize success. Preapply
+resumption preserves the attempt nonce, archives its incomplete preparation, and
+regenerates those public outputs. Completed apply resumes only postconditions. `core_testnet` forbids `--inrou-stage-dir` and requires explicit `null` for
 both `inrou_canary` and `inrou_stage_tree_sha256`. `full_inrou` requires the stage
 argument and the complete matching native stage object and hash. The old `inrou`
 spelling is rejected.

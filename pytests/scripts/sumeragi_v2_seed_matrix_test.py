@@ -54,6 +54,7 @@ def _install_source_bound_fake_localnet_binaries(
         ),
         "iroha": program_target / "release" / "iroha",
         "kagami": program_target / "release" / "kagami",
+        "irohad_taira": program_target / "release" / "iroha3d_taira",
     }
     for label, binary in binaries.items():
         binary.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +90,7 @@ def _install_source_bound_fake_localnet_binaries(
         ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
+        ("irohad_taira", "release/iroha3d_taira"),
     ):
         binary = binaries[label]
         rows.extend(
@@ -443,6 +445,7 @@ def _expected_seed_command(
         f"{program_target / 'message-control' / 'release' / 'iroha3d'} "
         f"TEST_NETWORK_BIN_IROHA={program_target / 'release' / 'iroha'} "
         f"KAGAMI_BIN={program_target / 'release' / 'kagami'} "
+        f"TEST_NETWORK_BIN_IROHAD_TAIRA={program_target / 'release' / 'iroha3d_taira'} "
         "CARGO_NET_OFFLINE=true "
         "IROHA_TEST_REQUIRE_NETWORK=1 "
         "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "

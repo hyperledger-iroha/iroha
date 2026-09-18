@@ -3454,6 +3454,52 @@ fn autonomous_completion_selected_view_validates_artifact_once() {
 }
 
 #[test]
+fn autonomous_latest_snapshot_reuses_validated_current_cursor() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = unretired_autonomous_lane_attempt_fixture(&signer);
+    let payload = &fixture.payload;
+    let probe = AutonomousArtifactValidationProbe::start();
+    let mut rows = fixture
+        .kura
+        .latest_autonomous_lane_block_artifacts_snapshot(payload.network_id, 1, |height| {
+            assert_eq!(height, payload.origin_proposal.descriptor.proposal_height);
+            Ok(payload.epoch)
+        })
+        .expect("authenticate the current route snapshot");
+    assert_eq!(rows.len(), 1);
+    let (artifact, current) = rows.pop().expect("one current autonomous route");
+    assert_eq!(artifact.executable_payload, *payload);
+    assert_eq!(artifact.new_view_certificates.len(), 1);
+    assert_eq!(
+        artifact.new_view_certificates[0].certificate,
+        fixture.new_view_certificate
+    );
+    assert_eq!(
+        current,
+        crate::lane_consensus::retarget_lane_block_proposal_view(&payload.origin_proposal, 1)
+            .expect("exact authenticated next cursor")
+    );
+    assert_eq!(
+        probe.count(),
+        1,
+        "snapshot must retain the already validated cursor"
+    );
+    drop(probe);
+    let wrong_epoch = payload
+        .epoch
+        .checked_add(1)
+        .expect("fixture epoch can advance");
+    let error = fixture
+        .kura
+        .latest_autonomous_lane_block_artifacts_snapshot(payload.network_id, 1, |_| Ok(wrong_epoch))
+        .expect_err("cursor reuse must preserve the caller's epoch binding");
+    assert!(
+        error.to_string().contains("wrong network context"),
+        "{error}"
+    );
+}
+
+#[test]
 fn autonomous_retired_attempt_reuses_validated_current_cursor() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let fixture = retired_autonomous_lane_attempt_fixture(&signer);
@@ -3624,6 +3670,30 @@ fn autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix() {
             fs::read(&view_path).unwrap(),
             bytes,
             "{kind}: read cannot repair input"
+        );
+        drop(probe);
+        let snapshot_probe = AutonomousArtifactValidationProbe::start();
+        let snapshot_error = kura
+            .latest_autonomous_lane_block_artifacts_snapshot(payload.network_id, 1, |_| {
+                Ok(payload.epoch)
+            })
+            .expect_err("route snapshot cannot reuse a cursor from a corrupt or foreign suffix");
+        if let Some(reason) = reason {
+            assert!(
+                snapshot_error.to_string().contains(reason),
+                "{kind}: {snapshot_error}"
+            );
+        } else {
+            assert!(
+                matches!(&snapshot_error, Error::NoritoFrame(_)),
+                "{kind}: {snapshot_error}"
+            );
+        }
+        assert_eq!(snapshot_probe.count(), validation_count, "{kind}");
+        assert_eq!(
+            fs::read(&view_path).unwrap(),
+            bytes,
+            "{kind}: snapshot cannot repair input"
         );
     }
 }

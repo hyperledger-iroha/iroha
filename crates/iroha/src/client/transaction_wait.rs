@@ -79,6 +79,19 @@ struct Backpressure {
 
 /// Preserve backpressure as an error for one-shot reads; only finality waits retry it.
 pub(super) fn backpressure_response(response: &Response<Vec<u8>>) -> eyre::Report {
+    let retry_after = match retry_after_delay(response) {
+        Ok(delay) => delay,
+        Err(error) => return error,
+    };
+    Backpressure {
+        retry_after,
+        body: String::from_utf8_lossy(response.body()).into_owned(),
+    }
+    .into()
+}
+
+/// Parse Torii's unambiguous delta-seconds retry instruction without guessing a shorter delay.
+pub(super) fn retry_after_delay(response: &Response<Vec<u8>>) -> Result<Option<Duration>> {
     let mut headers = response.headers().get_all(http::header::RETRY_AFTER).iter();
     let retry_after = match headers.next() {
         None => None,
@@ -89,19 +102,15 @@ pub(super) fn backpressure_response(response: &Response<Vec<u8>>) -> eyre::Repor
                 !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
             });
             let Some(seconds) = seconds.and_then(|value| value.parse::<u64>().ok()) else {
-                return eyre!("pipeline status 429 has invalid Retry-After delta seconds");
+                return Err(eyre!("HTTP 429 has invalid Retry-After delta seconds"));
             };
             if headers.next().is_some() {
-                return eyre!("pipeline status 429 has multiple Retry-After values");
+                return Err(eyre!("HTTP 429 has multiple Retry-After values"));
             }
             Some(Duration::from_secs(seconds))
         }
     };
-    Backpressure {
-        retry_after,
-        body: String::from_utf8_lossy(response.body()).into_owned(),
-    }
-    .into()
+    Ok(retry_after)
 }
 
 /// One finality decision rule shared by blocking and asynchronous transports.

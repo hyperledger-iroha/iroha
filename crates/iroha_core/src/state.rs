@@ -13186,6 +13186,66 @@ struct CanonicalWsvMergeCommitAuthorization {
     /// present, final application must observe these bytes unchanged before it
     /// appends the ordinary Applied block event and publishes the buffer.
     validated_publication_event_bytes: Option<Vec<u8>>,
+    /// Independently sealed, deterministic beacon composition; the certified
+    /// batch roots above always retain their original QC-bound values.
+    beacon_composition: Option<CanonicalMergeBeaconCompositionAuthorization>,
+}
+/// Move-only second-stage seal, minted immediately after the verified native
+/// pulse application and before any generic block lifecycle effects.
+#[derive(Debug)]
+struct CanonicalMergeBeaconCompositionAuthorization {
+    effects_hash: HashOf<iroha_data_model::consensus::NposConsensusEffects>,
+    write_set_root: Hash,
+    external_event_bytes: Option<Vec<u8>>,
+    external_event_count: usize,
+    /// Exact merge/pulse events followed only by the canonical carrier TimeEvent.
+    /// Generic lifecycle writes remain forbidden by the separately sealed WSV root.
+    publication_event_bytes: Vec<u8>,
+}
+impl CanonicalWsvMergeCommitAuthorization {
+    fn composed_write_set_root(&self) -> Hash {
+        self.beacon_composition
+            .as_ref()
+            .map_or(self.write_set_root, |seal| seal.write_set_root)
+    }
+    fn composed_external_events(&self) -> (Option<&[u8]>, usize) {
+        self.beacon_composition.as_ref().map_or(
+            (
+                self.external_event_bytes.as_deref(),
+                self.external_event_count,
+            ),
+            |seal| {
+                (
+                    seal.external_event_bytes.as_deref(),
+                    seal.external_event_count,
+                )
+            },
+        )
+    }
+}
+/// Bind the complete parent beacon authority/history and evidence-pruning input.
+/// A certified merge may not change these inputs before applying the pulse.
+/// This is an internal native projection, never a wire or persisted codec.
+pub(crate) fn merge_beacon_parent_surface(world: &impl WorldReadOnly) -> Hash {
+    let mut parts = vec![b"iroha:merge-beacon-parent:v1".to_vec()];
+    macro_rules! capture {
+        ($($field:ident),+ $(,)?) => {$(
+            parts.push(world.$field().iter().map(|(key, value)| (key.clone(), value.clone())).collect::<Vec<_>>().encode());
+        )+};
+    }
+    capture!(
+        global_beacon_dkg,
+        global_beacon_key_sessions,
+        global_beacon_active_session,
+        global_beacon_latest_pulse,
+        global_beacon_pulses,
+        global_beacon_pulse_slots,
+        parliament_required_beacon_pulse_slots,
+        parliament_unavailable_beacon_pulse_slots,
+        consensus_evidence
+    );
+    parts.push(world.sumeragi_npos_parameters().encode());
+    Hash::new(parts.encode())
 }
 /// Exact carrier metadata permitted at each autonomous merge execution boundary.
 ///
@@ -13214,6 +13274,7 @@ struct CanonicalCarrierCommitMetadataAuthorization {
     carrier_height: u64,
     carrier_hash: HashOf<BlockHeader>,
     post_finality_write_set_root: Hash,
+    pre_finality_write_set_root: Hash,
     previous_commit_topology: Vec<PeerId>,
     next_commit_topology: Vec<PeerId>,
     autoscale_sample: AutoscaleSampleRecord,
@@ -13492,6 +13553,125 @@ impl<'state> StateBlock<'state> {
         transaction.apply_consensus_effects();
         self.applied_npos_consensus_effects_hash = Some(HashOf::new(effects));
         Ok(outcome)
+    }
+    /// Consume one parent-validated pulse capability after exact certified merge
+    /// execution, and seal the full composed overlay before lifecycle processing.
+    pub(crate) fn apply_verified_merge_beacon_pulse(
+        &mut self,
+        capability: crate::block::valid::VerifiedMergeBeaconPulse,
+    ) -> eyre::Result<()> {
+        let (header, network_id, effects, prune_keys, roster, parent_surface) =
+            capability.into_parts();
+        if self._curr_block != header
+            || self.network_id != network_id
+            || self.start_of_block_effects_applied
+            || self.applied_npos_consensus_effects_hash.is_some()
+            || merge_beacon_parent_surface(&self.world) != parent_surface
+        {
+            return Err(eyre::eyre!(
+                "merge beacon capability differs from the pristine carrier or parent authority"
+            ));
+        }
+        self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
+        let entry = self
+            .staged_merge_entry
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("beacon composition lacks its certified merge"))?;
+        let batch = entry
+            .execution_batch
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("beacon composition requires an execution-bearing merge"))?;
+        let authorization = self
+            .canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .ok_or_else(|| {
+                eyre::eyre!("beacon composition lacks its original merge authorization")
+            })?;
+        let actual_events = (!self.world.external_event_buf.is_empty())
+            .then(|| self.world.external_event_buf.encode());
+        let original_root = Self::merge_execution_write_set_root_from_overlay_with_external_events(
+            &self.world,
+            &self.merge_carrier_entrypoints,
+            actual_events.as_deref(),
+            self.merge_execution_runtime_effects().as_ref(),
+        );
+        if authorization.beacon_composition.is_some()
+            || authorization.validated_publication_event_bytes.is_some()
+            || actual_events.as_deref() != authorization.external_event_bytes.as_deref()
+            || !Self::canonical_wsv_merge_commit_authorization_matches(
+                authorization,
+                entry,
+                batch,
+                header.height().get(),
+                header.hash(),
+                u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX),
+                self.state_ref.lane_execution_state_hash(),
+                original_root,
+            )
+        {
+            return Err(eyre::eyre!(
+                "certified merge changed before beacon composition"
+            ));
+        }
+        let expected_anchor = header.prev_block_hash().map(|block_hash| {
+            iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                height: header.height().get().saturating_sub(1),
+                block_hash,
+            }
+        });
+        // The capability freezes the exact parent-derived pruning plan as well
+        // as the pulse. Empty admission/action vectors cannot add generic NPoS work.
+        self.apply_pristine_npos_consensus_effects(
+            &effects,
+            &prune_keys,
+            expected_anchor,
+            &roster,
+            header.height().get(),
+            header.view_change_index(),
+            header.creation_time_ms,
+        )?;
+        let external_event_bytes = (!self.world.external_event_buf.is_empty())
+            .then(|| self.world.external_event_buf.encode());
+        let write_set_root = Self::merge_execution_write_set_root_from_overlay_with_external_events(
+            &self.world,
+            &self.merge_carrier_entrypoints,
+            external_event_bytes.as_deref(),
+            self.merge_execution_runtime_effects().as_ref(),
+        );
+        let mut publication_events = self.world.external_event_buf.clone();
+        publication_events.push(self.create_time_event(&header).into());
+        let seal = CanonicalMergeBeaconCompositionAuthorization {
+            effects_hash: HashOf::new(&effects),
+            write_set_root,
+            external_event_bytes,
+            external_event_count: self.world.external_event_buf.len(),
+            publication_event_bytes: publication_events.encode(),
+        };
+        self.canonical_wsv_merge_commit_authorization
+            .as_mut()
+            .ok_or_else(|| {
+                eyre::eyre!("merge authorization disappeared during beacon composition")
+            })?
+            .beacon_composition = Some(seal);
+        Ok(())
+    }
+    /// Only a consumed native capability can admit NPoS effects on a merge carrier.
+    pub(crate) fn has_verified_merge_beacon_composition(&self, block: &SignedBlock) -> bool {
+        self.canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .is_some_and(|authorization| {
+                authorization.carrier_hash == block.header().hash()
+                    && authorization
+                        .beacon_composition
+                        .as_ref()
+                        .is_some_and(|seal| {
+                            block
+                                .npos_consensus_effects()
+                                .is_some_and(|effects| HashOf::new(effects) == seal.effects_hash)
+                                && self.applied_npos_consensus_effects_hash
+                                    == Some(seal.effects_hash)
+                        })
+            })
     }
     /// Read an exact pending QueuePlan binding from the immutable parent WSV.
     ///
@@ -21944,6 +22124,12 @@ macro_rules! world_ro_accessors {
             storage parliament_attempts:
                 iroha_data_model::governance::types::GovernanceAttemptId =>
                 ParliamentAttemptStateV1;
+            /// Exact pending Parliament beacon-slot requests (read-only).
+            storage parliament_required_beacon_pulse_slots:
+                (BeaconSessionId, u64) => BTreeSet<GovernanceAttemptId>;
+            /// Exact terminally unavailable Parliament beacon slots (read-only).
+            storage parliament_unavailable_beacon_pulse_slots:
+                (BeaconSessionId, u64) => BTreeSet<GovernanceAttemptId>;
             /// Exact retention-deadline contributors grouped by TLE key session.
             storage parliament_tle_key_session_retention_deadlines:
                 TleKeySessionId => ParliamentTleKeySessionRetentionIndexV1;
@@ -27816,8 +28002,7 @@ impl State {
     pub(crate) fn matches_kura_instance(&self, kura: &Arc<Kura>) -> bool {
         Arc::ptr_eq(&self.kura, kura)
     }
-    /// Clone the block storage handle used by isolated snapshot-state reconstruction.
-    #[cfg(test)]
+    /// Clone this state's block storage handle for consensus owners and snapshot reconstruction.
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
@@ -31610,6 +31795,65 @@ impl State {
     #[track_caller]
     pub fn prev_commit_topology_snapshot(&self) -> Vec<PeerId> {
         self.prev_commit_topology.view().iter().cloned().collect()
+    }
+    /// Authenticate a threshold-key lifecycle certificate for the contiguous next block.
+    ///
+    /// This admission check uses the durable parent's exact frozen roster, never
+    /// the mutable commit topology. Execution still checks the certificate again,
+    /// including its exact height, session compare-and-set and replay protection.
+    /// No State view is held while authenticating durable finality.
+    ///
+    /// # Errors
+    ///
+    /// Rejects absent/corrupt finality, a changed committed tip, and any invalid
+    /// network, height, roster or quorum binding. Returns the authenticated parent
+    /// hash and roster so ingress can also require local ownership of the global control route.
+    pub fn verify_next_height_threshold_key_lifecycle_certificate_v1(
+        &self,
+        certificate: &iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
+    ) -> core::result::Result<(HashOf<BlockHeader>, Vec<PeerId>), String> {
+        let (parent_height, parent_hash) = {
+            let hashes = self.block_hashes.view();
+            let height = u64::try_from(hashes.len())
+                .map_err(|_| "lifecycle parent height exceeds u64".to_owned())?;
+            let hash = hashes
+                .last()
+                .copied()
+                .ok_or_else(|| "lifecycle admission requires a committed parent".to_owned())?;
+            (height, hash)
+        };
+        let height = parent_height
+            .checked_add(1)
+            .ok_or_else(|| "lifecycle execution height overflows".to_owned())?;
+        let (header, parent) = self
+            .kura
+            .v2_finality_artifact_with_header(parent_height)
+            .map_err(|error| format!("lifecycle parent finality is invalid: {error}"))?
+            .ok_or_else(|| "lifecycle parent finality is absent".to_owned())?;
+        if header.height().get() != parent_height
+            || header.hash() != parent_hash
+            || parent.height_context.network_id != *self.network_id_ref()
+        {
+            return Err("lifecycle parent differs from the committed network/tip".to_owned());
+        }
+        let roster = threshold_key_lifecycle_successor_roster_v1(height, &parent.height_context)
+            .ok_or_else(|| {
+                "lifecycle parent does not authenticate the successor roster".to_owned()
+            })?;
+        verify_threshold_key_lifecycle_certificate_v1(
+            certificate,
+            self.network_id_ref(),
+            height,
+            &roster,
+        )
+        .map_err(|error| error.to_string())?;
+        let hashes = self.block_hashes.view();
+        if u64::try_from(hashes.len()).ok() != Some(parent_height)
+            || hashes.last().copied() != Some(parent_hash)
+        {
+            return Err("lifecycle committed tip changed during authentication".to_owned());
+        }
+        Ok((parent_hash, roster))
     }
     /// Latest committed block height derived from the block hash journal.
     ///
@@ -53427,6 +53671,7 @@ impl<'state> StateBlock<'state> {
                 external_event_bytes,
                 external_event_count,
                 validated_publication_event_bytes: None,
+                beacon_composition: None,
             });
         self.staged_merge_entry = Some(entry.clone());
         Ok(())
@@ -53586,10 +53831,20 @@ impl<'state> StateBlock<'state> {
         let current_base_height =
             u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX);
         let current_base_hash = self.state_ref.lane_execution_state_hash();
+        let (composed_event_bytes, composed_event_count) = authorization.composed_external_events();
+        let expected_effects_hash = authorization
+            .beacon_composition
+            .as_ref()
+            .map(|seal| seal.effects_hash);
+        if self.applied_npos_consensus_effects_hash != expected_effects_hash {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "merge carrier has unsealed or mismatched NPoS effects".to_owned(),
+            ));
+        }
         let autonomous_event_prefix = self
             .world
             .external_event_buf
-            .get(..authorization.external_event_count)
+            .get(..composed_event_count)
             .ok_or_else(|| {
                 MergeLedgerCommitError::ExecutionDivergence(
                     "autonomous merge execution events were removed before block admission"
@@ -53598,8 +53853,7 @@ impl<'state> StateBlock<'state> {
             })?;
         let autonomous_event_prefix_bytes = (!autonomous_event_prefix.is_empty())
             .then(|| autonomous_event_prefix.to_vec().encode());
-        if autonomous_event_prefix_bytes.as_deref() != authorization.external_event_bytes.as_deref()
-        {
+        if autonomous_event_prefix_bytes.as_deref() != composed_event_bytes {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "autonomous merge execution event prefix drifted before block admission".to_owned(),
             ));
@@ -53608,7 +53862,7 @@ impl<'state> StateBlock<'state> {
             Self::merge_execution_write_set_root_from_overlay_with_external_events(
                 &self.world,
                 &self.merge_carrier_entrypoints,
-                authorization.external_event_bytes.as_deref(),
+                composed_event_bytes,
                 self.merge_execution_runtime_effects().as_ref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -53619,14 +53873,24 @@ impl<'state> StateBlock<'state> {
             self._curr_block.hash(),
             current_base_height,
             current_base_hash,
-            current_write_set_root,
-        ) {
+            authorization.write_set_root,
+        ) || current_write_set_root != authorization.composed_write_set_root()
+        {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "canonical WSV merge commit authorization drifted before block admission"
                     .to_owned(),
             ));
         }
         let publication_event_bytes = self.world.external_event_buf.encode();
+        if authorization
+            .beacon_composition
+            .as_ref()
+            .is_some_and(|seal| seal.publication_event_bytes != publication_event_bytes)
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "composed merge beacon events differ from the sealed prefix and canonical time event".to_owned(),
+            ));
+        }
         let authorization = self
             .canonical_wsv_merge_commit_authorization
             .as_mut()
@@ -55016,7 +55280,7 @@ impl<'state> StateBlock<'state> {
                     Self::merge_execution_write_set_root_from_overlay_with_external_events(
                         &world,
                         &merge_carrier_entrypoints,
-                        authorization.external_event_bytes.as_deref(),
+                        authorization.composed_external_events().0,
                         merge_runtime_effects.as_ref(),
                     );
                 if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -55056,6 +55320,8 @@ impl<'state> StateBlock<'state> {
                     || authorized_sample.creation_time_ms
                         != u64::try_from(_curr_block.creation_time().as_millis())
                             .unwrap_or(u64::MAX)
+                    || carrier_authorization.pre_finality_write_set_root
+                        != authorization.composed_write_set_root()
                     || carrier_authorization.post_finality_write_set_root != current_write_set_root
                     || carrier_authorization.previous_commit_topology != previous_commit_topology
                     || staged_previous_topology != previous_commit_topology
@@ -55743,7 +56009,7 @@ impl<'state> StateBlock<'state> {
             Self::merge_execution_write_set_root_from_overlay_with_external_events(
                 &self.world,
                 &self.merge_carrier_entrypoints,
-                authorization.external_event_bytes.as_deref(),
+                authorization.composed_external_events().0,
                 self.merge_execution_runtime_effects().as_ref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
@@ -55834,6 +56100,7 @@ impl<'state> StateBlock<'state> {
                 carrier_height,
                 carrier_hash,
                 post_finality_write_set_root,
+                pre_finality_write_set_root: authorization.composed_write_set_root(),
                 previous_commit_topology,
                 next_commit_topology: self.commit_topology.iter().cloned().collect(),
                 autoscale_sample,
@@ -56056,6 +56323,15 @@ impl<'state> StateBlock<'state> {
             block_height,
         ) {
             return (Vec::new(), Err(error));
+        }
+        if self
+            .canonical_wsv_merge_commit_authorization
+            .as_ref()
+            .is_some_and(|authorization| authorization.beacon_composition.is_some())
+        {
+            if let Err(error) = self.validate_staged_merge_execution_authorization() {
+                return (Vec::new(), Err(error));
+            }
         }
         if let Some(bundle) = block.as_ref().da_commitments() {
             let height = block.as_ref().header().height().get();

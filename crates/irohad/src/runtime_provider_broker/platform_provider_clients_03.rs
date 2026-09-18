@@ -2699,7 +2699,81 @@ fn retry_consensus_signer_once_after_unavailable<T>(
     }
 }
 
+impl GlobalBeaconBrokerPartialSigner {
+    fn attest_projected_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1, BrokerError> {
+        retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
+            iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+                session,
+                expected_signer_index,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            let request_payload = encode_canonical(
+                &GlobalBeaconCapabilityAttestRequestWireV1 {
+                    session: session.record().clone(),
+                    signer_index: expected_signer_index,
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )?;
+            let result = provider_call!(
+                self,
+                call,
+                OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+                request_payload,
+                false,
+            )?;
+            let attested = self
+                .session
+                .decode_result::<GlobalBeaconCapabilityAttestResultWireV1>(&result)?;
+            let expected = iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+                session,
+                expected_signer_index,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+            if attested.session_id != expected.session_id()
+                || attested.transcript_hash != expected.transcript_hash()
+                || attested.signer_index != expected.signer_index()
+            {
+                self.session.poison();
+                return Err(BrokerError::Rejected);
+            }
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            Ok(expected)
+        })
+    }
+}
+
 impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBrokerPartialSigner {
+    fn attest_partial_signing_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+            session,
+            expected_signer_index,
+        )?;
+        self.attest_projected_capability(session, expected_signer_index)
+            .map_err(|error| match error {
+                BrokerError::Unavailable
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch
+                | BrokerError::Ambiguous => {
+                    iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::Unavailable
+                }
+                BrokerError::StaleOrRevoked | BrokerError::Rejected | BrokerError::Conflict => {
+                    iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::NotOwned
+                }
+            })
+    }
+
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,

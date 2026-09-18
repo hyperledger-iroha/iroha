@@ -796,7 +796,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami", "iroha3d_taira"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -1482,6 +1482,7 @@ def _seed_run_logs(
             f"TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL={message_control_irohad} "
             f"TEST_NETWORK_BIN_IROHA={iroha} "
             f"KAGAMI_BIN={kagami} "
+            f"TEST_NETWORK_BIN_IROHAD_TAIRA={program_target_dir / 'release' / 'iroha3d_taira'} "
             "CARGO_NET_OFFLINE=true "
             "IROHA_TEST_REQUIRE_NETWORK=1 "
             "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "

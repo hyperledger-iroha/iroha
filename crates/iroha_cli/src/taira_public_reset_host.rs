@@ -1,5 +1,8 @@
 //! Authenticated OpenSSH transport and compiled remote host dispatcher for public Taira reset.
 
+#[path = "taira_public_reset_beacon.rs"]
+pub(super) mod beacon;
+
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
 #[path = "taira_public_reset_stopped_runtime.rs"]
@@ -11,13 +14,13 @@ pub(super) mod occupied;
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
     AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1, EndpointV1, InventoryV1,
-    PUBLIC_ROOT, PinnedArtifact, RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1,
-    RecoveryOutcome, TrustedKeyV1, ValidatorV1, artifact, authorization_semantic_sha256,
-    ensure_authorization_current, ensure_pinned_unchanged, now_unix_ms, open_pinned_regular,
-    pin_owner_private_file, read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex,
-    validate_inventory, validate_owner_private_dir, validate_validator_genesis_config,
-    validate_validator_operator_config, validator_operator_public_key,
-    verify_execution_authorization,
+    PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1, RecoveryIntentV1,
+    RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1, ValidatorV1,
+    artifact, authorization_semantic_sha256, ensure_authorization_current, ensure_pinned_unchanged,
+    now_unix_ms, open_pinned_regular, pin_owner_private_file, read_pinned_bytes, read_private_json,
+    revalidate_pinned, sha256_hex, validate_inventory, validate_owner_private_dir,
+    validate_validator_genesis_config, validate_validator_operator_config,
+    validator_operator_public_key, verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
@@ -633,6 +636,7 @@ enum HostAction {
     Reset,
     Preseed,
     Start,
+    BeaconActivate,
     Restart,
     EdgeStage,
     EdgeCutover,
@@ -655,6 +659,7 @@ impl HostAction {
             Self::Reset => "reset",
             Self::Preseed => "preseed",
             Self::Start => "start",
+            Self::BeaconActivate => "beacon_activate",
             Self::Restart => "restart",
             Self::EdgeStage => "edge_stage",
             Self::EdgeCutover => "edge_cutover",
@@ -677,6 +682,7 @@ impl HostAction {
             "reset" => Ok(Self::Reset),
             "preseed" => Ok(Self::Preseed),
             "start" => Ok(Self::Start),
+            "beacon_activate" => Ok(Self::BeaconActivate),
             "restart" => Ok(Self::Restart),
             "edge_stage" => Ok(Self::EdgeStage),
             "edge_cutover" => Ok(Self::EdgeCutover),
@@ -699,7 +705,7 @@ impl HostAction {
             Self::Reset => inventory.timeouts.reset_secs,
             Self::Preseed => inventory.timeouts.preseed_secs,
             Self::Start => validator_start_timeout_secs(inventory, host_slug)?,
-            Self::Restart => inventory.timeouts.restart_secs,
+            Self::BeaconActivate | Self::Restart => inventory.timeouts.restart_secs,
             Self::EdgeStage | Self::EdgeCutover | Self::EdgeVerify | Self::Seal => {
                 inventory.timeouts.edge_secs
             }
@@ -823,10 +829,14 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         return Err(eyre!("host request JSON is not canonical"));
     }
     let action = HostAction::parse(&request.action)?;
-    if request.recovery_only && !matches!(action, HostAction::Restart | HostAction::MutationReserve)
+    if request.recovery_only
+        && !matches!(
+            action,
+            HostAction::Restart | HostAction::BeaconActivate | HostAction::MutationReserve
+        )
     {
         return Err(eyre!(
-            "read-only host recovery is supported only for a submitted restart or prepared mutation"
+            "read-only host recovery is supported only for a submitted restart, provider activation or prepared mutation"
         ));
     }
     let (admitted, _chain_guard) = admit_host_request(request, action)?;
@@ -855,6 +865,15 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
     let receipt_name = host_receipt_name(action, &admitted.request.artifact_role)?;
     let receipt_dir = ensure_host_receipt_dir(&admitted)?;
     if admitted.request.recovery_only {
+        if action == HostAction::BeaconActivate {
+            return beacon::recover_provider_host(
+                &admitted,
+                &receipt_dir,
+                &receipt_name,
+                &mut progress,
+                progress_decision,
+            );
+        }
         return recover_submitted_restart(
             &admitted,
             &receipt_dir,
@@ -1131,9 +1150,12 @@ fn validate_prepared_mutation_identity(admitted: &HostAdmission) -> Result<()> {
     let request = &admitted.request;
     let scope = admitted.inventory.qualification_scope;
     let valid_kind = match request.mutation_phase.as_str() {
-        "pre_edge" => scope
-            .canary_kinds()
-            .contains(&request.mutation_kind.as_str()),
+        "pre_edge" => {
+            scope
+                .canary_kinds()
+                .contains(&request.mutation_kind.as_str())
+                && !request.mutation_kind.starts_with("beacon_")
+        }
         phase if phase == "post_edge" || scope.restart_wave(phase).is_some() => {
             matches!(
                 request.mutation_kind.as_str(),
@@ -1177,6 +1199,16 @@ fn validate_prepared_mutation_progress(
         .position(|key| key.action == HostAction::Seal.label())
         .ok_or_else(|| eyre!("host plan omits seal phase"))?;
     let expected = match admitted.request.mutation_phase.as_str() {
+        "pre_edge"
+            if matches!(
+                admitted.request.mutation_kind.as_str(),
+                "onboarding" | "faucet" | "write_canary"
+            ) =>
+        {
+            plan.iter()
+                .position(|key| key.action == HostAction::BeaconActivate.label())
+                .ok_or_else(|| eyre!("host plan omits provider activation"))?
+        }
         "pre_edge" => first_restart,
         "post_edge" => first_seal,
         phase => {
@@ -3532,14 +3564,14 @@ fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Opt
     for line in std::str::from_utf8(bytes)?.lines() {
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| eyre!("vacant unit evidence is not key=value"))?;
+            .ok_or_else(|| eyre!("terminal unit evidence is not key=value"))?;
         if !matches!(
             key,
             "ActiveState" | "SubState" | "MainPID" | "ControlPID" | "ControlGroup" | "Job"
         ) || fields.insert(key, value).is_some()
         {
             return Err(eyre!(
-                "vacant unit evidence has duplicate or unknown fields"
+                "terminal unit evidence has duplicate or unknown fields"
             ));
         }
     }
@@ -3558,7 +3590,7 @@ fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Opt
         || fields.get("Job") != Some(&"")
     {
         return Err(eyre!(
-            "vacant target has an active process, job, or nonterminal service state"
+            "stopped target has an active process, job, or nonterminal service state"
         ));
     }
     match fields.get("ControlGroup").copied() {
@@ -3573,7 +3605,7 @@ fn validate_vacant_unit_evidence(bytes: &[u8], allow_failed: bool) -> Result<Opt
         {
             Ok(Some(Path::new("/sys/fs/cgroup").join(&path[1..])))
         }
-        _ => Err(eyre!("vacant target cgroup path is not canonical")),
+        _ => Err(eyre!("stopped target cgroup path is not canonical")),
     }
 }
 
@@ -3592,6 +3624,25 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
             "nginx.service"
         }
     };
+    require_terminal_unit_absence(admitted, unit, allow_failed)
+}
+
+/// The stopped Inrou boundary also applies to occupied releases and derived beacon units.
+fn require_stopped_owner_absence(admitted: &HostAdmission) -> Result<()> {
+    let HostTarget::Validator(validator) = &admitted.target else {
+        return require_vacant_unit(admitted, true);
+    };
+    let unit_sha256 = occupied::stopped_unit_hash(admitted, validator)?;
+    attest_loaded_systemd_unit(validator, &unit_sha256, admitted.action_deadline)?;
+    require_terminal_unit_absence(admitted, &validator.systemd_unit, true)
+}
+
+/// Prove no service, cgroup, escaped process or mapped state remains, without claiming vacancy.
+fn require_terminal_unit_absence(
+    admitted: &HostAdmission,
+    unit: &str,
+    allow_failed: bool,
+) -> Result<()> {
     let evidence = run_host_command(
         SYSTEMCTL,
         &[
@@ -3607,19 +3658,35 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
         ],
         admitted.action_deadline,
     )?;
-    if let Some(cgroup) = validate_vacant_unit_evidence(&evidence, allow_failed)? {
-        require_root_directory(&cgroup, false, "vacant target cgroup")?;
-        let events = fs::read_to_string(cgroup.join("cgroup.events"))?;
+    validate_terminal_unit_absence_with(
+        &evidence,
+        allow_failed,
+        |cgroup| {
+            require_root_directory(cgroup, false, "stopped target cgroup")?;
+            Ok(fs::read_to_string(cgroup.join("cgroup.events"))?)
+        },
+        || require_no_live_target_references(admitted),
+    )
+}
+
+fn validate_terminal_unit_absence_with(
+    evidence: &[u8],
+    allow_failed: bool,
+    read_cgroup: impl FnOnce(&Path) -> Result<String>,
+    require_no_references: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if let Some(cgroup) = validate_vacant_unit_evidence(evidence, allow_failed)? {
+        let events = read_cgroup(&cgroup)?;
         if events
             .lines()
             .filter(|line| line.starts_with("populated "))
             .collect::<Vec<_>>()
             != ["populated 0"]
         {
-            return Err(eyre!("vacant target cgroup retains processes"));
+            return Err(eyre!("stopped target cgroup retains processes"));
         }
     }
-    require_no_live_target_references(admitted)
+    require_no_references()
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -4128,6 +4195,60 @@ fn require_vacant_rollback_postcondition(admitted: &HostAdmission) -> Result<()>
     stopped_runtime::reconcile(admitted, false)
 }
 
+fn require_signed_stopped_state(validator: &ValidatorV1, state: &Path) -> Result<()> {
+    let prior = validator.admitted_release()?;
+    if prior.service_state.stopped_state().is_none() {
+        return Err(eyre!(
+            "stopped predecessor admission requires explicit signed stopped state"
+        ));
+    }
+    require_root_directory(state, false, "signed stopped predecessor state")?;
+    let metadata = fs::symlink_metadata(state)?;
+    prior
+        .service_state
+        .validate_state_identity(metadata.dev(), metadata.ino())
+}
+
+/// Use only the signed predecessor state; a failed running check cannot select stopped recovery.
+fn preserve_prior_service_state(
+    state: &PriorValidatorServiceStateV1,
+    running: impl FnOnce() -> Result<()>,
+    stopped: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    state.validate()?;
+    match state {
+        PriorValidatorServiceStateV1::Running => running(),
+        PriorValidatorServiceStateV1::Stopped(_) => stopped(),
+    }
+}
+
+/// This verifies the selected prior runtime; an unavailable running predecessor never falls back.
+fn verify_occupied_predecessor(admitted: &HostAdmission, validator: &ValidatorV1) -> Result<()> {
+    let prior = validator.admitted_release()?;
+    occupied::verify_prior_artifacts(validator, true)?;
+    if validated_current_release_target(admitted)? != Path::new(&prior.release_root) {
+        return Err(eyre!(
+            "occupied predecessor selector differs from its signed release"
+        ));
+    }
+    attest_loaded_systemd_unit(
+        validator,
+        &prior.artifact("validator_unit")?.sha256,
+        admitted.action_deadline,
+    )?;
+    preserve_prior_service_state(
+        &prior.service_state,
+        || {
+            require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
+            attest_validator_process(admitted, validator, Path::new(&prior.release_root), false)
+        },
+        || {
+            require_terminal_unit_absence(admitted, &validator.systemd_unit, true)?;
+            require_signed_stopped_state(validator, Path::new(&validator.state_root))
+        },
+    )
+}
+
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     #[cfg(unix)]
     if rustix::process::geteuid().as_raw() != 0 {
@@ -4174,36 +4295,7 @@ fn host_preflight(admitted: &HostAdmission) -> Result<()> {
     }
     match &admitted.target {
         HostTarget::Validator(validator) => {
-            occupied::verify_prior_artifacts(validator, true)?;
-            attest_loaded_systemd_unit(
-                validator,
-                &validator
-                    .admitted_release()?
-                    .artifact("validator_unit")?
-                    .sha256,
-                admitted.action_deadline,
-            )?;
-            let active = run_host_command(
-                SYSTEMCTL,
-                &[
-                    "show",
-                    "--property=ActiveState",
-                    "--value",
-                    &validator.systemd_unit,
-                ],
-                admitted.action_deadline,
-            )?;
-            if active != b"active\n" {
-                return Err(eyre!(
-                    "validator unit must be active before public reset so rollback preserves its signed preflight state"
-                ));
-            }
-            attest_validator_process(
-                admitted,
-                validator,
-                Path::new(&validator.admitted_release()?.release_root),
-                false,
-            )?;
+            verify_occupied_predecessor(admitted, validator)?;
         }
         HostTarget::Edge(edge) => {
             attest_loaded_edge_unit(edge, admitted.action_deadline)?;
@@ -4727,6 +4819,13 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
         plan.push(HostActionKeyV1 {
             host_slug: validator.slug.clone(),
             action: HostAction::Start.label().to_owned(),
+            artifact_role: String::new(),
+        });
+    }
+    for validator in &validators {
+        plan.push(HostActionKeyV1 {
+            host_slug: validator.slug.clone(),
+            action: HostAction::BeaconActivate.label().to_owned(),
             artifact_role: String::new(),
         });
     }
@@ -5339,6 +5438,15 @@ fn revalidate_cached_action_postcondition(
                 &validator.systemd_unit,
             )?;
             require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
+            if !validator.is_vacant()
+                && validator
+                    .admitted_release()?
+                    .service_state
+                    .stopped_state()
+                    .is_some()
+            {
+                verify_occupied_predecessor(admitted, validator)?;
+            }
             stopped_runtime::reconcile(admitted, false)
         }
         HostAction::Install => {
@@ -5369,6 +5477,12 @@ fn revalidate_cached_action_postcondition(
             sync_reset_state_parents(state, &previous, sync_directory)
         }
         HostAction::Preseed => preseed_inrou_stores(admitted, false),
+        HostAction::BeaconActivate => {
+            let HostTarget::Validator(validator) = &admitted.target else {
+                return Err(eyre!("cached beacon activation requires a validator"));
+            };
+            beacon::revalidate_provider(admitted, validator)
+        }
         HostAction::Start | HostAction::Restart => {
             let HostTarget::Validator(validator) = &admitted.target else {
                 return Err(eyre!("cached active receipt requires a validator target"));
@@ -5494,8 +5608,7 @@ fn verify_conservative_rollback_absence(admitted: &HostAdmission) -> Result<()> 
                     "conservative rollback target still has authorization-generated state"
                 ));
             }
-            require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
-            attest_validator_process(admitted, validator, &selected, false)
+            verify_occupied_predecessor(admitted, validator)
         }
         HostTarget::Edge(edge) => {
             if selected != Path::new(&edge.admitted_release()?.release_root) {
@@ -5626,17 +5739,16 @@ fn execute_host_action(
             };
             if validator.is_vacant() {
                 require_vacant_host_precondition(admitted)?;
-            } else if !ensure_host_receipt_dir(admitted)?
-                .join(manager_intent_name("stop")?)
-                .exists()
+            } else if validator
+                .admitted_release()?
+                .service_state
+                .stopped_state()
+                .is_some()
+                || !ensure_host_receipt_dir(admitted)?
+                    .join(manager_intent_name("stop")?)
+                    .exists()
             {
-                occupied::verify_prior_artifacts(validator, true)?;
-                attest_validator_process(
-                    admitted,
-                    validator,
-                    Path::new(&validator.admitted_release()?.release_root),
-                    false,
-                )?;
+                verify_occupied_predecessor(admitted, validator)?;
             }
             stop_unit(admitted, "stop", &validator.systemd_unit)?;
             Ok((0, 0, "validator stopped".to_owned()))
@@ -5688,6 +5800,13 @@ fn execute_host_action(
                 observe_validator_process(admitted, validator, &release, true)
             })?;
             Ok((0, 0, "validator started".to_owned()))
+        }
+        HostAction::BeaconActivate => {
+            let HostTarget::Validator(validator) = &admitted.target else {
+                return Err(eyre!("beacon activation requires a validator target"));
+            };
+            beacon::activate_provider(admitted, validator)?;
+            Ok((0, 0, "exact certified beacon provider activated".to_owned()))
         }
         HostAction::Restart => {
             let HostTarget::Validator(validator) = &admitted.target else {
@@ -6896,6 +7015,14 @@ fn ensure_state_move_intent(
         return Ok(intent);
     }
     let metadata = state.metadata()?;
+    if let HostTarget::Validator(validator) = &admitted.target {
+        if !validator.is_vacant() {
+            validator
+                .admitted_release()?
+                .service_state
+                .validate_state_identity(metadata.dev(), metadata.ino())?;
+        }
+    }
     let intent = StateMoveIntentV1 {
         schema: STATE_MOVE_INTENT_SCHEMA_V1.to_owned(),
         host_slug: admitted.target.slug().to_owned(),
@@ -6926,6 +7053,14 @@ fn load_state_move_intent(rollback: &Path, admitted: &HostAdmission) -> Result<S
         || intent.prior_inode == 0
     {
         return Err(eyre!("validator state-move intent is not this exact reset"));
+    }
+    if let HostTarget::Validator(validator) = &admitted.target {
+        if !validator.is_vacant() {
+            validator
+                .admitted_release()?
+                .service_state
+                .validate_state_identity(intent.prior_device, intent.prior_inode)?;
+        }
     }
     Ok(intent)
 }
@@ -8182,6 +8317,10 @@ fn reconcile_prior_manager_operations(admitted: &HostAdmission) -> Result<()> {
             ("stop", "stop", validator.systemd_unit.as_str()),
             ("start", "start", validator.systemd_unit.as_str()),
             ("restart", "restart", validator.systemd_unit.as_str()),
+            ("beacon-stop", "stop", validator.systemd_unit.as_str()),
+            ("beacon-start", "start", validator.systemd_unit.as_str()),
+            ("beacon-unit-reload", "daemon-reload", ""),
+            ("beacon-unit-rollback-reload", "daemon-reload", ""),
             ("install-unit-reload", "daemon-reload", ""),
             ("rollback-unit-reload", "daemon-reload", ""),
         ],
@@ -8300,11 +8439,12 @@ fn start_unit(admitted: &HostAdmission, label: &str, unit: &str) -> Result<()> {
 }
 
 fn restart_unit(admitted: &HostAdmission, validator: &ValidatorV1) -> Result<()> {
-    attest_loaded_systemd_unit(
-        validator,
-        &validator.systemd_unit_sha256,
-        admitted.action_deadline,
-    )?;
+    let active = beacon::active_binding(admitted, validator)?;
+    let unit_sha256 = active
+        .as_ref()
+        .map(|binding| binding.unit_sha256.as_str())
+        .unwrap_or(&validator.systemd_unit_sha256);
+    attest_loaded_systemd_unit(validator, unit_sha256, admitted.action_deadline)?;
     let receipt_dir = ensure_host_receipt_dir(admitted)?;
     let (intent, _) = read_private_json::<HostIntentV1>(
         &receipt_dir.join("restart.intent.json"),
@@ -8728,6 +8868,7 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
             }
             stop_unit(admitted, "rollback-stop", &validator.systemd_unit)?;
             if validator.is_vacant() {
+                beacon::restore_vacant_initial_unit(admitted, validator)?;
                 require_vacant_unit(admitted, true)?;
             }
             let previous = rollback.join("state");
@@ -8792,15 +8933,21 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 Path::new(&validator.admitted_release()?.release_root),
             )?;
             occupied::restore_validator_unit(admitted)?;
-            start_unit(admitted, "rollback-start", &validator.systemd_unit)?;
-            wait_for_validator_process(admitted.action_deadline, || {
-                observe_validator_process(
-                    admitted,
-                    validator,
-                    Path::new(&validator.admitted_release()?.release_root),
-                    false,
-                )
-            })
+            preserve_prior_service_state(
+                &validator.admitted_release()?.service_state,
+                || {
+                    start_unit(admitted, "rollback-start", &validator.systemd_unit)?;
+                    wait_for_validator_process(admitted.action_deadline, || {
+                        observe_validator_process(
+                            admitted,
+                            validator,
+                            Path::new(&validator.admitted_release()?.release_root),
+                            false,
+                        )
+                    })
+                },
+                || verify_occupied_predecessor(admitted, validator),
+            )
         }
         HostTarget::Edge(edge) => {
             if edge.is_vacant() {
@@ -8889,14 +9036,28 @@ fn verify_rollback_postcondition(admitted: &HostAdmission) -> Result<()> {
                 verify_populated_fresh_state_for_quarantine(&fresh_trash, admitted)?;
             }
             occupied::verify_restored_validator_unit(admitted)?;
-            require_session_manager_operation_applied(
-                admitted,
-                "rollback-start",
-                "start",
-                &validator.systemd_unit,
-            )?;
-            require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
-            attest_validator_process(admitted, validator, rollback, false)
+            preserve_prior_service_state(
+                &validator.admitted_release()?.service_state,
+                || {
+                    require_session_manager_operation_applied(
+                        admitted,
+                        "rollback-start",
+                        "start",
+                        &validator.systemd_unit,
+                    )?;
+                    require_unit_active(&validator.systemd_unit, admitted.action_deadline)?;
+                    attest_validator_process(admitted, validator, rollback, false)
+                },
+                || {
+                    require_session_manager_operation_applied(
+                        admitted,
+                        "rollback-stop",
+                        "stop",
+                        &validator.systemd_unit,
+                    )?;
+                    verify_occupied_predecessor(admitted, validator)
+                },
+            )
         }
         HostTarget::Edge(edge) => {
             let rollback = Path::new(&edge.admitted_release()?.release_root);
@@ -11610,31 +11771,34 @@ impl LocalArtifactClosure {
         Ok(Self { files })
     }
 
-    fn recover_cli(journal_dir: &Path, admitted: &AdmittedReset) -> Result<Self> {
+    fn recover_tools(journal_dir: &Path, admitted: &AdmittedReset) -> Result<Self> {
         let validator = admitted
             .inventory
             .validators
             .first()
-            .ok_or_else(|| eyre!("recovery inventory has no validator CLI source"))?;
-        let expected = artifact(&validator.artifacts, "iroha_cli")?;
+            .ok_or_else(|| eyre!("recovery inventory has no validator tool source"))?;
         let root = journal_dir
             .join("staged-artifacts-v1")
             .join(&admitted.inventory_sha256);
         validate_owner_private_dir(&root, "retained recovery artifact root")?;
-        let path = root
-            .join(&validator.slug)
-            .join(&admitted.inventory.authorization_nonce)
-            .join(staged_artifact_name("iroha_cli")?);
-        validate_snapshot_file(&path, expected)?;
-        let (file, snapshot) = open_pinned_regular(&path, "retained recovery CLI")?;
-        let files = BTreeMap::from([(
-            (validator.slug.clone(), "iroha_cli".to_owned()),
-            StagedArtifact {
-                path,
-                file,
-                snapshot,
-            },
-        )]);
+        let mut files = BTreeMap::new();
+        for role in ["iroha_cli", "iroha3d"] {
+            let expected = artifact(&validator.artifacts, role)?;
+            let path = root
+                .join(&validator.slug)
+                .join(&admitted.inventory.authorization_nonce)
+                .join(staged_artifact_name(role)?);
+            validate_snapshot_file(&path, expected)?;
+            let (file, snapshot) = open_pinned_regular(&path, "retained recovery tool")?;
+            files.insert(
+                (validator.slug.clone(), role.to_owned()),
+                StagedArtifact {
+                    path,
+                    file,
+                    snapshot,
+                },
+            );
+        }
         Ok(Self { files })
     }
 
@@ -11713,7 +11877,7 @@ fn snapshot_artifact(pinned: &PinnedArtifact, destination: &Path) -> Result<()> 
         destination,
         artifact.size,
         &artifact.sha256,
-        if artifact.role == "iroha_cli" {
+        if matches!(artifact.role.as_str(), "iroha_cli" | "iroha3d") {
             0o500
         } else {
             0o400
@@ -11727,7 +11891,7 @@ fn validate_snapshot_file(path: &Path, artifact: &ArtifactV1) -> Result<()> {
         path,
         artifact.size,
         &artifact.sha256,
-        if artifact.role == "iroha_cli" {
+        if matches!(artifact.role.as_str(), "iroha_cli" | "iroha3d") {
             0o500
         } else {
             0o400
@@ -13153,7 +13317,7 @@ impl<'a> RecoverySshTransport<'a> {
             admitted,
             journal_dir,
         )?;
-        let closure = LocalArtifactClosure::recover_cli(journal_dir, admitted)?;
+        let closure = LocalArtifactClosure::recover_tools(journal_dir, admitted)?;
         let local_receipt_parent = journal_dir.join("local-receipts-v1");
         ensure_private_directory(&local_receipt_parent)?;
         let local_receipt_root = local_receipt_parent.join(&admitted.authorization_sha256);
@@ -13786,8 +13950,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             inherited_files: Vec::new(),
             deadline,
         };
-        let ambiguous_recoverable =
-            matches!(action, HostAction::Restart | HostAction::MutationReserve) && !recovery_only;
+        let ambiguous_recoverable = matches!(
+            action,
+            HostAction::Restart | HostAction::BeaconActivate | HostAction::MutationReserve
+        ) && !recovery_only;
         let process = match self.runner.run(&spec) {
             Ok(process) => process,
             Err(error) if ambiguous_recoverable => {
@@ -15622,7 +15788,10 @@ pub(super) fn recovery_intent_identity_matches(
             })
 }
 
-fn build_recovery_intent(inventory: &InventoryV1, step: ExecutionStep) -> Option<RecoveryIntentV1> {
+pub(super) fn build_recovery_intent(
+    inventory: &InventoryV1,
+    step: ExecutionStep,
+) -> Option<RecoveryIntentV1> {
     let nonce = &inventory.authorization_nonce;
     let mutations = match step {
         ExecutionStep::Canary => inventory
@@ -15757,6 +15926,33 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         Err(_) => PreparedMutationOutcome::Pending,
                     }
                 }
+                "beacon_install" => match self.recover_beacon_install(progress, deadline) {
+                    Ok(()) => return Ok(RecoveryOutcome::ReadyToContinue),
+                    Err(_) => return Ok(RecoveryOutcome::Pending),
+                },
+                "beacon_provider_1" | "beacon_provider_2" | "beacon_provider_3"
+                | "beacon_provider_4" => {
+                    let slot = mutation
+                        .kind
+                        .strip_prefix("beacon_provider_")
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .and_then(|value| value.checked_sub(1))
+                        .ok_or_else(|| eyre!("invalid provider recovery slot"))?;
+                    match self.recover_beacon_provider(slot, deadline) {
+                        Ok(receipt) if receipt.status == "ok" => PreparedMutationOutcome::Applied {
+                            value: json::Value::Null,
+                            evidence: Vec::new(),
+                        },
+                        Ok(receipt) if receipt.status == "continue" => {
+                            ensure_authorization_current(self.admitted)?;
+                            return Ok(RecoveryOutcome::ResumeSubmittedBeaconActivation);
+                        }
+                        Ok(receipt) if receipt.status == "rejected" => {
+                            PreparedMutationOutcome::Rejected(receipt.detail)
+                        }
+                        Ok(_) | Err(_) => PreparedMutationOutcome::Pending,
+                    }
+                }
                 "onboarding" | "faucet" | "write_canary" => {
                     self.recover_write_canary_child_until(deadline, mutation)?
                 }
@@ -15848,12 +16044,21 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         let next_mutation = usize::from(intent.next_mutation);
         match step {
             ExecutionStep::Canary => {
+                let deadline = Instant::now()
+                    .checked_add(Duration::from_secs(inventory.timeouts.canary_secs))
+                    .ok_or_else(|| eyre!("beacon bootstrap deadline overflow"))?;
+                self.run_beacon_prefix(
+                    progress,
+                    next_mutation,
+                    super::recovery_ready_to_resume_beacon_activation(intent, step),
+                    deadline,
+                )?;
                 for (index, kind) in inventory
                     .qualification_scope
                     .canary_kinds()
                     .iter()
                     .enumerate()
-                    .skip(next_mutation)
+                    .skip(next_mutation.max(8))
                 {
                     match *kind {
                         "onboarding" | "faucet" | "write_canary" => self
@@ -18171,7 +18376,9 @@ fn verify_remote_recovery_receipt(request: &HostRequestV1, receipt: &HostReceipt
         || receipt.inventory_sha256 != sha256_hex(&inventory)
         || receipt.authorization_sha256 != request.authorization_semantic_sha256
         || receipt.authorization_nonce != inventory_value.authorization_nonce
-        || !matches!(receipt.status.as_str(), "ok" | "pending" | "rejected")
+        || !(matches!(receipt.status.as_str(), "ok" | "pending" | "rejected")
+            || (request.action == HostAction::BeaconActivate.label()
+                && receipt.status == "continue"))
         || receipt.bytes_before != 0
         || receipt.bytes_after != 0
         || receipt.reclaimed_bytes != 0
@@ -20632,6 +20839,7 @@ mod tests {
             Reset,
             Preseed,
             Start,
+            BeaconActivate,
             Restart,
             EdgeStage,
             EdgeCutover,
@@ -20744,6 +20952,48 @@ mod tests {
             json::from_value::<HostProgressV1>(missing).is_err(),
             "the exact V1 host progress must reject an omitted prepared_action slot"
         );
+    }
+
+    #[test]
+    fn beacon_activation_barrier_preserves_pre_ready_bootstrap_and_blocks_later_mutations() {
+        let mut admitted = progress_admission();
+        let plan = host_forward_plan(&admitted);
+        let activation = plan
+            .iter()
+            .position(|key| key.action == HostAction::BeaconActivate.label())
+            .unwrap();
+        let restart = plan
+            .iter()
+            .position(|key| key.action == HostAction::Restart.label())
+            .unwrap();
+        assert_eq!(restart - activation, 4);
+        assert!(
+            plan[..activation]
+                .iter()
+                .rev()
+                .take(4)
+                .all(|key| key.action == HostAction::Start.label())
+        );
+        let mut progress = initial_host_progress(&admitted);
+        progress.next_forward_ordinal = u16::try_from(activation).unwrap();
+        admitted.request.mutation_phase = "pre_edge".into();
+        for kind in ["onboarding", "faucet", "write_canary"] {
+            admitted.request.mutation_kind = kind.into();
+            validate_prepared_mutation_progress(&admitted, &progress).unwrap();
+        }
+        admitted.request.mutation_kind = "inrou_bundle_pin".into();
+        assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
+        progress.next_forward_ordinal = u16::try_from(restart).unwrap();
+        validate_prepared_mutation_progress(&admitted, &progress).unwrap();
+        admitted.request.mutation_kind = "write_canary".into();
+        assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
+        select_target(&mut admitted, "taira-validator-1");
+        progress.next_forward_ordinal = u16::try_from(activation).unwrap();
+        assert_eq!(
+            admit_host_action_progress(&admitted, HostAction::BeaconActivate, &progress).unwrap(),
+            HostProgressDecision::Advance
+        );
+        assert!(admit_host_action_progress(&admitted, HostAction::Restart, &progress).is_err());
     }
 
     #[test]
@@ -23666,7 +23916,7 @@ time.sleep(30)
         let inventory = super::super::sample_inventory_fixture();
         let canary = build_recovery_intent(&inventory, ExecutionStep::Canary)
             .expect("canary recovery intent");
-        assert_eq!(canary.mutations.len(), 7);
+        assert_eq!(canary.mutations.len(), 12);
         assert_eq!(
             canary
                 .mutations
@@ -23677,6 +23927,11 @@ time.sleep(30)
                 "onboarding",
                 "faucet",
                 "write_canary",
+                "beacon_install",
+                "beacon_provider_1",
+                "beacon_provider_2",
+                "beacon_provider_3",
+                "beacon_provider_4",
                 "inrou_bundle_pin",
                 "inrou_guest_pin",
                 "inrou_discovery_pin",
@@ -23760,7 +24015,16 @@ time.sleep(30)
                 .iter()
                 .map(|mutation| mutation.kind.as_str())
                 .collect::<Vec<_>>(),
-            ["onboarding", "faucet", "write_canary"]
+            [
+                "onboarding",
+                "faucet",
+                "write_canary",
+                "beacon_install",
+                "beacon_provider_1",
+                "beacon_provider_2",
+                "beacon_provider_3",
+                "beacon_provider_4"
+            ]
         );
         assert!(!recovery_intent_identity_matches(&canary, &full_canary));
         assert!(!recovery_intent_identity_matches(&full_canary, &canary));
@@ -23824,7 +24088,7 @@ time.sleep(30)
                 .collect::<Vec<_>>(),
             ["onboarding", "faucet", "write_canary"]
         );
-        let writes = canary
+        let envelopes = canary
             .mutations
             .iter()
             .chain(&restart.mutations)
@@ -23832,8 +24096,8 @@ time.sleep(30)
             .filter(|mutation| mutation.kind != "host_restart")
             .count();
         assert_eq!(
-            writes, 9,
-            "initial, single postrestart, and public-edge workflows retain immutable recovery evidence"
+            envelopes, 14,
+            "initial beacon install and four providers, single postrestart, and public-edge workflows retain immutable recovery evidence"
         );
         admitted.request.mutation_kind = "write_canary".to_owned();
         for phase in ["pre_edge", "restart-wave-1", "post_edge"] {
@@ -24262,7 +24526,8 @@ time.sleep(30)
         }
 
         let admitted = progress_admission();
-        validate_inventory(&admitted.inventory).expect("complete cohost fixture");
+        super::super::validate_inventory_structure(&admitted.inventory)
+            .expect("complete cohost fixture");
         let trusted = TrustedKeyV1 {
             schema: super::super::TRUSTED_KEY_SCHEMA_V1.to_owned(),
             algorithm: "ed25519".to_owned(),
@@ -24282,6 +24547,12 @@ time.sleep(30)
                     validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
                 }
             }
+            assert!(
+                super::super::validate_inventory_structure(&inventory)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("one authenticated SSH host identity")
+            );
             for slug in super::super::VALIDATOR_SLUGS
                 .iter()
                 .copied()
@@ -24299,11 +24570,9 @@ time.sleep(30)
                 let bytes = json::to_json(&request).expect("canonical host request");
                 let error = dispatch_host_request(bytes.as_bytes(), &mut UnreadBody)
                     .expect_err("direct host dispatch must reject unsupported topology");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("one authenticated SSH host identity"),
-                    "cohost_mask={mask} target={slug}: {error:#}"
+                super::super::assert_compiled_admission_error(
+                    &error,
+                    "one authenticated SSH host identity",
                 );
             }
         }
@@ -24323,7 +24592,8 @@ time.sleep(30)
                 admitted.inventory.inrou_stage_tree_sha256 = None;
                 admitted.authorization.claims.inrou_stage_tree_sha256 = None;
             }
-            validate_inventory(&admitted.inventory).expect("admitted cohost topology");
+            super::super::validate_inventory_structure(&admitted.inventory)
+                .expect("admitted cohost topology");
             let plan = host_forward_plan(&admitted);
             let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
             let slugs = admitted
@@ -24361,16 +24631,52 @@ time.sleep(30)
                     .map(|index| super::super::VALIDATOR_SLUGS[*index])
                     .collect::<Vec<_>>()
             );
-            assert_eq!(plan[first_restart - 1].action, HostAction::Start.label());
+            let first_beacon = plan
+                .iter()
+                .position(|key| key.action == HostAction::BeaconActivate.label())
+                .expect("first provider activation");
+            assert_eq!(plan[first_beacon - 1].action, HostAction::Start.label());
+            assert_eq!(first_restart, first_beacon + 4);
+            assert_eq!(
+                plan[first_beacon..first_restart]
+                    .iter()
+                    .map(|key| (key.action.as_str(), key.host_slug.as_str()))
+                    .collect::<Vec<_>>(),
+                super::super::VALIDATOR_SLUGS
+                    .iter()
+                    .map(|slug| (HostAction::BeaconActivate.label(), *slug))
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
-            let phases = std::iter::once(("pre_edge".to_owned(), first_restart))
+            let phases = ["onboarding", "faucet", "write_canary"]
+                .into_iter()
+                .map(|kind| ("pre_edge".to_owned(), kind, first_beacon))
                 .chain(
-                    (1..=scope.restart_validator_indices().len())
-                        .map(|wave| (format!("restart-wave-{wave}"), first_restart + wave)),
+                    [
+                        "inrou_bundle_pin",
+                        "inrou_guest_pin",
+                        "inrou_discovery_pin",
+                        "inrou_canary",
+                    ]
+                    .into_iter()
+                    .filter(|_| scope.includes_inrou())
+                    .map(|kind| ("pre_edge".to_owned(), kind, first_restart)),
                 )
-                .chain(std::iter::once(("post_edge".to_owned(), first_seal)));
-            for (phase, ordinal) in phases {
+                .chain((1..=scope.restart_validator_indices().len()).map(|wave| {
+                    (
+                        format!("restart-wave-{wave}"),
+                        "write_canary",
+                        first_restart + wave,
+                    )
+                }))
+                .chain(std::iter::once((
+                    "post_edge".to_owned(),
+                    "write_canary",
+                    first_seal,
+                )));
+            for (phase, kind, ordinal) in phases {
                 admitted.request.mutation_phase = phase.clone();
+                admitted.request.mutation_kind = kind.to_owned();
                 let mut progress = initial_host_progress(&admitted);
                 progress.next_forward_ordinal = u16::try_from(ordinal).expect("bounded plan");
                 validate_prepared_mutation_progress(&admitted, &progress)
@@ -24588,6 +24894,113 @@ time.sleep(30)
         );
         assert_eq!(opened, 2);
         assert_eq!(seen, BTreeSet::from([PathBuf::from("mnt:[42]")]));
+    }
+
+    #[test]
+    fn prior_service_state_never_restarts_stopped_or_falls_back_from_running() {
+        let stopped =
+            PriorValidatorServiceStateV1::Stopped(super::super::StoppedValidatorStateV1 {
+                device: 1,
+                inode: 2,
+            });
+        let verified = std::cell::Cell::new(false);
+        preserve_prior_service_state(
+            &stopped,
+            || panic!("stopped predecessor must neither start nor require a start receipt"),
+            || {
+                verified.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(verified.get());
+        let error = preserve_prior_service_state(
+            &stopped,
+            || panic!("failed absence must not restart predecessor"),
+            || Err(eyre!("foreign state or surviving process")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("foreign state"));
+        let error = preserve_prior_service_state(
+            &PriorValidatorServiceStateV1::Running,
+            || Err(eyre!("running predecessor is failed")),
+            || panic!("unavailable running process must never become stopped admission"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("running predecessor is failed"));
+        preserve_prior_service_state(
+            &PriorValidatorServiceStateV1::Running,
+            || Ok(()),
+            || panic!("running proof cannot use absence"),
+        )
+        .unwrap();
+        let invalid =
+            PriorValidatorServiceStateV1::Stopped(super::super::StoppedValidatorStateV1 {
+                device: 1,
+                inode: 0,
+            });
+        assert!(
+            preserve_prior_service_state(
+                &invalid,
+                || panic!("invalid signed state must not start"),
+                || panic!("invalid signed state must not admit absence")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn stopped_predecessor_absence_checks_cgroup_and_escaped_references() {
+        let root = tempfile::tempdir().unwrap();
+        let events = root.path().join("cgroup.events");
+        let evidence = b"ActiveState=failed\nSubState=failed\nMainPID=0\nControlPID=0\nControlGroup=/system.slice/iroha.service\nJob=\n";
+        let read = |path: &Path| {
+            assert_eq!(path, Path::new("/sys/fs/cgroup/system.slice/iroha.service"));
+            Ok(fs::read_to_string(&events)?)
+        };
+        for bytes in ["populated 1\n", "populated 0\npopulated 0\n", "frozen 0\n"] {
+            fs::write(&events, bytes).unwrap();
+            assert!(
+                validate_terminal_unit_absence_with(evidence, true, read, || {
+                    panic!("cgroup failure must precede process census")
+                })
+                .is_err()
+            );
+        }
+        fs::write(&events, "populated 0\nfrozen 0\n").unwrap();
+        let observed = std::cell::Cell::new(false);
+        validate_terminal_unit_absence_with(evidence, true, read, || {
+            observed.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            observed.get(),
+            "an empty service cgroup never substitutes for the global census"
+        );
+        let error = validate_terminal_unit_absence_with(evidence, true, read, || {
+            Err(eyre!("escaped child still holds retained state"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("escaped child"));
+        for (from, to) in [
+            ("MainPID=0", "MainPID=42"),
+            ("ControlPID=0", "ControlPID=42"),
+            ("Job=\n", "Job=1 /org/freedesktop/systemd1/job/1\n"),
+            ("ActiveState=failed", "ActiveState=activating"),
+            ("SubState=failed", "SubState=auto-restart"),
+        ] {
+            let changed = std::str::from_utf8(evidence).unwrap().replace(from, to);
+            assert!(
+                validate_terminal_unit_absence_with(
+                    changed.as_bytes(),
+                    true,
+                    |_| panic!("live service must fail before cgroup access"),
+                    || panic!("live service must fail before census")
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

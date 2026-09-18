@@ -10,10 +10,61 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
+## Validator epoch maintenance
+
+The network operator must provision and commit the next mint-finality roster
+before each NPoS boundary. The native `iroha taira epoch-maintenance` workflow
+uses independently selected public genesis/peer trust and a bounded public
+schedule produced by `kagami kagemusha derive-mint-finality-epoch-schedule-v1`.
+Run its `maintain` command alongside application traffic with a separate ledger
+owner holding `CanSetParameters`; an HTTP operator credential alone cannot
+submit the maintenance transaction. The DPN deployment receives no validator
+seed material and does not manage validator epochs.
+
+For boundary height B, the next roster must have executed by B−1. Queued
+maintenance needs three canonical carrier heights, so preparation rejects a
+parent later than B−4. These carriers contain actual admission, availability and
+parameter execution work. A public API listener or one successful deployment
+phase does not establish that the next epoch has been prepared.
+
+The maintainer retains one exact signed transaction per network and target epoch,
+observes uncertain submissions, and verifies its successful authenticated
+execution on all four validators. It stages the following roster only after an
+actual epoch transition. Its finite schedule and invocation budget require
+explicit renewal and supervision; it does not create empty blocks to reach a
+future epoch. Provisioning public keys does not prove future election membership.
+The workflow supports the selected fixed four-validator configuration and
+rejects observed membership changes. The consensus boundary remains authoritative.
+
 ## Commands
 
-Export the target profile from the assembled native reset inventory and the
-`prepare-public-inputs` bundle. No new trust JSON needs to be handwritten:
+For an existing network, export the target profile from the retained public
+signed genesis, its independently selected public key, checked NetworkId and
+four public peer records:
+
+```sh
+iroha taira dataspace-deploy export-profile \
+  --network-id CHECKED_NETWORK_ID \
+  --genesis-signed /ABSOLUTE/PUBLIC/genesis.signed.nrt \
+  --genesis-public-key /ABSOLUTE/PUBLIC/genesis.public_key \
+  --peers /ABSOLUTE/PUBLIC/peers.json \
+  --output /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json
+```
+
+`peers.json` is an array of the existing profile's four peer records, each with
+`torii_origin`, `peer_id`, `node_fingerprint`, `build_fingerprint` and
+`config_fingerprint`. Select these public pins independently from approved
+validator deployment evidence. A historical build pin must not be reused after
+an upgrade, and untrusted HTTP discovery must not become the expected authority.
+The command verifies the native signed genesis, checked network, exact four-peer
+roster and node hashes, then publishes the native trust format without replacing
+an existing file. Its receipt hashes the exact public inputs and output. It loads
+no client configuration or credentials and makes no network request. Export does
+not establish authorization or deployment success; plan and apply still compare
+fresh signed attestations against every selected pin.
+
+When preparing a reset, the existing assembled inventory and complete
+`prepare-public-inputs` bundle can also export the target profile:
 
 ```sh
 iroha taira public-reset export-deployment-profile \
@@ -123,6 +174,14 @@ with a named receipt. An incomplete result is printed before the command exits
 with an error, so automation can retain the report without mistaking it for a
 successful deployment. `status` reports an inspected operation's pending state
 without treating that state as a command failure.
+For a failed phase, the terminal error includes its transaction hash and the
+retained global/local `Rejected` or `Expired` observations, with source and any
+reported block height. For `Rejected`, one authenticated query requests the exact
+retained transaction's committed details. A matching rejected result supplies its
+native error chain; exact typed absence is reported as unavailable details. Other
+query or identity errors remain failures. `Expired` causes no details query, and
+no failed transaction is resubmitted. The formatter uses the retained report and
+never prints a signed payload or claims independently anchored completion.
 
 `apply` and `status` accept `--timeout-ms` (default `180000`). Each invocation
 creates one absolute deadline shared by its preflight, HTTP reads and proof

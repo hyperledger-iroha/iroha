@@ -25,6 +25,16 @@ fn derive_profile(
     wire: &[u8],
 ) -> Result<DeploymentTrustV1> {
     validate_inventory(inventory)?;
+    derive_admitted_profile(inventory, public, wire)
+}
+
+// The caller owns exact inventory admission. Keep the binding computation shared
+// with unit tests without replacing the production release identity check.
+fn derive_admitted_profile(
+    inventory: &InventoryV1,
+    public: &public_inputs::PublicInputsV1,
+    wire: &[u8],
+) -> Result<DeploymentTrustV1> {
     if inventory.next_genesis_hash != public.genesis_hash
         || inventory.canary_onboarding_request != public.canary_onboarding_request
         || sha256_hex(wire) != public.signed_genesis_sha256
@@ -152,6 +162,7 @@ mod tests {
             network_id: NetworkId::from_genesis_hash(genesis.hash()),
             genesis_hash: genesis_hash.clone(),
             signed_genesis_sha256: sha256_hex(&wire),
+            raw_manifest_sha256: "1".repeat(64),
             genesis_public_key: key.public_key().clone(),
             canary_public_key: canary.public_key().clone(),
             canary_onboarding_request: inventory.canary_onboarding_request.clone(),
@@ -182,14 +193,28 @@ mod tests {
                 }
             }
         }
+        inventory.beacon_bootstrap =
+            host::beacon::fixture_plan(&inventory.validators, &inventory.validator_clients);
+        inventory.beacon_bootstrap.request.dkg_session.network_id = public.network_id;
         inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
+        validate_inventory_structure(&inventory).expect("complete profile binding fixture");
         (inventory, public, wire)
     }
 
     #[test]
     fn deployment_profile_binds_native_genesis_and_ordered_inventory_peers() {
         let (inventory, public, wire) = fixture();
-        let profile = derive_profile(&inventory, &public, &wire).unwrap();
+        let profile = derive_admitted_profile(&inventory, &public, &wire).unwrap();
+        let admitted = derive_profile(&inventory, &public, &wire);
+        if test_compiled_release_commit().is_some() {
+            assert_eq!(
+                json::to_vec(&admitted.unwrap()).unwrap(),
+                json::to_vec(&profile).unwrap()
+            );
+        } else {
+            let error = admitted.expect_err("development executable cannot admit a release");
+            assert_compiled_admission_error(&error, "unused on development builds");
+        }
         assert_eq!(profile.peers.len(), 4);
         for (peer, client) in profile.peers.iter().zip(&inventory.validator_clients) {
             assert_eq!(peer.peer_id.to_string(), client.peer_id);
@@ -205,7 +230,12 @@ mod tests {
         let mut wrong = inventory.clone();
         wrong.next_genesis_hash = Hash::new(b"other genesis").to_string();
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
-        assert!(derive_profile(&wrong, &public, &wire).is_err());
+        assert!(
+            derive_admitted_profile(&wrong, &public, &wire)
+                .unwrap_err()
+                .to_string()
+                .contains("inventory differs from the selected native public input bundle"),
+        );
         let mut wrong = inventory.clone();
         wrong.validators[0]
             .artifacts
@@ -214,11 +244,21 @@ mod tests {
             .unwrap()
             .sha256 = "a".repeat(64);
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
-        assert!(derive_profile(&wrong, &public, &wire).is_err());
+        assert!(
+            derive_admitted_profile(&wrong, &public, &wire)
+                .unwrap_err()
+                .to_string()
+                .contains("inventory genesis artifact differs from public bundle"),
+        );
         let mut wrong = inventory.clone();
         wrong.validators.swap(0, 1);
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
-        assert!(derive_profile(&wrong, &public, &wire).is_err());
+        assert!(
+            derive_admitted_profile(&wrong, &public, &wire)
+                .unwrap_err()
+                .to_string()
+                .contains("deployment profile validator slots differ"),
+        );
         let mut wrong = inventory;
         let foreign =
             iroha_crypto::KeyPair::try_from_seed(vec![99; 32], Algorithm::BlsNormal).unwrap();
@@ -226,7 +266,12 @@ mod tests {
         wrong.validator_clients[0].peer_id = peer.to_string();
         wrong.validators[0].node_fingerprint = Hash::new(peer.encode()).to_string();
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
-        assert!(derive_profile(&wrong, &public, &wire).is_err());
+        assert!(
+            derive_admitted_profile(&wrong, &public, &wire)
+                .unwrap_err()
+                .to_string()
+                .contains("validator profile must bind four distinct genesis peers and endpoints"),
+        );
     }
 
     #[test]

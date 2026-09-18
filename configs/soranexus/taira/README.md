@@ -391,23 +391,29 @@ target/release/iroha taira public-reset preflight \
 ```
 
 Before preflight, use the same compiled CLI to create the inventory and owner
-signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
+signature locally. `assemble` accepts an unsigned inventory draft with explicit
 approved endpoints and host pins, target occupancy, previous/next genesis anchors,
 source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+The draft must omit `beacon_bootstrap`; native assembly derives this required
+signed-inventory field from the validated public bundle and final unit inputs.
+Do not copy a predecessor's generated beacon plan into a fresh draft.
 The required `qualification_scope` is `core_testnet` for basic Taira/BPNG
-testing or `inrou` for the additional VM workload qualification. Core scope
-runs the onboarding, faucet and write canaries, four-validator convergence and
+testing or `full_inrou` for the additional VM workload qualification. Core scope
+runs the onboarding, faucet and write canaries during fresh beacon provisioning,
+installs the certified session and all four providers, then checks convergence and
 one validator restart followed by the same three canaries, and public Torii/MCP
 checks. Inrou scope exercises all four restart waves and adds its four
 prepared mutations and live workload checks. Inventory, authorization, journal
 and report bind the same scope; recovery cannot change it. A core result does
 not establish Inrou workload readiness. Both scopes retain the installation
 stage/preseed barrier and the same host rollback plan.
-Render validator units using `scripts/taira_validator_unit.py`, then bind the
-generated unit bytes into the inventory. Type=exec waits for the inline signer
-custody launcher; native checks still require the actual daemon and readiness.
-It fills derived hashes, sizes, modes, source/stage identities and validator
-fingerprints from the actual files, then runs the existing admission checks.
+Render initial validator units using the authenticated same-revision
+`scripts/taira_validator_unit.py`, then bind those bytes into the original seven
+artifacts. The separately rendered final beacon units select `beacon.toml` and
+FD200 custody. Type=exec waits for the inline signer custody launcher; native
+checks still require the actual daemon and readiness. Native assembly fills
+derived hashes, sizes, modes, source/stage identities and validator fingerprints
+from the actual files, then runs the existing admission checks.
 Generate its source manifest with `iroha taira public-reset source-manifest
 --source-root DIR` from the exact clean `optimizations` checkout. Taira's signed
 genesis must use NPoS; each supplied validator config must bind that actual genesis
@@ -434,12 +440,45 @@ read-only private descriptor. Assembly verifies all four validator configs and
 the dedicated key against the inventory; account and validator keys are separate
 credentials.
 
-Both commands below require the same local file arguments. Paths are illustrative;
-use the approved release's actual inputs and an existing mode-0700 output directory.
-The four client configs and four systemd units must be in validator order.
+Prepare the complete public bundle and nonce-bound beacon inputs natively before
+assembly. Paths are illustrative; use the approved release's actual generated
+network and unsigned draft, with fresh outputs in an owner-only runtime directory:
+
+```bash
+target/release/iroha taira public-reset prepare-public-inputs \
+  --localnet-dir /private/runtime/taira-public-reset/network \
+  --inventory-draft /private/runtime/taira-public-reset/inventory-draft.json \
+  --output-dir /private/runtime/taira-public-reset/public-inputs
+target/release/iroha taira public-reset prepare-beacon-inputs \
+  --inventory-draft /private/runtime/taira-public-reset/inventory-draft.json \
+  --public-inputs /private/runtime/taira-public-reset/public-inputs \
+  --output /private/runtime/taira-public-reset/beacon-inputs.json
+```
+
+The five-file public bundle includes the raw `genesis.json` and its authenticated
+manifest hash. Incomplete four-file bundles are rejected; prepare a fresh complete
+bundle. The second command derives the request and four ordered final-unit inputs
+from native-validated genesis and the draft's nonce. Use each returned
+`credential_path` unchanged with the authenticated renderer's
+`--global-beacon-credential` and `--config-file beacon.toml`, preserving the initial
+unit's exact runtime-key and mint-finality-seed paths. Render four fresh mode0644
+final unit files; do not modify the initial units or construct beacon request JSON
+by hand. The [maintained retry caller](../../../docs/source/taira_retry.md)
+authenticates the pinned renderer and initial units and performs these steps for
+its admitted rolled-back deployment scope.
+
+Assembly and authorization require the same local arguments below. The four client
+configs, initial units and final beacon units must each be in validator order.
+This example uses `full_inrou`; omit `--inrou-stage-dir` for `core_testnet`.
 
 ```bash
 reset_local_inputs=(
+  --public-inputs /private/runtime/taira-public-reset/public-inputs
+  --beacon-inputs /private/runtime/taira-public-reset/beacon-inputs.json
+  --beacon-validator-unit /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-1.service
+    /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-2.service
+    /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-3.service
+    /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-4.service
   --runtime-client-config /private/runtime/taira-public-reset/client.toml
   --validator-client-config /private/runtime/taira-public-reset/client1.toml
     /private/runtime/taira-public-reset/client2.toml
@@ -448,10 +487,10 @@ reset_local_inputs=(
   --validator-operator-key /private/runtime/taira-public-reset/validator-operator.key
   --onboarding-token /private/runtime/taira-public-reset/onboarding-token
   --inrou-stage-dir /private/runtime/taira-public-reset/inrou-stage
-  --validator-unit /private/runtime/taira-public-reset/validator1.service
-    /private/runtime/taira-public-reset/validator2.service
-    /private/runtime/taira-public-reset/validator3.service
-    /private/runtime/taira-public-reset/validator4.service
+  --validator-unit /private/runtime/taira-public-reset/initial-units/iroha3d-taira-validator-1.service
+    /private/runtime/taira-public-reset/initial-units/iroha3d-taira-validator-2.service
+    /private/runtime/taira-public-reset/initial-units/iroha3d-taira-validator-3.service
+    /private/runtime/taira-public-reset/initial-units/iroha3d-taira-validator-4.service
   --edge-unit /private/runtime/taira-public-reset/edge.service
   --known-hosts /private/runtime/taira-public-reset/known_hosts
 )
@@ -527,7 +566,14 @@ fields are required; vacant state accepts only `null` content. Unknown fields,
 unknown discriminators, and retired rollback shapes are rejected. There is no
 implicit predecessor or legacy rollback field. An admitted release binds its
 actual prior commit, canonical `releases/<commit>` directory, and exact artifact
-hashes. A vacant
+hashes. Every occupied validator record also requires `service_state`: explicitly
+`running` with null content, or `stopped` with the independently selected state
+root's `device` and nonzero `inode`. Missing state has no default. Running requires
+the exact live prior process; a failed probe never changes it to stopped. Stopped
+requires the exact prior artifacts, loaded unit and selector, a terminal inactive
+or failed unit with no job/PID/cgroup members or escaped state references, and the
+signed state directory identity. This is occupied state, never vacancy or a claim
+that the predecessor is healthy. A vacant
 target still requires independent trusted dispatcher/guard provisioning,
 Linux/AArch64, and validator KVM API 12; it requires no running predecessor.
 The network's `previous_genesis_hash` remains the actual public reset anchor,
@@ -542,14 +588,33 @@ empty cgroup membership, and bounded process/file/mount-namespace references
 before accepting vacancy. Service, state, guard, and first-edge route roots
 must share the filesystem used for atomic rollback quarantine.
 
-The canonical plan starts all validators, stages and activates the edge, then
-runs public convergence, canaries, and restart proofs. First edge activation
+The canonical plan starts all validators, runs native beacon bootstrap and
+canaries, then convergence and restart proofs before staging and activating the
+edge. The signed initial epoch must accommodate actual QueuePlan and execution
+carriers before exact-height threshold-key installation and signer activation.
+Native bootstrap records authenticated committed heights, including jumps
+between useful operations. It never advances phases with empty blocks.
+First edge activation
 uses a durable start operation. A failed first installation stops its service,
 restores the exact original empty state inode, removes only its admitted
 selector, and atomically retains its candidate release/configuration in the
 private authorization rollback namespace. It never starts a fictitious prior
 release or deletes unproven state. Failure to prove ownership or shutdown
 retains the evidence and leaves rollback incomplete.
+
+An occupied reset atomically renames each complete prior state directory to
+`<reset_guard>/rollback/<authorization_nonce>/state` on the same filesystem and
+starts a fresh active directory from the approved new genesis. The archive is a
+local retained tree, not an off-host backup or a migration of old ledger data.
+Existing accounts, balances, aliases, contracts and catalog state remain in that
+old chain unless explicitly included in the new genesis; the new network identity
+requires new client/trust bindings. Keep the exact prior artifacts and archive.
+Before deployment is proven, rollback restores the old directory inode, release
+selector and unit. A signed running predecessor must restart and pass process
+attestation; a signed stopped predecessor remains stopped with absence rechecked.
+Restoring a failed predecessor does not repair it. Unresolved mutation outcomes
+remain journaled, and a proven deployment proceeds through sealing/cleanup rather
+than rollback. A reset requires explicit approval of this state replacement.
 
 The rendered validator configuration must replace the dedicated
 `REPLACE_WITH_TAIRA_CANARY_ONBOARDING_*` fields with one credential scoped to

@@ -64,10 +64,10 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+        "8fe0b1dcdf61ec3a5ff9fb5081e95bfd9726b858b78e1206c4e73fa18370e6eb"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+        "99f133b20edf8e0ec6be9c0ccdbdb5a36de78ae7f851cd3ceac37aef60325a3f"
     ),
 }
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -163,6 +163,7 @@ _PREBUILT_BINARY_SPECS = (
     ),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
+    ("irohad_taira", "release/iroha3d_taira"),
 )
 _PREBUILT_MANIFEST_FIELDS = (
     "schema_version",
@@ -192,7 +193,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "fe65c02642f1eba64e6ad356e12eaf4120c7ac42bb389d10cb7a14b609de2705"
+    "dcd28f4902a450d914140e008d3a4a99067064e91f3dfc80ea73f4351a7b9e9a"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -247,15 +248,15 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+        "8fe0b1dcdf61ec3a5ff9fb5081e95bfd9726b858b78e1206c4e73fa18370e6eb"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+        "99f133b20edf8e0ec6be9c0ccdbdb5a36de78ae7f851cd3ceac37aef60325a3f"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
+        "f9e8e8ff5f745163a66d24f14ccd2362f100314752471b2981ceaf6eed05d888"
     ),
 }
 _APPROVAL_CLASS_IDS = (

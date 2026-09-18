@@ -275,19 +275,50 @@ Derive the complete public identity bundle using the maintained CLI:
 
     iroha taira public-reset prepare-public-inputs \
       --localnet-dir /absolute/private/generated-network \
-      --canary-public-key /absolute/private/canary/public.key \
+      --inventory-draft /absolute/private/inventory-draft.json \
       --output-dir /absolute/private/public-inputs
 
-The command uses native signed-genesis validation and the shared canary request
-constructor. It atomically writes `genesis.signed.nrt`, `genesis.hash`,
-`canary-onboarding-request.json` and `public-inputs.json` as 0644 public artifacts
-inside a 0700 directory. The hash file contains the native consensus genesis
-hash, not a SHA256 of the wire file; the typed record names both values explicitly.
-Repeating an identical request verifies the retained bundle; conflicting output
-is never replaced. It reads only the public generator files and canary public key.
-`public-reset assemble` and `authorize` require `--public-inputs DIR` and derive
-the next genesis hash and canary request from that validated bundle. The existing
-full execution, source, config and authorization checks remain required.
+The unsigned draft must omit the generated `beacon_bootstrap` field, including
+when it is derived from a predecessor inventory. Native validation extracts the
+canary public identity from its exact onboarding request and validates the signed
+genesis against the generated raw manifest. The command atomically writes five
+public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
+`canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
+mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
+the native consensus genesis hash from the signed wire's SHA256. An incomplete
+four-file bundle is rejected; prepare a fresh complete output. Repeating an
+identical complete request verifies the retained bundle without replacing it.
+The explicit `--canary-public-key PATH` alternative is mutually exclusive with
+`--inventory-draft` and reads only that public key.
+
+Derive the fresh beacon request and exact per-validator credential paths from the
+same draft and public bundle:
+
+    iroha taira public-reset prepare-beacon-inputs \
+      --inventory-draft /absolute/private/inventory-draft.json \
+      --public-inputs /absolute/private/public-inputs \
+      --output /absolute/private/beacon-inputs.json
+
+Use the authenticated same-revision unit renderer for each returned final-unit
+entry, preserving its initial runtime-key and mint-finality-seed paths and using
+the exact native `credential_path` with `--global-beacon-credential` and
+`--config-file beacon.toml`. The [maintained retry caller](taira_retry.md) verifies
+the pinned renderer and initial units before rendering these four final mode0644
+units. The native request is not hand-authored JSON.
+
+Both `public-reset assemble` and `authorize` require the same `--public-inputs DIR`,
+`--beacon-inputs PATH` and four ordered `--beacon-validator-unit` paths, in addition
+to their original local inputs. Native assembly independently rederives the
+request, seat map and required signed `beacon_bootstrap` plan; the original seven
+artifacts and initial units remain unchanged. See the complete
+[assembly example](../../configs/soranexus/taira/README.md#public-reset).
+The existing execution, source, config and authorization checks remain required.
+The signed genesis must leave room for onboarding, funding, the canary's real
+QueuePlan admission and execution carriers, and certificate installation before
+the first mandatory pulse. Finalization uses the authenticated observed height.
+The sole threshold-key certificate uses signed Ordinary admission, retaining its
+exact next-height and current-roster quorum checks; other public transactions
+continue to use QueuePlanSynced admission.
 
 Public validator client settings can reference the native-generated
 `runtime/taira-runtime-signers/peerN.private_key` sidecar through
@@ -304,9 +335,23 @@ Each candidate validator includes a seventh `validator_unit` artifact at
 match the explicit validator unit input and digest. Reset execution durably
 retains the prior unit, records publication intent, atomically installs the
 candidate unit and records the exact service-manager reload. Interrupted forward
-and rollback publication resume only from that durable evidence. Rollback
-restores the old unit, selector and retained state before proving the old process
-again; cleanup protects every admitted prior artifact root.
+and rollback publication resume only from that durable evidence. An occupied
+validator additionally signs its required prior `service_state`: `running`, or
+`stopped` with the independently selected state-root device/inode. There is no
+implicit state or fallback from a failed running-process check. Both modes retain
+all exact prior artifact, loaded-unit, selector and custody checks. Stopped mode
+also proves no service job, PID, populated cgroup or escaped state reference.
+
+Reset retains the original state inode at
+`<reset_guard>/rollback/<authorization_nonce>/state` by same-filesystem rename;
+it does not copy old ledger contents into the newly initialized chain or create
+an off-host backup. Approval must identify the old/new genesis and resulting
+active-state loss. Rollback before deployment proof restores the old unit,
+selector and retained state. Running mode proves the restored old process;
+stopped mode stays stopped and proves absence, without claiming recovery or
+health. Cached and conservative rollback use the same signed state. Cleanup
+protects every admitted prior artifact root. Proven deployments cannot roll back
+through this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently

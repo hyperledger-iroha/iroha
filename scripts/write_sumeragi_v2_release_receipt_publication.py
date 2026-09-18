@@ -1532,7 +1532,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami", "iroha3d_taira"},
         "aggregate prebuilt release directory",
     )
     _prebuilt_directory_inventory(

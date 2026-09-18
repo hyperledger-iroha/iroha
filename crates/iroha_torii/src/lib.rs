@@ -14245,7 +14245,8 @@ async fn handler_health(
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Admission remains unavailable until Queue startup reconciliation finishes.
+/// probe. Queue startup and consensus admission must be available. Beacon setup
+/// additionally gates this production probe while leaving installation ingress open.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
@@ -14272,6 +14273,11 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
             "Consensus admission is unavailable",
         )
             .into_response();
+    }
+    if let Some(sumeragi) = &app.sumeragi
+        && let Err(reason) = sumeragi.global_beacon_readiness(app.state.as_ref())
+    {
+        return (StatusCode::SERVICE_UNAVAILABLE, reason.to_string()).into_response();
     }
     let replay_archive_required = app
         .state
@@ -25213,6 +25219,9 @@ fn normalize_proxied_transaction_submission_response(
     response
 }
 #[cfg(feature = "connect")]
+mod threshold_key_lifecycle_ingress;
+
+#[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>,
@@ -25229,11 +25238,9 @@ async fn execute_torii_transaction_via_proxy(
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
     if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return torii_proxy_error_response(
-            StatusCode::CONFLICT,
-            "queue_plan_admission_intent_mismatch",
-            "public transaction submission requires a signature-bound QueuePlanSynced admission intent",
-        );
+        return threshold_key_lifecycle_ingress::submit(
+            app.clone(), accepted_transaction, routing_plan, minimal_response, format,
+        ).await;
     }
     // An ordinary durable ingress/gossip claim deliberately has no global identity yet. It is
     // not a public QueuePlanSynced retry: construct the canonical global binding below and let

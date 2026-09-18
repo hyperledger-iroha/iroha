@@ -159,6 +159,14 @@ fn validate_operation_payload(
                 session_network_id,
             )?;
         }
+        (slot, OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            let _ = decode_global_beacon_capability_attest_request(
+                &request.payload,
+                session_network_id,
+            )?;
+        }
         (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)
             if slot == bootle_lantern_issuance_slot =>
         {
