@@ -117,7 +117,7 @@ fn either_busy_writer_returns_original_values_and_releases_partial_locks() {
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .err()
             .unwrap();
-        assert_eq!(error, PublicationPreparationError::Busy);
+        assert!(matches!(error, PublicationPreparationError::Busy(_)));
         assert_eq!(returned.change.as_ref().unwrap().1.as_ptr(), ptr);
         drop(current);
         drop(undo);

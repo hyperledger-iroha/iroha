@@ -13,7 +13,11 @@ use iroha_core::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    block::{SignedBlock, lane_admission::LaneAdmittedInputV1},
+    block::{
+        SignedBlock,
+        execution_output::{ExecutionOutputV1, TriggerFailureRootV1},
+        lane_admission::LaneAdmittedInputV1,
+    },
     isi::{
         InstructionBox, SetParameter,
         consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1},
@@ -204,7 +208,7 @@ impl Projection {
         let tx = match entrypoint {
             TransactionEntrypoint::External(tx) => Some(tx),
             TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         };
         let occurrence = norito::json!({
             "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
@@ -216,27 +220,107 @@ impl Projection {
         if let Some(tx) = tx {
             self.executable(tx.instructions(), &occurrence)?;
         }
-        match entrypoint {
-            TransactionEntrypoint::Time(time) => {
-                for (index, isi) in time.instructions.iter().enumerate() {
-                    self.instruction(isi, &occurrence, format!("time_trigger/{index}"))?;
-                }
-            }
-            TransactionEntrypoint::SealedCommitment(_) => {
-                self.gap("sealed_commitment_bodies_unavailable")
-            }
-            _ => {}
+        if matches!(entrypoint, TransactionEntrypoint::SealedCommitment(_)) {
+            self.gap("sealed_commitment_bodies_unavailable");
         }
-        if let Some(Ok(steps)) = result.map(|result| result.as_ref()) {
+        if let Some(result) = result {
+            self.recorded_steps(result, &occurrence, "recorded_trigger")?;
+        }
+        Ok(())
+    }
+
+    // A full result owns nested Data and ExecuteTrigger steps together. It does
+    // not encode which dispatch mechanism selected each step; do not invent it.
+    fn recorded_steps(
+        &mut self,
+        result: &iroha_data_model::transaction::signed::TransactionResult,
+        occurrence: &Value,
+        path: &str,
+    ) -> Result<()> {
+        if let Ok(steps) = result.as_ref() {
             for (step_index, step) in steps.iter().enumerate() {
                 for (index, isi) in step.instructions.iter().enumerate() {
-                    self.instruction(
-                        isi,
-                        &occurrence,
-                        format!("recorded_data_trigger/{step_index}/{index}"),
-                    )?;
+                    self.instruction(isi, occurrence, format!("{path}/{step_index}/{index}"))?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn output(
+        &mut self,
+        block: &SignedBlock,
+        index: usize,
+        output: &ExecutionOutputV1,
+    ) -> Result<()> {
+        let (source, invocation, result, failure_root, completions) = match output {
+            ExecutionOutputV1::Network(row) => {
+                let input_index = usize::try_from(row.input_index)?;
+                let entrypoint = block
+                    .network_entrypoint_at(input_index)
+                    .ok_or_else(|| eyre!("Network output lacks its exact input"))?;
+                let source = if block
+                    .execution_context()
+                    .is_some_and(|c| c.native_lane_decisions.is_some())
+                {
+                    "native_decision_execution"
+                } else {
+                    "block_network_execution"
+                };
+                return self.entrypoint(
+                    entrypoint,
+                    block,
+                    source,
+                    input_index,
+                    Some(&row.result),
+                    None,
+                );
+            }
+            ExecutionOutputV1::Pipeline(row) => (
+                "pipeline_execution",
+                json::to_value(&row.invocation)?,
+                &row.result,
+                &row.failure_root,
+                &row.completions,
+            ),
+            ExecutionOutputV1::Time(row) => (
+                "time_execution",
+                json::to_value(&row.invocation)?,
+                &row.result,
+                &row.failure_root,
+                &row.completions,
+            ),
+        };
+        self.count(source);
+        let occurrence = norito::json!({
+            "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
+            "source": source, "output_index": index, "output_hash": (iroha_crypto::HashOf::new(output).to_string()),
+            "invocation": invocation, "completion_count": (completions.len()),
+            "stored_outcome": (outcome(Some(result))), "authenticated_execution_verified": false
+        });
+        self.recorded_steps(result, &occurrence, "recorded_trigger")?;
+        match failure_root {
+            Some(TriggerFailureRootV1::DeclaredInstructionProjection(step))
+            | Some(TriggerFailureRootV1::ReturnedBeforeRollback(step)) => {
+                let path = if matches!(
+                    failure_root,
+                    Some(TriggerFailureRootV1::DeclaredInstructionProjection(_))
+                ) {
+                    "rejected_declared_trigger"
+                } else {
+                    "rolled_back_trigger"
+                };
+                for (index, isi) in step.iter().enumerate() {
+                    self.instruction(isi, &occurrence, format!("{path}/{index}"))?;
+                }
+            }
+            Some(
+                TriggerFailureRootV1::OmittedByOutputLimit
+                | TriggerFailureRootV1::OmittedAfterRejection,
+            ) => {
+                self.gap("rejected_trigger_program_omitted");
+            }
+            None => {}
         }
         Ok(())
     }
@@ -258,6 +342,16 @@ fn project_block(
     sidecars: &BTreeMap<String, Vec<u8>>,
     used: &mut BTreeSet<String>,
 ) -> Result<()> {
+    block
+        .validate_proposal_commitments()
+        .map_err(|_| eyre!("block proposal commitments differ"))?;
+    if block.has_results() {
+        // The immutable proposal commits network inputs. BlockResult owns the
+        // separate complete output tree, including internal invocation identities.
+        block
+            .validate_output_merkle_cache()
+            .map_err(|_| eyre!("block typed output ownership or Merkle cache differs"))?;
+    }
     if let Some(context) = block.execution_context() {
         context
             .validate_native_lane_decisions_shape()
@@ -356,44 +450,8 @@ fn project_block(
         }
     }
     if block.has_results() {
-        block
-            .validate_entrypoint_merkle_cache()
-            .map_err(|_| eyre!("block entrypoint Merkle cache differs"))?;
-        block
-            .validate_result_merkle_cache()
-            .map_err(|_| eyre!("block result Merkle cache differs"))?;
-        // Consensus commits physical external inputs; the retained execution
-        // tree additionally includes native inputs and Time entrypoints.
-        let external_root = block
-            .external_entrypoints_slice()
-            .iter()
-            .map(TransactionEntrypoint::hash)
-            .collect::<iroha_crypto::MerkleTree<_>>()
-            .root();
-        if external_root != block.header().merkle_root()
-            || block
-                .result_hashes()
-                .collect::<iroha_crypto::MerkleTree<_>>()
-                .root()
-                != block.header().result_merkle_root()
-        {
-            return Err(eyre!(
-                "block header differs from its retained execution roots"
-            ));
-        }
-        if block.entrypoint_hashes().len() != block.results().len() {
-            return Err(eyre!("block entrypoint/result count differs"));
-        }
-        let source = if block
-            .execution_context()
-            .is_some_and(|c| c.native_lane_decisions.is_some())
-        {
-            "native_decision_execution"
-        } else {
-            "block_entrypoint_execution"
-        };
-        for (index, entrypoint, result) in block.entrypoint_results() {
-            projection.entrypoint(&entrypoint, block, source, index, Some(result), None)?;
+        for (index, output) in block.execution_outputs().iter().enumerate() {
+            projection.output(block, index, output)?;
         }
     } else {
         for (index, entrypoint) in block.network_entrypoints().enumerate() {
@@ -583,16 +641,28 @@ mod tests {
     use super::*;
     use iroha_core::{block::BlockBuilder, tx::AcceptedTransaction};
     use iroha_crypto::HashOf;
-    use iroha_data_model::trigger::{DataTriggerSequence, TimeTriggerEntrypoint};
     use iroha_data_model::{
         NetworkId,
         account::AccountId,
-        block::BlockHeader,
+        block::{
+            BlockHeader,
+            execution_output::{
+                InvocationCompletionV1, NetworkExecutionOutputV1, PipelineEventPositionV1,
+                PipelineExecutionOutputV1, PipelineInvocationV1, TimeExecutionOutputV1,
+                TimeInvocationV1, TriggerUseV1,
+            },
+            output_budget::ExecutionOutputLimits,
+        },
+        events::{
+            time::{TimeEvent, TimeInterval},
+            trigger_completed::TriggerCompletedOutcome,
+        },
         isi::{Log, consensus_keys::ThresholdKeyLifecycleCertificateV1},
         transaction::{
             ExecutionStep, FeePaymentIntent, IvmBytecode, TransactionBuilder,
-            signed::{TransactionResult, TransactionResultInner},
+            signed::TransactionResult,
         },
+        trigger::DataTriggerStep,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::{borrow::Cow, sync::Arc};
@@ -639,6 +709,60 @@ mod tests {
             .unpack(|_| {})
             .into();
         Arc::new(block)
+    }
+    // Public report fixtures claim only structural output coherence, never State
+    // execution, trigger selection, finality or provider authority.
+    fn attach_outputs(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
+        block
+            .set_execution_outputs(
+                outputs,
+                0,
+                BTreeMap::new(),
+                Vec::new(),
+                Default::default(),
+                BTreeSet::new(),
+                Vec::new(),
+                &ExecutionOutputLimits {
+                    max_outputs: 16,
+                    max_output_bytes: 1024 * 1024,
+                    max_total_output_bytes: 4 * 1024 * 1024,
+                    max_executed_wire_bytes:
+                        iroha_data_model::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+                },
+            )
+            .expect("structurally coherent typed outputs");
+    }
+    fn network_output(steps: Vec<DataTriggerStep>) -> ExecutionOutputV1 {
+        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Ok(steps)),
+            completions: Vec::new(),
+        })
+    }
+    fn trigger_use(block: &SignedBlock, name: &str) -> TriggerUseV1 {
+        TriggerUseV1 {
+            trigger_id: name.parse().expect("trigger ID"),
+            registered_at_height: block.header().height().get() - 1,
+            action_hash: Hash::new(name.as_bytes()),
+        }
+    }
+    fn trigger_step(name: &str) -> DataTriggerStep {
+        DataTriggerStep {
+            id: name.parse().expect("trigger ID"),
+            instructions: ExecutionStep(vec![lifecycle()].into()),
+        }
+    }
+    fn time_invocation(block: &SignedBlock) -> TimeInvocationV1 {
+        TimeInvocationV1 {
+            schedule_index: 0,
+            event: TimeEvent {
+                interval: TimeInterval {
+                    since_ms: block.header().creation_time_ms.saturating_sub(1),
+                    length_ms: 1,
+                },
+            },
+            trigger: trigger_use(block, "beacon_lifecycle_timer"),
+        }
     }
     fn store(block: &SignedBlock) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("store directory");
@@ -754,7 +878,7 @@ mod tests {
             projection
                 .records
                 .iter()
-                .any(|row| row["instruction_path"].as_str() == Some("recorded_data_trigger/0/0"))
+                .any(|row| row["instruction_path"].as_str() == Some("recorded_trigger/0/0"))
         );
     }
 
@@ -768,32 +892,36 @@ mod tests {
             .into(),
         ]))
         .clone();
-        let time = TimeTriggerEntrypoint {
-            id: "beacon_lifecycle_timer".parse().expect("trigger ID"),
-            instructions: ExecutionStep(vec![lifecycle()].into()),
-            authority: AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()),
-        };
-        let hashes = [
-            block.external_entrypoints_slice()[0].hash(),
-            time.hash_as_entrypoint(),
-        ];
-        block
-            .set_transaction_results(
-                vec![time],
-                &hashes,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("attach canonical external and Time results");
-        assert_ne!(block.full_entry_merkle_root(), block.header().merkle_root());
+        let proposal_header = block.header();
+        let input_hash = block.external_entrypoints_slice()[0].hash();
+        let time = ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            invocation: time_invocation(&block),
+            result: TransactionResult::new(Ok(vec![trigger_step("beacon_lifecycle_timer")])),
+            failure_root: None,
+            completions: Vec::new(),
+        });
+        attach_outputs(&mut block, vec![network_output(Vec::new()), time]);
+        assert_eq!(block.header(), proposal_header);
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 2);
         assert_eq!(
             block.header().merkle_root(),
-            [hashes[0]]
+            [input_hash]
                 .into_iter()
                 .collect::<iroha_crypto::MerkleTree<_>>()
                 .root()
+        );
+        assert_ne!(
+            block
+                .network_input_merkle_commitment()
+                .expect("input commitment")
+                .root()
+                .to_string(),
+            block
+                .output_merkle_commitment()
+                .expect("output commitment")
+                .root()
+                .to_string()
         );
         let dir = store(&block);
         let mut output = Vec::new();
@@ -804,7 +932,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0]["instruction_path"].as_str(),
-            Some("time_trigger/0")
+            Some("recorded_trigger/0/0")
         );
         assert_eq!(
             records[0]["occurrence"]["stored_outcome"].as_str(),
@@ -815,31 +943,200 @@ mod tests {
             Some(false)
         );
 
-        // Keep both header commitments mandatory even though their input sets differ.
-        for field in ["merkle_root", "result_merkle_root"] {
-            let mut corrupt = json::to_value(&block).expect("fixture JSON");
-            corrupt
-                .as_object_mut()
-                .expect("block object")
-                .get_mut("payload")
-                .expect("block payload")
-                .as_object_mut()
-                .expect("payload object")
-                .get_mut("header")
-                .expect("block header")
-                .as_object_mut()
-                .expect("header object")
-                .insert(field.to_owned(), Value::Null);
-            let corrupt: SignedBlock = json::from_value(corrupt).expect("structural fixture");
+        assert_eq!(
+            records[0]["occurrence"]["source"].as_str(),
+            Some("time_execution")
+        );
+        assert_eq!(records[0]["occurrence"]["output_index"].as_u64(), Some(1));
+        assert!(
+            records[0]["occurrence"]
+                .as_object()
+                .expect("occurrence object")
+                .get("entrypoint_hash")
+                .is_none()
+        );
+
+        // Neither a changed proposal input root nor a stale output tree is
+        // accepted. Outputs never rewrite the signed proposal header.
+        let mut bad_input = json::to_value(&block).expect("fixture JSON");
+        bad_input
+            .as_object_mut()
+            .unwrap()
+            .get_mut("payload")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .get_mut("header")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("merkle_root".to_owned(), Value::Null);
+        let mut bad_output = json::to_value(&block).expect("fixture JSON");
+        bad_output
+            .as_object_mut()
+            .unwrap()
+            .get_mut("result")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "output_merkle".to_owned(),
+                json::to_value(&iroha_crypto::MerkleTree::<ExecutionOutputV1>::default()).unwrap(),
+            );
+        let mut bad_owner = json::to_value(&block).expect("fixture JSON");
+        let mut changed_outputs = block.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(row) = &mut changed_outputs[0] else {
+            panic!("Network fixture")
+        };
+        row.input_index = 1;
+        let result = bad_owner
+            .as_object_mut()
+            .unwrap()
+            .get_mut("result")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        result.insert(
+            "outputs".to_owned(),
+            json::to_value(&changed_outputs).unwrap(),
+        );
+        result.insert(
+            "output_merkle".to_owned(),
+            json::to_value(
+                &changed_outputs
+                    .iter()
+                    .map(HashOf::new)
+                    .collect::<iroha_crypto::MerkleTree<_>>(),
+            )
+            .unwrap(),
+        );
+        for (value, expected) in [
+            (bad_input, "proposal commitments"),
+            (bad_output, "typed output ownership or Merkle cache"),
+            (bad_owner, "typed output ownership or Merkle cache"),
+        ] {
+            let corrupt: SignedBlock = json::from_value(value).expect("structural fixture");
             let error = project_block(
                 &corrupt,
                 &mut Projection::default(),
                 &BTreeMap::new(),
                 &mut BTreeSet::new(),
             )
-            .expect_err("reject mismatched header commitment");
-            assert!(error.to_string().contains("retained execution roots"));
+            .expect_err("reject changed commitment");
+            assert!(error.to_string().contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn beacon_history_projects_nested_callbacks_once_and_distinguishes_rejected_roots() {
+        let original = block(vec![
+            Log::new(iroha_data_model::Level::INFO, "unrelated".to_owned()).into(),
+        ]);
+        let pipeline = ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 {
+                event: PipelineEventPositionV1::Network(0),
+                candidate_index: 0,
+                trigger: trigger_use(&original, "pipeline_root"),
+            },
+            result: TransactionResult::new(Ok(vec![
+                trigger_step("pipeline_root"),
+                trigger_step("nested_by_call"),
+            ])),
+            failure_root: None,
+            completions: Vec::new(),
+        });
+        for (failure_root, expected_path) in [
+            (
+                TriggerFailureRootV1::DeclaredInstructionProjection(ExecutionStep(
+                    vec![lifecycle()].into(),
+                )),
+                "rejected_declared_trigger/0",
+            ),
+            (
+                TriggerFailureRootV1::ReturnedBeforeRollback(ExecutionStep(
+                    vec![lifecycle()].into(),
+                )),
+                "rolled_back_trigger/0",
+            ),
+        ] {
+            let mut block = (*original).clone();
+            let invocation = time_invocation(&block);
+            let completion = InvocationCompletionV1 {
+                callback_index: 0,
+                trigger_id: invocation.trigger.trigger_id.clone(),
+                outcome: TriggerCompletedOutcome::Failure("actual invocation rejected".to_owned()),
+            };
+            let failed = ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+                invocation,
+                result: TransactionResult::new(Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "fixture rejection".to_owned(),
+                        ),
+                    ),
+                )),
+                failure_root: Some(failure_root),
+                completions: vec![completion],
+            });
+            attach_outputs(
+                &mut block,
+                vec![
+                    network_output(vec![
+                        trigger_step("nested_data"),
+                        trigger_step("nested_execute_trigger"),
+                    ]),
+                    pipeline.clone(),
+                    failed,
+                ],
+            );
+            let mut projection = Projection::default();
+            project_block(
+                &block,
+                &mut projection,
+                &BTreeMap::new(),
+                &mut BTreeSet::new(),
+            )
+            .expect("typed candidate projection");
+            assert_eq!(
+                projection.records.len(),
+                5,
+                "each full result is projected once"
+            );
+            for (row, source) in projection.records.iter().zip([
+                "block_network_execution",
+                "block_network_execution",
+                "pipeline_execution",
+                "pipeline_execution",
+                "time_execution",
+            ]) {
+                assert_eq!(row["occurrence"]["source"].as_str(), Some(source));
+                assert_eq!(
+                    row["occurrence"]["authenticated_execution_verified"].as_bool(),
+                    Some(false)
+                );
+            }
+            assert_eq!(
+                projection.records[4]["instruction_path"].as_str(),
+                Some(expected_path)
+            );
+            assert_eq!(
+                projection.records[4]["occurrence"]["stored_outcome"].as_str(),
+                Some("recorded_rejection_unverified")
+            );
+        }
+        let mut omitted = (*original).clone();
+        let terminal = ExecutionOutputV1::time_output_limit_rejection(time_invocation(&omitted));
+        attach_outputs(&mut omitted, vec![network_output(Vec::new()), terminal]);
+        let mut projection = Projection::default();
+        project_block(
+            &omitted,
+            &mut projection,
+            &BTreeMap::new(),
+            &mut BTreeSet::new(),
+        )
+        .expect("omitted rejected program");
+        assert!(projection.records.is_empty());
+        assert!(projection.gaps.contains("rejected_trigger_program_omitted"));
     }
 
     #[test]

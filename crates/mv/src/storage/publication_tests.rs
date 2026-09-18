@@ -141,7 +141,7 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .err()
             .unwrap();
-        assert_eq!(error, PublicationPreparationError::Busy);
+        assert!(matches!(error, PublicationPreparationError::Busy(_)));
         assert_eq!(returned.entries.as_ptr(), original);
         drop(current);
         drop(undo);

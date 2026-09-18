@@ -1358,3 +1358,25 @@ history pagination, SCCP outbox, live runner integration and one-candidate
 formal/SDK/workspace/four/seven-validator qualification remain required.
 
 Frozen800 passes six-crate lib/bin test compilation801 on 20,686 unchanged inputs. Runtime809 passes 524 of 528 exact tests: all 73 MV tests and 451 of 455 Core controls, with unchanged source and retained executables. Three State publication/native ownership failures persist. One new failure identifies a receipt writer that rejects its own authenticated interrupted append before reaching recovery; source815 is in progress. Membership bindings795 and all 49 controls796 pass; exact800+803+805 source gate806 passes. World capture807 and actual carrier integration808 retain all 278 original World journals and four runtime cells after one admission; review correction816 makes the reservation outlive originals on early errors. Frozen810 contains these changes and is compiling in811; source gate813 is running. Archive writers, aggregate pre-vote resource ownership, the consuming publisher and real four/seven-validator qualification remain open. Direct receipt window exhaustion also lacks pre-vote admission and can reach fail-stop after commitment. No liveness goal is complete.
+
+The September 19 MAIN implementation adds nonblocking preparation for the complete
+World, replay membership, block hashes and four runtime journals. Each refusal
+returns the original journals after releasing every acquired writer. A `Busy`
+result carries an opaque observation from the actual refusing lock, captured
+before its acquisition attempt; commit, abort, detachment and guard drop signal
+only after physical release. MV current, undo and metadata locks have separate
+sources so unwinding a partial acquisition cannot wake its own refused lock.
+Hash readers must signal too. A hash read-guard panic is not writer poisoning; an actual
+poisoned owner is a local reconstruction failure, never a consensus rejection or
+an indefinite Busy retry. Pending async registrations are cancelable and require
+caller admission; the primitive itself is not a complete candidate-memory policy.
+
+The production completion criterion remains one move-only prepared candidate in
+worker/body-store custody, joined by exact cached/recovered receipts, then consumed
+under actual QC/Kura/Native authority. An execution-hash cache hit cannot replace
+that owner. Whole geometry/receipt/archive/installation capacity must be admitted
+before canonical append; partial durable work retains the same recovery owner.
+Acquire all State/component locks without waiting, return the full owner on local
+deferral, and await its exact release outside the synchronous worker. Only the
+complete publisher may expose State and return its post-WSV continuation. Existing
+raw publication guards remain enforced until that path replaces its callers.

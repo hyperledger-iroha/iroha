@@ -5,6 +5,14 @@
 
 use super::*;
 
+#[path = "runtime_publication.rs"]
+mod publication;
+pub(super) use publication::{PreparedRuntimeJournals, RuntimePublicationError};
+
+#[cfg(test)]
+#[path = "runtime_publication_tests.rs"]
+mod publication_tests;
+
 /// Read-only original inputs for one complete runtime-journal admission.
 pub(crate) struct RuntimeJournalInputs<'capture, 'state> {
     canonical_runtime: &'capture CellBlock<'state, SnapshotNexusRuntime>,
@@ -35,7 +43,8 @@ impl<'state> RuntimeJournalInputs<'_, 'state> {
     }
 }
 
-/// Exact original runtime deltas, with no State or Cell borrow and no publisher.
+/// Exact original runtime deltas, with no State or Cell borrow.
+/// Publication preparation requires reacquiring all four original owners.
 pub(super) struct RuntimeJournals<Admission> {
     pub(super) canonical_runtime: mv::cell::Detached<SnapshotNexusRuntime, ()>,
     pub(super) commit_topology: mv::cell::Detached<Vec<PeerId>, ()>,

@@ -13,6 +13,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "set_publication_tests.rs"]
+mod publication_tests;
+
 fn id(value: &str) -> TriggerId {
     value.parse().unwrap()
 }

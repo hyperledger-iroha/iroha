@@ -9098,10 +9098,10 @@ fn build_state(
         authenticated_snapshot_bootstrap_payload: None,
         #[cfg(feature = "telemetry")]
         telemetry,
-        lane_lifecycle_lock: parking_lot::Mutex::new(()),
+        lane_lifecycle_lock: StatePublicationMutex::default(),
         queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
-        state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
-        state_write_lock: parking_lot::Mutex::new(()),
+        state_commit_lock: Arc::new(StatePublicationMutex::default()),
+        state_write_lock: StatePublicationMutex::default(),
         view_generation: AtomicU64::new(0),
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),

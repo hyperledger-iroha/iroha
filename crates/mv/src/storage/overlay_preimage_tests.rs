@@ -10,9 +10,9 @@ use std::{
     },
 };
 
-fn entries<'a>(
-    entries: impl Iterator<Item = TouchedEntry<'a, u64, Vec<u8>>>,
-) -> Vec<(u64, Option<Vec<u8>>, Option<Vec<u8>>)> {
+type EntryImage = (u64, Option<Vec<u8>>, Option<Vec<u8>>);
+
+fn entries<'a>(entries: impl Iterator<Item = TouchedEntry<'a, u64, Vec<u8>>>) -> Vec<EntryImage> {
     entries
         .map(|entry| (*entry.key, entry.before.cloned(), entry.after.cloned()))
         .collect()

@@ -93,6 +93,8 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
             .collect();
         Storage {
             publication: crate::publication::Publication::new(),
+            revert_released: crate::ReleaseNotification::default(),
+            blocks_released: crate::ReleaseNotification::default(),
             revert: EbrCell::new(revert),
             blocks,
         }

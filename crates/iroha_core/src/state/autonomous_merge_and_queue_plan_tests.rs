@@ -185,13 +185,15 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
                 .into(),
             );
         }
-        let (rows, hashes, results, execution_hashes) =
-            staged.execute_time_triggers(&carrier.header());
+        let mut executed = carrier.canonical_resultless_proposal();
+        ValidBlock::execute_block_outputs_for_test(&mut executed, &mut staged, None)
+            .expect("native composition must execute through the complete canonical owner");
         assert!(
-            rows.is_empty()
-                && hashes.is_empty()
-                && results.is_empty()
-                && execution_hashes.is_empty()
+            executed.execution_outputs().iter().all(|output| matches!(
+                output,
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(_)
+            )),
+            "the composition fixture has no internal invocation sources"
         );
         if alteration != 2 {
             staged
