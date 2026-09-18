@@ -107,6 +107,8 @@ use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
 };
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::nexus::{
     DataSpaceCatalog, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
     FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
@@ -118,10 +120,7 @@ use iroha_data_model::nexus::{LaneLifecyclePlan, LaneStorageProfile, LaneVisibil
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    block::{
-        BlockHeader, ExternalExecutionContext, ExternalExecutionRouteLeg,
-        ExternalExecutionRouteRole,
-    },
+    block::{ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole},
     consensus::MAX_LANE_CONSENSUS_VALIDATORS,
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{

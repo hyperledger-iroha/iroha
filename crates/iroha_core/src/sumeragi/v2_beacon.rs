@@ -86,7 +86,6 @@ pub(crate) struct V2GlobalBeaconLifecycle {
     roster: Vec<PeerId>,
     local_validator: Option<wire::ValidatorIndex>,
     signer: Option<Arc<dyn GlobalThresholdBeaconPartialSignerV1>>,
-    requested: bool,
     required_for_consensus: bool,
     active: Option<ActiveGlobalBeaconRound>,
     // Retained only until independently useful work or an authenticated peer
@@ -134,7 +133,6 @@ impl V2GlobalBeaconLifecycle {
                 roster,
                 local_validator: None,
                 signer: None,
-                requested: false,
                 required_for_consensus: false,
                 active: None,
                 deferred_state: None,
@@ -149,7 +147,6 @@ impl V2GlobalBeaconLifecycle {
                 roster,
                 local_validator,
                 signer,
-                requested: false,
                 required_for_consensus,
                 active: None,
                 deferred_state: None,
@@ -251,7 +248,6 @@ impl V2GlobalBeaconLifecycle {
             roster,
             local_validator,
             signer,
-            requested: true,
             required_for_consensus,
             active,
             deferred_state: None,
@@ -279,7 +275,6 @@ impl V2GlobalBeaconLifecycle {
                 .collect(),
             local_validator,
             signer,
-            requested: required_for_consensus,
             required_for_consensus,
             active: None,
             deferred_state: required_for_consensus.then_some(state),
@@ -323,8 +318,9 @@ impl V2GlobalBeaconLifecycle {
 
     /// Return whether committed state requests a pulse attempt at this height.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn pulse_requested(&self) -> bool {
-        self.requested
+        self.required_for_consensus
     }
 
     /// Return whether absence of the pulse must stop consensus at this height.

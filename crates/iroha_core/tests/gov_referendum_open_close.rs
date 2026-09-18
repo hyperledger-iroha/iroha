@@ -34,7 +34,7 @@ fn referendum_open_and_close_by_height() {
     let world = World::with([domain], [account], []);
     let state = State::new_for_testing(world, kura, query_handle);
     // Block H=1: create a proposed referendum with explicit [2,3] window.
-    let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let rid = "standalone-window".to_owned();
     {
         let mut sblock1 = state.block(header1);
@@ -77,7 +77,7 @@ fn referendum_open_and_close_by_height() {
         assert_eq!(referendum.status, GovernanceReferendumStatus::Proposed);
     }
     // Block H=2: opens.
-    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let custody = GovernanceLockCustody {
         escrowed: false,
         asset_definition_id: state.gov.voting_asset_id.clone(),
@@ -130,7 +130,7 @@ fn referendum_open_and_close_by_height() {
         assert!(has_opened_event_at_h2 || status_open_at_h2);
     }
     // Block H=3: the inclusive end height remains open.
-    let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let header3 = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let has_closed_event_at_h3 = sblock3.world.take_external_events().iter().any(|event| {
         matches!(
@@ -156,7 +156,7 @@ fn referendum_open_and_close_by_height() {
     assert!(status_open_at_h3);
     assert!(!has_closed_event_at_h3);
     // Block H=4: closes at h_end + 1.
-    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut sblock4 = state.block(header4);
     let events_at_h4 = sblock4.world.take_external_events();
     let has_closed_event_at_h4 = events_at_h4.iter().any(|event| {
@@ -217,7 +217,7 @@ fn referendum_open_and_close_by_height() {
     drop(view);
     // The canonical decision is emitted at closure. Its retained Closed state must prevent
     // subsequent heights from recalculating or emitting another decision for this referendum.
-    let mut next = state.block(BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0));
+    let mut next = state.block(BlockHeader::new(nonzero!(5_u64), None, None, 0, 0));
     assert!(
         !next
             .world

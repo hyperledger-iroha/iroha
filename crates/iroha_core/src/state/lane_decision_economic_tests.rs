@@ -527,7 +527,9 @@ fn native_economic_fixture_with_world_initializer(
                 state.network_id,
                 layout,
             );
-            kura.store_v2_finality_artifact(&artifact).unwrap();
+            let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
+            assert_eq!(receipt.height(), artifact.height);
+            assert_eq!(receipt.block_hash(), committed.hash());
             previous = Some(artifact);
         }
         let previous = previous.unwrap();

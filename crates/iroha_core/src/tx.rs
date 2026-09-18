@@ -3195,6 +3195,7 @@ impl StateBlock<'_> {
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
+    #[cfg(test)]
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
     /// Returns the hash and the result of the transaction.

@@ -394,7 +394,7 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         assert_eq!(state.committed_height(), durable_count);
         return;
     }
-    let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    let_row! { parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
     assert!(parent.as_ref().execution_outputs().is_empty());
     assert_eq!(parent.as_ref().committed_fragment_count(), Some(0));
     let parent_hash = parent.as_ref().hash();

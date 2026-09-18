@@ -34,7 +34,7 @@ fn plain_ballot_rejected_when_duration_below_min() {
     cfg.conviction_step_blocks = 100;
     state.set_gov(cfg);
     let _kp = checked_random_plain_ballot_keypair();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let permission: Permission = CanSubmitGovernanceBallot {

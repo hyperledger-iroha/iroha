@@ -1146,13 +1146,6 @@ v2_apply_test!(
             fixture.kura.get_block(successor_height).is_some(),
             "the damaged durable body must have a previously valid cached copy"
         );
-        let primary = fixture
-            .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(LaneId::SINGLE)
-            .expect("primary storage lane")
-            .clone();
         let body_file = Kura::canonical_storage_paths(&fixture.kura.store_root())
             .0
             .join("blocks.data");

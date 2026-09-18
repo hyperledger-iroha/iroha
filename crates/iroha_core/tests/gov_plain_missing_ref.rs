@@ -31,7 +31,7 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     for referendum_id in ["missing", "closed"] {

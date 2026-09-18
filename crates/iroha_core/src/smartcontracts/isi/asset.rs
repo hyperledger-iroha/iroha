@@ -6708,7 +6708,8 @@ pub mod isi {
         emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())
     }
-    /// Apply a user-authorized transparent numeric transfer on the simple batch path.
+    #[cfg(test)]
+    /// Exercise the reference numeric-transfer batch path in delta regression tests.
     ///
     /// Returns `Ok(false)` when the transfer needs the full per-transaction merge path.
     pub(crate) fn execute_batch_merge_eligible_user_numeric_asset_transfer(

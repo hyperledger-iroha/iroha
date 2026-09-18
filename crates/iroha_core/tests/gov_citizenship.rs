@@ -67,7 +67,7 @@ fn register_and_revoke_citizenship_moves_bond() {
     gov_cfg.citizenship_bond_amount = 50_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     RegisterCitizen {
@@ -130,7 +130,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 10;
     state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Seed referendum and permissions.
@@ -205,7 +205,7 @@ fn citizenship_records_persist_across_transactions() {
     gov_cfg.citizenship_bond_amount = 50_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
-    let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
     RegisterCitizen {
@@ -226,7 +226,7 @@ fn citizenship_records_persist_across_transactions() {
         .cloned()
         .expect("citizen record should persist after tx apply");
     assert_eq!(citizen_record.amount, Quantity::from(50_u64));
-    let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block_2 = state.block(header_2);
     let stx_2 = block_2.transaction();
     assert_eq!(
@@ -256,7 +256,7 @@ fn citizenship_top_up_preserves_the_original_bond_interval() {
     gov_cfg.citizenship_bond_amount = 50_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
-    let mut block_1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block_1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx_1 = block_1.transaction();
     RegisterCitizen {
         owner: ALICE_ID.clone(),
@@ -268,7 +268,7 @@ fn citizenship_top_up_preserves_the_original_bond_interval() {
     block_1
         .commit_world_overlay_for_testing()
         .expect("initial citizen bond block commits");
-    let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut stx_2 = block_2.transaction();
     RegisterCitizen {
         owner: ALICE_ID.clone(),

@@ -451,7 +451,7 @@ state_test! { sync historical_native_batch_carrier_recovery_retains_exact_result
         state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
         else { panic!("authenticated eviction requires the exact existing global source owner"); };
     assert_eq!(requirement.finality(), included.finality());
-    let (request, response, mut outstanding) = authenticated_native_batch_body_response_for_test(
+    let (request, response, outstanding) = authenticated_native_batch_body_response_for_test(
         &fixture.native.validators[0], requirement.finality(), &carrier,
     );
     let first = &fixture.native.block;

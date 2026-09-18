@@ -301,12 +301,33 @@ mod block {
     /// All payload sets are moved or share their original immutable allocation.
     /// This owner exposes no live-history reader or independent publish method:
     /// the aggregate State publisher must validate every journal before writing.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
     pub(crate) struct DetachedTransactionsBlock {
         predecessor_identity: Arc<()>,
         predecessor: Option<Arc<BlockInfo>>,
         current: Arc<BlockInfo>,
         revert: bool,
+        #[cfg_attr(
+            test,
+            expect(
+                dead_code,
+                reason = "TODO: consume retained journals and effects in the aggregate State publisher"
+            )
+        )]
         publication: MembershipPublication,
+        #[cfg_attr(
+            test,
+            expect(
+                dead_code,
+                reason = "TODO: consume retained journals and effects in the aggregate State publisher"
+            )
+        )]
         next_identity: Arc<()>,
     }
 
@@ -510,6 +531,13 @@ mod block {
             drop(block);
         }
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
     impl DetachedTransactionsBlock {
         /// Borrow the exact admitted carrier height and immutable membership.
         pub(crate) fn staged_membership(&self) -> (Value, &HashSet<Key>) {
@@ -574,13 +602,20 @@ mod block {
         }
     }
 }
-pub(crate) use block::{
-    DetachedTransactionsBlock, MembershipPredecessorStatus, PreparedTransactionsBlock,
-};
+#[cfg(test)]
+pub(crate) use block::MembershipPredecessorStatus;
+pub(crate) use block::{DetachedTransactionsBlock, PreparedTransactionsBlock};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
 
 /// Borrowed logical membership, independent of the latest/history representation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod membership_projection {
     use super::*;
 
@@ -802,6 +837,7 @@ mod membership_projection {
         }
     }
 }
+#[cfg(test)]
 pub(in crate::state) use membership_projection::TransactionsMembershipTransition;
 
 #[cfg(test)]

@@ -30,8 +30,9 @@ use crate::{
 use core::str::FromStr;
 use iroha_config::parameters::actual::QueryCursorMode;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
-    block::BlockHeader,
     errors::CanonicalErrorKind,
     executor::{IvmAdmissionError, ManifestCodeHashMismatchInfo},
     isi::{
@@ -59,19 +60,19 @@ use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 use sha2::{Digest as _, Sha256};
-#[cfg(feature = "telemetry")]
+#[cfg(all(test, feature = "telemetry"))]
 use std::time::Instant;
-#[cfg(test)]
 use std::{
-    collections::VecDeque,
-    sync::{LazyLock, Mutex},
-};
-use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     io::{Cursor, Seek, SeekFrom, Write},
     mem,
     num::NonZeroU64,
     sync::{Arc, OnceLock},
+};
+#[cfg(test)]
+use std::{
+    collections::{BTreeSet, VecDeque},
+    sync::{LazyLock, Mutex},
 };
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StreamingOverlayMetadata {
@@ -550,6 +551,7 @@ fn cached_generic_amx_analysis(
         .analyze_generic_program(summary)
         .map_err(map_program_analysis_error)
 }
+#[cfg(test)]
 #[cfg(feature = "telemetry")]
 fn observe_overlay_stage_ms<R>(state_ro: &R, stage: &'static str, started_at: Instant)
 where
@@ -1166,7 +1168,8 @@ pub struct TxOverlay {
     sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
     byte_size: OnceLock<usize>,
 }
-/// Overlay plus optional host access log captured during the same VM run.
+#[cfg(test)]
+/// Overlay and same-run access evidence retained for scheduler regression tests.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTxOverlay {
     /// Built transaction overlay.
@@ -1222,6 +1225,7 @@ impl VmAccessFence {
         }
         fence
     }
+    #[cfg(test)]
     /// Return whether the bytecode can observe world state not represented by
     /// the durable-state read fingerprint.
     #[must_use]
@@ -1245,12 +1249,11 @@ impl VmAccessFence {
         }
     }
 }
-/// Snapshot of the durable-state prefixes read while preparing a VM overlay.
+#[cfg(test)]
+/// Durable-state read snapshot retained for overlay invalidation regression tests.
 ///
-/// Overlay construction runs before the block scheduler applies predecessors. A
-/// later transaction must therefore re-run its VM when one of the durable paths
-/// it observed has changed in the meantime; otherwise a read-modify-write can
-/// commit the value computed from the stale block-start snapshot.
+/// The tests prepare an overlay, change predecessor state, and verify that stale
+/// reads require a fresh VM run before applying a read-modify-write result.
 #[derive(Clone, Debug)]
 pub(crate) struct DurableStateReadSnapshot {
     /// `None` means an invalid/unrepresentable host key forced a fail-closed
@@ -1258,6 +1261,7 @@ pub(crate) struct DurableStateReadSnapshot {
     prefixes: Option<Vec<StatePath>>,
     fingerprint: [u8; 32],
 }
+#[cfg(test)]
 impl DurableStateReadSnapshot {
     /// Capture all exact values and descendants covered by the host read log.
     ///
@@ -1316,6 +1320,7 @@ impl DurableStateReadSnapshot {
         durable_state_prefix_fingerprint(self.prefixes.as_deref(), state_ro) == self.fingerprint
     }
 }
+#[cfg(test)]
 fn durable_state_prefix_fingerprint<R>(prefixes: Option<&[StatePath]>, state_ro: &R) -> [u8; 32]
 where
     R: StateReadOnly,
@@ -1368,6 +1373,7 @@ where
     }
     hasher.finalize().into()
 }
+#[cfg(test)]
 impl PreparedTxOverlay {
     fn new(
         overlay: TxOverlay,
@@ -2051,7 +2057,8 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
         completed_axt,
         durable_state_overlay,
         durable_state_authorizations,
-        access_log: _,
+        #[cfg(test)]
+            access_log: _,
         gas_used,
         events_commitment: _,
         trace_hash: _,
@@ -2095,8 +2102,11 @@ fn tx_overlay_from_ivm_proved_replay<R: StateReadOnly>(
 }
 struct GenericOverlayExecution {
     overlay: TxOverlay,
+    #[cfg(test)]
     access_log: Option<ivm::host::AccessLog>,
+    #[cfg(test)]
     access_fence: VmAccessFence,
+    #[cfg(test)]
     force_live_rebuild: bool,
 }
 fn validate_generic_program_context<R: StateReadOnly>(
@@ -2144,7 +2154,9 @@ where
     enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
     let tx_gas_limit = require_tx_gas_limit(tx)?;
     let amx_analysis = cached_generic_amx_analysis(ivm_cache, summary)?;
+    #[cfg(test)]
     let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
+    #[cfg(test)]
     let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
     let prepared_contract_cache = ivm_cache.prepared_contract_cache();
     let mut vm = ivm_cache
@@ -2187,7 +2199,7 @@ where
     vm.set_zk_trace_enabled(false);
     run_vm_with_host(&mut vm, &mut host)?;
     let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-    let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
+    let _access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
     let queued = host.drain_queued_instructions_with_contract_runtime_context(None);
     let (durable_state_overlay, durable_state_authorizations) =
         host.drain_durable_state_overlay_with_authorizations();
@@ -2202,8 +2214,11 @@ where
     );
     Ok(GenericOverlayExecution {
         overlay,
-        access_log,
+        #[cfg(test)]
+        access_log: _access_log,
+        #[cfg(test)]
         access_fence,
+        #[cfg(test)]
         force_live_rebuild,
     })
 }
@@ -2755,7 +2770,8 @@ pub fn build_overlay_for_transaction_with_accounts(
         )),
     }
 }
-/// Build an overlay and optionally capture dynamic state access in the same VM run.
+#[cfg(test)]
+/// Build an overlay with optional same-run access evidence for scheduler regression tests.
 ///
 /// # Errors
 /// Returns an error if the IVM header fails policy checks or running the VM fails.
@@ -3255,7 +3271,8 @@ where
         }
     }
 }
-/// Build an overlay for a transaction under quarantine limits.
+#[cfg(test)]
+/// Build a reference overlay under quarantine limits for regression tests.
 ///
 /// Applies per-transaction execution caps when running IVM bytecode to collect queued ISIs:
 /// - `max_cycles_cap`: if non-zero, caps VM cycles to `min(header.max_cycles, max_cycles_cap, upper_bound_cap)`.
@@ -10222,6 +10239,7 @@ pub enum OverlayBuildError {
     ExecutionOwner(String),
 }
 impl OverlayBuildError {
+    #[cfg(test)]
     /// Return whether rebuilding against a later serial state may change the result. Structural,
     /// policy, gas, cryptographic-proof, and quarantine failures are invariant and must remain
     /// rejected without another execution attempt. A proved replay mismatch is state-dependent
@@ -10738,7 +10756,7 @@ where
     };
     work.gas_used = Some(gas_limit.saturating_sub(vm.remaining_gas()));
     run_result?;
-    let access_log = finish_overlay_access_log(&mut host, true)?;
+    let _access_log = finish_overlay_access_log(&mut host, true)?;
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
     let trace_hash = expected_ivm_trace_hash(&trace_bundle)?;
@@ -10801,7 +10819,8 @@ where
         completed_axt,
         durable_state_overlay,
         durable_state_authorizations,
-        access_log,
+        #[cfg(test)]
+        access_log: _access_log,
         events_commitment,
         gas_used,
         trace_hash,
@@ -10814,6 +10833,7 @@ pub(crate) struct IvmProvedReplay {
     pub(crate) durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     pub(crate) durable_state_authorizations:
         BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
+    #[cfg(test)]
     pub(crate) access_log: Option<ivm::host::AccessLog>,
     pub(crate) events_commitment: Hash,
     pub(crate) gas_used: u64,

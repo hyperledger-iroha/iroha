@@ -24302,7 +24302,7 @@ state_test! { sync apply_lane_lifecycle_same_plan_recreated_lane_resets_da_curso
     let_row! { lane1_config = LaneConfig { id: recreated_lane_id, alias: "beta".to_string(), ..LaneConfig::default() } };
     let_row! { two_lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), lane1_config.clone()], ) .expect("two-lane catalog") };
     let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-    let (kura, state) = authenticated_startup_state_for_testing(
+    let (_kura, state) = authenticated_startup_state_for_testing(
         temp_dir.path().join("same-plan-kura"), &LaneCatalog::default(),
     );
     install_existing_nexus_geometry_for_test(
@@ -24365,7 +24365,7 @@ state_test! { sync configured_lane_lifecycle_same_shard_dataspace_rebind_persist
     let_row! { lane1_config = LaneConfig { id: rebound_lane_id, alias: "beta".to_string(), ..LaneConfig::default() } };
     let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), lane1_config.clone()], ) .expect("initial lane catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-    let (kura, state) = authenticated_startup_state_for_testing(
+    let (_kura, state) = authenticated_startup_state_for_testing(
         temp_dir.path().join("same-shard-rebind-kura"), &LaneCatalog::default(),
     );
     install_existing_nexus_geometry_for_test(

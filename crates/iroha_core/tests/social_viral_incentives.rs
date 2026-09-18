@@ -365,7 +365,7 @@ fn header(height: u64) -> BlockHeader {
 }
 fn header_at(height: u64, creation_time_ms: u64) -> BlockHeader {
     let nonzero_height = NonZeroU64::new(height).expect("height must be non-zero");
-    BlockHeader::new(nonzero_height, None, None, None, creation_time_ms, 0)
+    BlockHeader::new(nonzero_height, None, None, creation_time_ms, 0)
 }
 fn follow_feed_id() -> FeedId {
     TWITTER_FOLLOW_FEED_ID.parse().expect("feed id")

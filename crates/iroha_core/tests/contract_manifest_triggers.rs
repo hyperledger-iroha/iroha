@@ -176,7 +176,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
@@ -327,7 +327,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     );
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
@@ -420,7 +420,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
@@ -638,7 +638,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let (state, authority, kp) = setup_state();
     let target_address = contract_address(&authority, 0);
     let source_address = contract_address(&authority, 1);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
@@ -808,7 +808,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
 fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let (state, authority, kp) = setup_state();
     let source_address = contract_address(&authority, 0);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
@@ -882,7 +882,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
 #[test]
 fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let (state, authority, kp) = setup_state();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =

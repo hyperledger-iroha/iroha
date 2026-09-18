@@ -90,7 +90,7 @@ fn setup_state(
     // Finalize the genesis fixture so its asset has an incarnation before
     // executing the height-two native and IVM transactions.
     state
-        .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+        .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
         .commit_empty_block_for_testing()
         .expect("commit genesis fixture");
     state
@@ -124,7 +124,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
     let host_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
     // Direct Execute path.
     let direct_events = {
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = direct_state.block(header);
         let mut tx = block.transaction();
         let executor = tx.world.executor().clone();
@@ -172,7 +172,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
             ivm_sys::SYSCALL_MINT_ASSET,
             &[(10, ptr_account), (11, ptr_asset), (12, ptr_amount)],
         );
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = host_state.block(header);
         let mut tx = block.transaction();
         CoreHost::with_host(&mut vm, |host| {

@@ -185,14 +185,16 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
                 .into(),
             );
         }
-        let (rows, hashes, results, execution_hashes) =
-            staged.execute_time_triggers(&carrier.header());
-        assert!(
-            rows.is_empty()
-                && hashes.is_empty()
-                && results.is_empty()
-                && execution_hashes.is_empty()
-        );
+        // The canonical output owner also runs Time maintenance and emits its
+        // authorization-bound event when no internal invocation is scheduled.
+        // TODO: migrate this legacy certified-merge fixture to the complete
+        // native source/common output owner. Keep its current admission failure
+        // until that integration exists; a synthetic Time event would omit the
+        // real maintenance effects and weaken these authorization controls.
+        let mut executed = carrier.canonical_resultless_proposal();
+        ValidBlock::execute_block_outputs_for_test(&mut executed, &mut staged, None)
+            .expect("native composition requires the complete canonical output owner");
+        assert!(executed.execution_outputs().is_empty());
         if alteration != 2 {
             staged
                 .validate_staged_merge_execution_authorization()

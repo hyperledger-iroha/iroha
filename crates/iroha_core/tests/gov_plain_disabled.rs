@@ -24,14 +24,8 @@ fn plain_ballot_rejected_when_disabled() {
     cfg.plain_voting_enabled = false;
     cfg.min_bond_amount = 0_u64.into();
     state.set_gov(cfg);
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let permission: Permission = CanSubmitGovernanceBallot {

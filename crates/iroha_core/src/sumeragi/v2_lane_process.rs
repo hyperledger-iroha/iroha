@@ -356,6 +356,13 @@ pub(crate) enum LaneProcessProgress {
     ClosedDrained,
     Persistence(LaneService),
     Body(LaneBodyProgress),
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     Failed(String),
 }
 /// Sole process-lifetime owner, independent of global height/view rollover.
@@ -872,6 +879,13 @@ impl LaneProcessOwner {
         self.active(id)?.service_one(&state, observed, now)
     }
     /// Settle already-returned body work without another physical operation.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     pub(crate) fn service_body_completion(
         &mut self,
         id: HeightContextId,
@@ -892,6 +906,13 @@ impl LaneProcessOwner {
         self.active(id)?.flush_one(&state, observed, sender)
     }
     /// Existing authenticated global source recovery, never a native fetch protocol.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     pub(crate) fn complete_source_recovery(
         &mut self,
         id: HeightContextId,

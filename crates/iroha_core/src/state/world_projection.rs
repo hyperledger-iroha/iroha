@@ -33,12 +33,6 @@ pub(crate) struct WorldNetDelta {
 }
 
 impl WorldNetDelta {
-    /// Domain-separated binding to the visited fields and their net changes.
-    #[cfg(test)]
-    pub(crate) fn root(&self) -> Hash {
-        self.root
-    }
-
     /// Number of distinct keys/cells whose canonical before/after values differ.
     #[cfg(test)]
     pub(crate) fn changed_values(&self) -> u64 {
@@ -332,5 +326,12 @@ impl WorldBlock<'_> {
 mod tests;
 
 #[path = "world_baseline.rs"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod world_baseline;
 pub(in crate::state) use world_baseline::WorldStateBaseline;

@@ -1704,7 +1704,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let lane_entry = lane_config.primary();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
     let entrypoint = indexed_log_entrypoint([0xD2; 32], [0xD3; 32]);

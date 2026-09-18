@@ -21,7 +21,7 @@ use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn bench_block_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0)
+    BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)
 }
 fn build_bench_state() -> (State, AccountId, AccountId) {
     let (authority, _) = gen_account_in("wonderland");

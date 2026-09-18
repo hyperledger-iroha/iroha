@@ -1,3 +1,4 @@
+//! Shared state and block fixtures for execution benchmarks.
 #![allow(clippy::disallowed_types, clippy::items_after_test_module)]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
@@ -73,7 +74,7 @@ pub fn create_block<'a>(
         .unpack(|_| {})
         .unwrap();
     // Verify that transactions are valid (non-fatal in release benches)
-    debug_assert_eq!(block.as_ref().errors().count(), 0);
+    debug_assert_eq!(block.as_ref().failed_outputs().count(), 0);
     (block, state_block)
 }
 fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> Option<&DomainId> {
@@ -428,7 +429,7 @@ mod tests {
             &topology,
             &peer_private_key,
         );
-        assert_eq!(block.as_ref().errors().count(), 0);
+        assert_eq!(block.as_ref().failed_outputs().count(), 0);
     }
 }
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {

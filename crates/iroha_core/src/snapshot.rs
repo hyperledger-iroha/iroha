@@ -4710,19 +4710,32 @@ fn snapshot_lane_geometry_images(
     runtime: &Cell<SnapshotNexusRuntime>,
     height: u64,
     network_id: &NetworkId,
-) -> Result<(SnapshotLaneGeometryProjection, Option<SnapshotLaneGeometryProjection>), TryWriteError> {
+) -> Result<
+    (
+        SnapshotLaneGeometryProjection,
+        Option<SnapshotLaneGeometryProjection>,
+    ),
+    TryWriteError,
+> {
     let current = runtime.view();
     let predecessor = runtime.predecessor_view();
     let recovery = if height == 0 {
         None
     } else {
         Some(snapshot_lane_geometry_projection(
-            predecessor.get().as_ref().unwrap_or_else(|| current.get()).clone(),
+            predecessor
+                .get()
+                .as_ref()
+                .unwrap_or_else(|| current.get())
+                .clone(),
             height - 1,
             network_id,
         )?)
     };
-    Ok((snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?, recovery))
+    Ok((
+        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
+        recovery,
+    ))
 }
 
 #[cfg(test)]

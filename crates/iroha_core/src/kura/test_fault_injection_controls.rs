@@ -69,30 +69,6 @@ fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures
         }));
     });
 }
-#[cfg(test)]
-fn unique_retired_path(base: &Path, stem: &str, extension: Option<&str>) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
-        .unwrap_or(0);
-    let mut counter = 0u32;
-    loop {
-        let mut name = format!("{stem}_{stamp}");
-        if counter > 0 {
-            name.push('_');
-            name.push_str(&counter.to_string());
-        }
-        if let Some(ext) = extension {
-            name.push('.');
-            name.push_str(ext);
-        }
-        let candidate = base.join(&name);
-        if !candidate.exists() {
-            return candidate;
-        }
-        counter = counter.saturating_add(1);
-    }
-}
 
 #[cfg(test)]
 fn fail_after_next_native_amx_evidence_temp_sync_for_tests() {

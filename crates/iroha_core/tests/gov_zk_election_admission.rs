@@ -58,7 +58,7 @@ fn election_request(options: u32) -> CreateElection {
 #[test]
 fn election_option_bounds_and_failed_key_lookup_preserve_state() {
     let state = election_state();
-    let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
     for options in [0, MAX_ELECTION_OPTIONS_V1 + 1, MAX_ELECTION_OPTIONS_V1] {
         let mut transaction = block.transaction();
         let permission: Permission = CanManageParliament.into();
@@ -103,7 +103,7 @@ fn election_option_bounds_and_failed_key_lookup_preserve_state() {
 #[test]
 fn unqualified_vote_circuits_cannot_enter_the_production_registry() {
     let state = election_state();
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut transaction = block.transaction();
     let permission = Permission::new("CanManageVerifyingKeys".to_owned(), Json::new(()));
     Grant::account_permission(permission, ALICE_ID.clone())
@@ -157,7 +157,7 @@ fn unqualified_vote_circuits_cannot_enter_the_production_registry() {
 #[test]
 fn finalize_rejects_invalid_stored_and_submitted_tally_shapes() {
     let state = election_state();
-    let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
     let mut transaction = block.transaction();
     let permission: Permission = CanEnactGovernance.into();
     Grant::account_permission(permission, ALICE_ID.clone())

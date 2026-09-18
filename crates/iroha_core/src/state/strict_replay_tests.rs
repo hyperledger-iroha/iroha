@@ -13,7 +13,7 @@ use crate::{
         v2_effects::ApplyTask,
     },
 };
-use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
+use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     HasMetadata, Registrable,

@@ -3,8 +3,8 @@
 //! The caller acquires and checks this reservation while holding its existing
 //! archive index writer. Every index mutation must either observe no reservation
 //! or present this exact move-only owner. Committed readers remain independent.
-//! TODO: replace both candidate archive captures' retained physical writers with
-//! this owner and carry its typed wait through actual pre-vote admission.
+//! TODO: connect the retained candidate archive captures to the production
+//! carrier publisher and carry their typed waits through pre-vote admission.
 
 use std::sync::{Arc, Weak};
 

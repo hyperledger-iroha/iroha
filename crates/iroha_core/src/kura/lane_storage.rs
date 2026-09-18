@@ -69,6 +69,7 @@ impl LaneStorageEntry {
         self.identity.blocks_dir(root.as_ref())
     }
 
+    #[cfg(test)]
     pub(super) fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
         self.identity.merge_log_path(root.as_ref())
     }

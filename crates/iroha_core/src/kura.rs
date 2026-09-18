@@ -82,9 +82,8 @@ use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{
-            Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
-            SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
-            kura_replica_advert_registry_key_capacity,
+            Fastpq as FastpqConfig, Kura as Config, LaneConfig, SnapshotBootstrapPolicy,
+            SumeragiV2RuntimeLimits, kura_replica_advert_registry_key_capacity,
         },
         defaults::{
             kura::{
@@ -880,9 +879,6 @@ pub struct Kura {
     /// Bitmask of observed canonical reader kinds after their initial prune-poison check.
     #[cfg(test)]
     canonical_read_kinds_after_prune_check: AtomicUsize,
-    /// Test hook failing a direct relabel after its block-directory move.
-    #[cfg(test)]
-    fail_next_relabel_after_block_move: AtomicBool,
     /// Test hook pausing after exact instance preparation and before reference publication.
     #[cfg(test)]
     pause_geometry_reference_publication: AtomicBool,
@@ -2564,7 +2560,7 @@ include!("kura/retired_pipeline_roster_rejection.rs");
 impl Kura {
     fn new_inner(
         config: &Config,
-        lane_config: &LaneConfig,
+        _lane_config: &LaneConfig,
         configured_catalog_hash: Option<Hash>,
         provisional_hash_only_prefix: Option<usize>,
         discover_signed_lineage_marker: bool,
@@ -3165,8 +3161,6 @@ impl Kura {
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
             #[cfg(test)]
-            fail_next_relabel_after_block_move: AtomicBool::new(false),
-            #[cfg(test)]
             pause_geometry_reference_publication: AtomicBool::new(false),
             #[cfg(test)]
             geometry_reference_publication_paused: AtomicBool::new(false),
@@ -3555,8 +3549,6 @@ impl Kura {
             observe_canonical_reads_after_prune_check: AtomicBool::new(false),
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
-            #[cfg(test)]
-            fail_next_relabel_after_block_move: AtomicBool::new(false),
             #[cfg(test)]
             pause_geometry_reference_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -9015,47 +9007,6 @@ impl Kura {
         };
         self.merge_entry_for_carrier(u64::try_from(block_height.get())?, block_hash)
     }
-    /// Return every globally carried execution entry in sparse carrier order.
-    ///
-    /// The result is complete regardless of merge-log cache capacity.
-    pub(crate) fn committed_merge_execution_entries(
-        &self,
-    ) -> Result<Vec<(MergeLedgerCarrierRecord, MergeLedgerEntry)>> {
-        self.ensure_prune_recovery_not_required()?;
-        #[cfg(test)]
-        {
-            let mut merge_log = self.merge_log.lock();
-            merge_log.complete_execution_scans =
-                merge_log.complete_execution_scans.saturating_add(1);
-        }
-        for _ in 0..2 {
-            let records = self.merge_carrier_records()?;
-            let generation = self.merge_carrier_index.lock().generation;
-            let mut committed = Vec::new();
-            for record in records {
-                let entry = self
-                    .merge_log
-                    .lock()
-                    .entry_by_hash(record.entry_hash)?
-                    .ok_or_else(|| {
-                        Error::MergeCarrierConflict(format!(
-                            "carrier block {} references a missing committed merge entry",
-                            record.block_height
-                        ))
-                    })?;
-                if entry.execution_batch.is_some() {
-                    committed.push((record, entry));
-                }
-            }
-            if self.merge_carrier_index.lock().generation == generation {
-                self.ensure_prune_recovery_not_required()?;
-                return Ok(committed);
-            }
-        }
-        Err(Error::MergeCarrierConflict(
-            "sparse merge carriers changed during complete query snapshot".to_owned(),
-        ))
-    }
     /// Snapshot every sparse merge carrier after validating each record against
     /// the canonical durable block hash. The result is ordered by block height.
     ///
@@ -11993,31 +11944,6 @@ impl Kura {
     #[cfg(test)]
     pub(crate) fn merge_query_indexed_hashes_for_test(&self) -> BTreeSet<HashOf<MergeLedgerEntry>> {
         self.merge_log.lock().indexed_lookup_hashes.clone()
-    }
-    /// Corrupt a sidecar payload while retaining its frame index for fail-closed tests.
-    #[cfg(test)]
-    pub(crate) fn remove_merge_entry_payload_for_test(&self, hash: HashOf<MergeLedgerEntry>) {
-        let mut merge_log = self.merge_log.lock();
-        merge_log.in_memory_entries.remove(&hash);
-        let Some(frame) = merge_log.frames_by_hash.get(&hash).copied() else {
-            return;
-        };
-        let Some(path) = merge_log.file.as_ref().map(|file| file.path.clone()) else {
-            return;
-        };
-        let payload_len =
-            usize::try_from(frame.payload_len).expect("merge frame payload length fits usize");
-        let mut file = FileWrap::open_with(path, |options| {
-            options.write(true);
-        })
-        .expect("open indexed merge sidecar without append mode for test corruption");
-        file.try_io(|inner| {
-            inner.seek(SeekFrom::Start(frame.frame_offset.saturating_add(4)))?;
-            inner.write_all(&vec![0; payload_len])?;
-            inner.sync_data()?;
-            Ok(())
-        })
-        .expect("corrupt indexed merge sidecar payload for test");
     }
     #[cfg(test)]
     fn fail_next_merge_append_after_for_test(&self, point: MergeLedgerAppendFailurePoint) {
@@ -42539,6 +42465,13 @@ include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
 #[path = "kura/native_lane_batch_source.rs"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 mod native_lane_batch_source;
 pub(crate) use native_lane_batch_source::FinalizedNativeLaneBatchV1;
 #[cfg(test)]

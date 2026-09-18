@@ -57,7 +57,7 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     (state, network_id, account_id, key_pair)
 }
 fn build_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+    BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)
 }
 fn make_transaction(
     network_id: &NetworkId,
@@ -218,7 +218,12 @@ fn block_pipeline_rejects_missing_assessment() {
         .unpack(|_| {});
     let signed_block: SignedBlock = valid_block.into();
     let err = signed_block
-        .error(0)
+        .network_output_at(0)
+        .expect("validated transaction has an output")
+        .1
+        .result
+        .as_ref()
+        .err()
         .expect("fraud monitoring should reject missing assessment");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
