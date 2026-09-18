@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from sumeragi_v2_multilane_geometry_evidence_contract import _code
+
 
 def validate_queue_plan_autonomous_only_contract(
     root: Path,
@@ -82,6 +84,8 @@ def validate_queue_plan_autonomous_only_contract(
                     f"{root / relative}: QueuePlan autonomous-only item {symbol} "
                     f"is missing source-bound token {token!r}"
                 )
+
+    validate_current_queue_plan_selection(binding_items, errors)
 
     for relative, kind, symbol, tokens in (
         QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS
@@ -166,6 +170,39 @@ QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
 
 QUEUE_PLAN_AUTONOMOUS_ONLY_INVARIANT = "MLQueuePlanExecutionAutonomousOnly"
 QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
+    ('crates/iroha_data_model/src/block/lane_admission.rs',
+     'struct',
+     'QueuePlanAdmissionBindingV1',
+     ('version',
+      'network_id_digest',
+      'request_id',
+      'entrypoint_hash',
+      'routing_plan_digest',
+      'admission_context',
+      'enqueue_timestamp_ms',
+      'journal_record_digest')),
+    ('crates/iroha_core/src/torii_proxy.rs',
+     'fn',
+     'validate_queue_plan_binding_for_request',
+     ('binding.network_id_digest != queue_plan_admission_network_id_digest(network_id)',
+      'binding.request_id != queue_plan_synced_request_id(network_id, transaction.hash())',
+      'validate_queue_plan_binding_for_transaction_and_plan(binding, transaction, routing_plan)')),
+    ('crates/iroha_core/src/torii_proxy.rs',
+     'fn',
+     'validate_queue_plan_binding_for_transaction_and_plan',
+     ('binding.validate_structure()?;',
+      'binding.entrypoint_hash != transaction.hash()',
+      'binding.signed_transaction_hash != crate::tx::exact_signed_transaction_hash(transaction)',
+      'binding.routing_plan_digest != routing_plan.digest()',
+      '.validate_for_routing_plan(routing_plan)?;',
+      'crate::queue::queue_plan_journal_record_claim_digest(',
+      'transaction.clone(),',
+      'routing_plan.clone(),',
+      'binding.admission_context.clone(),',
+      'binding.enqueue_timestamp_ms,',
+      'Some(binding.global_admission_identity()),',
+      'if exact_digest != binding.journal_record_digest',
+      'Ok(())')),
     (
         "crates/iroha_core/src/block.rs",
         "fn",
@@ -190,20 +227,16 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
             "staged_merge_entry",
         ),
     ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
-        "method",
-        "V2CandidateAssembler::snapshot_routable_candidates",
-        (
-            "let queue_plan_synced =",
-            "TransactionAdmissionIntent::QueuePlanSynced",
-            "binding.validate_for_request(",
-            "report.routable = report.routable.saturating_add(1)",
-            "if queue_plan_synced",
-            "report.work_deferred = report.work_deferred.saturating_add(1)",
-            "records.push(CandidateRecord {",
-        ),
-    ),
+    ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
+     'method',
+     'V2CandidateAssembler::snapshot_routable_candidates',
+     ('let queue_plan_synced =',
+      'TransactionAdmissionIntent::QueuePlanSynced',
+      'crate::torii_proxy::validate_queue_plan_binding_for_request(',
+      'report.routable = report.routable.saturating_add(1)',
+      'if queue_plan_synced',
+      'report.work_deferred = report.work_deferred.saturating_add(1)',
+      'records.push(CandidateRecord {')),
     (
         "crates/iroha_core/src/queue.rs",
         "method",
@@ -232,24 +265,23 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
             "let encoded_payload_body_len = Encode::encode(&(",
         ),
     ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "method",
-        "&mut V2LaneWorkAdapter::prepare",
-        (
-            "if !candidates.is_empty()",
-            "let broad_autonomous_route_exclusion =",
-            "proposal_lookahead_enabled(&nexus, self.context.height)",
-            "let is_queue_plan_synced =",
-            "== iroha_data_model::transaction::TransactionAdmissionIntent::",
-            "QueuePlanSynced;",
-            "(is_queue_plan_synced",
-            "|| (broad_autonomous_route_exclusion",
-            ".contains_key(&(route.lane_id, route.dataspace_id))",
-            ".then_some(index)",
-            "CandidateWorkUnavailable::new(",
-        ),
-    ),
+    ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+     'method',
+     '&mut V2LaneWorkAdapter::prepare',
+     ('if context != &self.context',
+      'match self.refresh_merge_candidates(view)',
+      'let reserved_routes = self',
+      'let reserved_entrypoints = self',
+      '(candidate.transaction().entrypoint().admission_intent()',
+      '== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)',
+      '.then_some(index)',
+      'if !unavailable.is_empty()',
+      '"QueuePlanSynced work requires its globally admitted autonomous reservation"',
+      'reserved_routes.contains(&(leg.route.lane_id, leg.route.dataspace_id))',
+      '(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)',
+      '"ordinary work conflicts with an already-reserved autonomous lane slot"',
+      'let autonomous_lane_payloads = self',
+      'CandidateWorkUnavailable::new(')),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
@@ -261,7 +293,7 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
             'retire_autonomous_payload_batch(&losing_pending)',
             'let canonical_recovery = (|| -> crate::kura::Result<bool> {',
             'Ok(canonical_v2_lane_payload_matches_kura(',
-            'let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {\n            return V2LaneIngressOutcome::Rejected;\n        };',
+            'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {',
         ),
     ),
 )
@@ -279,20 +311,16 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
             "native_queue_plan_admissions != state_block.staged_queue_plan_admissions()",
         ),
     ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
-        "method",
-        "V2CandidateAssembler::snapshot_routable_candidates",
-        (
-            "let queue_plan_synced =",
-            "binding.validate_for_request(",
-            "report.routable = report.routable.saturating_add(1)",
-            "if queue_plan_synced",
-            "report.work_deferred = report.work_deferred.saturating_add(1)",
-            "break;",
-            "records.push(CandidateRecord {",
-        ),
-    ),
+    ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
+     'method',
+     'V2CandidateAssembler::snapshot_routable_candidates',
+     ('let queue_plan_synced =',
+      'crate::torii_proxy::validate_queue_plan_binding_for_request(',
+      'report.routable = report.routable.saturating_add(1)',
+      'if queue_plan_synced',
+      'report.work_deferred = report.work_deferred.saturating_add(1)',
+      'break;',
+      'records.push(CandidateRecord {')),
     (
         "crates/iroha_core/src/queue.rs",
         "method",
@@ -322,18 +350,23 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
             "let encoded_payload_body_len = Encode::encode(&(",
         ),
     ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "method",
-        "&mut V2LaneWorkAdapter::prepare",
-        (
-            "let broad_autonomous_route_exclusion =",
-            "let is_queue_plan_synced =",
-            "(is_queue_plan_synced",
-            "|| (broad_autonomous_route_exclusion",
-            ".then_some(index)",
-        ),
-    ),
+    ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+     'method',
+     '&mut V2LaneWorkAdapter::prepare',
+     ('if context != &self.context',
+      'match self.refresh_merge_candidates(view)',
+      'let reserved_routes = self',
+      'let reserved_entrypoints = self',
+      '(candidate.transaction().entrypoint().admission_intent()',
+      '== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)',
+      '.then_some(index)',
+      'if !unavailable.is_empty()',
+      '"QueuePlanSynced work requires its globally admitted autonomous reservation"',
+      'reserved_routes.contains(&(leg.route.lane_id, leg.route.dataspace_id))',
+      '(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)',
+      'if !unavailable.is_empty()',
+      '"ordinary work conflicts with an already-reserved autonomous lane slot"',
+      'let autonomous_lane_payloads = self')),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
@@ -343,7 +376,7 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
             "external_queue_plan_synced_entrypoint_index(block).is_some()",
             "return V2LaneIngressOutcome::Rejected;",
             "let canonical_recovery = (|| -> crate::kura::Result<bool> {",
-            "let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery)",
+            'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {',
             "retain_pending_certified_merge_entry_for_locked_carrier(",
             "retire_autonomous_payload_batch(&losing_pending)",
         ),
@@ -1655,3 +1688,70 @@ def validate_direct_release_authority_contract(
     )
     if gate is not None and ledger.rust_code_tokens(gate) != ledger.rust_code_tokens(_DIRECT_RELEASE_GATE_SOURCE):
         errors.append(f"{queue_path}: direct-release authority gate must have only StrictAbsence in shipping builds")
+
+
+def validate_current_queue_plan_selection(items: dict, errors: list[str]) -> None:
+    """Bind unconditional signed-intent exclusion and exact request delegation."""
+    symbol = "&mut V2LaneWorkAdapter::prepare"
+    item = items.get(("crates/iroha_core/src/sumeragi/v2_lane_work.rs", "method", symbol))
+    if item is not None:
+        exact = """let unavailable = candidates.iter().copied().enumerate()
+            .filter_map(|(index, candidate)| {
+                (candidate.transaction().entrypoint().admission_intent()
+                    == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+                    .then_some(index)
+            }).collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(unavailable,
+                    "QueuePlanSynced work requires its globally admitted autonomous reservation",
+                ).into());
+            }"""
+        conflict = """let unavailable = candidates.iter().copied().enumerate()
+            .filter_map(|(index, candidate)| {
+                let entrypoint = Hash::from(candidate.entrypoint_hash());
+                let route_conflict = candidate.routing_plan().legs().iter().any(|leg| {
+                    reserved_routes.contains(&(leg.route.lane_id, leg.route.dataspace_id))
+                });
+                (reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)
+            }).collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(unavailable,
+                    "ordinary work conflicts with an already-reserved autonomous lane slot",
+                ).into());
+            }"""
+        for obligation in (exact, conflict):
+            if _code(obligation) not in _code(item):
+                errors.append(f"{symbol}: current QueuePlan intent or reserved-slot exclusion changed")
+    symbol = "V2CandidateAssembler::snapshot_routable_candidates"
+    item = items.get(("crates/iroha_core/src/sumeragi/v2_candidate.rs", "method", symbol))
+    if item is not None:
+        call = """crate::torii_proxy::validate_queue_plan_binding_for_request(
+            &binding, state.network_id_ref(), transaction.entrypoint(), &routing_plan,
+        )"""
+        if _code(call) not in _code(item):
+            errors.append(f"{symbol}: exact QueuePlan request authority delegation changed")
+
+    request = items.get(("crates/iroha_core/src/torii_proxy.rs", "fn", "validate_queue_plan_binding_for_request"))
+    if request is not None:
+        guards = (
+            """if binding.network_id_digest != queue_plan_admission_network_id_digest(network_id) {
+                return Err("QueuePlan admission binding belongs to another network".to_owned());
+            }""",
+            """if binding.request_id != queue_plan_synced_request_id(network_id, transaction.hash()) {
+                return Err("QueuePlan admission binding has a noncanonical semantic request identity".to_owned());
+            }
+            validate_queue_plan_binding_for_transaction_and_plan(binding, transaction, routing_plan)""",
+        )
+        if any(_code(guard) not in _code(request) for guard in guards):
+            errors.append("QueuePlan binding network/request rejection or exact delegation changed")
+    claim = items.get(("crates/iroha_core/src/torii_proxy.rs", "fn", "validate_queue_plan_binding_for_transaction_and_plan"))
+    if claim is not None:
+        exact = """let exact_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(), routing_plan.clone(), binding.admission_context.clone(),
+            binding.enqueue_timestamp_ms, Some(binding.global_admission_identity()),
+        ).map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
+        if exact_digest != binding.journal_record_digest {
+            return Err("QueuePlan admission binding does not cover the exact journal record".to_owned());
+        } Ok(())"""
+        if _code(exact) not in _code(claim):
+            errors.append("QueuePlan complete journal claim or digest rejection changed")

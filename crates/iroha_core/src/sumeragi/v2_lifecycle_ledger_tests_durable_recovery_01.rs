@@ -180,7 +180,6 @@ impl RecoveryFixture {
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
             None,
             None,
-            None,
             1_000 + u64::from(marker),
             view,
         );
@@ -309,7 +308,6 @@ impl RecoveryFixture {
         let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
-            None,
             None,
             None,
             2_000 + u64::from(marker),
@@ -489,7 +487,6 @@ impl RecoveryFixture {
         let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
         let header = BlockHeader::new(
             NonZeroU64::new(context.height).expect("fixture height is non-zero"),
-            None,
             None,
             None,
             3_000 + u64::from(marker),

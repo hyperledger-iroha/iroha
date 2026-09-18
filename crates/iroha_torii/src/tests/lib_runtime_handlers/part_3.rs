@@ -813,7 +813,6 @@ fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
             NonZeroU64::new(height).expect("proxy fixture height must be non-zero"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1352,7 +1351,6 @@ fn queue_plan_admission_publication_retains_future_until_catch_up() {
     let future_height = state_height.checked_add(1).unwrap();
     let future_header = BlockHeader::new(
         NonZeroU64::new(future_height).unwrap(),
-        None,
         None,
         None,
         0,

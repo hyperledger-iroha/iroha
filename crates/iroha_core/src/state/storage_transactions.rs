@@ -38,7 +38,9 @@ pub struct TransactionsStorage {
     /// are retained only for finalised blocks (with heights strictly lower than the current latest
     /// block) so that stale transactions are discarded after rollbacks.
     blocks: DashMap<Key, Value>,
-    write_lock: Mutex<()>,
+    // The opaque identity covers both the hot tip and the historical map.
+    // It rotates while the writer is held, never from a caller-provided scalar.
+    write_lock: Mutex<Arc<()>>,
 }
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct BlockInfo {
@@ -54,7 +56,7 @@ impl TransactionsStorage {
         Self {
             latest_block: ArcSwapOption::empty(),
             blocks: DashMap::new(),
-            write_lock: Mutex::new(()),
+            write_lock: Mutex::new(Arc::new(())),
         }
     }
     /// Create persistent view of storage at certain point in time
@@ -78,7 +80,8 @@ impl TransactionsStorage {
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
         height: NonZeroUsize,
     ) {
-        let _guard = self.write_lock.lock();
+        let mut guard = self.write_lock.lock();
+        let next_identity = Arc::new(());
         let entrypoints = entrypoints.into_iter().collect::<HashSet<_>>();
         let latest = self.latest_block.load_full();
         match latest.as_deref() {
@@ -106,6 +109,7 @@ impl TransactionsStorage {
                 height,
             }))),
         }
+        *guard = next_identity;
     }
     /// Deliberately replace existing membership for a malformed-State recovery fixture.
     ///
@@ -118,7 +122,8 @@ impl TransactionsStorage {
         entrypoint: Key,
         height: Value,
     ) {
-        let _guard = self.write_lock.lock();
+        let mut guard = self.write_lock.lock();
+        let next_identity = Arc::new(());
         assert!(
             self.view().get(&entrypoint).is_some(),
             "overwrite needs existing membership"
@@ -140,6 +145,7 @@ impl TransactionsStorage {
             self.blocks.insert(entrypoint, height);
         }
         self.latest_block.store(Some(Arc::new(updated)));
+        *guard = next_identity;
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> TransactionsBlock<'_> {
@@ -160,6 +166,28 @@ impl TransactionsStorage {
         }
     }
 }
+/// Read the logical committed cut, excluding the abandoned tip during replacement.
+fn membership_at_cut<Q>(
+    latest: Option<&BlockInfo>,
+    history: &DashMap<Key, Value>,
+    undo_latest: bool,
+    key: &Q,
+) -> Option<Value>
+where
+    Key: Borrow<Q>,
+    Q: Hash + Eq + ?Sized,
+{
+    let latest = latest?;
+    if !undo_latest && latest.transactions.contains(key) {
+        Some(latest.height)
+    } else {
+        history
+            .get(key)
+            .map(|height| *height)
+            .filter(|height| *height < latest.height)
+    }
+}
+
 /// Persistent view of storage at certain point in time
 pub trait TransactionsReadOnly {
     /// Read entry from the storage
@@ -185,21 +213,7 @@ mod view {
             Key: Borrow<Q>,
             Q: Hash + Eq + ?Sized,
         {
-            if let Some(block) = &self.latest_block {
-                let block_height = block.height;
-                if block.transactions.contains(key) {
-                    return Some(block_height);
-                }
-                if let Some(height) = self
-                    .blocks
-                    .get(key)
-                    .map(|h| *h)
-                    .filter(|&h| h < block_height)
-                {
-                    return Some(height);
-                }
-            }
-            None
+            membership_at_cut(self.latest_block.as_deref(), self.blocks, false, key)
         }
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -238,30 +252,87 @@ mod block {
             /// Height encoded in the block being committed.
             actual_current_height: usize,
         },
+        /// The next transaction-membership height exceeds the storage representation
+        HeightOverflow,
         /// Deterministic autoscale lane lifecycle failed while preparing block commit
         AutoscaleLaneLifecycle,
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
         /// Finalized FASTPQ source ownership is invalid at block commit
         FastpqSourceInventory,
+        /// Execution output reservations have not been resolved by the canonical producer
+        ExecutionOutputCapacity,
         /// Frozen lane consensus metadata changed after its authenticated capture
         LaneConsensusContexts,
         /// Permanent AXT handle counter could not finalize its block transition
         AxtCounterRatchet,
         /// Live asset-definition incarnations are inconsistent with the registry
         AxtAssetIncarnation,
+        /// Prepared World commit does not match the actual State or target height
+        WorldCommitPreparation,
+        /// The applying State was busy or changed during its complete snapshot observation
+        SnapshotObservationChanged,
+        /// A stable State snapshot projection or encoding is malformed
+        SnapshotProjection,
     }
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
         pub(super) blocks_ref: &'storage DashMap<Key, Value>,
-        pub(super) _guard: MutexGuard<'storage, RawMutex, ()>,
+        pub(super) _guard: MutexGuard<'storage, RawMutex, Arc<()>>,
         /// Own fields
         pub(super) revert: bool,
         pub(super) current_block: Option<Arc<BlockInfo>>,
     }
-    impl TransactionsBlock<'_> {
+    /// An admitted membership transition retaining its original exclusive writer.
+    ///
+    /// Dropping this owner leaves storage unchanged. Publication consumes the
+    /// exact admitted action without consulting a new frontier or admitting a
+    /// different payload. Shared reads remain available for State snapshots.
+    pub(crate) struct PreparedTransactionsBlock<'storage> {
+        block: TransactionsBlock<'storage>,
+        publication: MembershipPublication,
+        next_identity: Arc<()>,
+    }
+
+    /// An admitted transition whose original physical writer has been released.
+    ///
+    /// All payload sets are moved or share their original immutable allocation.
+    /// This owner exposes no live-history reader or independent publish method:
+    /// the aggregate State publisher must validate every journal before writing.
+    pub(crate) struct DetachedTransactionsBlock {
+        predecessor_identity: Arc<()>,
+        predecessor: Option<Arc<BlockInfo>>,
+        current: Arc<BlockInfo>,
+        revert: bool,
+        publication: MembershipPublication,
+        next_identity: Arc<()>,
+    }
+
+    /// A short observation, never authorization to publish a detached journal.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum MembershipPredecessorStatus {
+        /// Another writer owns the observation boundary.
+        Busy,
+        /// Both membership representations still have the captured identity.
+        Current,
+        /// Some committed membership changed after capture.
+        Changed,
+    }
+
+    enum MembershipPublication {
+        Repeated,
+        Replace {
+            current: Arc<BlockInfo>,
+        },
+        Advance {
+            previous: Option<Arc<BlockInfo>>,
+            current: Arc<BlockInfo>,
+        },
+    }
+
+    impl<'storage> TransactionsBlock<'storage> {
         /// Return whether a canonical block membership update was staged.
         pub(crate) fn has_staged_block(&self) -> bool {
             self.current_block.is_some()
@@ -313,58 +384,176 @@ mod block {
         /// height being committed does not match the expected height derived from the current
         /// storage state. These behaviours are illustrated in the release-mode tests.
         pub fn commit(self) -> Result<(), TransactionsBlockError> {
-            self.validate_commit()?;
-            self.commit_unchecked()
+            self.prepare_commit()?.publish();
+            Ok(())
+        }
+        /// Admit the exact staged transition and retain its exclusive writer.
+        ///
+        /// This performs all membership validation before publication. Failure
+        /// drops the staging scope without modifying committed membership.
+        pub(crate) fn prepare_commit(
+            self,
+        ) -> Result<PreparedTransactionsBlock<'storage>, TransactionsBlockError> {
+            let publication = self.admit_publication()?;
+            Ok(PreparedTransactionsBlock {
+                block: self,
+                publication,
+                next_identity: Arc::new(()),
+            })
         }
         /// Validate that this block can be committed without mutating the storage.
         ///
         /// This lets callers perform other fallible commit preparation after the transaction height
         /// has been proven acceptable, but before consuming the transaction block.
         pub(crate) fn validate_commit(&self) -> Result<(), TransactionsBlockError> {
-            let previous_block = &self.latest_block_ref.load();
-            let previous_block = previous_block.as_ref();
-            let previous_height = previous_block.map_or(0, |b| b.height.get());
-            let addition = usize::from(!self.revert);
-            let expected_current_height = previous_height + addition;
+            self.admit_publication().map(|_| ())
+        }
+        fn admit_publication(&self) -> Result<MembershipPublication, TransactionsBlockError> {
+            let previous_block = self.latest_block_ref.load_full();
+            let previous_height = previous_block.as_ref().map_or(0, |b| b.height.get());
             let Some(current_block) = self.current_block.as_ref() else {
                 return Err(TransactionsBlockError::MissingInsertBlock);
             };
+            if !self.revert
+                && previous_block.as_ref().is_some_and(|previous_block| {
+                    previous_block.height == current_block.height
+                        && previous_block.transactions == current_block.transactions
+                })
+            {
+                return Ok(MembershipPublication::Repeated);
+            }
+            let addition = usize::from(!self.revert);
+            let expected_current_height = previous_height
+                .checked_add(addition)
+                .ok_or(TransactionsBlockError::HeightOverflow)?;
             let current_height = current_block.height.get();
             if expected_current_height != current_height {
-                if !self.revert
-                    && previous_block.is_some_and(|previous_block| {
-                        previous_block.height == current_block.height
-                            && previous_block.transactions == current_block.transactions
-                    })
-                {
-                    return Ok(());
-                }
                 return Err(TransactionsBlockError::HeightMismatch {
                     expected_current_height,
                     actual_current_height: current_height,
                 });
             }
-            Ok(())
-        }
-        fn commit_unchecked(self) -> Result<(), TransactionsBlockError> {
-            let previous_block = &self.latest_block_ref.load();
-            let previous_block = previous_block.as_ref();
-            let Some(current_block) = self.current_block else {
-                return Err(TransactionsBlockError::MissingInsertBlock);
-            };
             if self.revert {
-                // Rolling back the latest block must not drop historical entries from
-                // earlier heights; we only prune versions that no longer fall strictly
-                // below the height being re-executed.
-                self.blocks_ref
-                    .retain(|_, height| *height < current_block.height);
-            } else if let Some(previous_block) = previous_block {
-                for &transaction in &previous_block.transactions {
-                    self.blocks_ref.insert(transaction, previous_block.height);
+                Ok(MembershipPublication::Replace {
+                    current: Arc::clone(current_block),
+                })
+            } else {
+                Ok(MembershipPublication::Advance {
+                    previous: previous_block,
+                    current: Arc::clone(current_block),
+                })
+            }
+        }
+    }
+    impl<'storage> PreparedTransactionsBlock<'storage> {
+        /// Move the admitted action and exact cut, then release the writer.
+        ///
+        /// This adds no collection allocation or copy. Snapshot/checkpoint
+        /// projections must already have consumed the original locked reader.
+        pub(crate) fn detach(self) -> DetachedTransactionsBlock {
+            let Self {
+                block,
+                publication,
+                next_identity,
+            } = self;
+            let detached = DetachedTransactionsBlock {
+                predecessor_identity: Arc::clone(&block._guard),
+                predecessor: block.latest_block_ref.load_full(),
+                current: Arc::clone(block.current_block.as_ref().expect("admitted membership")),
+                revert: block.revert,
+                publication,
+                next_identity,
+            };
+            drop(block);
+            detached
+        }
+
+        /// Borrow immutable staged membership and its actual predecessor.
+        pub(crate) fn as_block(&self) -> &TransactionsBlock<'storage> {
+            &self.block
+        }
+
+        /// Publish the admitted transition once, retaining its writer throughout.
+        ///
+        /// All semantic refusal happened during preparation. The retained mutex
+        /// prevents any other membership writer from changing the admitted cut.
+        pub(crate) fn publish(self) {
+            let Self {
+                mut block,
+                publication,
+                next_identity,
+            } = self;
+            let changes_identity = !matches!(&publication, MembershipPublication::Repeated);
+            match publication {
+                MembershipPublication::Repeated => {
+                    // Do not promote a repeated tip into history: replacement
+                    // must still recover the actual older membership.
+                }
+                MembershipPublication::Replace { current } => {
+                    block
+                        .blocks_ref
+                        .retain(|_, height| *height < current.height);
+                    block.latest_block_ref.store(Some(current));
+                }
+                MembershipPublication::Advance { previous, current } => {
+                    if let Some(previous) = previous {
+                        for &transaction in &previous.transactions {
+                            block.blocks_ref.insert(transaction, previous.height);
+                        }
+                    }
+                    block.latest_block_ref.store(Some(current));
                 }
             }
-            self.latest_block_ref.store(Some(current_block));
-            Ok(())
+            if changes_identity {
+                *block._guard = next_identity;
+            }
+            drop(block);
+        }
+    }
+    impl DetachedTransactionsBlock {
+        /// Borrow the exact admitted carrier height and immutable membership.
+        pub(crate) fn staged_membership(&self) -> (Value, &HashSet<Key>) {
+            (self.current.height, &self.current.transactions)
+        }
+
+        /// Whether admission reverted the original committed tip first.
+        pub(crate) fn replaces_tip(&self) -> bool {
+            self.revert
+        }
+
+        /// Height of the original committed cut, including a replaced tip.
+        pub(crate) fn predecessor_height(&self) -> usize {
+            self.predecessor
+                .as_ref()
+                .map_or(0, |block| block.height.get())
+        }
+
+        /// Observe a target's exact captured identity without blocking on its writer.
+        /// A different storage, including one restored from identical bytes, differs.
+        ///
+        /// The result is advisory: an aggregate publisher must retain all
+        /// journal writers while checking identities and publishing together.
+        pub(crate) fn observe_predecessor(
+            &self,
+            storage: &TransactionsStorage,
+        ) -> MembershipPredecessorStatus {
+            let Some(guard) = storage.write_lock.try_lock() else {
+                return MembershipPredecessorStatus::Busy;
+            };
+            if Arc::ptr_eq(&guard, &self.predecessor_identity) {
+                MembershipPredecessorStatus::Current
+            } else {
+                MembershipPredecessorStatus::Changed
+            }
+        }
+    }
+    impl TransactionsReadOnly for PreparedTransactionsBlock<'_> {
+        fn get<Q>(&self, key: &Q) -> Option<Value>
+        where
+            Key: Borrow<Q>,
+            Q: Hash + Eq + ?Sized,
+        {
+            self.block.get(key)
         }
     }
     impl TransactionsReadOnly for TransactionsBlock<'_> {
@@ -380,18 +569,249 @@ mod block {
             {
                 return Some(height);
             }
-            let latest_block = self.latest_block_ref.load();
-            if let Some(block) = latest_block.as_ref().as_ref()
-                && block.transactions.contains(key)
-            {
-                return Some(block.height);
-            }
-            self.blocks_ref.get(key).map(|height| *height)
+            let latest = self.latest_block_ref.load();
+            membership_at_cut(latest.as_deref(), self.blocks_ref, self.revert, key)
         }
     }
 }
+pub(crate) use block::{
+    DetachedTransactionsBlock, MembershipPredecessorStatus, PreparedTransactionsBlock,
+};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
+
+/// Borrowed logical membership, independent of the latest/history representation.
+mod membership_projection {
+    use super::*;
+
+    /// One validated transition borrowed from the actual membership owner.
+    ///
+    /// The block's existing write guard remains held for this borrow. No key set
+    /// is copied and no caller-supplied inventory participates. Visits have
+    /// unspecified order: use a history-independent map or canonicalize in the
+    /// consumer rather than folding callback order into a commitment.
+    /// This describes membership only, not carrier or sealed-alias admission.
+    pub(in crate::state) struct TransactionsMembershipTransition<'block> {
+        before: Snapshot<'block>,
+        current: &'block BlockInfo,
+    }
+
+    struct Snapshot<'block> {
+        latest: Option<Arc<BlockInfo>>,
+        history: &'block DashMap<Key, Value>,
+        revert: bool,
+    }
+
+    impl TransactionsBlock<'_> {
+        fn membership_snapshot(&self) -> Snapshot<'_> {
+            Snapshot {
+                latest: self.latest_block_ref.load_full(),
+                history: self.blocks_ref,
+                revert: self.revert,
+            }
+        }
+
+        /// Visit the exact currently committed logical hash-to-height map.
+        ///
+        /// This cold visit scans history and the latest set, borrowing each key
+        /// while the block's write fence is held. It can run before staging.
+        /// Callback order is unspecified and callbacks must not acquire a writer
+        /// for this storage. Callback errors stop the visit without changing it.
+        pub(in crate::state) fn visit_committed_membership<E>(
+            &self,
+            visit: impl FnMut(&Key, Value) -> Result<(), E>,
+        ) -> Result<(), E> {
+            self.membership_snapshot().visit(false, visit)
+        }
+
+        /// Visit the exact logical predecessor used by this block scope.
+        ///
+        /// For replacement this excludes the abandoned latest set and retains
+        /// only earlier history, matching commit's undo cut. Ordinary scopes
+        /// visit the committed tip. The same cold-visit rules as
+        /// [`Self::visit_committed_membership`] apply.
+        pub(in crate::state) fn visit_predecessor_membership<E>(
+            &self,
+            visit: impl FnMut(&Key, Value) -> Result<(), E>,
+        ) -> Result<(), E> {
+            let snapshot = self.membership_snapshot();
+            snapshot.visit(snapshot.revert, visit)
+        }
+
+        /// Borrow an exact transition only after existing commit validation.
+        ///
+        /// Missing staging or an invalid height fails before any consumer can
+        /// observe staged rows. The borrow prevents staging or committing a
+        /// different payload while the transition is in use.
+        pub(in crate::state) fn membership_transition(
+            &self,
+        ) -> Result<TransactionsMembershipTransition<'_>, TransactionsBlockError> {
+            self.validate_commit()?;
+            let current = self
+                .current_block
+                .as_deref()
+                .ok_or(TransactionsBlockError::MissingInsertBlock)?;
+            Ok(TransactionsMembershipTransition {
+                before: self.membership_snapshot(),
+                current,
+            })
+        }
+    }
+
+    impl Snapshot<'_> {
+        fn history_before(&self, key: &Key, ceiling: Value) -> Option<Value> {
+            self.history
+                .get(key)
+                .map(|entry| *entry)
+                .filter(|height| *height < ceiling)
+        }
+
+        fn get(&self, undo_latest: bool, key: &Key) -> Option<Value> {
+            membership_at_cut(self.latest.as_deref(), self.history, undo_latest, key)
+        }
+
+        fn visit<E>(
+            &self,
+            undo_latest: bool,
+            mut visit: impl FnMut(&Key, Value) -> Result<(), E>,
+        ) -> Result<(), E> {
+            let Some(latest) = self.latest.as_ref() else {
+                return Ok(());
+            };
+            if !undo_latest {
+                for key in &latest.transactions {
+                    visit(key, latest.height)?;
+                }
+            }
+            for entry in self.history.iter() {
+                if *entry.value() < latest.height
+                    && (undo_latest || !latest.transactions.contains(entry.key()))
+                {
+                    visit(entry.key(), *entry.value())?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl TransactionsMembershipTransition<'_> {
+        /// Height of the committed tip before this publication; zero if empty.
+        pub(in crate::state) fn committed_height(&self) -> usize {
+            self.before
+                .latest
+                .as_ref()
+                .map_or(0, |block| block.height.get())
+        }
+
+        /// Height of the logical predecessor, after undo for replacement.
+        pub(in crate::state) fn predecessor_height(&self) -> usize {
+            let committed = self.committed_height();
+            if self.before.revert {
+                committed.saturating_sub(1)
+            } else {
+                committed
+            }
+        }
+
+        /// Height whose exact membership has passed existing commit validation.
+        pub(in crate::state) fn staged_height(&self) -> Value {
+            self.current.height
+        }
+
+        /// Visit the exact post-commit logical map without publishing it.
+        ///
+        /// Cold traversal scans history plus the current/latest sets; duplicate
+        /// physical keys are visited once with their actual lookup precedence.
+        /// The underlying stores are borrowed and callback order is unspecified.
+        pub(in crate::state) fn visit_staged_membership<E>(
+            &self,
+            mut visit: impl FnMut(&Key, Value) -> Result<(), E>,
+        ) -> Result<(), E> {
+            for key in &self.current.transactions {
+                visit(key, self.current.height)?;
+            }
+            let promoted = (!self.before.revert)
+                .then_some(self.before.latest.as_deref())
+                .flatten();
+            if let Some(previous) = promoted {
+                for key in &previous.transactions {
+                    if !self.current.transactions.contains(key) {
+                        visit(key, previous.height)?;
+                    }
+                }
+            }
+            for entry in self.before.history.iter() {
+                if *entry.value() < self.current.height
+                    && !self.current.transactions.contains(entry.key())
+                    && !promoted.is_some_and(|previous| previous.transactions.contains(entry.key()))
+                {
+                    visit(entry.key(), *entry.value())?;
+                }
+            }
+            Ok(())
+        }
+
+        /// Visit net changes from the logical predecessor to the staged map.
+        ///
+        /// This visits only the actual staged set. Ordinary latest-set promotion
+        /// changes representation, not logical values. Replacement starts from
+        /// the earlier history cut, not the abandoned committed tip.
+        pub(in crate::state) fn visit_predecessor_changes<E>(
+            &self,
+            mut visit: impl FnMut(&Key, Option<Value>, Option<Value>) -> Result<(), E>,
+        ) -> Result<(), E> {
+            for key in &self.current.transactions {
+                let before = self.before.get(self.before.revert, key);
+                let after = Some(self.current.height);
+                if before != after {
+                    visit(key, before, after)?;
+                }
+            }
+            Ok(())
+        }
+
+        /// Visit net changes from the committed tip to the staged map.
+        ///
+        /// Unlike predecessor changes, replacement includes removal of abandoned
+        /// tip-only keys and restoration of their earlier historical values.
+        /// Work is bounded by the actual staged and latest sets, without scanning
+        /// history. This relies on the private storage invariant: history has
+        /// heights below the committed tip; exact repeated commits preserve it.
+        pub(in crate::state) fn visit_committed_changes<E>(
+            &self,
+            mut visit: impl FnMut(&Key, Option<Value>, Option<Value>) -> Result<(), E>,
+        ) -> Result<(), E> {
+            for key in &self.current.transactions {
+                let before = self.before.get(false, key);
+                let after = Some(self.current.height);
+                if before != after {
+                    visit(key, before, after)?;
+                }
+            }
+            if self.before.revert
+                && let Some(previous) = &self.before.latest
+            {
+                for key in &previous.transactions {
+                    if !self.current.transactions.contains(key) {
+                        let after = self.before.history_before(key, self.current.height);
+                        visit(key, Some(previous.height), after)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+pub(in crate::state) use membership_projection::TransactionsMembershipTransition;
+
+#[cfg(test)]
+#[path = "storage_transactions_projection_tests.rs"]
+mod projection_tests;
+
+#[cfg(test)]
+#[path = "storage_transactions_preparation_tests.rs"]
+mod preparation_tests;
+
 /// Module with serialization and deserialization of [`TransactionsStorage`]
 mod serialization {
     use super::*;
@@ -437,8 +857,14 @@ mod serialization {
         } else {
             let previous = block.latest_block_ref.load();
             if let Some(previous) = previous.as_ref() {
-                for transaction in &previous.transactions {
-                    map.insert(*transaction, previous.height);
+                let repeated = block.current_block.as_ref().is_some_and(|current| {
+                    current.height == previous.height
+                        && current.transactions == previous.transactions
+                });
+                if !repeated {
+                    for transaction in &previous.transactions {
+                        map.insert(*transaction, previous.height);
+                    }
                 }
             }
         }
@@ -453,6 +879,11 @@ mod serialization {
     impl JsonSerializeTrait for TransactionsBlock<'_> {
         fn json_serialize(&self, out: &mut String) {
             write_transactions_block_json(self, out)
+        }
+    }
+    impl JsonSerializeTrait for PreparedTransactionsBlock<'_> {
+        fn json_serialize(&self, out: &mut String) {
+            write_transactions_block_json(self.as_block(), out)
         }
     }
     impl FastJsonWrite for TransactionsView<'_> {
@@ -507,7 +938,7 @@ mod serialization {
             Ok(TransactionsStorage {
                 latest_block: ArcSwapOption::from(latest_block),
                 blocks: dash,
-                write_lock: Mutex::new(()),
+                write_lock: Mutex::new(Arc::new(())),
             })
         }
     }

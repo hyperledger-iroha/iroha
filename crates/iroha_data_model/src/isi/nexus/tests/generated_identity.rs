@@ -188,8 +188,7 @@ fn sponsor_instruction_records() -> [Value; 10] {
     ]
 }
 
-#[test]
-fn nexus_instructions_preserve_captured_frames() {
+fn current_instruction_records() -> Value {
     let mut rows = sponsor_instruction_records().to_vec();
     rows.extend(verified_instruction_records());
     rows.sort_by(|left, right| {
@@ -205,13 +204,28 @@ fn nexus_instructions_preserve_captured_frames() {
             .sum::<usize>(),
         24
     );
+    Value::Array(rows)
+}
+
+#[test]
+#[ignore = "explicit first-release Nexus wire fixture capture"]
+fn capture_nexus_identity_frames_for_first_release_migration() {
+    eprintln!(
+        "NEXUS_CANONICAL_IDENTITY_CAPTURE={}",
+        json::to_string(&current_instruction_records())
+            .expect("encode actual Nexus identity capture")
+    );
+}
+
+#[test]
+fn nexus_instructions_preserve_captured_frames() {
     let captured: Value = json::from_str(include_str!(
         "../../../../tests/fixtures/nexus_instruction_generated_identity_frames.json"
     ))
     .expect("immutable Nexus instruction capture");
     fixture_json::assert_json_matches(
         &captured,
-        &Value::Array(rows),
+        &current_instruction_records(),
         "Nexus instruction identities",
     );
 }

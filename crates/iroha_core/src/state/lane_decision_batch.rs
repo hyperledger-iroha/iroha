@@ -18,6 +18,23 @@ use std::{collections::HashSet, sync::Arc};
 type Result<T> = std::result::Result<T, MergeLedgerCommitError>;
 type Execution = super::lane_decision_execution::PreexecutedLaneDecisionGroupV1;
 
+/// Preserve stable source errors, but discard either result after a publication.
+/// This finite outer fence also covers early errors from nested observations.
+pub(super) fn with_stable_observation<T>(
+    state: &State,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let generation = state.state_view_generation();
+    if generation % 2 != 0 {
+        return Err(MergeLedgerCommitError::ExecutionObservationChanged);
+    }
+    let result = operation();
+    if !super::is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Err(MergeLedgerCommitError::ExecutionObservationChanged);
+    }
+    result
+}
+
 /// Private identity and actual prefix roots, minted only by ordered execution.
 /// This seal cannot authenticate a full global witness or authorize State commit.
 pub(super) struct NativeLaneStageSealV1 {
@@ -28,6 +45,7 @@ pub(super) struct NativeLaneStageSealV1 {
     membership: HashSet<HashOf<TransactionEntrypoint>>,
     application_write_set_root: Hash,
     write_set_root: Hash,
+    completed_write_set_root: Option<Hash>,
     fastpq: super::native_lane_fastpq::NativeLaneFastpqSeal,
 }
 
@@ -111,27 +129,21 @@ impl State {
         &self,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<LaneDecisionBatchV1> {
-        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
-        let generation = self.state_view_generation();
-        if generation % 2 != 0 {
-            return Err(invalid("native execution base is being published".into()));
-        }
-        let batch = LaneDecisionBatchV1 {
-            base_state_height: u64::try_from(self.view().block_hashes.len())
-                .map_err(|_| invalid("native execution base height overflows".into()))?,
-            base_state_hash: self.lane_execution_state_hash(),
-            groups: groups
-                .iter()
-                .map(VerifiedLaneDecisionGroupV1::to_wire)
-                .collect(),
-        };
-        batch.canonical_hash().map_err(invalid)?;
-        if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Err(invalid(
-                "native execution base changed during source preparation".into(),
-            ));
-        }
-        Ok(batch)
+        with_stable_observation(self, || {
+            let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
+            let captured = crate::snapshot::CapturedStateSnapshot::capture(self)?;
+            let batch = LaneDecisionBatchV1 {
+                base_state_height: u64::try_from(captured.height())
+                    .map_err(|_| invalid("native execution base height overflows".into()))?,
+                base_state_hash: HashOf::from_untyped_unchecked(captured.canonical_hash()?),
+                groups: groups
+                    .iter()
+                    .map(VerifiedLaneDecisionGroupV1::to_wire)
+                    .collect(),
+            };
+            batch.canonical_hash().map_err(invalid)?;
+            Ok(batch)
+        })
     }
 
     /// Execute verified sources under their actual carrier, after shared start hooks.
@@ -142,20 +154,23 @@ impl State {
         batch: &LaneDecisionBatchV1,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
-        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
-        batch.canonical_hash().map_err(invalid)?;
-        if self.prepare_lane_decision_batch(groups)? != *batch {
-            return Err(invalid(
-                "native source differs from its exact verified inputs or applying pre-State".into(),
-            ));
-        }
-        let prepared = self.prepare_native_batch_on_carrier(carrier.clone(), groups)?;
-        if prepared.batch() != batch {
-            return Err(invalid(
-                "native applying pre-State changed before execution".into(),
-            ));
-        }
-        Ok(prepared)
+        with_stable_observation(self, || {
+            let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
+            batch.canonical_hash().map_err(invalid)?;
+            if self.prepare_lane_decision_batch(groups)? != *batch {
+                return Err(invalid(
+                    "native source differs from its exact verified inputs or applying pre-State"
+                        .into(),
+                ));
+            }
+            let prepared = self.prepare_native_batch_on_carrier(carrier.clone(), groups)?;
+            if prepared.batch() != batch {
+                return Err(invalid(
+                    "native applying pre-State changed before execution".into(),
+                ));
+            }
+            Ok(prepared)
+        })
     }
 
     /// Standalone actual-header scratch constructor; callers authenticate the
@@ -167,19 +182,15 @@ impl State {
         header: BlockHeader,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
-        let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
-        let generation = self.state_view_generation();
-        let batch = self.prepare_lane_decision_batch(groups)?;
-        let (overlay, executions) =
-            self.with_native_lane_execution(header, groups, |overlay, results| {
-                overlay.seal_native_lane_decision_batch(results, batch)
-            })?;
-        if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "native execution base changed during preparation".into(),
-            ));
-        }
-        PreparedLaneDecisionBatchV1::from_stage(overlay, executions)
+        with_stable_observation(self, || {
+            let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+            let batch = self.prepare_lane_decision_batch(groups)?;
+            let (overlay, executions) =
+                self.with_native_lane_execution(header, groups, |overlay, results| {
+                    overlay.seal_native_lane_decision_batch(results, batch)
+                })?;
+            PreparedLaneDecisionBatchV1::from_stage(overlay, executions)
+        })
     }
 }
 
@@ -236,9 +247,10 @@ impl StateBlock<'_> {
             membership,
             application_write_set_root,
             write_set_root,
+            completed_write_set_root: None,
             fastpq,
         }));
-        self.validate_native_lane_execution_prefix()?;
+        self.validate_native_lane_execution()?;
         Ok(results)
     }
 
@@ -319,8 +331,9 @@ impl StateBlock<'_> {
             .map(|seal| (seal.batch.as_ref(), &seal.fastpq)))
     }
 
-    /// Check actual start+native writes at the constructor's sealed prefix.
-    pub(super) fn validate_native_lane_execution_prefix(&self) -> Result<()> {
+    /// Check the owned native execution cut: the prefix before internal phases,
+    /// or the complete actual tail once the common producer has finished.
+    pub(super) fn validate_native_lane_execution(&self) -> Result<()> {
         self.validate_native_lane_stage_membership()?;
         if !self.start_of_block_effects_applied
             || self.merge_execution_write_set_root()
@@ -328,11 +341,70 @@ impl StateBlock<'_> {
                     .native_lane_stage
                     .as_ref()
                     .expect("checked native seal")
-                    .write_set_root
+                    .completed_write_set_root
+                    .unwrap_or_else(|| {
+                        self.native_lane_stage
+                            .as_ref()
+                            .expect("checked native seal")
+                            .write_set_root
+                    })
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "native start+execution prefix writes changed or hooks did not run".into(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Bind the actual completed tail once, using the common producer's private
+    /// source inventory. Scratch-only execution without a native stage remains
+    /// nonpublishable and cannot later manufacture this seal.
+    pub(super) fn complete_native_output_tail(
+        &mut self,
+        sources: &super::output_capacity::OwnedExecutionSources,
+    ) -> std::result::Result<(), String> {
+        if !sources.is_native() || sources.proposal() != self._curr_block.hash() {
+            return Err("native tail has a foreign producer source".into());
+        }
+        if self.native_lane_stage.is_none() {
+            return Ok(());
+        }
+        self.validate_native_lane_stage_membership()
+            .map_err(|error| error.to_string())?;
+        self.verify_native_owned_fastpq_output_join(sources)?;
+        let completed = self.merge_execution_write_set_root();
+        let seal = self
+            .native_lane_stage
+            .as_mut()
+            .ok_or("native tail lost its stage")?;
+        if seal.completed_write_set_root.is_some() {
+            return Err("native tail was completed twice".into());
+        }
+        seal.completed_write_set_root = Some(completed);
+        Ok(())
+    }
+
+    /// Rejoin the complete actual native owner with the source-only proposal.
+    /// Equal Network hashes alone cannot substitute different route Decisions.
+    pub(super) fn validate_native_output_carrier(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> std::result::Result<(), String> {
+        self.validate_native_lane_execution()
+            .map_err(|error| error.to_string())?;
+        let seal = self
+            .native_lane_stage
+            .as_ref()
+            .ok_or("native output has no stage")?;
+        if seal.completed_write_set_root.is_none()
+            || block.header() != seal.carrier
+            || !block.external_entrypoints_slice().is_empty()
+            || block
+                .execution_context()
+                .and_then(|context| context.native_lane_decisions.as_deref())
+                != Some(seal.batch.as_ref())
+        {
+            return Err("native output carrier differs from its actual source/tail".into());
         }
         Ok(())
     }

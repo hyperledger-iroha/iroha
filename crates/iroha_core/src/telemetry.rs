@@ -7637,14 +7637,14 @@ mod tests {
     #[tokio::test]
     async fn commit_time_clamps_when_block_created_in_future() {
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 2_000, 0);
         let report = BlockCommitReport::new(&header, &time_source);
         assert_eq!(report.commit_time, Duration::ZERO);
     }
     #[tokio::test]
     async fn reconcile_last_reported_block_keeps_matching_report() {
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 900, 0);
         let mut report = BlockCommitReport::new(&header, &time_source);
         let corrected = reconcile_last_reported_block_with_kura(&mut report, &header, &time_source);
         assert!(!corrected);
@@ -7655,8 +7655,8 @@ mod tests {
     #[tokio::test]
     async fn reconcile_last_reported_block_uses_kura_block_on_hash_mismatch() {
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
-        let stale_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
-        let persisted_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 800, 0);
+        let stale_header = BlockHeader::new(nonzero!(2_u64), None, None, 900, 0);
+        let persisted_header = BlockHeader::new(nonzero!(2_u64), None, None, 800, 0);
         let mut report = BlockCommitReport::new(&stale_header, &time_source);
         let corrected =
             reconcile_last_reported_block_with_kura(&mut report, &persisted_header, &time_source);
@@ -7672,7 +7672,6 @@ mod tests {
         let header = block.as_ref().header();
         let stale_header = BlockHeader::new(
             header.height(),
-            None,
             None,
             None,
             u64::try_from(header.creation_time().as_millis()).expect("time should fit into u64")
@@ -11266,7 +11265,7 @@ mod tests {
         let block = sut.build_block(vec![tx]);
         sut.mock_time_handle.advance(Duration::from_millis(150));
         let block = sut.commit_block(block);
-        let mut errors = block.as_ref().errors();
+        let mut errors = block.as_ref().failed_outputs();
         let (idx, _) = errors
             .next()
             .expect("time trigger should fail in telemetry test");

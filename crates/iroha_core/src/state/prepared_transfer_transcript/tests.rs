@@ -15,7 +15,7 @@ fn state() -> State {
 }
 
 fn header() -> BlockHeader {
-    BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0)
+    BlockHeader::new(nonzero!(1_u64), None, None, 7, 0)
 }
 
 fn delta() -> TransferDeltaTranscript {

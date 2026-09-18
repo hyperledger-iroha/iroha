@@ -1097,9 +1097,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     );
     let source = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("configured lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts");
@@ -1955,13 +1953,26 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         .map(|entrypoint| entrypoint.hash())
         .collect::<Vec<_>>();
     assert_eq!(entrypoint_hashes.len(), 1);
-    predecessor_block
-        .set_transaction_results(
-            Vec::new(),
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &predecessor_block,
             &entrypoint_hashes,
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        predecessor_block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
-        .expect("attach the predecessor's canonical transaction result");
+    }
+    .expect("attach the predecessor's canonical transaction result");
     let leader_index =
         usize::try_from(parent.context.leader(0)).expect("predecessor leader index fits usize");
     let signature = SignatureOf::try_from_hash(
@@ -2987,7 +2998,6 @@ fn autonomous_carrier_block_at_view(
             .parent_commit_qc
             .as_ref()
             .map(|qc| qc.subject.block_hash),
-        None,
         None,
         adapter.context.height,
         view,
@@ -4632,7 +4642,8 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
             .certified_autonomous_lane_block_is_globally_applied(proposal)
             .expect("authenticate exact durable application evidence")
     );
-    let state_hash = crate::snapshot::canonical_state_snapshot_hash(state.as_ref());
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(state.as_ref())
+        .expect("stable valid fixture snapshot");
     let session = CommittedLaneBlockSession {
         proposal: certificate.proposal.clone(),
         prepare_qc: certificate.prepare_qc.clone(),
@@ -5141,7 +5152,8 @@ pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
         Some(terminal_receipt)
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(state.as_ref())
+            .expect("stable valid fixture snapshot"),
         state_hash
     );
 }
@@ -6019,9 +6031,7 @@ fn autonomous_producer_skips_idle_routes_with_an_occupied_queue() {
         assert!(!queue.lane_has_pending_work(*idle_lane, *idle_dataspace, incarnation));
         let path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(*idle_lane)
+            .lane_storage_identity(*idle_lane)
             .expect("idle catalog storage entry")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts/ownerships.norito");
@@ -6117,9 +6127,7 @@ fn autonomous_producer_outside_lane_committee_skips_storage_planning() {
     assert!(queue.lane_has_pending_work(lane_id, dataspace_id, incarnation));
     let path = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .unwrap()
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/ownerships.norito");
@@ -6157,9 +6165,7 @@ fn empty_autonomous_queue_skips_unneeded_lane_storage_probes() {
     assert!(adapter.pending_autonomous_reservation_batches.is_empty());
     let ownerships = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .expect("exact idle lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/ownerships.norito");
@@ -6235,9 +6241,7 @@ fn active_autonomous_queue_still_rejects_corrupt_lane_planning_input() {
     let fifo = queue.fifo_snapshot_for_test();
     let ownerships = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .expect("exact active lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/ownerships.norito");

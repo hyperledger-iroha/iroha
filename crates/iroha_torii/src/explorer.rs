@@ -793,7 +793,7 @@ impl ExplorerBlockDto {
         mut is_visible: impl FnMut(usize) -> bool,
     ) -> Self {
         let header = block.header();
-        let visible_indices = (0..block.external_entrypoint_count())
+        let visible_indices = (0..block.network_entrypoint_count())
             .filter(|index| is_visible(*index))
             .collect::<Vec<_>>();
         let transactions_rejected = if block.has_results() {
@@ -801,9 +801,8 @@ impl ExplorerBlockDto {
                 .iter()
                 .filter(|index| {
                     block
-                        .results()
-                        .nth(**index)
-                        .is_some_and(|result| result.as_ref().is_err())
+                        .network_output_at(u32::try_from(**index).unwrap_or(u32::MAX))
+                        .is_some_and(|(_, output)| output.result.is_err())
                 })
                 .count()
         } else {
@@ -2581,7 +2580,7 @@ mod tests {
         transaction::{
             error::TransactionRejectionReason,
             executable::{ContractInvocation, Executable},
-            signed::{TransactionBuilder, TransactionResultInner},
+            signed::TransactionBuilder,
         },
         trigger::DataTriggerSequence,
     };
@@ -3243,15 +3242,26 @@ mod tests {
         )
         .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
         .sign(ALICE_KEYPAIR.private_key());
-        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 1_700_000_000_000, 0);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, 1_700_000_000_000, 0);
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
-        builder.push_result(TransactionResultInner::Err(
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(
-                "boom".to_string(),
-            )),
-        ));
-        let block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: iroha_data_model::transaction::TransactionResult::new(Err(
+                            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                                "boom".to_string(),
+                            )),
+                        )),
+                        completions: vec![],
+                    },
+                ),
+            ],
+        );
         let dto = ExplorerBlockDto::from_block(&block);
         assert_eq!(dto.height, 3);
         assert_eq!(dto.transactions_total, 1);
@@ -3306,15 +3316,26 @@ mod tests {
                 payload,
                 ALICE_KEYPAIR.private_key(),
             );
-        let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 1_700_000_001_000, 0);
+        let header = BlockHeader::new(nonzero!(4_u64), None, None, 1_700_000_001_000, 0);
         let mut builder = BlockBuilder::new(header);
         builder.push_sealed_transaction_commitment(sealed_commitment);
-        builder.push_result(TransactionResultInner::Err(
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(
-                "boom".to_string(),
-            )),
-        ));
-        let block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: iroha_data_model::transaction::TransactionResult::new(Err(
+                            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                                "boom".to_string(),
+                            )),
+                        )),
+                        completions: vec![],
+                    },
+                ),
+            ],
+        );
         let dto = ExplorerBlockDto::from_block(&block);
         assert_eq!(dto.height, 4);
         assert_eq!(dto.transactions_total, 1);

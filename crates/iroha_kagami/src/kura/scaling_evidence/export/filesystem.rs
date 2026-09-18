@@ -40,6 +40,7 @@ struct SuppliedEvidenceBundleV1 {
 struct SuppliedEvidenceHeightV1 {
     height: u64,
     finality: Vec<u8>,
+    contexts: Vec<u8>,
     queries: Vec<Vec<u8>>,
 }
 

@@ -129,7 +129,6 @@ pub(super) fn configure_future_created_autoscale_route_for_test(
         NonZeroU64::new(1).expect("nonzero authority height"),
         None,
         None,
-        None,
         0,
         0,
     ));
@@ -1829,7 +1828,6 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
         std::num::NonZeroU64::new(height).expect("nonzero height"),
         None,
         None,
-        None,
         2,
         0,
     );
@@ -1878,7 +1876,6 @@ fn exact_alias_resolve_rejects_rekey_index_split_brain() {
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("nonzero height"),
-        None,
         None,
         None,
         0,

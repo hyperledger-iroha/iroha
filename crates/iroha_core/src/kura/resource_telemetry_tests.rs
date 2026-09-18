@@ -146,9 +146,7 @@ fn resource_gather_tracks_actual_sidecar_bytes_and_resident_queue_memberships() 
             header.set_height(std::num::NonZeroU64::new(1).unwrap());
         })
         .into();
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .unwrap();
+    crate::kura::tests::install_network_index_test_outputs(&mut block, Vec::new());
     let signature =
         iroha_crypto::SignatureOf::try_from_hash(key.private_key(), block.header().hash()).unwrap();
     block

@@ -202,13 +202,20 @@ pub(crate) fn autonomous_lane_startup_fixture_for_carrier(
             .expect("startup fixture lane exists");
         assert_eq!(
             kura.lane_storage_entry(lane_id)
-                .expect("startup fixture Kura lane storage exists"),
-            entry.clone(),
+                .expect("startup fixture Kura lane storage exists")
+                .identity,
+            state
+                .lane_storage_identity(lane_id)
+                .expect("actual canonical runtime identity"),
             "State and Kura must own identical active lane storage geometry"
         );
         assert_eq!(
-            kura.active_lane_incarnation_marker(entry)
-                .expect("startup fixture Kura active lane marker exists"),
+            kura.active_lane_incarnation_marker(
+                &kura
+                    .lane_storage_entry(entry.lane_id)
+                    .expect("exact active identity")
+            )
+            .expect("startup fixture Kura active lane marker exists"),
             (state_incarnations[&lane_id], 0),
             "State and Kura must own the same active lane incarnation"
         );
@@ -1057,7 +1064,13 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
         b"kura-autonomous-retirement-recreated-incarnation",
         &signer,
     );
-    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
+    let original = kura.lane_storage_entry(lane_entry.lane_id).unwrap();
+    kura.substitute_lane_marker_identity_for_test(
+        &original,
+        recreated.origin_proposal.descriptor.lane_incarnation,
+        0,
+    )
+    .expect("inject a foreign marker at the original instance path");
     assert!(
         kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch,)
             .is_err(),
@@ -1094,6 +1107,10 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist retirement");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         temp_dir.path(),
@@ -1311,6 +1328,10 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         .expect("read origin view state");
     advanced.new_view_certificates.push(new_view);
     let advanced_state = AutonomousLaneBlockViewState::from_artifact(&advanced);
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &kura.store_root,
@@ -1419,6 +1440,11 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
     drop(kura);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open before authenticated secondary recovery");
+    assert!(
+        kura.lane_storage_entries.lock().is_empty(),
+        "repair consumes retained publication capacity without active State admission"
+    );
+    assert_eq!(kura.certified_bundle_capacity_reserved_bytes().unwrap(), 0);
     restore_autonomous_lane_fixture_geometry(&kura, &lane_config, &payload)
         .expect("repair bundle after exact lane geometry recovery");
     let source = kura
@@ -1509,6 +1535,10 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
             .is_err(),
         "a durable certificate must freeze the exact reconstructed bundle bytes"
     );
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &kura.store_root,
@@ -1523,15 +1553,25 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         "merge admission must not choose a view while startup recovery can still replace it",
     );
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reopen Kura");
-    let before_restore = snapshot_regular_test_tree(temp_dir.path());
-    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &payload)
-        .expect_err("an unsupported named temporary must not be promoted during geometry restore");
-    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before_restore);
+    let before_restart = snapshot_regular_test_tree(temp_dir.path());
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+        Ok(_) => panic!("a named view temporary must fail startup capacity admission"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && path == &view_state_temp
+                    && source.to_string().contains("unexpected or obsolete autonomous persistence artifact")
+        ),
+        "startup must reject the exact unsupported named temporary: {error}"
+    );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before_restart);
     assert!(
         view_state_temp.exists(),
-        "failed restore must retain the rejected evidence"
+        "failed startup must retain the rejected evidence"
     );
 }
 #[test]
@@ -1576,6 +1616,10 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
         Hash::new(b"drifted autonomous input hash"),
     );
     let drifted_bytes = drifted.encode_framed().expect("encode drifted input");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
     assert!(Kura::append_indexed_sidecar(
@@ -1643,6 +1687,10 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     Kura::validate_autonomous_lane_merge_bundle(&drifted, network_id, epoch)
         .expect("drift fixture remains internally valid");
     let drifted_bytes = drifted.encode_framed().expect("encode drifted bundle");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) =
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
     fs::write(&data_path, &drifted_bytes).expect("write divergent canonical bundle data");
@@ -1697,6 +1745,10 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         .expect("persist certified autonomous source");
     kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) =
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
     let backup_dir = TempDir::new().expect("bundle backup dir");
@@ -1802,6 +1854,10 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
     let recovered = kura
         .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover execution input before crash");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &kura.store_root,
@@ -1870,6 +1926,10 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         certificate_prefix.push(durable);
     }
     let store_root = kura.store_root();
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &store_root,
@@ -1888,6 +1948,7 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         let _sidecar_guard = kura.sidecar_lock.lock();
         kura.write_autonomous_lane_block_view_state_locked(
             pending_canonical_bytes,
+            lane_entry,
             &AutonomousLaneBlockArtifact {
                 format: AutonomousLaneBlockArtifactFormat::Current,
                 executable_payload: payload.clone(),
@@ -2713,6 +2774,10 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .is_err(),
         "cursor sequence exhaustion must fail closed instead of saturating",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact restored lifecycle identity");
+    let lane = &lane;
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
@@ -2974,6 +3039,11 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("encode unpublished generation-five successor");
     fs::write(&process_generation_atomic_temp, generation_five_bytes)
         .expect("stage pre-rename process-generation successor");
+    fs::File::open(&process_generation_atomic_temp)
+        .expect("open unpublished process-generation successor")
+        .sync_all()
+        .expect("make the exact unpublished successor durable before the crash cut");
+    sync_dir(temp_dir.path()).expect("sync process-generation crash namespace");
     let (recovered_generation_kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("startup cleans an exact unpublished process-generation successor");
@@ -2982,6 +3052,150 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         fs::read(&process_generation_path).expect("read authoritative process generation"),
         process_generation_bytes,
         "startup recovery must retain stable generation four instead of promoting generation five",
+    );
+    assert!(
+        recovered_generation_kura
+            .lane_storage_entries
+            .lock()
+            .is_empty(),
+        "retained startup recovery must not publish an active State catalog",
+    );
+    assert!(view_path.is_file());
+    assert!(height_pointer.is_file());
+    assert!(route_pointer.is_file());
+    let recovered_view_bytes = fs::read(&view_path).expect("read the recovered exact view");
+    let recovered_view =
+        Kura::decode_autonomous_lane_block_view_state(&view_path, &recovered_view_bytes)
+            .expect("decode the recovered exact view");
+    assert!(recovered_view.matches_payload(&payload));
+    let pointer = Kura::decode_autonomous_lane_block_latest_attempt(
+        &height_pointer,
+        &fs::read(&height_pointer).expect("read recovered height pointer"),
+    )
+    .expect("decode recovered height pointer");
+    assert!(pointer.matches_payload(&payload));
+    let pointer = Kura::decode_autonomous_lane_block_latest_attempt(
+        &route_pointer,
+        &fs::read(&route_pointer).expect("read recovered route pointer"),
+    )
+    .expect("decode recovered route pointer");
+    assert!(pointer.matches_payload(&payload));
+
+    // A retained entry is an exact locator, not permission to substitute a
+    // current LaneId binding. Reject every changed identity before any write.
+    let mut foreign_entries = [
+        (*lane).clone(),
+        (*lane).clone(),
+        (*lane).clone(),
+        (*lane).clone(),
+        (*lane).clone(),
+    ];
+    foreign_entries[0].identity.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign view-recovery network")),
+    );
+    foreign_entries[1].identity.lane_id = LaneId::new(2);
+    foreign_entries[2].identity.dataspace_id = DataSpaceId::new(42);
+    foreign_entries[3].identity.incarnation = Hash::new(b"foreign view-recovery incarnation");
+    foreign_entries[4].identity.activation_height = lane.activation_height + 1;
+    let view_temp = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
+    fs::rename(&view_path, &view_temp).expect("stage exact view promotion crash cut");
+    fs::write(
+        &view_path,
+        b"torn main view beside exact retained temporary",
+    )
+    .expect("stage torn view main");
+    fs::File::open(&view_temp)
+        .expect("open retained view temporary")
+        .sync_all()
+        .expect("sync retained view temporary");
+    sync_dir(&artifact_dir).expect("sync retained view crash namespace");
+    let before_foreign_recovery = snapshot_regular_files_recursively(temp_dir.path());
+    let exact_view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+        lane,
+        &recovered_generation_kura.store_root(),
+        1,
+        proposal_height,
+    );
+    assert_eq!(fs::canonicalize(&view_path).unwrap(), exact_view_path);
+    {
+        let _prune_guard = recovered_generation_kura.prune_lock.lock();
+        recovered_generation_kura
+            .ensure_prune_recovery_not_required()
+            .expect("recovery fixture has no prune debt");
+        let _canonical_guard = recovered_generation_kura.canonical_chain_lock.lock();
+        let pending_canonical_bytes = recovered_generation_kura
+            .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
+            .expect("capture pending canonical bytes");
+        let _geometry_guard = recovered_generation_kura.lane_geometry_lock.lock();
+        let _sidecar_guard = recovered_generation_kura.sidecar_lock.lock();
+        recovered_generation_kura
+            .validate_autonomous_view_state_target_locked(lane, &payload, &exact_view_path)
+            .expect("the retained original instance passes the same target join");
+        for foreign_entry in &foreign_entries {
+            assert!(
+                recovered_generation_kura
+                    .write_autonomous_lane_block_view_state_record_locked(
+                        pending_canonical_bytes,
+                        foreign_entry,
+                        &payload,
+                        &recovered_view,
+                        &exact_view_path,
+                        network_id,
+                        epoch,
+                    )
+                    .is_err(),
+                "a foreign instance must not acquire missing-view recovery"
+            );
+            assert!(
+                recovered_generation_kura
+                    .read_autonomous_lane_block_view_state_with_current_locked(
+                        &payload,
+                        &exact_view_path,
+                        AutonomousLaneBlockViewStateReadMode::Recover {
+                            pending_canonical_bytes,
+                            entry: foreign_entry,
+                        },
+                    )
+                    .is_err(),
+                "a foreign instance must not acquire temp promotion"
+            );
+            assert_eq!(
+                snapshot_regular_files_recursively(temp_dir.path()),
+                before_foreign_recovery,
+                "foreign recovery must preserve all durable and temporary evidence",
+            );
+        }
+        // Exercise the authenticated attempt reader's recovery seam directly.
+        // The cold constructor separately rejects unresolved named view temps
+        // during its earlier global capacity inventory.
+        let recovered = recovered_generation_kura
+            .read_autonomous_lane_block_attempt_record_locked(
+                lane,
+                lane.lane_id,
+                1,
+                proposal_height,
+                network_id,
+                epoch,
+                Some(pending_canonical_bytes),
+            )
+            .expect("recover the exact retained view under its original identity")
+            .expect("the exact immutable attempt remains present");
+        assert_eq!(recovered.artifact.executable_payload, payload);
+    }
+    assert!(
+        recovered_generation_kura
+            .lane_storage_entries
+            .lock()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read(&view_path).expect("read promoted view"),
+        recovered_view_bytes
+    );
+    assert!(!view_temp.exists());
+    assert_eq!(
+        fs::read(&process_generation_path).expect("generation after view recovery"),
+        process_generation_bytes,
     );
     drop(recovered_generation_kura);
     fs::write(&process_generation_atomic_temp, &process_generation_bytes)
@@ -3722,6 +3936,10 @@ fn current_autonomous_reader_preserves_corruption_and_authenticated_retirement()
         .expect("active payload");
     assert_eq!(actual, payload);
     assert_eq!(cursor, payload.origin_proposal);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let pointer_path =
         Kura::autonomous_lane_block_latest_attempt_path_for_entry(lane, temp_dir.path(), 1);
     let original = fs::read(&pointer_path).expect("read current pointer");
@@ -3803,6 +4021,10 @@ fn corrupted_receipt_aborts_lane_mutation_before_view_recovery() {
         .expect("current payload");
     let next =
         next_durable_lane_view_certificate_for_kura(&current, &payload, &signer, network, epoch);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
         temp_dir.path(),

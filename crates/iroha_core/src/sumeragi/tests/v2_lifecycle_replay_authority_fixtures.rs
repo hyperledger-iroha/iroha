@@ -1115,7 +1115,6 @@ impl CertifiedServeRecoveredReplayFixture {
             NonZeroU64::new(round.height).expect("non-zero fixture height"),
             None,
             None,
-            None,
             1_000,
             round.view,
         );

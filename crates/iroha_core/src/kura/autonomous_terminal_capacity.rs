@@ -15,7 +15,7 @@ struct AutonomousReplicaClaimStartupCapacitySnapshot {
 impl Kura {
     fn autonomous_lane_attempt_inventory_counts_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         target_lane_block_height: u64,
     ) -> Result<AutonomousLaneAttemptInventoryBudget> {
         self.autonomous_lane_attempt_inventory_counts_with_allowed_view_temp_locked(
@@ -29,7 +29,7 @@ impl Kura {
     /// Every other recovery artifact remains fail-closed.
     fn autonomous_lane_attempt_inventory_counts_with_allowed_view_temp_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         target_lane_block_height: u64,
         allowed_view_temp: Option<&Path>,
     ) -> Result<AutonomousLaneAttemptInventoryBudget> {
@@ -260,12 +260,7 @@ impl Kura {
         &self,
         allowed_view_temp: Option<&Path>,
     ) -> Result<(usize, usize)> {
-        let entries = self
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let entries = self.retained_lane_storage_entries_under_geometry_guard()?;
         let mut missing = 0_usize;
         let mut incomplete = 0_usize;
         for entry in entries {

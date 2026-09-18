@@ -2372,7 +2372,6 @@ mod tests {
                 NonZeroU64::new(self.context.height).expect("fixture height is non-zero"),
                 None,
                 None,
-                None,
                 5_000 + u64::from(marker),
                 self.round.view,
             );

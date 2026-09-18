@@ -2088,7 +2088,6 @@ pub mod query {
                 NonZeroU64::new(height).expect("non-zero block height"),
                 None,
                 None,
-                None,
                 creation_time_ms,
                 0,
             )

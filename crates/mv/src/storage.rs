@@ -1,4 +1,7 @@
-use crate::{Key, Value};
+use crate::{
+    BlockMode, Key, PublicationPreparationError, Value,
+    publication::{CapturedPublication, NextPublication, Publication},
+};
 use concread::{
     bptree::{BptreeMap, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn},
     ebrcell::{EbrCell, EbrCellWriteTxn},
@@ -6,6 +9,8 @@ use concread::{
 use std::{borrow::Borrow, collections::BTreeMap, ops::RangeBounds};
 /// Multi-version key value storage
 pub struct Storage<K: Key, V: Value> {
+    /// Process-local identity of the jointly published current/undo pair.
+    pub(crate) publication: Publication,
     /// Previous version of values in the `blocks` map, required to perform revert of the latest changes
     pub(crate) revert: EbrCell<BTreeMap<K, Option<V>>>,
     /// Map which represent aggregated changes of multiple blocks
@@ -15,6 +20,7 @@ impl<K: Key, V: Value> Storage<K, V> {
     /// Construct new [`Self`]
     pub fn new() -> Self {
         Self {
+            publication: Publication::new(),
             revert: EbrCell::new(BTreeMap::new()),
             blocks: BptreeMap::new(),
         }
@@ -28,21 +34,30 @@ impl<K: Key, V: Value> Storage<K, V> {
     pub fn block(&self) -> Block<'_, K, V> {
         let mut revert = self.revert.write();
         let blocks = self.blocks.write();
+        let predecessor = self.publication.capture();
         // Clear revert
         revert.get_mut().clear();
-        Block::new(revert, blocks, false)
+        Block::new(
+            revert,
+            blocks,
+            false,
+            &self.publication,
+            predecessor,
+            BlockMode::Ordinary,
+        )
     }
     /// Insert a value directly into the latest committed state.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let mut blocks = self.blocks.write();
         let prev_value = blocks.insert(key, value);
-        blocks.commit();
+        self.publication.publish(|| blocks.commit());
         prev_value
     }
     /// Create block to aggregate updates and revert changes created in the latest block
     pub fn block_and_revert(&self) -> Block<'_, K, V> {
         let mut revert = self.revert.write();
         let mut blocks = self.blocks.write();
+        let predecessor = self.publication.capture();
         {
             let revert = core::mem::take(revert.get_mut());
             for (key, value) in revert {
@@ -52,7 +67,14 @@ impl<K: Key, V: Value> Storage<K, V> {
                 };
             }
         }
-        Block::new(revert, blocks, true)
+        Block::new(
+            revert,
+            blocks,
+            true,
+            &self.publication,
+            predecessor,
+            BlockMode::Replace,
+        )
     }
 }
 impl<K: Key, V: Value> Default for Storage<K, V> {
@@ -63,6 +85,7 @@ impl<K: Key, V: Value> Default for Storage<K, V> {
 impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         Self {
+            publication: Publication::new(),
             revert: EbrCell::new(BTreeMap::new()),
             blocks: iter.into_iter().collect(),
         }
@@ -181,6 +204,230 @@ mod view {
     }
 }
 pub use view::View;
+/// Borrowed before/after values for one key touched by an overlay.
+///
+/// `None` represents absence, including removal of a missing key. A touched key
+/// may have equal before/after values. Consumers which commit semantic changes
+/// must compare their canonical value projections instead of hashing the fact
+/// that a mutable accessor was used. Borrowing this record prevents further
+/// mutation of its originating overlay until the borrow ends.
+pub struct TouchedEntry<'a, K: Key, V: Value> {
+    /// Key in the storage's canonical order.
+    pub key: &'a K,
+    /// Value before the overlay's first mutation of this key.
+    pub before: Option<&'a V>,
+    /// Current value, including changes from applied children.
+    pub after: Option<&'a V>,
+}
+
+struct DetachedEntry<K, V> {
+    key: K,
+    before: Option<V>,
+    after: Option<V>,
+}
+
+/// Owned touched entries and original current/undo identity, without writer locks.
+///
+/// This move-only journal preserves absence and no-op touches. It is not a full
+/// read view: untouched reads are bound by the captured publication identity.
+/// Replacement mode requires undoing the exact original tip before applying
+/// these candidate touches, including changes made only by that discarded tip.
+/// Publication preparation reacquires its original writers and checks that
+/// exact pair. Cross-field publication remains the caller's responsibility.
+pub struct Detached<K: Key, V: Value, Admission> {
+    predecessor: CapturedPublication,
+    mode: BlockMode,
+    dirty: bool,
+    entries: Vec<DetachedEntry<K, V>>,
+    // Drop the reservation after the actual retained keys and values.
+    admission: Admission,
+}
+
+impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
+    /// Return the actual original block's acquisition mode.
+    pub fn mode(&self) -> BlockMode {
+        self.mode
+    }
+
+    /// Return whether current-map publication was required by the original block.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Borrow exact candidate touches, including no-ops, in canonical key order.
+    pub fn touched_entries(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
+        self.entries.iter().map(|entry| TouchedEntry {
+            key: &entry.key,
+            before: entry.before.as_ref(),
+            after: entry.after.as_ref(),
+        })
+    }
+
+    /// Borrow the caller's retained allocation reservation.
+    pub fn admission(&self) -> &Admission {
+        &self.admission
+    }
+
+    /// Observe equality with this owner's current published current/undo pair.
+    ///
+    /// The observation is not an exclusive lease or publication authority. A
+    /// complete State publisher must reacquire and jointly check all original
+    /// owners before any field is published. A stale local journal does not by
+    /// itself authorize rejection of a decided carrier.
+    pub fn matches_current(&self, storage: &Storage<K, V>) -> bool {
+        self.predecessor.matches(&storage.publication)
+    }
+
+    /// Compare exact original owner/version and mode with an acquired block.
+    /// Matching is read-only and provides no reattachment or commit capability.
+    pub fn matches_block_predecessor(&self, block: &Block<'_, K, V>) -> bool {
+        self.mode == block.mode && self.predecessor.same_as(&block.predecessor)
+    }
+
+    /// Stage this exact journal under its original current/undo writers.
+    ///
+    /// The required callback admits COW writer acquisition, candidate copies,
+    /// replacement undo, next identity and eventual retained-reader publication
+    /// peak before either writer is acquired. Acquisition never waits. The
+    /// exact owner/version is rechecked under both writers before staging any
+    /// entry; all refusals return the original journal intact for its owner.
+    ///
+    /// Preparing publishes nothing. The aggregate caller must prepare all
+    /// fields, retain their writers and join its external authorization before
+    /// publishing the first field. No mutable block or reconstruction API escapes.
+    pub fn try_prepare_publication<'target, Installation, E>(
+        self,
+        target: &'target Storage<K, V>,
+        admit: impl FnOnce(&Self, &Storage<K, V>) -> Result<Installation, E>,
+    ) -> Result<
+        PreparedPublication<'target, K, V, Admission, Installation>,
+        (Self, PublicationPreparationError<E>),
+    > {
+        if !self.predecessor.matches(&target.publication) {
+            return Err((self, PublicationPreparationError::Changed));
+        }
+        let installation = match admit(&self, target) {
+            Ok(installation) => installation,
+            Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
+        };
+        let Some(mut revert) = target.revert.try_write() else {
+            return Err((self, PublicationPreparationError::Busy));
+        };
+        let Some(mut blocks) = target.blocks.try_write() else {
+            return Err((self, PublicationPreparationError::Busy));
+        };
+        if !self.predecessor.matches(&target.publication) {
+            return Err((self, PublicationPreparationError::Changed));
+        }
+        let next = NextPublication::new();
+        let old_undo = core::mem::take(revert.get_mut());
+        if self.mode == BlockMode::Replace {
+            for (key, before) in old_undo {
+                match before {
+                    Some(value) => {
+                        blocks.insert(key, value);
+                    }
+                    None => {
+                        blocks.remove(&key);
+                    }
+                }
+            }
+        }
+        for entry in &self.entries {
+            revert
+                .get_mut()
+                .insert(entry.key.clone(), entry.before.clone());
+            match &entry.after {
+                Some(value) => {
+                    blocks.insert(entry.key.clone(), value.clone());
+                }
+                None => {
+                    blocks.remove(&entry.key);
+                }
+            }
+        }
+        Ok(PreparedPublication {
+            revert,
+            blocks,
+            publication: &target.publication,
+            next,
+            journal: self,
+            installation,
+        })
+    }
+}
+
+/// Immutable staged map publication retaining both exact original writers.
+/// Dropping this owner or calling [`Self::abort`] leaves current and undo intact.
+#[must_use = "preparation must be published or aborted by its aggregate owner"]
+pub struct PreparedPublication<'target, K: Key, V: Value, Admission, Installation> {
+    revert: EbrCellWriteTxn<'target, BTreeMap<K, Option<V>>>,
+    blocks: BptreeMapWriteTxn<'target, K, V>,
+    publication: &'target Publication,
+    next: NextPublication,
+    journal: Detached<K, V, Admission>,
+    // Drop installation capacity after every retained/staged value and writer.
+    installation: Installation,
+}
+
+impl<K: Key, V: Value, Admission, Installation>
+    PreparedPublication<'_, K, V, Admission, Installation>
+{
+    /// Abort staging and release both writers, retaining the exact original delta.
+    pub fn abort(self) -> Detached<K, V, Admission> {
+        let Self {
+            revert,
+            blocks,
+            publication: _,
+            next,
+            journal,
+            installation,
+        } = self;
+        drop(blocks);
+        drop(revert);
+        drop(next);
+        drop(installation);
+        journal
+    }
+
+    /// Publish the already prepared pair once and hand reservations back.
+    ///
+    /// This has no semantic refusal. It is not allocation-free: admission must
+    /// cover Concread's internal publication and delayed reclamation as well as
+    /// staging. The aggregate owner supplies joint visibility and finality.
+    pub fn publish(self) -> (Admission, Installation) {
+        let Self {
+            revert,
+            blocks,
+            publication,
+            next,
+            journal,
+            installation,
+        } = self;
+        let Detached {
+            predecessor: _,
+            mode: _,
+            dirty,
+            entries,
+            admission,
+        } = journal;
+        publication.publish_prepared(next, || {
+            if dirty {
+                blocks.commit();
+            }
+            revert.commit();
+        });
+        drop(entries);
+        (admission, installation)
+    }
+}
+
+#[cfg(test)]
+#[path = "storage/publication_tests.rs"]
+mod publication_tests;
+
 /// Module for [`Block`] and it's related impls
 mod block {
     use super::*;
@@ -189,17 +436,26 @@ mod block {
         pub(crate) revert: EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>,
         pub(crate) blocks: BptreeMapWriteTxn<'store, K, V>,
         pub(super) dirty: bool,
+        pub(super) publication: &'store Publication,
+        pub(super) predecessor: CapturedPublication,
+        pub(super) mode: BlockMode,
     }
     impl<'store, K: Key, V: Value> Block<'store, K, V> {
         pub(super) fn new(
             revert: EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>,
             blocks: BptreeMapWriteTxn<'store, K, V>,
             dirty: bool,
+            publication: &'store Publication,
+            predecessor: CapturedPublication,
+            mode: BlockMode,
         ) -> Self {
             Self {
                 revert,
                 blocks,
                 dirty,
+                publication,
+                predecessor,
+                mode,
             }
         }
         /// Create transaction for the block
@@ -220,12 +476,59 @@ mod block {
                 revert,
                 blocks,
                 dirty,
+                publication,
+                predecessor: _,
+                mode: _,
             } = self;
-            // Commit fields in the inverse order
-            if dirty {
-                blocks.commit();
+            publication.publish(|| {
+                // Commit fields in the inverse order. Even an untouched block
+                // publishes its clear-undo transition and changes pair identity.
+                if dirty {
+                    blocks.commit();
+                }
+                revert.commit();
+            });
+        }
+
+        /// Admit the actual delta, detach it, and release both original writers.
+        ///
+        /// The callback receives the immutable original block before capture
+        /// allocates its entry vector or clones final values. Its returned
+        /// reservation remains owned by the detached journal. Rejection drops
+        /// this block without publishing current values or undo history.
+        ///
+        /// Keys and preimages move from the original undo map; only touched
+        /// final values are cloned. No whole-map clone or EBR read pin survives.
+        /// The caller must admit that memory, capture overlap and any eventual
+        /// COW installation peak. No allocation-free installation is promised.
+        pub fn try_detach<Admission, E>(
+            mut self,
+            admit: impl FnOnce(&Self) -> Result<Admission, E>,
+        ) -> Result<Detached<K, V, Admission>, E> {
+            let admission = admit(&self)?;
+            let undo = core::mem::take(self.revert.get_mut());
+            let mut entries = Vec::with_capacity(undo.len());
+            for (key, before) in undo {
+                let after = self.blocks.get(&key).cloned();
+                entries.push(DetachedEntry { key, before, after });
             }
-            revert.commit();
+            let Self {
+                revert,
+                blocks,
+                dirty,
+                predecessor,
+                mode,
+                publication: _,
+            } = self;
+            drop(blocks);
+            drop(revert);
+            Ok(Detached {
+                predecessor,
+                mode,
+                dirty,
+                entries,
+                admission,
+            })
         }
         /// Read-only access to the block revert map (keys touched in this block).
         pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
@@ -243,6 +546,30 @@ mod block {
                 None => self.get(key),
             }
         }
+        /// Visit this block's touched keys with their exact pre-block and current values.
+        ///
+        /// Entries are ordered by `K::Ord`, independent of mutation order. The
+        /// iterator borrows the undo journal and current storage without cloning
+        /// keys/values or allocating another change list. Aborted transactions
+        /// contribute no entries; applied transactions retain the first block
+        /// preimage. No-op touches remain visible, including absent-to-absent.
+        /// For `block_and_revert`, the preimage starts after the prior block was
+        /// reverted, just like [`Self::get_before_block`].
+        pub fn touched_entries(
+            &self,
+        ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
+            self.revert.iter().map(|(key, before)| TouchedEntry {
+                key,
+                before: before.as_ref(),
+                after: self.get(key),
+            })
+        }
+
+        /// Return the actual acquisition mode, including an untouched replacement.
+        pub fn mode(&self) -> BlockMode {
+            self.mode
+        }
+
         /// Return whether this block has staged any storage mutation.
         pub fn is_dirty(&self) -> bool {
             self.dirty
@@ -334,6 +661,34 @@ mod block {
                 None => self.get(key),
             }
         }
+        /// Read the value before this transaction's first mutation of `key`.
+        ///
+        /// Earlier applied transactions are part of this preimage. Use
+        /// [`Self::get_before_block`] for the parent block's original value.
+        pub fn get_before_transaction(&self, key: &K) -> Option<&V> {
+            match self.revert.get(key) {
+                Some(previous) => previous.as_ref(),
+                None => self.get(key),
+            }
+        }
+
+        /// Visit this transaction's touched keys before apply or rollback.
+        ///
+        /// The borrowed records contain transaction-start and current values,
+        /// ordered by `K::Ord`, without cloning or allocating another change
+        /// list. Earlier applied siblings are included in `before`; untouched
+        /// sibling keys are not returned. No-op touches remain explicit. On
+        /// apply, the block journal retains its earlier preimage instead.
+        pub fn touched_entries(
+            &self,
+        ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
+            self.revert.iter().map(|(key, before)| TouchedEntry {
+                key,
+                before: before.as_ref(),
+                after: self.get(key),
+            })
+        }
+
         /// Apply aggregated changes of [`Transaction`] to the [`Block`]
         pub fn apply(mut self) {
             for (key, value) in core::mem::take(&mut self.revert) {
@@ -962,3 +1317,13 @@ mod tests {
 #[path = "storage/history.rs"]
 mod history;
 pub use history::History;
+mod snapshot;
+pub use snapshot::Snapshot;
+
+#[cfg(test)]
+#[path = "storage/overlay_preimage_tests.rs"]
+mod overlay_preimage_tests;
+
+#[cfg(test)]
+#[path = "storage/detached_tests.rs"]
+mod detached_tests;

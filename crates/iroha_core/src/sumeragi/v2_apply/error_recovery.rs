@@ -1,6 +1,9 @@
 /// Fail-closed application or recovery failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2ApplyError {
+    /// A complete committed snapshot identity could not be acquired.
+    #[error(transparent)]
+    SnapshotCapture(#[from] crate::snapshot::SnapshotCaptureError),
     /// Frozen wire input is malformed.
     #[error(transparent)]
     Wire(#[from] wire::ValidationError),

@@ -678,7 +678,6 @@ fn durable_validate_fixture_at_view_with_parent(
         NonZeroU64::new(round.height).expect("non-zero durable Validate height"),
         parent_block_hash,
         None,
-        None,
         1_000,
         round.view,
     );

@@ -704,6 +704,8 @@ pub struct BlockStore {
     /// Canonical inline-body bytes read through either block-store read path.
     #[cfg(test)]
     body_bytes_read: AtomicU64,
+    #[cfg(test)]
+    body_read_calls: AtomicUsize,
     /// Durable prefix validated read-only before emergency Fast recovery.
     fast_prevalidated_count: Option<u64>,
     commit_marker_count: u64,

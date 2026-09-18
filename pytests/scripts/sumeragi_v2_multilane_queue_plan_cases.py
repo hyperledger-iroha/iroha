@@ -14,6 +14,7 @@ def copy_queue_plan_autonomous_only_fixture(tmp_path: Path, module) -> list[dict
     )
     relatives.update(
         {
+            Path("crates/iroha_core/src/queue/reservation_journal.rs"),
             module.FORMAL_RELATIVE / f"{module.QUEUE_PLAN_STARTUP_REPLAY_MODULE}.tla",
             module.FORMAL_RELATIVE
             / "multilane_queue_plan_admission_registry_fixed.cfg",
@@ -42,7 +43,8 @@ def test_queue_plan_autonomous_only_contract_accepts_current_production(
 ) -> None:
     module = load_checker()
     models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
-    assert validate_queue_plan_autonomous_only_fixture(tmp_path, module, models) == ()
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert errors == (), errors
 
 
 def test_queue_plan_autonomous_only_contract_rejects_candidate_fifo_bypass(
@@ -105,7 +107,7 @@ def test_queue_plan_autonomous_only_contract_rejects_ordinary_lane_payload_inten
     ), errors
 
 
-def test_queue_plan_autonomous_only_contract_rejects_route_gated_provider(
+def test_queue_plan_autonomous_only_contract_rejects_wrong_intent_provider(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -114,12 +116,12 @@ def test_queue_plan_autonomous_only_contract_rejects_route_gated_provider(
     replace_once_after(
         path,
         "impl CandidateWorkProvider for &mut V2LaneWorkAdapter {",
-        "(is_queue_plan_synced\n",
-        "(false\n",
+        "== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)",
+        "== iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)",
     )
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any(
-        "&mut V2LaneWorkAdapter::prepare" in error and "(is_queue_plan_synced" in error
+        "&mut V2LaneWorkAdapter::prepare" in error and ("QueuePlanSynced" in error or "exclusion changed" in error)
         for error in errors
     ), errors
 
@@ -134,7 +136,7 @@ def test_queue_plan_autonomous_only_contract_rejects_late_locked_body_guard(
         path,
         "fn bind_locked_global_body_from_origin(",
         "if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some()",
-        "let canonical_recovery = canonical_v2_lane_payload_matches_kura(",
+        "let canonical_recovery = (|| -> crate::kura::Result<bool> {",
     )
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any(
@@ -1267,3 +1269,48 @@ def test_queue_plan_pending_membership_contract_rejects_historical_authority_ord
     assert any(
         "ordered QueuePlan" in error and symbol in error for error in errors
     ), errors
+
+
+@pytest.mark.parametrize("relative,anchor,old,new", [
+    ("crates/iroha_core/src/sumeragi/v2_candidate.rs", "fn snapshot_routable_candidates(",
+     "&binding,\n                    state.network_id_ref(),", "&binding,\n                    &NetworkId::default(),"),
+    ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", "impl CandidateWorkProvider for &mut V2LaneWorkAdapter {",
+     "== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)",
+     "== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced && false)"),
+    ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", "impl CandidateWorkProvider for &mut V2LaneWorkAdapter {",
+     "(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)",
+     "reserved_entrypoints.contains(&entrypoint).then_some(index)"),
+    ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", "impl CandidateWorkProvider for &mut V2LaneWorkAdapter {",
+     "(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)",
+     "route_conflict.then_some(index)"),
+    ("crates/iroha_core/src/torii_proxy.rs", "pub fn validate_queue_plan_binding_for_request(",
+     "if binding.network_id_digest != queue_plan_admission_network_id_digest(network_id)",
+     "if false && binding.network_id_digest != queue_plan_admission_network_id_digest(network_id)"),
+    ("crates/iroha_core/src/torii_proxy.rs", "pub fn validate_queue_plan_binding_for_request(",
+     "if binding.request_id != queue_plan_synced_request_id(network_id, transaction.hash())",
+     "if false && binding.request_id != queue_plan_synced_request_id(network_id, transaction.hash())"),
+    ("crates/iroha_core/src/torii_proxy.rs", "pub fn validate_queue_plan_binding_for_transaction_and_plan(",
+     "        binding.enqueue_timestamp_ms,", "        0,"),
+    ("crates/iroha_core/src/torii_proxy.rs", "pub fn validate_queue_plan_binding_for_transaction_and_plan(",
+     "Some(binding.global_admission_identity()),", "None,"),
+    ("crates/iroha_core/src/torii_proxy.rs", "pub fn validate_queue_plan_binding_for_transaction_and_plan(",
+     "if exact_digest != binding.journal_record_digest", "if false && exact_digest != binding.journal_record_digest"),
+])
+def test_queue_plan_autonomous_only_current_claim_and_selection_mutations(
+    tmp_path: Path, relative: str, anchor: str, old: str, new: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    replace_once_after(tmp_path / relative, anchor, old, new)
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert errors, "changed QueuePlan authority or unconditional ownership must fail"
+
+
+def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path: Path) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    model = next(row for row in models if row["module"] == module.QUEUE_PLAN_STARTUP_REPLAY_MODULE)
+    binding = next(row for row in model["production_symbols"] if row["symbol"] == "QueuePlanAdmissionBindingV1")
+    binding["path"] = "crates/iroha_core/src/torii_proxy.rs"
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any("QueuePlanAdmissionBindingV1" in error and "must occur exactly once" in error for error in errors), errors

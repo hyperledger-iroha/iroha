@@ -2,7 +2,7 @@
 /// Exact canonical application authority for an obsolete lane-history prefix.
 /// Only the constructor below may turn a persisted cursor into this proof.
 struct AuthenticatedLaneHistoryRetention {
-    entry: LaneConfigEntry,
+    entry: LaneStorageEntry,
     frontier: LaneMergeApplicationFrontierV1,
     first_retained_height: u64,
 }
@@ -25,7 +25,51 @@ enum LaneHistoryTerminalEvidenceRole {
     ApplicationReceipt,
 }
 
+/// Borrowed authority for one already authenticated terminal rewrite image.
+/// It cannot authorize an append, prepend or reset, and retains both held images
+/// and the exact durable certified frontier until the first promotion.
+struct AdmittedCertifiedHistoryRewrite<'image> {
+    entry: &'image LaneStorageEntry,
+    frontier: &'image LatestCertifiedLaneBlockFrontierRead,
+    original: &'image BoundProgressPair,
+    candidate: Option<&'image BoundProgressPair>,
+}
+
 impl Kura {
+    fn recheck_admitted_certified_history_rewrite_locked(
+        &self,
+        admitted: &AdmittedCertifiedHistoryRewrite<'_>,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<()> {
+        let expected = Self::certified_lane_block_paths_for_entry(admitted.entry, &self.store_root);
+        if expected.0 != data_path || expected.1 != index_path || admitted.candidate.is_none() {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path.to_path_buf(),
+                "terminal rewrite admission does not bind this exact certified candidate",
+            ));
+        }
+        self.require_retained_lane_storage_entry(admitted.entry)?;
+        self.confirm_latest_certified_lane_block_frontier_read_locked(
+            admitted.entry,
+            &admitted.frontier.snapshot,
+        )?;
+        for pair in std::iter::once(admitted.original).chain(admitted.candidate) {
+            let unchanged = match pair {
+                BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),
+                BoundProgressPair::Absent(namespace) => {
+                    self.bound_progress_namespace_unchanged(namespace)
+                }
+            };
+            if !unchanged {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path.to_path_buf(),
+                    "terminal rewrite admission changed its held original or candidate",
+                ));
+            }
+        }
+        Ok(())
+    }
     /// Rebuild every capacity obligation and finish owned publication recovery
     /// before terminal history compaction can remove source dependencies.
     fn recover_lane_histories_on_startup(&self) -> Result<()> {
@@ -43,19 +87,14 @@ impl Kura {
     /// The caller holds `prune_lock`, but no geometry or sidecar lock.
     fn authenticated_lane_history_retention_under_prune_guard(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
     ) -> Result<Option<AuthenticatedLaneHistoryRetention>> {
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let path = Self::lane_merge_application_frontier_path_for_entry(entry, &self.store_root);
         let frontier = {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            if self.lane_storage_entry(entry.lane_id)? != *entry {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "lane geometry changed during retention authority authentication",
-                ));
-            }
+            self.require_retained_lane_storage_entry(entry)?;
             let _sidecar_guard = self.sidecar_lock.lock();
             if self.bound_progress_sidecar_directory_is_absent(&path, &path)? {
                 None
@@ -92,7 +131,21 @@ impl Kura {
     /// The caller holds `prune_lock`, but no geometry or sidecar lock.
     fn recover_certified_bundle_history_rewrites_under_prune_guard(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
+        retention: Option<&AuthenticatedLaneHistoryRetention>,
+        frontier: Option<&CertifiedLaneBlockArtifact>,
+    ) -> Result<()> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        self.require_retained_lane_storage_entry(entry)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.recover_certified_bundle_history_rewrites_locked(entry, retention, frontier)
+    }
+
+    /// Recover authenticated terminal images under prune, canonical (when present),
+    /// geometry and sidecar ownership already held by startup or retirement.
+    fn recover_certified_bundle_history_rewrites_locked(
+        &self,
+        entry: &LaneStorageEntry,
         retention: Option<&AuthenticatedLaneHistoryRetention>,
         frontier: Option<&CertifiedLaneBlockArtifact>,
     ) -> Result<()> {
@@ -107,14 +160,7 @@ impl Kura {
             candidate: Option<BoundProgressPair>,
             inventory: BTreeMap<u64, (CertifiedLaneBlockArtifact, Hash)>,
         }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        if self.lane_storage_entry(entry.lane_id)? != *entry {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "lane geometry changed during certified-history rewrite recovery",
-            ));
-        }
-        let _sidecar_guard = self.sidecar_lock.lock();
+        self.require_retained_lane_storage_entry(entry)?;
         let pairs = [
             (
                 Self::certified_lane_block_paths_for_entry(entry, &self.store_root),
@@ -320,6 +366,20 @@ impl Kura {
                 "terminal certified-history rewrite has no mandatory durable certified frontier",
             ));
         };
+        let frontier_read = self
+            .read_latest_certified_lane_block_frontier_locked(entry, false)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "terminal rewrite lost its mandatory certified frontier",
+                )
+            })?;
+        if frontier_read.frontier.artifact != *frontier {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "terminal rewrite changed its exact certified frontier",
+            ));
+        }
         let frontier_height = frontier.proposal.descriptor.lane_block_height;
         if certified.keys().any(|height| *height > frontier_height)
             || certified
@@ -398,11 +458,20 @@ impl Kura {
                     image.data_path.with_extension("norito.tmp"),
                     image.index_path.with_extension("index.tmp"),
                 ]);
-            if !self.recover_bound_progress_sidecar_artifacts_in_namespace(
+            let certified_rewrite = (image.kind == CertifiedLaneBlockArtifact::FORMAT_LABEL)
+                .then_some(AdmittedCertifiedHistoryRewrite {
+                    entry,
+                    frontier: &frontier_read,
+                    original: &image.original,
+                    candidate: image.candidate.as_ref(),
+                });
+            if !self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
                 &image.namespace,
                 &image.data_path,
                 &image.index_path,
                 image.kind,
+                None,
+                certified_rewrite.as_ref(),
             ) {
                 return Err(Self::invalid_lane_artifact_error(
                     image.index_path,
@@ -421,7 +490,7 @@ impl Kura {
     /// Authenticate every complete image before a terminal rewrite is promoted.
     fn certified_history_rewrite_inventory_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         bound: &mut BoundProgressSidecar,
         certified_pair: bool,
     ) -> Result<BTreeMap<u64, (CertifiedLaneBlockArtifact, Hash)>> {
@@ -489,7 +558,7 @@ impl Kura {
     fn compact_lane_histories_through_merge_frontier_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         frontier: &LaneMergeApplicationFrontierV1,
     ) -> Result<LaneHistoryCompactionOutcome> {
         if self
@@ -637,7 +706,12 @@ impl Kura {
             }
         }
 
+        let receipt_pinned = self.post_wsv_receipt_compaction_is_pinned_locked(entry);
         for ((data_path, index_path), kind, role) in pairs {
+            if receipt_pinned && matches!(role, LaneHistoryTerminalEvidenceRole::ApplicationReceipt)
+            {
+                continue;
+            }
             let required_heights = match role {
                 LaneHistoryTerminalEvidenceRole::Unpinned => &empty_required_heights,
                 LaneHistoryTerminalEvidenceRole::CanonicalReplica => {

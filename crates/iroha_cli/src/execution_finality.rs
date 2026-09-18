@@ -511,9 +511,12 @@ impl VerifySettlementArgs {
         let block = block_from_wire(&bundle.block)?;
         let entry_hash =
             HashOf::<TransactionEntrypoint>::from_untyped_unchecked(self.expected_entry_hash);
+        // `latest` was accepted by the pinned chain verifier above. Its target context,
+        // rather than the initial predecessor pin, now authenticates this exact height.
         let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
             &block,
             &finality.finality_artifact,
+            finality.finality_artifact.context_id(),
             &entry_hash,
         )
         .wrap_err("finality does not authenticate the exact executed block and target entry")?;

@@ -158,7 +158,6 @@ fn block_header_at(height: u64, now_unix: u64) -> BlockHeader {
         height.try_into().expect("nonzero fixture block height"),
         None,
         None,
-        None,
         now_unix * 1_000,
         0,
     )
@@ -338,7 +337,7 @@ fn pending_operations_survive_concurrency_and_policy_rotation() {
     let custody = account(&keypair(0x73));
     let treasury = account(&keypair(0x74));
     let state = state_fixture(&governance, &provider, &custody, &treasury);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, NOW * 1_000, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
@@ -1854,7 +1853,7 @@ fn exact_service_authorities_and_decision_cas_fail_without_mutation() {
     let decision = account(&keypair(0xA3));
     let operations = account(&keypair(0xA4));
     let state = state_fixture(&governance, &provider, &decision, &operations);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, NOW * 1_000, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.tx_call_hash = Some(Hash::prehashed([0xA5; Hash::LENGTH]));

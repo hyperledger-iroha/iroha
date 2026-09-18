@@ -53,7 +53,7 @@ impl CanonicalAutonomousLaneReplicaV1 {
 
 impl Kura {
     fn canonical_autonomous_lane_replica_paths_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         store_root: &Path,
     ) -> (PathBuf, PathBuf) {
         let directory = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
@@ -776,19 +776,11 @@ impl Kura {
                 "canonical autonomous replica data would exceed its aggregate byte budget",
             ));
         }
-        let transient_bytes = u64::try_from(encoded.len())?
-            .checked_add(Self::maximum_index_growth_for_unresolved_sidecar_write(
-                lane_block_height,
-            ))
-            .and_then(|bytes| {
-                bytes.checked_add(u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES).ok()?)
-            })
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    data_path.clone(),
-                    "canonical autonomous replica publication peak overflows",
-                )
-            })?;
+        let transient_bytes = self.bound_progress_publication_peak_locked(
+            &namespace,
+            lane_block_height,
+            u64::try_from(encoded.len())?,
+        )?;
         self.validate_configured_autonomous_mutation_disk_peak_locked(
             pending_canonical_bytes,
             transient_bytes,
@@ -1089,7 +1081,7 @@ impl Kura {
 
     fn canonical_autonomous_lane_replica_record_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_block_height: u64,
         expected_network_id: Option<iroha_data_model::NetworkId>,
         expected_epoch: Option<u64>,
@@ -1143,12 +1135,7 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let entries = self
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let entries = self.retained_lane_storage_entries_under_geometry_guard()?;
         let _sidecar_guard = self.sidecar_lock.lock();
         for entry in entries {
             let (data_path, index_path) =

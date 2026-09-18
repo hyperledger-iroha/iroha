@@ -21,6 +21,7 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native transition-preflight Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native transition-preflight lane entry");
@@ -221,6 +222,7 @@ fn native_amx_retained_history_requires_exact_native_links_and_shared_predecesso
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native retained-chain Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native retained-chain lane entry");
@@ -297,6 +299,7 @@ fn native_amx_startup_rejects_symmetric_middle_pair_deletion() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native punctured-startup Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native punctured-startup lane entry");
@@ -336,6 +339,7 @@ fn native_amx_startup_rejects_authenticated_retained_predecessor_drift() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native drifted-startup Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native drifted-startup lane entry");
@@ -365,6 +369,7 @@ fn native_amx_prune_intent_rejects_middle_pair_puncture() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native punctured-prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native punctured-prune lane entry");
@@ -415,7 +420,7 @@ fn native_amx_prune_intent_rejects_middle_pair_puncture() {
         "failed prune-intent validation must leave the middle pair untouched"
     );
 }
-fn native_amx_prune_special_paths(kura: &Kura, entry: &LaneConfigEntry) -> (PathBuf, PathBuf) {
+fn native_amx_prune_special_paths(kura: &Kura, entry: &LaneStorageEntry) -> (PathBuf, PathBuf) {
     let directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
     (
         directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE),
@@ -424,7 +429,7 @@ fn native_amx_prune_special_paths(kura: &Kura, entry: &LaneConfigEntry) -> (Path
 }
 fn native_amx_prune_evidence_snapshot(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     heights: &[u64],
 ) -> BTreeMap<PathBuf, Vec<u8>> {
     heights
@@ -474,6 +479,7 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
             let lane_config = RuntimeLaneConfig::default();
             let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
                 .expect("initialize Native prune special-file Kura");
+            establish_dummy_store_primary_anchor(&kura);
             let entry = kura
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("Native prune special-file lane entry");
@@ -578,6 +584,7 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Native prune semantic-matrix Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native prune semantic-matrix lane entry");
@@ -680,6 +687,7 @@ fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidenc
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Native prune stable/temp conflict Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native prune stable/temp conflict lane entry");
@@ -723,6 +731,7 @@ fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Native prune identical stable/temp Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native prune identical stable/temp lane entry");
@@ -779,6 +788,7 @@ fn native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths() 
             let lane_config = RuntimeLaneConfig::default();
             let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
                 .expect("initialize Native prune unsafe-file Kura");
+            establish_dummy_store_primary_anchor(&kura);
             let entry = kura
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("Native prune unsafe-file lane entry");
@@ -850,6 +860,7 @@ fn native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrad
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native prune legacy-name Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune legacy-name lane entry");
@@ -884,6 +895,7 @@ fn native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Native prune mixed legacy/V2 Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native prune mixed legacy/V2 lane entry");
@@ -922,6 +934,7 @@ fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently()
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native prune partial-prefix Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune partial-prefix lane entry");
@@ -996,6 +1009,7 @@ fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites()
             &RuntimeLaneConfig::default(),
         )
         .expect("initialize Native prune in-place rewrite Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune in-place rewrite lane entry");
@@ -1058,6 +1072,7 @@ fn native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_u
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native prune metadata-drift Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune metadata-drift lane entry");
@@ -1160,6 +1175,7 @@ fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only(
         )
         .expect("configured Native prune-intent budget")
     );
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("configured Native evidence lane entry");
@@ -1350,6 +1366,7 @@ fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion(
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize forged Native manifest temporary Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("forged Native manifest temporary lane entry");
@@ -1418,6 +1435,7 @@ fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize unbacked Native receipt temporary Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("unbacked Native receipt temporary lane entry");
@@ -1479,6 +1497,7 @@ fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize redundant Native temporary Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("redundant Native temporary lane entry");
@@ -1564,6 +1583,7 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize prepublication retention Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("prepublication primary lane entry");
@@ -1685,7 +1705,7 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
 /// its exact application receipt. Shared lane height can follow a Native control.
 fn append_ordinary_carrier_for_native_chain(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     blocks: &mut DummyBlocks,
     lane_height: u64,
     predecessor: Option<&LaneBlockProposalV1>,
@@ -1747,7 +1767,7 @@ fn append_ordinary_carrier_for_native_chain(
 /// installing exact carrier-authenticated manifest/receipt bytes.
 fn publish_native_chain_fixture_pointer(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     receipt: &NativeAmxParticipantApplicationReceiptArtifact,
 ) {
     let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
@@ -1974,6 +1994,7 @@ fn native_amx_sparse_prune_intent_authenticates_removed_preimages_after_each_unl
             let lane_config = RuntimeLaneConfig::default();
             let (kura, _) =
                 Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+            establish_dummy_store_primary_anchor(&kura);
             let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
             let first = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
             publish_native_chain_fixture_pointer(&kura, &entry, &first);
@@ -2035,6 +2056,8 @@ fn native_amx_sparse_prune_intent_authenticates_removed_preimages_after_each_unl
             let before = snapshot_regular_files_recursively(&Kura::lane_artifact_dir(
                 &entry.blocks_dir(&kura.store_root),
             ));
+            let network_id = kura.bound_lane_storage_network().unwrap();
+            let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
             drop(kura);
             let reopened = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config);
             if tamper_preimage {
@@ -2052,6 +2075,14 @@ fn native_amx_sparse_prune_intent_authenticates_removed_preimages_after_each_unl
             } else {
                 let (reopened, _) = reopened
                     .expect("exact sparse prefix remains authenticated across partial unlink");
+                assert!(reopened.lane_storage_entries.lock().is_empty());
+                reopened.bind_lane_storage_network(network_id).unwrap();
+                reopened
+                    .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+                    .expect("restore the original authenticated live Native route");
+                reopened
+                    .finish_restored_lane_segments_with_geometry(&lane_config)
+                    .expect("finish restored Native route");
                 assert!(!intent_path.exists());
                 assert!(removal_paths.iter().all(|path| !path.exists()));
                 assert_eq!(

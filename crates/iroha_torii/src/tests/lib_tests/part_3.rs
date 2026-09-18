@@ -396,7 +396,7 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
     let world = World::with([domain], [authority_account, account], []);
     let app = mk_app_state_for_tests_with_world(world);
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         let world = tx.world_mut_for_testing();
@@ -461,7 +461,7 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         tx.world_mut_for_testing()
@@ -632,7 +632,7 @@ async fn ram_lfe_program_policies_list_registered_program() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -719,7 +719,7 @@ async fn ram_lfe_execute_returns_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -792,7 +792,7 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -862,7 +862,7 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -942,7 +942,7 @@ async fn identifier_policies_lists_registered_policy() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1012,7 +1012,7 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1133,7 +1133,6 @@ async fn identifier_resolve_returns_bound_account() {
         nonzero!(1_u64),
         None,
         None,
-        None,
         receipt.resolved_at_ms(),
         0,
     );
@@ -1249,7 +1248,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         nonzero!(1_u64),
         None,
         None,
-        None,
         receipt.resolved_at_ms(),
         0,
     );
@@ -1360,7 +1358,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
         nonzero!(1_u64),
         None,
         None,
-        None,
         receipt.resolved_at_ms(),
         0,
     );
@@ -1445,7 +1442,7 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
         .expect("unique app")
         .identifier_resolver = Some(resolver);
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         register_and_activate_identifier_policy_bundle(
@@ -1563,7 +1560,7 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1663,7 +1660,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     let receipt_hash = receipt.payload.receipt_hash.to_string();
     let header = BlockHeader::new(
         nonzero!(1_u64),
-        None,
         None,
         None,
         receipt.resolved_at_ms(),
@@ -2433,7 +2429,6 @@ async fn proof_retention_status_reports_counts() {
     {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height>0"),
-            None,
             None,
             None,
             0,

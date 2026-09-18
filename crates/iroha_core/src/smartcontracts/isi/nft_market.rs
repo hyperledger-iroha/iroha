@@ -254,7 +254,6 @@ mod tests {
             NonZeroU64::new(height).unwrap(),
             None,
             None,
-            None,
             height * 1_000,
             0,
         )

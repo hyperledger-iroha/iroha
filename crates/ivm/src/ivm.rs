@@ -1351,6 +1351,133 @@ impl std::fmt::Display for RuntimeTemplateResetError {
     }
 }
 impl std::error::Error for RuntimeTemplateResetError {}
+/// One finite allowance of completed architectural VM cycles shared by a source's runs.
+///
+/// This is a non-cloneable owner, not source authentication or a host-work budget.
+/// Each scoped run consumes the same allowance, including nested VMs and ZK padding.
+/// Failed instructions release their pending reservation; previously completed cycles
+/// remain consumed. Dropping this owner closes every retained runtime reference.
+#[derive(Debug)]
+pub struct VmCycleBudget {
+    shared: Arc<SharedVmCycleBudget>,
+}
+#[derive(Debug)]
+struct SharedVmCycleBudget {
+    limit: u64,
+    state: parking_lot::Mutex<VmCycleBudgetState>,
+}
+#[derive(Debug, Default)]
+struct VmCycleBudgetState {
+    consumed: u64,
+    reserved: u64,
+    refused: bool,
+    closed: bool,
+}
+impl VmCycleBudget {
+    /// Create an explicit finite allowance. The caller owns source/policy authentication.
+    pub fn new(limit: std::num::NonZeroU64) -> Self {
+        Self {
+            shared: Arc::new(SharedVmCycleBudget {
+                limit: limit.get(),
+                state: parking_lot::Mutex::new(VmCycleBudgetState::default()),
+            }),
+        }
+    }
+    /// The immutable finite allowance established by the owner.
+    pub fn limit(&self) -> u64 {
+        self.shared.limit
+    }
+    /// Completed architectural cycles, including completed nested execution and ZK padding.
+    pub fn consumed(&self) -> u64 {
+        self.shared.state.lock().consumed
+    }
+    /// Cycles available for another dispatch, excluding active parent reservations.
+    pub fn remaining(&self) -> u64 {
+        let state = self.shared.state.lock();
+        self.shared.limit - state.consumed - state.reserved
+    }
+    /// Whether the owner is open and has no local runtime-ownership fault.
+    ///
+    /// This is independent of deterministic cycle exhaustion.
+    pub fn is_open(&self) -> bool {
+        !self.shared.state.lock().closed
+    }
+    /// Whether any dispatch or padding reservation was refused for lack of cycles.
+    ///
+    /// Exact-fit successful execution has zero remaining cycles without exhaustion.
+    pub fn exhausted(&self) -> bool {
+        self.shared.state.lock().refused
+    }
+}
+impl Drop for VmCycleBudget {
+    fn drop(&mut self) {
+        self.shared.state.lock().closed = true;
+    }
+}
+impl SharedVmCycleBudget {
+    fn ensure_healthy(&self) -> Result<(), VMError> {
+        let state = self.state.lock();
+        if state.closed {
+            Err(VMError::HostUnavailable)
+        } else if state.refused {
+            Err(VMError::ExceededMaxCycles)
+        } else {
+            Ok(())
+        }
+    }
+    fn reserve(&self, cycles: u64) -> Result<VmCycleReservation<'_>, VMError> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return Err(VMError::HostUnavailable);
+        }
+        if state.refused || cycles > self.limit - state.consumed - state.reserved {
+            state.refused = true;
+            return Err(VMError::ExceededMaxCycles);
+        }
+        state.reserved += cycles;
+        Ok(VmCycleReservation {
+            shared: self,
+            cycles,
+            pending: true,
+        })
+    }
+}
+struct VmCycleReservation<'a> {
+    shared: &'a SharedVmCycleBudget,
+    cycles: u64,
+    pending: bool,
+}
+impl VmCycleReservation<'_> {
+    fn complete(mut self, actual: Option<u64>) -> Result<(), VMError> {
+        let mut state = self.shared.state.lock();
+        state.reserved -= self.cycles;
+        self.pending = false;
+        if actual != Some(self.cycles) {
+            // A lifecycle mutation or a new opcode with an unreviewed cycle cost
+            // cannot turn an inaccurate reservation into accepted execution.
+            state.closed = true;
+            return Err(VMError::HostUnavailable);
+        }
+        state.consumed += self.cycles;
+        Ok(())
+    }
+}
+impl Drop for VmCycleReservation<'_> {
+    fn drop(&mut self) {
+        if self.pending {
+            self.shared.state.lock().reserved -= self.cycles;
+        }
+    }
+}
+/// Reservation cost matching the completed-cycle increments in the dispatch table.
+fn completed_instruction_cycles(opcode: u8) -> u64 {
+    match opcode {
+        instruction::wide::arithmetic::ISQRT => 6,
+        instruction::wide::arithmetic::DIV_CEIL | instruction::wide::arithmetic::GCD => 12,
+        instruction::wide::arithmetic::MEAN => 3,
+        _ => 1,
+    }
+}
 pub struct IVM {
     pub registers: Registers,
     // The vector register file has been folded into `registers`. Vector
@@ -1384,6 +1511,8 @@ pub struct IVM {
     /// Exact canonical entrypoint-argument gas escrowed before guest execution.
     argument_decode_prepaid_gas: Option<u64>,
     cycles: u64,
+    /// Scoped shared cycle allowance; runtime resets cannot replenish it.
+    active_cycle_budget: Option<Arc<SharedVmCycleBudget>>,
     halted: bool,
     constraint_failed: bool,
     contract_abort_error: Option<VMError>,
@@ -1484,6 +1613,7 @@ impl Clone for IVM {
             last_staged_syscall: None,
             argument_decode_prepaid_gas: None,
             cycles: self.cycles,
+            active_cycle_budget: self.active_cycle_budget.clone(),
             halted: self.halted,
             constraint_failed: self.constraint_failed,
             contract_abort_error: self.contract_abort_error.clone(),
@@ -1798,6 +1928,7 @@ impl IVM {
             last_staged_syscall: None,
             argument_decode_prepaid_gas: None,
             cycles: 0,
+            active_cycle_budget: None,
             halted: false,
             constraint_failed: false,
             contract_abort_error: None,
@@ -4382,6 +4513,60 @@ impl IVM {
         self.assert_host_rollback_healthy();
         self.run_with_host_ref(host)
     }
+    /// Run with the caller's single finite allowance for completed architectural cycles.
+    ///
+    /// Reusing a VM or running another Batch segment does not replenish `budget`.
+    /// Core owns the signed-source binding and must use ordinary `run_with_host`
+    /// for separately executed trigger callbacks. Gas and per-program cycle checks
+    /// remain independent. A refused shared reservation returns `ExceededMaxCycles`.
+    pub fn run_with_host_and_cycle_budget(
+        &mut self,
+        host: &mut dyn IVMHost,
+        budget: &VmCycleBudget,
+    ) -> Result<(), VMError> {
+        self.run_with_host_and_shared_cycles(host, Arc::clone(&budget.shared))
+    }
+    /// Run a nested VM with the active parent's exact cycle allowance, if present.
+    ///
+    /// Hosts must use this for nested contract dispatch rather than creating a new
+    /// allowance or deriving one from a remaining-cycle scalar.
+    pub fn run_with_host_and_parent_cycle_budget(
+        &mut self,
+        host: &mut dyn IVMHost,
+        parent: &IVM,
+    ) -> Result<(), VMError> {
+        match &parent.active_cycle_budget {
+            Some(shared) => self.run_with_host_and_shared_cycles(host, Arc::clone(shared)),
+            None => self.run_with_host(host),
+        }
+    }
+    fn run_with_host_and_shared_cycles(
+        &mut self,
+        host: &mut dyn IVMHost,
+        shared: Arc<SharedVmCycleBudget>,
+    ) -> Result<(), VMError> {
+        if self
+            .active_cycle_budget
+            .as_ref()
+            .is_some_and(|active| !Arc::ptr_eq(active, &shared))
+        {
+            // Rebinding a runtime retained by another active source is a local
+            // host ownership error, not deterministic capacity exhaustion.
+            shared.state.lock().closed = true;
+            if let Some(active) = &self.active_cycle_budget {
+                active.state.lock().closed = true;
+            }
+            return Err(VMError::HostUnavailable);
+        }
+        shared.ensure_healthy()?;
+        let previous = self.active_cycle_budget.replace(shared);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| self.run_with_host(host)));
+        self.active_cycle_budget = previous;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
     #[inline]
     fn commit_memory_after_run_if_needed(&mut self) {
         if self.zk_trace_collection_enabled() {
@@ -4389,6 +4574,12 @@ impl IVM {
         }
     }
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        // Keep a local reference through host callbacks/lifecycle changes. This
+        // owner never comes from program bytes or a warmed runtime template.
+        let cycle_budget = self.active_cycle_budget.clone();
+        if let Some(budget) = &cycle_budget {
+            budget.ensure_healthy()?;
+        }
         if self.host_trace_log_detached || self.host_trace_invocation_log.is_some() {
             // A VM moved out of a host callback still borrows both logger
             // allocations from the active outer invocation. Do not scrub or
@@ -4439,8 +4630,12 @@ impl IVM {
             self.pc_trace.clear();
             self.delta_trace = zk::DeltaTraceLog::default();
             let mut last_logged_cycle = 0;
+            let mut pending_cycles: Option<(u64, VmCycleReservation<'_>)> = None;
             // Fetch-Decode-Execute loop
             loop {
+                if let Some((before, reservation)) = pending_cycles.take() {
+                    reservation.complete(self.cycles.checked_sub(before))?;
+                }
                 self.flush_cycle_logs(&mut last_logged_cycle);
                 // Stop the loop if HALT was executed. When a cycle limit is set we
                 // continue executing even after a failed assertion so the trace
@@ -4477,6 +4672,10 @@ impl IVM {
                     .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
+                }
+                if let Some(budget) = &cycle_budget {
+                    let reservation = budget.reserve(completed_instruction_cycles(wide_op))?;
+                    pending_cycles = Some((self.cycles, reservation));
                 }
                 self.gas_remaining -= cost;
                 // Execute the instruction
@@ -5214,8 +5413,9 @@ impl IVM {
                         self.halted = true;
                         self.cycles += 1;
                         self.pc = self.pc.wrapping_add(length);
-                        self.flush_cycle_logs(&mut last_logged_cycle);
-                        break;
+                        // Commit completed HALT work at the loop boundary before
+                        // trace flushing, which may unwind while allocating.
+                        continue;
                     }
                     instruction::wide::crypto::SETVL => {
                         if unlikely(!self.vector_enabled) {
@@ -6441,12 +6641,20 @@ impl IVM {
                     }
                 }
             }
+            if let Some((before, reservation)) = pending_cycles.take() {
+                reservation.complete(self.cycles.checked_sub(before))?;
+            }
             // If we exit the loop early, pad the trace so that prover and verifier
             // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
             if self.zk_mode && self.max_cycles != 0 && self.cycles < self.max_cycles {
                 // Append dummy cycles (treated as NOPs) until the target length is
                 // reached. Each padded cycle still costs one unit of gas.
                 let remaining = self.max_cycles - self.cycles;
+                if let Some(budget) = &cycle_budget {
+                    // Padding contributes to architectural cycles even when the
+                    // existing following gas check rejects the padded execution.
+                    budget.reserve(remaining)?.complete(Some(remaining))?;
+                }
                 self.cycles = self.max_cycles;
                 // Padding instructions still consume gas like NOPs (cost 1 each)
                 if self.gas_remaining < remaining {
@@ -6475,6 +6683,13 @@ impl IVM {
                 std::panic::resume_unwind(payload);
             }
         };
+        let result = result.and_then(|()| {
+            // A host may swallow a nested error and return from its last syscall.
+            // Never accept such a parent after a shared reservation was refused.
+            cycle_budget
+                .as_ref()
+                .map_or(Ok(()), |budget| budget.ensure_healthy())
+        });
         if let Err(err) = &result {
             // Diagnostics are outside the guest execution trace. In
             // particular, an isolation failure may already have scrubbed an
@@ -8608,3 +8823,7 @@ seiyaku Demo {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "vm_cycle_budget_tests.rs"]
+mod vm_cycle_budget_tests;

@@ -1,12 +1,20 @@
+//! Replay authority regressions and structural typed-output comparison fixtures.
 use super::*;
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
-    block::{SignedBlock, consensus_v2::ConsensusMode},
+    block::{
+        SignedBlock,
+        consensus_v2::ConsensusMode,
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        output_budget::ExecutionOutputLimits,
+    },
     isi::Log,
     nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
     prelude::{Account, Domain},
-    transaction::{TransactionBuilder, error::TransactionRejectionReason},
+    transaction::{
+        TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResult,
+    },
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -123,50 +131,100 @@ fn new_genesis_account(
 ) -> iroha_data_model::account::NewAccount {
     Account::new(account_id.clone())
 }
-fn assert_canonical_successful_fixture_results(block: &SignedBlock) {
-    assert!(block.has_results(), "committed fixture must carry results");
-    let result_count = block.results().len();
-    assert_eq!(result_count, block.entrypoint_hashes().len());
-    assert!(
-        block.results().all(|result| result.as_ref().is_ok()),
-        "committed fixture results must all succeed"
-    );
-    let minimum_committed_fragment_count =
-        u64::try_from(result_count).expect("fixture result count fits u64");
-    assert!(
-        block
-            .committed_fragment_count()
-            .is_some_and(|count| count >= minimum_committed_fragment_count),
-        "committed fragments must cover every successful external result"
-    );
+fn replay_fixture_limits() -> ExecutionOutputLimits {
+    ExecutionOutputLimits {
+        max_outputs: 128,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 4 * 1024 * 1024,
+        max_executed_wire_bytes: 8 * 1024 * 1024,
+    }
+}
+
+// Structural fixtures only. Real replay authority/outputs continue to come
+// from StrictReplayFixture's actual candidate execution and certified Apply.
+fn install_replay_fixture_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<ExecutionOutputV1>,
+    declared_fragment_count: u64,
+) {
+    let transcripts = if block.has_results() {
+        block.fastpq_transcripts().clone()
+    } else {
+        Default::default()
+    };
+    let envelopes = block.axt_envelopes().unwrap_or_default().to_vec();
+    let policy = block.axt_policy_snapshot().cloned().unwrap_or_default();
+    let transitions = block
+        .axt_transitioned_dataspaces()
+        .cloned()
+        .unwrap_or_default();
+    let statements = block.lane_finality_statements().to_vec();
     block
-        .validate_entrypoint_merkle_cache()
-        .expect("committed fixture entrypoint Merkle cache must be canonical");
+        .set_execution_outputs(
+            outputs,
+            declared_fragment_count,
+            transcripts,
+            envelopes,
+            policy,
+            transitions,
+            statements,
+            &replay_fixture_limits(),
+        )
+        .expect("attach structurally valid complete replay-fixture outputs");
+}
+
+fn assert_canonical_successful_fixture_results(block: &SignedBlock, expected_fragments: u64) {
+    assert!(block.has_results(), "committed fixture must carry outputs");
     block
-        .validate_result_merkle_cache()
-        .expect("committed fixture result Merkle cache must be canonical");
+        .validate_output_merkle_cache()
+        .expect("complete output/source/cache fixture");
     assert_eq!(
-        block.header().result_merkle_root(),
+        block.execution_outputs().len(),
+        block.network_entrypoint_count(),
+        "this specific fixture has no internal invocations"
+    );
+    for index in 0..block.network_entrypoint_count() {
+        let (_, row) = block
+            .network_output_at(u32::try_from(index).unwrap())
+            .expect("each fixture source has its explicit Network join");
+        assert!(row.result.is_ok(), "fixture Network result must succeed");
+    }
+    assert!(
         block
-            .result_merkle_commitment()
-            .map(|commitment| *commitment.root())
+            .execution_outputs()
+            .iter()
+            .all(|output| output.result().is_ok())
+    );
+    assert_eq!(block.committed_fragment_count(), Some(expected_fragments));
+    assert!(
+        expected_fragments >= u64::try_from(block.network_entrypoint_count()).unwrap(),
+        "fixture declares one applied fragment per successful Network input"
     );
 }
+
 fn attach_successful_fixture_results(
     mut block: SignedBlock,
     signer: &iroha_crypto::KeyPair,
+    declared_fragment_count: u64,
 ) -> SignedBlock {
-    let entrypoint_hashes = block
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
-    let results = entrypoint_hashes
-        .iter()
-        .map(|_| Ok(iroha_data_model::transaction::DataTriggerSequence::default()))
+    let proposal = block.canonical_resultless_proposal();
+    let outputs = block
+        .network_entrypoints()
+        .enumerate()
+        .map(|(index, _)| {
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: u32::try_from(index).expect("fixture source index fits u32"),
+                result: TransactionResult::new(Ok(Vec::new())),
+                completions: Vec::new(),
+            })
+        })
         .collect();
-    block
-        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
-        .expect("attach exact successful replay-fixture results");
+    install_replay_fixture_outputs(&mut block, outputs, declared_fragment_count);
+    assert_eq!(
+        block.canonical_resultless_proposal(),
+        proposal,
+        "output attachment preserves every proposal field and signature"
+    );
     let final_signature = iroha_data_model::block::BlockSignature::new(
         0,
         iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), block.hash())
@@ -175,7 +233,7 @@ fn attach_successful_fixture_results(
     block
         .replace_signatures(std::collections::BTreeSet::from([final_signature]))
         .expect("replace result-bearing replay-fixture signature");
-    assert_canonical_successful_fixture_results(&block);
+    assert_canonical_successful_fixture_results(&block, declared_fragment_count);
     {
         let mut final_signatures = block.signatures();
         let final_signature = final_signatures.next().expect("replay-fixture signature");
@@ -394,7 +452,8 @@ fn replay_from_height_catches_up_state_impl() {
     assert_eq!(state.committed_height(), 3);
     assert_eq!(state.latest_block_hash_fast(), Some(third.block.hash()));
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         third.checkpoint_hash
     );
 }
@@ -472,7 +531,8 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
     assert_eq!(state.committed_height(), 2);
     assert_eq!(state.latest_block_hash_fast(), Some(second.block.hash()));
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         second.checkpoint_hash
     );
 }
@@ -659,25 +719,31 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         "the validation-only execution seam must discard its speculative state",
     );
     let mut signed_block2 = fixture.second_block.clone();
-    let entry_hashes = signed_block2
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
-    assert_eq!(entry_hashes.len(), 1);
+    assert_eq!(signed_block2.network_entrypoint_count(), 1);
     assert!(
         signed_block2
-            .results()
-            .all(|result| result.as_ref().is_ok())
+            .execution_outputs()
+            .iter()
+            .all(|output| output.result().is_ok())
     );
-    signed_block2
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted("forced mismatch".to_owned()),
-            ))],
-        )
-        .expect("change only the exact committed external result");
+    let proposal_before = signed_block2.canonical_resultless_proposal();
+    let mut outputs = signed_block2.execution_outputs().to_vec();
+    let ExecutionOutputV1::Network(row) = &mut outputs[0] else {
+        panic!("real applied fixture starts with its Network result");
+    };
+    assert_eq!(row.input_index, 0);
+    row.result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+        ValidationFail::NotPermitted("forced mismatch".to_owned()),
+    )));
+    row.completions.clear();
+    let fragments = signed_block2
+        .committed_fragment_count()
+        .expect("actual fixture fragment count");
+    install_replay_fixture_outputs(&mut signed_block2, outputs, fragments);
+    assert_eq!(
+        signed_block2.canonical_resultless_proposal(),
+        proposal_before
+    );
     let leader = fixture
         .second_context
         .leader(signed_block2.header().view_change_index());
@@ -819,7 +885,8 @@ fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
     super::replay_blocks_from_kura(kura, &mut replay_state, 2)
         .expect("authenticate the exact first-release prefix");
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&replay_state),
+        crate::snapshot::canonical_state_snapshot_hash(&replay_state)
+            .expect("stable valid fixture snapshot"),
         second.checkpoint_hash
     );
     let canonical_prefix = crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state);
@@ -901,7 +968,8 @@ fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
         Some(third.block.hash())
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&replay_state),
+        crate::snapshot::canonical_state_snapshot_hash(&replay_state)
+            .expect("stable valid fixture snapshot"),
         third.checkpoint_hash
     );
 }
@@ -932,10 +1000,13 @@ fn replay_result_comparison_requires_attached_results_even_for_empty_blocks() {
     for entry_count in [0, 1] {
         let proposal = replay_result_boundary_proposal(entry_count);
         assert!(!proposal.has_results());
-        let executed =
-            attach_successful_fixture_results(proposal.clone(), &SAMPLE_GENESIS_ACCOUNT_KEYPAIR);
+        let executed = attach_successful_fixture_results(
+            proposal.clone(),
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+            u64::try_from(entry_count).unwrap(),
+        );
         ensure_replayed_results_match_committed(1, &executed, &executed)
-            .expect("identical authenticated execution results must match");
+            .expect("identical structurally valid execution outputs must match");
         for replayed in [&proposal, &executed] {
             let error = ensure_replayed_results_match_committed(1, &proposal, replayed)
                 .expect_err("a resultless committed body cannot establish replay parity");
@@ -959,23 +1030,28 @@ fn replay_validation_diagnostics_handle_resultless_and_executed_failures() {
     for entry_count in [0, 1] {
         let proposal = replay_result_boundary_proposal(entry_count);
         assert!(!proposal.has_results());
-        assert!(replay_validation_transaction_errors(&proposal).is_empty());
-        let executed = attach_successful_fixture_results(proposal, &SAMPLE_GENESIS_ACCOUNT_KEYPAIR);
-        assert!(replay_validation_transaction_errors(&executed).is_empty());
+        assert!(replay_validation_output_errors(&proposal).is_empty());
+        let executed = attach_successful_fixture_results(
+            proposal,
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+            u64::try_from(entry_count).unwrap(),
+        );
+        assert!(replay_validation_output_errors(&executed).is_empty());
     }
     let mut failed = replay_result_boundary_proposal(1);
-    let entry_hashes = failed.entrypoint_hashes().collect::<Vec<_>>();
-    failed
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![Err(TransactionRejectionReason::Validation(
+    install_replay_fixture_outputs(
+        &mut failed,
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Err(TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted("result-boundary rejection".to_owned()),
-            ))],
-        )
-        .expect("attach the actual rejected execution result");
-    let errors = replay_validation_transaction_errors(&failed);
+            ))),
+            completions: Vec::new(),
+        })],
+        0,
+    );
+    let errors = replay_validation_output_errors(&failed);
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].starts_with("tx#0:"));
+    assert!(errors[0].starts_with("output#0 network#0:"));
     assert!(errors[0].contains("result-boundary rejection"));
 }

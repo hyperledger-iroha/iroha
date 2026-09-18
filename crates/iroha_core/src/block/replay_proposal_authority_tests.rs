@@ -15,13 +15,20 @@ fn authenticate_replay_fixture_block(
 ) -> (SignedBlock, VerifiedV2FinalityArtifact) {
     use iroha_data_model::block::consensus_v2 as wire;
     executed
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[],
-            Vec::new(),
+        .set_execution_outputs(
+            crate::execution_output_test_support::structural_network_outputs(
+                &executed,
+                &[],
+                Vec::new(),
+            ),
+            u64::try_from(executed.network_entrypoint_count())
+                .expect("fixture input count fits u64"),
             BTreeMap::new(),
             Vec::new(),
             fixture.state.block(executed.header()).axt_policy_snapshot(),
+            BTreeSet::new(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("retain exact control-only execution result");
     let context = fixture
@@ -121,9 +128,18 @@ fn authenticated_replay_added_lane_uses_replicated_frontier_without_published_st
         vec![iroha_data_model::nexus::LaneConfig::default()],
     )
     .unwrap();
-    fixture.state.kura().replace_lane_storage_entries_for_test(
-        &iroha_config::parameters::actual::LaneConfig::from_catalog(&baseline),
-    );
+    fixture
+        .state
+        .kura()
+        .replace_lane_storage_entries_for_test(
+            &iroha_config::parameters::actual::LaneConfig::from_catalog(&baseline),
+            &fixture.state.lane_incarnations_snapshot(),
+            &fixture
+                .state
+                .query_view()
+                .lane_incarnation_activation_heights,
+        )
+        .expect("retain exact primary identity while hiding secondary admission slots");
     assert!(
         fixture
             .state
@@ -133,7 +149,8 @@ fn authenticated_replay_added_lane_uses_replicated_frontier_without_published_st
             .iter()
             .any(|lane| lane.id == LaneId::new(3))
     );
-    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state)
+        .expect("stable valid fixture snapshot");
     let candidate = executed.canonical_resultless_proposal();
     ValidBlock::validate_execution_context_with_state(
         &candidate,
@@ -143,7 +160,8 @@ fn authenticated_replay_added_lane_uses_replicated_frontier_without_published_st
     )
     .expect("verified historical added-lane anchor uses exact replicated predecessor");
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&fixture.state),
+        crate::snapshot::canonical_state_snapshot_hash(&fixture.state)
+            .expect("stable valid fixture snapshot"),
         before
     );
     let error = validate_autonomous_anchor_fixture(
@@ -157,7 +175,8 @@ fn authenticated_replay_added_lane_uses_replicated_frontier_without_published_st
         if message.contains("local autonomous slot is unreadable") && message.contains("no Kura storage segment"))
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&fixture.state),
+        crate::snapshot::canonical_state_snapshot_hash(&fixture.state)
+            .expect("stable valid fixture snapshot"),
         before
     );
 }
@@ -244,10 +263,20 @@ fn authenticated_replay_ordinary_and_native_amx_keep_exact_predecessors_without_
         vec![iroha_data_model::nexus::LaneConfig::default()],
     )
     .unwrap();
-    fixture.state.kura().replace_lane_storage_entries_for_test(
-        &iroha_config::parameters::actual::LaneConfig::from_catalog(&baseline),
-    );
-    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state);
+    fixture
+        .state
+        .kura()
+        .replace_lane_storage_entries_for_test(
+            &iroha_config::parameters::actual::LaneConfig::from_catalog(&baseline),
+            &fixture.state.lane_incarnations_snapshot(),
+            &fixture
+                .state
+                .query_view()
+                .lane_incarnation_activation_heights,
+        )
+        .expect("retain exact primary identity while hiding secondary admission slots");
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state)
+        .expect("stable valid fixture snapshot");
     let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
         &fixture.bundle.autonomous_lane_payloads[0],
         fixture.state.network_id,
@@ -327,7 +356,8 @@ fn authenticated_replay_ordinary_and_native_amx_keep_exact_predecessors_without_
         "live ordinary ownership still requires readable current storage"
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&fixture.state),
+        crate::snapshot::canonical_state_snapshot_hash(&fixture.state)
+            .expect("stable valid fixture snapshot"),
         before
     );
 }

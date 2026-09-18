@@ -9,7 +9,7 @@ fn state_block_fragment_counter_updates_on_apply() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::new(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut state_block = state.block(header);
     let maintenance_fragments = state_block.committed_fragment_count();
     {

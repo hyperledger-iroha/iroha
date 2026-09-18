@@ -29454,6 +29454,13 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let result = iroha::data_model::transaction::TransactionResult::new(Ok(
             iroha::data_model::transaction::DataTriggerSequence::default(),
         ));
+        let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
             hash: transaction.hash_as_entrypoint().to_string(),
             transaction: iroha::data_model::query::CommittedTransaction {
@@ -29463,12 +29470,10 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 entrypoint_hash: transaction.hash_as_entrypoint(),
                 entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                 entrypoint: TransactionEntrypoint::External(transaction.clone()),
-                result_hash: result.hash(),
-                result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                result,
-                merge_inclusion: None,
+                output_hash: iroha_crypto::HashOf::new(&output),
+                output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                output,
             },
-            trigger_completions: Vec::new(),
         };
         for (resolved_from, proof, expected) in [
             (

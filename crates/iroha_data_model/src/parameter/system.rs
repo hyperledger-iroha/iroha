@@ -1,11 +1,12 @@
 //! Built-in parameter definitions and validation logic.
 pub use self::model::*;
+use super::execution_output::ExecutionOutputPolicyV1;
 
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 use core::{
     convert::TryFrom,
-    num::{NonZeroU16, NonZeroU64},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
     time::Duration,
 };
 use iroha_crypto::Algorithm;
@@ -604,15 +605,19 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[display("{max_transactions}_BL")]
+    #[display("{max_transactions},{max_time_trigger_invocations},{execution_output}_BL")]
     #[getset(get_copy = "pub")]
     pub struct BlockParameters {
         /// Maximal number of transactions in a block.
         ///
         /// A block is created if this limit is reached or [`SumeragiParameters::block_cadence_ms`] has expired,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
-        /// The same value caps scheduled time-trigger entrypoints materialised in one block.
         pub max_transactions: NonZeroU64,
+        /// Independent active Time invocation count, captured before Network execution.
+        /// Must remain within the genesis execution-output capacity envelope.
+        pub max_time_trigger_invocations: NonZeroU32,
+        /// Agreed immutable capacity envelope for output rows and trigger registries.
+        pub execution_output: ExecutionOutputPolicyV1,
     }
     /// Single block parameter
     ///
@@ -622,8 +627,16 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
+    #[expect(
+        variant_size_differences,
+        reason = "the small fixed-size genesis envelope is an atomic Copy parameter value"
+    )]
     pub enum BlockParameter {
         MaxTransactions(NonZeroU64),
+        /// Change the active Time count inside the committed capacity envelope.
+        MaxTimeTriggerInvocations(NonZeroU32),
+        /// Install the whole output capacity envelope at genesis.
+        ExecutionOutput(ExecutionOutputPolicyV1),
     }
     /// Limits that a transaction must obey to be accepted.
     #[derive(norito::NoritoSchema)]
@@ -1440,6 +1453,13 @@ impl JsonSerialize for BlockParameters {
         out.push('{');
         let mut first = true;
         json_support::write_field(out, &mut first, "max_transactions", &self.max_transactions);
+        json_support::write_field(
+            out,
+            &mut first,
+            "max_time_trigger_invocations",
+            &self.max_time_trigger_invocations,
+        );
+        json_support::write_field(out, &mut first, "execution_output", &self.execution_output);
         out.push('}');
     }
     fn json_serialize_to(
@@ -1450,6 +1470,13 @@ impl JsonSerialize for BlockParameters {
         out.push('{')?;
         let mut first = true;
         json_support::write_field_to(out, &mut first, "max_transactions", &self.max_transactions)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_time_trigger_invocations",
+            &self.max_time_trigger_invocations,
+        )?;
+        json_support::write_field_to(out, &mut first, "execution_output", &self.execution_output)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1465,8 +1492,20 @@ impl JsonDeserialize for BlockParameters {
             .map(|value| json_support::expect_nonzero_u64(&value, "max_transactions"))
             .transpose()?
             .unwrap_or_else(defaults::block::max_transactions);
+        let max_time_trigger_invocations =
+            json_support::parse_value_as(&map.remove("max_time_trigger_invocations").ok_or_else(
+                || json::Error::Message("missing max_time_trigger_invocations".into()),
+            )?)?;
+        let execution_output = json_support::parse_value_as(
+            &map.remove("execution_output")
+                .ok_or_else(|| json::Error::Message("missing execution_output".into()))?,
+        )?;
         json_support::ensure_no_extra(map)?;
-        Ok(Self::new(max_transactions))
+        Ok(Self {
+            max_transactions,
+            max_time_trigger_invocations,
+            execution_output,
+        })
     }
 }
 impl Default for TransactionParameters {
@@ -1537,6 +1576,8 @@ impl Parameters {
         apply_parameter!(
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
             Block(block.max_transactions) => BlockParameter::MaxTransactions,
+            Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
+            Block(block.execution_output) => BlockParameter::ExecutionOutput,
             Transaction(transaction.max_signatures) => TransactionParameter::MaxSignatures,
             Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
             Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
@@ -1730,11 +1771,20 @@ impl SumeragiParameters {
 impl BlockParameters {
     /// Construct [`Self`]
     pub const fn new(max_transactions: NonZeroU64) -> Self {
-        Self { max_transactions }
+        Self {
+            max_transactions,
+            max_time_trigger_invocations: nonzero_ext::nonzero!(512_u32),
+            execution_output: ExecutionOutputPolicyV1::bootstrap(),
+        }
     }
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = BlockParameter> {
-        [BlockParameter::MaxTransactions(self.max_transactions)].into_iter()
+        [
+            BlockParameter::MaxTransactions(self.max_transactions),
+            BlockParameter::MaxTimeTriggerInvocations(self.max_time_trigger_invocations),
+            BlockParameter::ExecutionOutput(self.execution_output),
+        ]
+        .into_iter()
     }
 }
 
@@ -1744,6 +1794,16 @@ impl JsonSerialize for BlockParameter {
         match self {
             BlockParameter::MaxTransactions(value) => {
                 json::write_json_string("MaxTransactions", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+            BlockParameter::MaxTimeTriggerInvocations(value) => {
+                json::write_json_string("MaxTimeTriggerInvocations", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
+            BlockParameter::ExecutionOutput(value) => {
+                json::write_json_string("ExecutionOutput", out);
                 out.push(':');
                 value.json_serialize(out);
             }
@@ -1758,6 +1818,14 @@ impl JsonSerialize for BlockParameter {
         match self {
             BlockParameter::MaxTransactions(value) => {
                 out.push_str("{\"MaxTransactions\":")?;
+                value.json_serialize_to(out)?;
+            }
+            BlockParameter::MaxTimeTriggerInvocations(value) => {
+                out.push_str("{\"MaxTimeTriggerInvocations\":")?;
+                value.json_serialize_to(out)?;
+            }
+            BlockParameter::ExecutionOutput(value) => {
+                out.push_str("{\"ExecutionOutput\":")?;
                 value.json_serialize_to(out)?;
             }
         }
@@ -1783,6 +1851,12 @@ impl JsonDeserialize for BlockParameter {
             "MaxTransactions" => Ok(Self::MaxTransactions(json_support::expect_nonzero_u64(
                 &payload,
                 "MaxTransactions",
+            )?)),
+            "MaxTimeTriggerInvocations" => Ok(Self::MaxTimeTriggerInvocations(
+                json_support::parse_value_as(&payload)?,
+            )),
+            "ExecutionOutput" => Ok(Self::ExecutionOutput(json_support::parse_value_as(
+                &payload,
             )?)),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),

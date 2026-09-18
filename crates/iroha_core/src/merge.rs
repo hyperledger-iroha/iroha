@@ -280,7 +280,6 @@ pub fn merge_application_header_from_carrier(carrier: &BlockHeader) -> BlockHead
         carrier.height(),
         carrier.prev_block_hash(),
         None,
-        None,
         u64::try_from(carrier.creation_time().as_millis()).unwrap_or(u64::MAX),
         carrier.view_change_index(),
     )

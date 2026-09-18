@@ -2534,10 +2534,10 @@ mod tests {
         }
     }
     fn block_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0)
+        BlockHeader::new(nonzero!(1_u64), None, None, NOW * 1_000, 0)
     }
     fn non_genesis_block_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(2_u64), None, None, None, NOW * 1_000, 0)
+        BlockHeader::new(nonzero!(2_u64), None, None, NOW * 1_000, 0)
     }
     fn state(operator: &KeyPair, others: &[&KeyPair]) -> State {
         let mut world = World::new();

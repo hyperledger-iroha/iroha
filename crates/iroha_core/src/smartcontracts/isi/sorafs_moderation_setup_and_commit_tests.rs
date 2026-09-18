@@ -217,7 +217,6 @@ fn moderation_manager_permission_requires_exact_direct_and_role_tokens() {
                 NonZeroU64::new(2).expect("non-genesis height"),
                 None,
                 None,
-                None,
                 1_000,
                 0,
             ));
@@ -771,7 +770,6 @@ fn rejected_challenge_slash_floors_to_voting_asset_precision() {
 fn header(height: u64, now: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("nonzero height"),
-        None,
         None,
         None,
         now,

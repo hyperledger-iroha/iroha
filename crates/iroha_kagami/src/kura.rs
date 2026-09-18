@@ -20,6 +20,8 @@ use std::{
 
 const BLOCK_INDEX_BATCH_LEN: usize = 256;
 const BLOCK_INDEX_BATCH_LEN_U64: u64 = 256;
+const MAX_FINALITY_PREFIX_HEIGHT: u64 = 4_096;
+const MAX_FINALITY_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -41,6 +43,15 @@ enum Command {
         #[clap(short = 'n', long, default_value_t = 1)]
         length: u64,
         /// Where to write the results of the inspection If omitted, writes to stdout
+        #[clap(short = 'o', long, value_name = "OUTPUT")]
+        output: Option<PathBuf>,
+    },
+    /// Verify a locally anchored retained prefix and export its exact finality proof.
+    Finality {
+        /// Verify all heights from genesis through this height (1..=4096).
+        #[clap(short = 'H', long, value_name = "HEIGHT")]
+        height: u64,
+        /// Write the public JSON outside the inspected store (default: stdout).
         #[clap(short = 'o', long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
     },
@@ -87,6 +98,16 @@ impl<T: Write> RunArgs<T> for Args {
                 })?;
                 tui::success("Block inspection complete");
                 Ok(())
+            }
+            Command::Finality { height, output } => {
+                if args.from.is_some() {
+                    return Err(eyre!(
+                        "finality inspection always verifies from genesis; omit --from"
+                    ));
+                }
+                write_inspection_output(writer, &args.path_to_block_store, output, |out| {
+                    print_finality(out, &args.path_to_block_store, height)
+                })
             }
             Command::Sidecar { height, output } => {
                 tui::status(format!("Retrieving pipeline sidecar for height {height}"));
@@ -247,6 +268,63 @@ fn print_blockchain(
         next_height += batch_len_u64;
         remaining -= batch_len_u64;
     }
+    Ok(())
+}
+fn print_finality(writer: &mut dyn Write, block_store_path: &Path, height: u64) -> Outcome {
+    use iroha_data_model::bridge::{
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier,
+    };
+    if !(1..=MAX_FINALITY_PREFIX_HEIGHT).contains(&height) {
+        return Err(eyre!(
+            "finality height must be in 1..={MAX_FINALITY_PREFIX_HEIGHT}"
+        ));
+    }
+    let directory = resolve_block_store_dir(block_store_path)?;
+    let mut store = BlockStore::open_read_only(&directory)
+        .wrap_err("failed to open canonical Kura journals read-only")?;
+    let (block_header, finality_artifact) = store
+        .read_verified_v2_finality(1)
+        .wrap_err("failed to read verified genesis finality")?;
+    let local_context = finality_artifact.context_id();
+    let mut verifier = BridgeFinalityVerifier::with_context(
+        finality_artifact.height_context.network_id,
+        local_context,
+    );
+    let mut selected = BridgeFinalityProof {
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+        block_header,
+        finality_artifact,
+    };
+    verifier
+        .verify(&selected)
+        .wrap_err("invalid genesis finality")?;
+    for current in 2..=height {
+        let (block_header, finality_artifact) = store
+            .read_verified_v2_finality(current)
+            .wrap_err_with(|| format!("failed to read verified finality at height {current}"))?;
+        selected = BridgeFinalityProof {
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+            block_header,
+            finality_artifact,
+        };
+        verifier
+            .verify(&selected)
+            .wrap_err_with(|| format!("invalid finality successor at height {current}"))?;
+    }
+    // The local genesis context supplies comparison evidence only. No externally
+    // authenticated network identity or genesis context was supplied to this command.
+    let report = norito::json!({
+        "schema": "iroha.kura.finality-inspection.v1",
+        "verified_prefix_start": 1_u64,
+        "verified_prefix_end": height,
+        "external_trust_anchor": false,
+        "local_genesis_context_id": local_context,
+        "finality_proof": selected
+    });
+    let encoded = norito::json::to_json_bounded(&report, MAX_FINALITY_OUTPUT_BYTES)
+        .wrap_err("finality inspection exceeds output bound")?;
+    writer.write_all(encoded.as_bytes())?;
+    writer.write_all(b"\n")?;
     Ok(())
 }
 fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -> Outcome {
@@ -424,7 +502,7 @@ mod tests {
         // Prepare a temp store and write metadata for a canonical block.
         let temp = tempfile::tempdir().unwrap();
         let lane_config = LaneConfig::default();
-        let block_store_path = lane_config.primary().blocks_dir(temp.path());
+        let block_store_path = Kura::canonical_storage_paths(temp.path()).0;
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: iroha_config::kura::InitMode::Strict,
@@ -518,6 +596,65 @@ mod tests {
         let error = print_blockchain(&mut Vec::new(), temp.path(), 0, 1)
             .expect_err("oversized block must be rejected");
         assert!(error.to_string().contains("invalid wire length"));
+    }
+    #[test]
+    fn finality_inspection_rejects_invalid_height_before_store_access() {
+        let missing = Path::new("/missing-kagami-finality-store");
+        for height in [0, MAX_FINALITY_PREFIX_HEIGHT + 1, u64::MAX] {
+            let mut output = Vec::new();
+            let error = print_finality(&mut output, missing, height)
+                .expect_err("invalid height must fail before opening a store");
+            assert!(error.to_string().contains("finality height must be in"));
+            assert!(output.is_empty());
+        }
+    }
+    #[test]
+    fn finality_inspection_failure_preserves_output_and_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(directory.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+        append_block(&mut store, None);
+        let before = ["blocks.index", "blocks.data", "blocks.hashes"]
+            .map(|name| (name, fs::read(directory.path().join(name)).unwrap()));
+        let output = tempfile::tempdir().unwrap();
+        let output_path = output.path().join("finality.json");
+        fs::write(&output_path, b"previous output").unwrap();
+        let args = Args {
+            from: None,
+            path_to_block_store: directory.path().to_path_buf(),
+            command: Command::Finality {
+                height: 1,
+                output: Some(output_path.clone()),
+            },
+        };
+        let mut sink = BufWriter::new(Vec::new());
+        assert!(args.run(&mut sink).is_err(), "missing finality must fail");
+        assert!(sink.into_inner().unwrap().is_empty());
+        assert_eq!(fs::read(&output_path).unwrap(), b"previous output");
+        for (name, bytes) in before {
+            assert_eq!(fs::read(directory.path().join(name)).unwrap(), bytes);
+        }
+        assert!(!directory.path().join("v2_finality").exists());
+    }
+    #[test]
+    fn finality_command_rejects_output_inside_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(directory.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+        let output = directory.path().join("finality.json");
+        let args = Args {
+            from: None,
+            path_to_block_store: directory.path().to_path_buf(),
+            command: Command::Finality {
+                height: 1,
+                output: Some(output.clone()),
+            },
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("output inside store must fail");
+        assert!(error.to_string().contains("inside the block store"));
+        assert!(!output.exists());
     }
     #[test]
     fn output_is_atomic_and_cannot_target_the_block_store() {

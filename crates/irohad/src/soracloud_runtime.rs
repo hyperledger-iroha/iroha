@@ -24485,7 +24485,6 @@ mod tests {
             NonZeroU64::new(next_height).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -27324,7 +27323,7 @@ mod tests {
                 .saturating_add(1),
         )
         .expect("nonzero block height");
-        let header = BlockHeader::new(next_height, view.latest_block_hash(), None, None, 0, 0);
+        let header = BlockHeader::new(next_height, view.latest_block_hash(), None, 0, 0);
         drop(view);
         let mut block = state.block(header);
         {
@@ -30014,7 +30013,6 @@ mod tests {
             NonZeroU64::new(next_height).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -30189,7 +30187,6 @@ mod tests {
             .map_or(1, |header| header.height().get().saturating_add(1));
         let header = BlockHeader::new(
             NonZeroU64::new(next_height).expect("non-zero height"),
-            None,
             None,
             None,
             0,

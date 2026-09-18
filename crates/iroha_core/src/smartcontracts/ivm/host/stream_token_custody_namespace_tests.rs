@@ -328,7 +328,7 @@ fn stream_token_custody_native_state_survives_debug_apply_and_export_refusal() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut tx = block.transaction();
     let mut host = CoreHost::new(ALICE_ID.clone());
     host.set_local_contract_debug_execution();

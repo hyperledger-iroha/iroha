@@ -1347,9 +1347,26 @@ pub(super) mod tests {
         .commit_unchecked()
         .unpack(|_| {});
         let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
-        executed_block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach deterministic history-fixture results");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &executed_block,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            executed_block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach deterministic history-fixture results");
         let executed_block_wire = executed_block
             .encode_wire()
             .expect("encode executed history-fixture block");
@@ -2249,9 +2266,26 @@ pub(super) mod tests {
         .commit_unchecked()
         .unpack(|_| {});
         let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
-        executed_block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach an empty deterministic execution result");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &executed_block,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            executed_block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach an empty deterministic execution result");
         assert!(!executed_block.is_resultless_proposal());
         let executed_block_wire = executed_block
             .encode_wire()

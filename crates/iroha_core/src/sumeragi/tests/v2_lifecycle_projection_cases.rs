@@ -320,7 +320,6 @@ impl Fixture {
             NonZeroU64::new(self.round.height).expect("non-zero fixture height"),
             None,
             None,
-            None,
             1_000,
             self.round.view,
         );

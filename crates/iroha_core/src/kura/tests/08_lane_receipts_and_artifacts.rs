@@ -8,7 +8,11 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
     ) = MarkedLaneBlockFixture::committed().into_parts();
     let block_hash = block.hash();
     let block_height = block.header().height().get();
-    let expected_result = block.results().next().expect("dummy block result").clone();
+    let expected_result = block
+        .output_results()
+        .next()
+        .expect("dummy block result")
+        .clone();
     store_finalized_fixture_block(&kura, Arc::new(block));
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("persist lane application receipt");
@@ -195,6 +199,10 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
         let expected = kura
             .recover_lane_block_application_receipt_artifact(&proposal)
             .expect("recover expected receipt before fault injection");
+        let lane_entry = kura
+            .lane_storage_entry(lane_entry.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane_entry = &lane_entry;
         let (data_path, index_path) =
             Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
         failure.inject();
@@ -299,12 +307,12 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
             .format,
         LaneBlockApplicationReceiptArtifactFormat::Current,
     );
-    kura.install_lane_incarnation_marker_for_test(
+    kura.substitute_lane_marker_identity_for_test(
         &lane_entry,
         Hash::new(b"recreated-current-receipt-incarnation"),
         0,
     )
-    .expect("install recreated lane marker");
+    .expect("corrupt the original marker without publishing replacement geometry");
     assert!(
         kura.read_lane_block_application_receipt(lane_id, 1)
             .is_none(),
@@ -359,10 +367,15 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"kura-merge-receipt-height-context"),
     ));
-    let payload = canonical_terminal_payload_for_test(lane_entry, height_context_id, &signer, 0xC2);
+    let payload = canonical_terminal_payload_for_test(
+        lane_entry.lane_id,
+        lane_entry.dataspace_id,
+        height_context_id,
+        &signer,
+        0xC2,
+    );
     let descriptor = payload.origin_proposal.descriptor.clone();
-    kura.install_lane_incarnation_marker_for_test(lane_entry, descriptor.lane_incarnation, 0)
-        .expect("install merge receipt lane marker");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &signer);
     let local_peer = PeerId::new(signer.public_key().clone());
     kura.bind_local_peer_id(local_peer.clone())
@@ -377,16 +390,29 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         height_context_id,
         &signer,
     );
-    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) =
+        canonical_terminal_merge_carrier_for_test(vec![execution], 1);
     assert!(
         carrier.has_results(),
         "a canonical merge receipt carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
+        carrier.output_results().count(),
         carrier.external_entrypoints_cloned().count(),
         "the merge receipt carrier must contain one result per ordinary entrypoint"
     );
+    assert_eq!(
+        carrier.external_entrypoints_cloned().count(),
+        0,
+        "the canonical carrier references its certified merge inputs exactly once",
+    );
+    let certified_batch = merge_entry
+        .execution_batch
+        .as_ref()
+        .expect("merge receipt fixture has an execution batch");
+    assert_eq!(certified_batch.entrypoint_count, 1);
+    assert_eq!(certified_batch.lanes[0].entrypoints.len(), 1);
+    assert_eq!(certified_batch.lanes[0].results.len(), 1);
     assert_eq!(
         merge_entry
             .execution_batch
@@ -439,6 +465,10 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
             .format,
         LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
     );
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let frontier_path =
         Kura::lane_merge_application_frontier_path_for_entry(lane_entry, &kura.store_root());
     let frontier = kura
@@ -499,12 +529,12 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         descriptor.lane_incarnation,
     )
     .expect("a canonical merge receipt must release its historical execution from retirement");
-    kura.install_lane_incarnation_marker_for_test(
+    kura.substitute_lane_marker_identity_for_test(
         lane_entry,
         Hash::new(b"recreated-merge-receipt-incarnation"),
         descriptor.proposal_height,
     )
-    .expect("install recreated merge lane marker");
+    .expect("corrupt the original merge marker without publishing a new instance");
     assert!(
         kura.read_lane_block_application_receipt(descriptor.lane_id, descriptor.lane_block_height,)
             .is_none(),
@@ -519,10 +549,14 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         .is_err(),
         "committed merge evidence must not authorize a retired-incarnation receipt replay",
     );
+    let corrupted_before = snapshot_regular_files_recursively(temp_dir.path());
     kura.persist_merge_lane_block_application_receipts_from_committed_log(&merge_entry)
-        .expect(
-            "startup repair skips historical executions instead of repopulating active storage",
-        );
+        .expect_err("historical repair must authenticate the retained original instance marker");
+    assert_eq!(
+        snapshot_regular_files_recursively(temp_dir.path()),
+        corrupted_before,
+        "rejected historical repair preserves occupied marker corruption without writes"
+    );
     assert!(
         kura.read_lane_block_application_receipt(descriptor.lane_id, descriptor.lane_block_height,)
             .is_none(),
@@ -1571,6 +1605,10 @@ fn fast_execution_preflight_read_leaves_recovery_artifacts_byte_exact() {
         "Strict must read the stable lane execution preflight"
     );
 
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (input_data_path, input_index_path) =
         Kura::lane_block_execution_input_paths_for_entry(&lane_entry, temp_dir.path());
     let (preflight_data_path, preflight_index_path) =
@@ -1883,7 +1921,7 @@ fn strict_writer_pending_protocols_recover_only_at_startup() {
     let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
         .expect("explicit startup recovers ordinary raw and receipt protocols before any writer");
     reopened
-        .restore_lane_segments(&lane_config)
+        .restore_published_lane_geometry_for_test(&lane_config)
         .expect("restore all committed lane segments before completing startup-owned recovery");
     assert!(!raw_data_temp.exists() && !raw_index_temp.exists() && !intent.exists());
     assert!(receipt_data.is_file() && receipt_index.is_file());
@@ -1901,5 +1939,75 @@ fn strict_writer_pending_protocols_recover_only_at_startup() {
             .read_lane_application_receipt(lane_id, lane_height)
             .unwrap(),
         Some(expected)
+    );
+}
+
+#[test]
+fn merge_receipt_repair_distinguishes_historical_identity_from_invalid_current_marker() {
+    let (directory, config) =
+        kura_storage_fixture("receipt identity classification", BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open canonical storage before lane publication");
+    let merge_entry =
+        merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0xA1; 32], [0xA2; 32]));
+    let execution = merge_entry.execution_batch.as_ref().unwrap().lanes[0].clone();
+    let descriptor = &execution.proposal.descriptor;
+    kura.bind_lane_storage_network(execution.autonomous_network_id)
+        .unwrap();
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
+    );
+    kura.restore_published_lane_geometry_for_test(&lane_config)
+        .unwrap();
+    assert!(
+        kura.merge_lane_execution_targets_active_geometry(&execution)
+            .unwrap()
+    );
+    for field in 0..3 {
+        let mut historical = execution.clone();
+        match field {
+            0 => historical.autonomous_network_id = test_network_id(b"another execution network"),
+            1 => historical.proposal.descriptor.dataspace_id = DataSpaceId::new(77),
+            2 => {
+                historical.proposal.descriptor.lane_incarnation =
+                    Hash::new(b"another retained incarnation")
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !kura
+                .merge_lane_execution_targets_active_geometry(&historical)
+                .unwrap(),
+            "another identity cannot target the current instance"
+        );
+    }
+    let exact = kura.lane_storage_entry(descriptor.lane_id).unwrap();
+    let mut backdated = execution.clone();
+    backdated.proposal.descriptor.proposal_height = exact.activation_height;
+    assert!(
+        kura.merge_lane_execution_targets_active_geometry(&backdated)
+            .is_err(),
+        "a proposal outside the same incarnation's activation bound is invalid, not historical"
+    );
+    let marker = exact
+        .blocks_dir(kura.store_root())
+        .join(".lane-incarnation.norito");
+    fs::write(&marker, b"occupied marker corruption").unwrap();
+    let before = snapshot_regular_files_recursively(directory.path());
+    assert!(
+        kura.merge_lane_execution_targets_active_geometry(&execution)
+            .is_err(),
+        "same-identity marker corruption must propagate as repair failure"
+    );
+    assert_eq!(snapshot_regular_files_recursively(directory.path()), before);
+    kura.lane_storage_entries.lock().remove(&descriptor.lane_id);
+    assert!(
+        !kura
+            .merge_lane_execution_targets_active_geometry(&execution)
+            .unwrap(),
+        "absent current reference does not grant current-instance repair"
     );
 }

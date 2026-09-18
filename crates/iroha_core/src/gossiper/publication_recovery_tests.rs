@@ -17,17 +17,16 @@ fn gossip_publication_block(
             });
         });
     let mut block: iroha_data_model::block::SignedBlock = valid.into();
-    block
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[],
-            Vec::new(),
-            BTreeMap::new(),
-            Vec::new(),
-            iroha_data_model::nexus::AxtPolicySnapshot::default(),
-        )
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, BTreeMap::new(),
+Vec::new(),
+iroha_data_model::nexus::AxtPolicySnapshot::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .unwrap();
-    block.set_committed_fragment_count(0);
+
     block
 }
 fn retained_publication_message(

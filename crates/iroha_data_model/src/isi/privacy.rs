@@ -969,6 +969,18 @@ mod tests {
             pending_protocol_limits_tightening: None,
         }
     }
+    #[test]
+    #[ignore = "opt-in capture of the current privacy activation instruction"]
+    fn capture_current_privacy_activation_instruction_identity_frames() {
+        let row = crate::isi::generated_record_identity_tests::capture(
+            RegisterPrivacyProtocolActivationV1::new(activation()),
+        );
+        println!(
+            "PRIVACY_ACTIVATION_INSTRUCTION_CAPTURE={}",
+            norito::json::to_json(&row).expect("encode exact activation identity capture"),
+        );
+    }
+
     fn envelope() -> PrivacyProofEnvelopeV1 {
         let activation = activation();
         let context = PrivacyStatementContextV1 {

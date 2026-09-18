@@ -14,7 +14,7 @@ state_test! { sync startup_sumeragi_key_policy_matches_canonical_state_without_m
     let before = norito::json::to_value(&state).expect("canonical nondefault fixture State");
     state.validate_sumeragi_key_policy(canonical.clone()).expect("retained nondefault policy matches");
     assert_eq!(norito::json::to_value(&state).expect("State after validation"), before);
-    let hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let hash = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     {
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.key_allowed_algorithms.reverse();
@@ -23,7 +23,7 @@ state_test! { sync startup_sumeragi_key_policy_matches_canonical_state_without_m
     let before = norito::json::to_value(&state).expect("equivalent algorithm order");
     state.validate_sumeragi_key_policy(canonical).expect("algorithm order is not policy");
     assert_eq!(norito::json::to_value(&state).expect("State after validation"), before);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state), hash);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"), hash);
 }
 
 state_test! { sync startup_sumeragi_key_policy_rejects_each_mismatch_without_mutation
@@ -53,7 +53,17 @@ state_test! { sync startup_sumeragi_key_policy_rejects_each_mismatch_without_mut
 
 fn snapshot_owner_policy_fixture() -> (
     tempfile::TempDir,
-    State,
+    Box<State>,
+    iroha_config::parameters::actual::Nexus,
+) {
+    snapshot_owner_policy_fixture_with_stored_history(false)
+}
+
+fn snapshot_owner_policy_fixture_with_stored_history(
+    store_history: bool,
+) -> (
+    tempfile::TempDir,
+    Box<State>,
     iroha_config::parameters::actual::Nexus,
 ) {
     let directory = tempfile::tempdir().expect("owner policy fixture directory");
@@ -100,6 +110,7 @@ fn snapshot_owner_policy_fixture() -> (
     state
         .set_nexus_from_config(configured.clone())
         .expect("install configured owner policy before genesis");
+    let configured_predecessor = state.canonical_runtime.view().get().clone();
     let (validator, keypair) = bls_account_in("snapshot-owner");
     insert_active_public_lane_validator_for_test(
         &state,
@@ -117,7 +128,62 @@ fn snapshot_owner_policy_fixture() -> (
             .activation_height = 1;
         world.commit();
     }
+    if store_history {
+        // Replacement rebuilds DA indexes from the exact canonical Kura prefix.
+        // Store checked empty, result-bearing bodies for this structural history;
+        // these signatures authenticate their bodies, not execution or finality.
+        let keypair = crate::state::checked_keypair();
+        let policy = crate::da::proof_policy_bundle(&state.nexus_snapshot().lane_config);
+        let mut previous = None;
+        for height in 1_u64..=5 {
+            let mut header = BlockHeader::new(
+                NonZeroU64::new(height).unwrap(),
+                previous,
+                None,
+                height * 100,
+                0,
+            );
+            header.set_confidential_features(Some(
+                iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST,
+            ));
+            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+            builder.set_da_proof_policies(Some(policy.clone()));
+            let mut carrier = builder
+                .try_build_with_signature(0, keypair.private_key())
+                .expect("structural predecessor signs its exact proposal body");
+            carrier
+                .set_execution_outputs(
+                    Vec::new(),
+                    0,
+                    BTreeMap::new(),
+                    Vec::new(),
+                    AxtPolicySnapshot::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
+                )
+                .expect("checked empty typed output collection");
+            carrier
+                .validate_proposal_commitments()
+                .expect("complete canonical proposal");
+            carrier
+                .validate_execution_result_structure()
+                .expect("complete canonical output structure");
+            carrier
+                .validate_output_merkle_cache()
+                .expect("complete canonical output caches");
+            previous = Some(carrier.hash());
+            kura.store_block(Arc::new(carrier))
+                .expect("persist actual predecessor body");
+        }
+    }
     seed_committed_height_for_state_test(&state, 5);
+    // The existing fixture prepopulates World and carrier-hash metadata; it does
+    // not execute five carriers. Retain the exact pre-setup runtime policy and
+    // lineage, then let the explicit metadata helper supply both sample cuts.
+    let mut runtime = state.canonical_runtime.block();
+    *runtime.get_mut() = configured_predecessor;
+    runtime.commit();
     seed_autoscale_sample_history_for_snapshot_test(&state);
     state
         .world
@@ -215,7 +281,8 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
     let snapshot = norito::json::to_value(&state).expect("canonical snapshot");
     let runtime = snapshot.as_object().expect("State object")
         .get("nexus_runtime").expect("runtime").as_object().expect("runtime object");
-    let policy = runtime.get("owner_policy").expect("required owner policy");
+    let policy = runtime.get("blocks").expect("current runtime").as_object().expect("runtime record")
+        .get("owner_policy").expect("required owner policy");
     let fields = policy.as_object().expect("owner policy object")
         .keys().cloned().collect::<Vec<_>>();
     assert_eq!(fields.len(), 9);
@@ -223,6 +290,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
         let mut missing = snapshot.clone();
         let _ = missing.as_object_mut().expect("State object")
             .get_mut("nexus_runtime").expect("runtime").as_object_mut().expect("runtime object")
+            .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
             .get_mut("owner_policy").expect("policy").as_object_mut().expect("policy object")
             .remove(&field);
         assert!(deserialize_state_snapshot_value_with_kura(missing, Arc::clone(&state.kura)).is_err(),
@@ -231,6 +299,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
     let mut absent = snapshot.clone();
     let _ = absent.as_object_mut().expect("State object")
         .get_mut("nexus_runtime").expect("runtime").as_object_mut().expect("runtime object")
+            .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
         .remove("owner_policy");
     assert!(deserialize_state_snapshot_value_with_kura(absent, Arc::clone(&state.kura)).is_err());
     for (field, invalid) in [
@@ -248,6 +317,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
         let mut changed = snapshot.clone();
         let _ = changed.as_object_mut().expect("State object")
             .get_mut("nexus_runtime").expect("runtime").as_object_mut().expect("runtime object")
+            .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
             .get_mut("owner_policy").expect("policy").as_object_mut().expect("policy object")
             .insert(field.to_owned(), invalid);
         assert!(deserialize_state_snapshot_value_with_kura(changed, Arc::clone(&state.kura)).is_err(),
@@ -256,21 +326,100 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
     let mut noncanonical = snapshot;
     let dataspaces = noncanonical.as_object_mut().expect("State object")
         .get_mut("nexus_runtime").expect("runtime").as_object_mut().expect("runtime object")
+            .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
         .get_mut("owner_policy").expect("policy").as_object_mut().expect("policy object")
         .get_mut("dataspaces").expect("dataspaces");
     let norito::json::Value::Array(entries) = dataspaces else { panic!("dataspace array"); };
     entries.reverse();
     assert!(deserialize_state_snapshot_value_with_kura(noncanonical, Arc::clone(&state.kura)).is_err());
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     let mut descriptions = state.nexus_snapshot().dataspace_catalog.entries().to_vec();
     for entry in &mut descriptions {
         entry.description = Some("different local operator description".to_owned());
     }
     state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(descriptions)
         .expect("description-only catalog update");
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state), before,
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"), before,
         "operator-facing descriptions must not affect the canonical commitment");
-    state.nexus.write().staking.max_validators = nonzero!(8_u32);
-    assert_ne!(crate::snapshot::canonical_state_snapshot_hash(&state), before,
+    // Structural commitment sensitivity, not a live policy transition: mutate
+    // the actual current record while retaining the exact predecessor.
+    let mut changed_owner = state.canonical_runtime.view().get().clone();
+    changed_owner.owner_policy.max_validators = 8;
+    state.canonical_runtime.replace_current_preserving_predecessor(changed_owner);
+    assert_ne!(crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"), before,
         "the owner policy must be authenticated by the canonical snapshot commitment");
+}
+
+state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roundtrips_both_cuts
+    let (_directory, state, _) = snapshot_owner_policy_fixture_with_stored_history(true);
+    let current = state.canonical_runtime.view().get().clone();
+    let predecessor = state.canonical_runtime.predecessor_view().get().clone()
+        .expect("explicitly published runtime predecessor fixture");
+    assert_eq!(current.autoscale_sample_history.last().unwrap().block_height, 5);
+    assert_eq!(predecessor.autoscale_sample_history.last().unwrap().block_height, 4);
+    let snapshot = norito::json::to_value(&state).expect("complete State snapshot");
+    let restored = deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura))
+        .expect("restore complete State with both runtime cuts");
+    assert_eq!(restored.canonical_runtime.view().get(), &current);
+    assert_eq!(restored.canonical_runtime.predecessor_view().get(), &Some(predecessor.clone()));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_bytes_for_tests(&restored),
+        crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
+        "complete canonical State projection survives restore");
+    {
+        let replacement = restored.block_and_revert(BlockHeader::new(nonzero!(5_u64), None, None, 500, 0));
+        assert_eq!(replacement.canonical_runtime.get(), &predecessor);
+        assert_eq!(replacement.autoscale_sample_history.back().unwrap().block_height, 4);
+        assert_eq!(replacement.lane_incarnation_lineage, predecessor.lineage_projection());
+    }
+    assert_eq!(restored.canonical_runtime.view().get(), &current,
+        "abandoned replacement cannot alter either retained cut");
+    assert_eq!(restored.canonical_runtime.predecessor_view().get(), &Some(predecessor.clone()));
+
+    let mut wrong_sample = predecessor.clone();
+    wrong_sample.autoscale_sample_history.last_mut().unwrap().block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"wrong runtime predecessor sample"));
+    let mut future_lineage = predecessor.clone();
+    future_lineage.lane_incarnation_lineage.last_mut().unwrap().activation_height = 5;
+    let mut wrong_physical_policy = predecessor.clone();
+    wrong_physical_policy.owner_policy.dataspaces.last_mut().unwrap().fault_tolerance += 1;
+    for (label, invalid) in [
+        ("missing predecessor", norito::json::Value::Null),
+        ("current record reused as predecessor", norito::json::to_value(&current).unwrap()),
+        ("wrong predecessor sample hash", norito::json::to_value(&wrong_sample).unwrap()),
+        ("future predecessor lineage", norito::json::to_value(&future_lineage).unwrap()),
+        ("predecessor physical policy disagrees with World", norito::json::to_value(&wrong_physical_policy).unwrap()),
+    ] {
+        let mut corrupt = snapshot.clone();
+        let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap()
+            .as_object_mut().unwrap().insert("revert".to_owned(), invalid);
+        let error = deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura))
+            .err().expect(label);
+        assert!(error.to_string().contains("nexus_runtime"), "{label}: {error}");
+    }
+    let fields = norito::json::to_value(&predecessor.owner_policy).unwrap()
+        .as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 9);
+    for field in fields {
+        let mut corrupt = snapshot.clone();
+        let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap().as_object_mut().unwrap()
+            .get_mut("revert").unwrap().as_object_mut().unwrap().get_mut("owner_policy").unwrap()
+            .as_object_mut().unwrap().remove(&field);
+        assert!(deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura)).is_err(),
+            "predecessor owner policy field {field} is mandatory");
+    }
+}
+
+state_test! { sync snapshot_runtime_height_zero_requires_absent_predecessor
+    let state = blank_test_state();
+    let snapshot = norito::json::to_value(&state).expect("height-zero State snapshot");
+    let restored = deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura))
+        .expect("height-zero State with no runtime undo");
+    assert!(restored.canonical_runtime.predecessor_view().get().is_none());
+    assert_eq!(restored.canonical_runtime.view().get(), state.canonical_runtime.view().get());
+    let mut corrupt = snapshot;
+    let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap().as_object_mut().unwrap()
+        .insert("revert".to_owned(), norito::json::to_value(state.canonical_runtime.view().get()).unwrap());
+    let error = deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura))
+        .err().expect("height zero cannot advertise an earlier runtime cut");
+    assert!(error.to_string().contains("height-zero runtime cannot retain predecessor undo"));
 }

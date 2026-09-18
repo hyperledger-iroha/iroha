@@ -2741,3 +2741,132 @@ fn only_temporary_finalized_ledger_loss_is_a_retryable_tick_error() {
         &ProviderIngestRuntimeErrorV1::InvalidFinalizedPage
     ));
 }
+
+#[test]
+fn committed_provider_observation_uses_only_the_matching_network_output() {
+    use iroha_data_model::{
+        block::{
+            builder::BlockBuilder,
+            execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, TimeExecutionOutputV1,
+                TimeInvocationV1, TriggerUseV1,
+            },
+            output_budget::ExecutionOutputLimits,
+        },
+        events::time::{TimeEvent, TimeInterval},
+        transaction::{
+            error::{TransactionLimitError, TransactionRejectionReason},
+            signed::TransactionResult,
+        },
+        trigger::DataTriggerStep,
+    };
+    let key = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519).unwrap();
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"provider observation fixture network",
+    )));
+    let transaction = |time| {
+        let mut builder = TransactionBuilder::new(
+            network_id,
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(time));
+        builder.sign(key.private_key())
+    };
+    let rejected = transaction(10);
+    let accepted = transaction(11);
+    let unknown = transaction(12);
+    let mut builder = BlockBuilder::new(BlockHeader::new(
+        std::num::NonZeroU64::new(2).unwrap(),
+        Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"provider parent",
+        ))),
+        None,
+        20,
+        0,
+    ));
+    builder.push_transaction(rejected.clone());
+    builder.push_transaction(accepted.clone());
+    let mut block = builder.build_with_signature(0, key.private_key());
+    assert_eq!(
+        observe_committed_provider_transaction(&block, accepted.hash()),
+        ProviderIngestTransactionObservationV1::Unavailable,
+        "a signed proposal has no committed output",
+    );
+    let trigger_id: iroha_data_model::trigger::TriggerId =
+        "provider_observation_time".parse().unwrap();
+    let outputs = vec![
+        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Err(TransactionRejectionReason::LimitCheck(
+                TransactionLimitError {
+                    reason: "fixture rejection".to_owned(),
+                },
+            ))),
+            completions: Vec::new(),
+        }),
+        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 1,
+            result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        }),
+        ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 0,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 19,
+                        length_ms: 1,
+                    },
+                },
+                trigger: TriggerUseV1 {
+                    trigger_id: trigger_id.clone(),
+                    registered_at_height: 1,
+                    action_hash: Hash::new(b"structural provider fixture action"),
+                },
+            },
+            result: TransactionResult::new(Ok(vec![DataTriggerStep {
+                id: trigger_id,
+                instructions: iroha_data_model::transaction::signed::ExecutionStep(
+                    Vec::new().into(),
+                ),
+            }])),
+            failure_root: None,
+            completions: Vec::new(),
+        }),
+    ];
+    // A finite structural model fixture grants no execution or finality authority.
+    let limits = ExecutionOutputLimits {
+        max_outputs: 3,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 3 * 1024 * 1024,
+        max_executed_wire_bytes: 4 * 1024 * 1024,
+    };
+    block
+        .set_execution_outputs(
+            outputs,
+            0,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &limits,
+        )
+        .unwrap();
+    assert_eq!(block.network_entrypoint_count(), 2);
+    assert_eq!(block.execution_outputs().len(), 3);
+    assert_eq!(
+        observe_committed_provider_transaction(&block, rejected.hash()),
+        ProviderIngestTransactionObservationV1::CommittedRejected,
+    );
+    assert_eq!(
+        observe_committed_provider_transaction(&block, accepted.hash()),
+        ProviderIngestTransactionObservationV1::CommittedSuccess,
+    );
+    assert_eq!(
+        observe_committed_provider_transaction(&block, unknown.hash()),
+        ProviderIngestTransactionObservationV1::Unavailable,
+        "a successful Time output cannot stand in for an absent Network input",
+    );
+}

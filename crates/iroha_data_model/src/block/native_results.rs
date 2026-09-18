@@ -1,28 +1,57 @@
-//! Structural native source/output joins for the canonical global result owner.
-//!
-//! Additional protocol/nested FASTPQ call keys remain untrusted structural output;
-//! Core's actual captured-source inventory and execution witness authenticate them.
-//! This module grants neither native source authority nor global execution validity.
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use iroha_crypto::{Hash, HashOf};
-
-use super::SignedBlock;
-use crate::{
-    fastpq::TransferTranscript, transaction::signed::TransactionResult,
-    trigger::TimeTriggerEntrypoint,
+//! Structural joins for the sole global output owner. No execution authority is minted.
+use super::{
+    SignedBlock,
+    execution_output::{ExecutionOutputV1, validate_execution_outputs_v1},
 };
-
+use crate::{fastpq::TransferTranscript, transaction::signed::TransactionEntrypoint};
+use iroha_crypto::{Hash, HashOf, MerkleTree};
+use std::collections::BTreeMap;
 impl SignedBlock {
-    /// Check the native input projection and its actual canonical full outputs.
-    ///
-    /// Results remain stored once in `BlockResult`. This checks cardinality
-    /// and structural ownership only: first-carrier finality, Decision signatures,
-    /// execution replay and every captured FASTPQ source require Core validation.
-    ///
+    /// Check every payload commitment without changing the signed proposal header.
     /// # Errors
-    /// Rejects mixed/malformed native source, absent/misaligned results, duplicate canonical call owners or malformed transcript vectors.
+    /// Rejects mixed native inputs or any absent, foreign or stale payload commitment.
+    pub fn validate_proposal_commitments(&self) -> Result<(), String> {
+        let header = self.header();
+        let external = MerkleTree::root_from_typed_leaves(
+            self.external_entrypoints_slice()
+                .iter()
+                .map(TransactionEntrypoint::hash),
+        );
+        if header.merkle_root() != external
+            || header.execution_context_hash() != self.execution_context().map(HashOf::new)
+            || header.da_proof_policies_hash() != self.da_proof_policies().map(HashOf::new)
+            || header.da_commitments_hash()
+                != self
+                    .da_commitments()
+                    .and_then(crate::da::commitment::DaCommitmentBundle::merkle_commitment)
+            || header.da_pin_intents_hash()
+                != self
+                    .da_pin_intents()
+                    .and_then(crate::da::pin_intent::DaPinIntentBundle::merkle_commitment)
+            || header.npos_effects_hash() != self.npos_consensus_effects().map(HashOf::new)
+        {
+            return Err("proposal header commitments differ from their actual payload".into());
+        }
+        self.validate_native_lane_source()
+    }
+    /// Validate source/phase/cardinality and transcript-vector shape, not actual execution.
+    /// # Errors
+    /// Rejects missing results or any structural ownership disagreement.
+    pub fn validate_execution_result_structure(&self) -> Result<(), String> {
+        self.validate_proposal_commitments()?;
+        let result = self
+            .result
+            .as_ref()
+            .ok_or("block has no execution outputs")?;
+        result
+            .axt_policy_snapshot
+            .validate()
+            .map_err(|error| error.to_string())?;
+        self.validate_output_rows(&result.outputs, &result.fastpq_transcripts)
+    }
+    /// Check native source/output structure at the existing source-specific boundary.
+    /// # Errors
+    /// Rejects a native carrier lacking valid actual global outputs.
     pub fn validate_native_lane_results(&self) -> Result<(), String> {
         if self
             .execution_context()
@@ -31,17 +60,8 @@ impl SignedBlock {
         {
             return Ok(());
         }
-        let result = self
-            .result
-            .as_ref()
-            .ok_or_else(|| "native carrier has no actual global results".to_owned())?;
-        self.validate_native_output_rows(
-            &result.time_triggers,
-            &result.transaction_results,
-            &result.fastpq_transcripts,
-        )
+        self.validate_execution_result_structure()
     }
-
     pub(super) fn validate_native_lane_source(&self) -> Result<(), String> {
         let Some(context) = self.execution_context() else {
             return Ok(());
@@ -62,47 +82,20 @@ impl SignedBlock {
         Ok(())
     }
 
-    pub(super) fn validate_native_output_rows(
+    pub(super) fn validate_output_rows(
         &self,
-        time: &[TimeTriggerEntrypoint],
-        results: &[TransactionResult],
+        outputs: &[ExecutionOutputV1],
         transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
     ) -> Result<(), String> {
-        let Some(context) = self.execution_context() else {
-            return Ok(());
-        };
-        let Some(batch) = context.native_lane_decisions.as_ref() else {
-            return Ok(());
-        };
-        self.validate_native_lane_source()?;
-        if results.len() != batch.groups.len() + time.len() {
-            return Err("native and Time results do not align with their sole input vector".into());
+        validate_execution_outputs_v1(outputs, self.hash(), self.header().height().get(), self)?;
+        if transcripts
+            .iter()
+            .any(|(owner, rows)| rows.is_empty() || rows.iter().any(|row| row.batch_hash != *owner))
+        {
+            return Err("FASTPQ vector is empty or differs from its actual call key".into());
         }
-        // Every vector has one actual execution-call owner. Additional protocol
-        // and nested execution keys are allowed here, not authenticated here.
-        if transcripts.iter().any(|(owner, values)| {
-            values.is_empty()
-                || values
-                    .iter()
-                    .any(|transcript| transcript.batch_hash != *owner)
-        }) {
-            return Err(
-                "global FASTPQ vector is empty or differs from its execution-call key".into(),
-            );
-        }
-        // Actual Time call identities are assigned by Core per invocation. Equal
-        // Time display entries are valid and cannot be used as evidence-map keys.
-        let mut native_calls = BTreeSet::new();
-        for group in &batch.groups {
-            if !native_calls.insert(Hash::from(
-                group.payload.input.entrypoint.execution_call_hash(),
-            )) {
-                return Err("native inputs repeat an execution-call owner".into());
-            }
-        }
-        // There is deliberately no proposal output claim to compare here. Missing
-        // or substituted actual output is rejected by canonical execution replay
-        // and the globally certified executed-wire commitment, not this shape check.
+        // Extra protocol/nested keys remain structural, not authenticated, here.
+        // Core's actual source inventory and exact global executed wire authenticate them.
         Ok(())
     }
 }

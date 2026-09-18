@@ -66,3 +66,6 @@ mod packed_struct_boundaries;
 mod packed_struct_self_delimiting;
 #[path = "../prelude_macros.rs"]
 mod prelude_macros;
+
+#[path = "../json_object_field_order.rs"]
+mod json_object_field_order;

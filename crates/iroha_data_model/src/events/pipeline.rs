@@ -448,7 +448,6 @@ mod tests {
                 height,
                 prev_block_hash: None,
                 merkle_root: Some(merkle_root),
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,

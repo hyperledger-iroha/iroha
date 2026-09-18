@@ -78,7 +78,6 @@ fn governance_rejections_are_counted_once_at_the_authoritative_isi_boundary() {
             std::num::NonZeroU64::new(1).expect("nonzero block height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -453,7 +452,6 @@ fn initial_executor_archive_block(state: &State) -> crate::state::StateBlock<'_>
         std::num::NonZeroU64::new(2).expect("post-genesis archive height"),
         Some(archive_location_genesis_header().hash()),
         None,
-        None,
         1_500,
         0,
     ))
@@ -642,7 +640,6 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).expect("replay height"),
         Some(genesis_hash),
-        None,
         None,
         1_500,
         0,
@@ -989,7 +986,6 @@ fn exact_release_query_fixture(
 ) -> (State, MusubiExactReleaseQueryV1) {
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero genesis height"),
-        None,
         None,
         None,
         0,
@@ -1475,14 +1471,16 @@ fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::
         .external_entrypoints_cloned()
         .map(|entrypoint| entrypoint.hash())
         .collect::<Vec<_>>();
-    genesis
-        .set_transaction_results(
-            Vec::new(),
-            &entrypoints,
-            vec![Ok(
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&genesis, &entrypoints, vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
-        )
+            )]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+genesis.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("retain the successful log-only genesis result");
     let signature = iroha_data_model::block::BlockSignature::new(
         0,
@@ -1496,13 +1494,13 @@ fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::
         genesis.header().creation_time(),
         std::time::Duration::from_millis(creation_time_ms)
     );
-    assert_eq!(genesis.results().len(), 1);
-    assert!(genesis.results().all(|result| result.as_ref().is_ok()));
+    assert_eq!(genesis.output_results().len(), 1);
+    assert!(genesis.output_results().all(|result| result.as_ref().is_ok()));
     genesis
-        .validate_entrypoint_merkle_cache()
+        .validate_proposal_commitments()
         .expect("canonical genesis entrypoints");
     genesis
-        .validate_result_merkle_cache()
+        .validate_output_merkle_cache()
         .expect("canonical genesis results");
     genesis
 }
@@ -1534,7 +1532,6 @@ fn archive_location_replay_block(state: &State) -> crate::state::StateBlock<'_> 
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).expect("nonzero replay height"),
         Some(archive_location_genesis_header().hash()),
-        None,
         None,
         2,
         0,
@@ -2207,7 +2204,6 @@ fn availability_refresh_preflights_resolver_rows_and_packages_before_mutation() 
         std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2309,7 +2305,6 @@ fn availability_refresh_rejects_an_invalid_archive_before_mutation() {
         std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2359,7 +2354,6 @@ fn availability_refresh_rejects_a_mismatched_archive_identity_before_mutation() 
     );
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
-        None,
         None,
         None,
         0,
@@ -2426,7 +2420,6 @@ fn availability_refresh_preflights_location_validation_and_identity() {
         std::num::NonZeroU64::new(2).expect("nonzero fixture height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2487,7 +2480,6 @@ fn archive_retention_uses_cached_finalized_time_for_the_exact_snapshot() {
     const FINALIZED_TIME_MS: u64 = 1_700_000_000_000;
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("nonzero finalized height"),
-        None,
         None,
         None,
         FINALIZED_TIME_MS,

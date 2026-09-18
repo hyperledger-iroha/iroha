@@ -291,9 +291,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         .evict_block_bodies_for_bench(payload_len)
         .expect("evict historical block body");
     assert!(freed >= payload_len);
-    let historical_sidecar_path = lane_config
-        .primary()
-        .blocks_dir(&kura_store_dir)
+    let historical_sidecar_path = Kura::canonical_storage_paths(&kura_store_dir).0
         .join("da_blocks")
         .join(format!("{:020}.norito", historical_height.get()));
     assert!(
@@ -355,7 +353,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     drop(state);
     drop(kura);
 
-    let merge_path = lane_config.primary().merge_log_path(&kura_store_dir);
+    let merge_path = Kura::canonical_storage_paths(&kura_store_dir).1;
     let query_index_path = kura_store_dir.join("query-index-status.norito");
     let query_projection_path = kura_store_dir.join("query-projection-checkpoint.norito");
     let deferred_bytes = b"left for Strict recovery";
@@ -431,8 +429,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         unbounded_blocks,
         iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
     ));
-    let unbounded_transactions = crate::smartcontracts::ValidQuery::execute(
-        iroha_data_model::query::transaction::prelude::FindTransactions,
+    let unbounded_transactions = crate::smartcontracts::isi::tx::execute_transactions_fixture(
         iroha_data_model::query::dsl::CompoundPredicate::PASS,
         &state_view,
     )

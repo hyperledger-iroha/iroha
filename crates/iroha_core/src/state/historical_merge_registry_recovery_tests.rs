@@ -72,11 +72,13 @@ fn historical_autonomous_merge_recovers_certified_carrier_before_world_replay_on
             .expect("fresh World marker lookup"),
         "validating durable history must not publish its future execution effects",
     );
-    let before = crate::snapshot::canonical_state_snapshot_hash(&cold);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&cold)
+        .expect("stable valid fixture snapshot");
     cold.recover_merge_ledger_from_kura()
         .expect("repeat authenticated cold recovery remains read-only");
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&cold),
+        crate::snapshot::canonical_state_snapshot_hash(&cold)
+            .expect("stable valid fixture snapshot"),
         before
     );
     assert!(cold.merge_ledger().snapshot().is_empty());
@@ -137,7 +139,8 @@ fn live_autonomous_merge_requires_exact_pending_queue_plan_owner_on_consensus_st
             .unwrap(),
         QueuePlanAdmissionRegistryMatch::Absent,
     );
-    let absent = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let absent = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     assert_merge_binding_error(
         state
             .validate_merge_execution_batch(
@@ -149,7 +152,8 @@ fn live_autonomous_merge_requires_exact_pending_queue_plan_owner_on_consensus_st
         MERGE_REGISTRY_BINDING_ERROR,
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         absent
     );
 
@@ -172,7 +176,8 @@ fn live_autonomous_merge_requires_exact_pending_queue_plan_owner_on_consensus_st
             .unwrap(),
         QueuePlanAdmissionRegistryMatch::Conflict,
     );
-    let conflicting = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let conflicting = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     assert_merge_binding_error(
         state
             .validate_merge_execution_batch(
@@ -184,7 +189,8 @@ fn live_autonomous_merge_requires_exact_pending_queue_plan_owner_on_consensus_st
         MERGE_REGISTRY_BINDING_ERROR,
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         conflicting
     );
 }
@@ -200,7 +206,8 @@ fn autonomous_merge_rejects_reforged_reservation_bindings_on_consensus_stack() {
         .expect("autonomous execution");
     let reservation = decode_canonical_merge_reservation_key(&batch.lanes[0].reservation_keys[0])
         .expect("exact native reservation");
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     for field in ["admission", "route", "incarnation", "view"] {
         let mut forged = reservation.clone();
         match field {
@@ -245,7 +252,8 @@ fn autonomous_merge_rejects_reforged_reservation_bindings_on_consensus_stack() {
             "forged {field} must not acquire the recovery-only Historical authority"
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&state),
+            crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot"),
             before
         );
     }
@@ -332,7 +340,8 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             .expect("exactly classified restored owner evidence"),
             expected,
         );
-        let before = crate::snapshot::canonical_state_snapshot_hash(&restored);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&restored)
+            .expect("stable valid fixture snapshot");
         let cached = restored.merge_ledger().snapshot();
         let expected_epoch = restored.merge_admission.read().expected_epoch();
         assert_merge_binding_error(
@@ -342,7 +351,8 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             MERGE_REGISTRY_BINDING_ERROR,
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&restored),
+            crate::snapshot::canonical_state_snapshot_hash(&restored)
+                .expect("stable valid fixture snapshot"),
             before
         );
         assert_eq!(restored.merge_ledger().snapshot(), cached);

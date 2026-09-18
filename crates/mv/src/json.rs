@@ -107,6 +107,33 @@ impl<const N: usize> JsonKeyCodec for [u8; N] {
 }
 /// Delimiter for tuple keys (chosen outside the ASCII printable range to avoid collisions).
 const TUPLE_KEY_SEPARATOR: char = '\u{1f}';
+impl<K: JsonKeyCodec> JsonKeyCodec for (K, u64, u64) {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut first = String::new();
+        self.0.encode_json_key(&mut first);
+        // Keep the first key's JSON quoting: embedded separators are escaped,
+        // and the two integer coordinates remain separate, exact components.
+        let joined = format!(
+            "{first}{TUPLE_KEY_SEPARATOR}{}{TUPLE_KEY_SEPARATOR}{}",
+            self.1, self.2
+        );
+        json::write_json_string(&joined, out);
+    }
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.rsplitn(3, TUPLE_KEY_SEPARATOR);
+        let invalid =
+            || json::Error::Message("expected a quoted key and two u64 coordinates".into());
+        let third = parts.next().ok_or_else(invalid)?;
+        let second = parts.next().ok_or_else(invalid)?;
+        let first = parts.next().ok_or_else(invalid)?;
+        let first: String = json::from_str(first)?;
+        Ok((
+            K::decode_json_key(&first)?,
+            u64::decode_json_key(second)?,
+            u64::decode_json_key(third)?,
+        ))
+    }
+}
 impl JsonKeyCodec for (String, String) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + self.1.len() + 1);
@@ -322,6 +349,7 @@ where
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Storage {
+            publication: crate::publication::Publication::new(),
             revert: EbrCell::new(revert),
             blocks,
         })
@@ -418,6 +446,7 @@ where
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Cell {
+            publication: crate::publication::Publication::new(),
             revert: EbrCell::new(revert),
             blocks: EbrCell::new(blocks),
         })
@@ -813,6 +842,32 @@ mod tests {
         let json = to_json(&storage).expect("serialize hex key");
         let decoded: Storage<[u8; 4], i32> = from_json(&json).expect("deserialize hex key");
         assert_eq!(decoded.view().get(&[0xAA, 0xBB, 0xCC, 0xDD]), Some(&7));
+    }
+    #[test]
+    fn coordinate_tuple_keys_preserve_escaping_limits_and_undo() {
+        let key = ("a\u{1f}\"b\\c".to_owned(), u64::MAX, 0);
+        let storage = Storage::<(String, u64, u64), u64>::new();
+        {
+            let mut block = storage.block();
+            block.insert(key.clone(), 7);
+            block.commit();
+        }
+        let encoded = to_json(&storage).unwrap();
+        let decoded: Storage<(String, u64, u64), u64> = from_json(&encoded).unwrap();
+        assert_eq!(decoded.view().get(&key), Some(&7));
+        assert!(decoded.block_and_revert().is_empty());
+        for malformed in [
+            "",
+            "a",
+            "a\u{1f}1\u{1f}2",
+            "\"a\"\u{1f}18446744073709551616\u{1f}0",
+            "\"a\"\u{1f}1\u{1f}0\u{1f}3",
+        ] {
+            assert!(
+                <(String, u64, u64)>::decode_json_key(malformed).is_err(),
+                "{malformed:?}"
+            );
+        }
     }
     #[test]
     fn storage_roundtrip_tuple_key() {

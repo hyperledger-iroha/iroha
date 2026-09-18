@@ -69,7 +69,7 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
 }
 fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair) {
     let kp = lane_authority_fixture::leader();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut builder = BlockBuilder::new(header);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
@@ -166,7 +166,7 @@ fn bls_batch_block_validates_with_pop() {
     let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
@@ -192,7 +192,7 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, false);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
@@ -219,7 +219,7 @@ fn bls_batch_block_rejects_missing_proof_policies() {
     let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let block = builder

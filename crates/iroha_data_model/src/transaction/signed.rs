@@ -15,7 +15,7 @@ use crate::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyVegaDeviceAuthenticationDigestV1,
     },
-    trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+    trigger::DataTriggerSequence,
 };
 #[cfg(feature = "fault_injection")]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -573,8 +573,6 @@ mod model {
         SealedCommitment(SignedSealedTransactionCommitment),
         /// Reveal of a previously committed sealed transaction.
         SealedReveal(SealedTransactionReveal),
-        /// Scheduled time trigger that initiates a transaction.
-        Time(TimeTriggerEntrypoint),
     }
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
@@ -2111,11 +2109,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(reveal, out);
             }
-            TransactionEntrypoint::Time(trigger) => {
-                norito::json::write_json_string("Time", out);
-                out.push(':');
-                norito::json::JsonSerialize::json_serialize(trigger, out);
-            }
         }
         out.push('}');
     }
@@ -2137,10 +2130,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(reveal) => {
                 out.push_str("\"SealedReveal\":")?;
                 norito::json::JsonSerialize::json_serialize_to(reveal, out)?;
-            }
-            TransactionEntrypoint::Time(trigger) => {
-                out.push_str("\"Time\":")?;
-                norito::json::JsonSerialize::json_serialize_to(trigger, out)?;
             }
         }
         out.push('}')?;
@@ -2168,10 +2157,6 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "SealedReveal" => {
                 let reveal = SealedTransactionReveal::json_deserialize(parser)?;
                 TransactionEntrypoint::SealedReveal(reveal)
-            }
-            "Time" => {
-                let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
-                TransactionEntrypoint::Time(trigger)
             }
             other => {
                 return Err(norito::json::Error::UnknownField {
@@ -2665,9 +2650,7 @@ impl TransactionEntrypoint {
     pub fn admission_intent(&self) -> TransactionAdmissionIntent {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.admission_intent(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                TransactionAdmissionIntent::Ordinary
-            }
+            TransactionEntrypoint::SealedCommitment(_) => TransactionAdmissionIntent::Ordinary,
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().admission_intent()
             }
@@ -2682,7 +2665,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().authority())
             }
-            TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
         }
     }
     /// Account authorized to initiate this transaction.
@@ -2695,7 +2677,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().authority()
             }
-            TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
         }
     }
     /// Creation timestamp in milliseconds when the entrypoint carries one.
@@ -2708,7 +2689,7 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 u64::try_from(entrypoint.signed_transaction().creation_time().as_millis()).ok()
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
     /// Metadata attached to the entrypoint when one exists.
@@ -2719,7 +2700,7 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().metadata())
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
     /// Hash for this transaction entrypoint.
@@ -2727,17 +2708,15 @@ impl TransactionEntrypoint {
     pub fn hash(&self) -> HashOf<Self> {
         match self {
             Self::External(transaction) => transaction.hash_as_entrypoint(),
-            Self::SealedCommitment(_) | Self::SealedReveal(_) | Self::Time(_) => HashOf::new(self),
+            Self::SealedCommitment(_) | Self::SealedReveal(_) => HashOf::new(self),
         }
     }
-    /// Network execution-call hash, or display hash for a Time entry.
+    /// Actual network execution-call hash, distinct from a sealed reveal outer identity.
     ///
     /// Result leaves and block entrypoint Merkle trees always use [`Self::hash`]. A sealed reveal,
     /// however, executes its inner signed transaction, whose call hash keys execution-scoped
     /// evidence such as native batch receipts and FASTPQ transcripts. Other network entrypoints
-    /// use their canonical outer hash. For [`Self::Time`] this returns only its display hash;
-    /// the execution owner separately assigns actual Time invocation identities, including
-    /// distinct identities for repeated invocations with equal display entrypoints.
+    /// use their canonical outer hash. Internal invocation identities belong to typed outputs.
     #[inline]
     pub fn execution_call_hash(&self) -> HashOf<Self> {
         match self {

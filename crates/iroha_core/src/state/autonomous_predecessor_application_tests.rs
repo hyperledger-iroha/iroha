@@ -297,11 +297,8 @@ fn autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corr
             .expect("a healthy different predecessor is ordinary rejection")
     );
     let lane_entry = state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
-        .expect("active predecessor lane")
-        .clone();
+        .lane_storage_identity(lane_id)
+        .expect("active predecessor lane identity");
     let receipt_dir = lane_entry
         .blocks_dir(kura.store_root())
         .join("lane_artifacts");

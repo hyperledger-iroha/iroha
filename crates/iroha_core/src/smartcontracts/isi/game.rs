@@ -2083,7 +2083,7 @@ mod tests {
         assert!(get(&st, &session.session_id).unwrap().liability.is_zero());
     }
     pub(super) fn header() -> BlockHeader {
-        BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 1_000, 0)
+        BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 1_000, 0)
     }
     fn signed_checkpoint(
         session: &GameSessionRecordV1,
@@ -3068,6 +3068,7 @@ mod tests {
             // checks that corruption changes the checkpoint, not that restore admits it.
             state.world = world;
             crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot")
         };
         let baseline = hash(world());
         assert_eq!(

@@ -153,7 +153,7 @@ fn atomic_observable_state(stx: &StateTransaction<'_, '_>) -> (Vec<Vec<u8>>, Vec
 fn atomic_settlement_executes_three_and_255_exact_payments_once() {
     for count in [3, 255] {
         let (state, movements, definition) = atomic_state(count);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut stx = block.transaction();
         let instruction = atomic_instruction(&stx, movements);
         install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
@@ -209,7 +209,7 @@ fn atomic_settlement_executes_three_and_255_exact_payments_once() {
 fn atomic_settlement_missing_consent_at_every_position_changes_nothing() {
     for count in [3, 255] {
         let (state, movements, _) = atomic_state(count);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         for omit in 0..count {
             let mut stx = block.transaction();
             let instruction = atomic_instruction(&stx, movements.clone());
@@ -227,7 +227,7 @@ fn atomic_settlement_missing_consent_at_every_position_changes_nothing() {
 #[test]
 fn atomic_settlement_metadata_or_amount_substitution_requires_fresh_whole_intent_consent() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for change in 0..2 {
         let mut stx = block.transaction();
         let original = atomic_instruction(&stx, movements.clone());
@@ -261,7 +261,7 @@ fn atomic_settlement_metadata_or_amount_substitution_requires_fresh_whole_intent
 #[test]
 fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     for expired in [false, true] {
         let mut stx = block.transaction();
         let network = if expired {
@@ -295,7 +295,7 @@ fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
 #[test]
 fn atomic_settlement_inclusive_expiry_height_is_accepted() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(100_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(100_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
@@ -307,7 +307,7 @@ fn atomic_settlement_inclusive_expiry_height_is_accepted() {
 #[test]
 fn atomic_settlement_rejects_intrabundle_financing_of_repeated_outgoing_debits() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let earlier = movements[0].source.clone();
     let later = movements[1].source.clone();
@@ -352,7 +352,7 @@ fn atomic_settlement_rejects_intrabundle_financing_of_repeated_outgoing_debits()
 fn atomic_settlement_final_aggregate_holding_limit_failure_changes_nothing() {
     for count in [3, 255] {
         let (state, movements, definition) = atomic_state(count);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut stx = block.transaction();
         SetAssetHoldingLimit::new(
             CARPENTER_ID.clone(),
@@ -375,7 +375,7 @@ fn atomic_settlement_final_aggregate_holding_limit_failure_changes_nothing() {
 #[test]
 fn atomic_settlement_missing_carrier_identity_changes_nothing() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
@@ -394,7 +394,7 @@ fn atomic_settlement_missing_carrier_identity_changes_nothing() {
 #[test]
 fn atomic_settlement_exact_signed_owner_needs_no_delegation_for_its_own_bucket() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let authority = movements[1].source.account().clone();
     let instruction = atomic_instruction(&stx, movements);
@@ -407,7 +407,7 @@ fn atomic_settlement_exact_signed_owner_needs_no_delegation_for_its_own_bucket()
 #[test]
 fn atomic_settlement_fresh_carrier_cannot_replay_the_business_identifier() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
@@ -430,7 +430,7 @@ fn atomic_settlement_fresh_carrier_cannot_replay_the_business_identifier() {
 #[test]
 fn atomic_settlement_reference_retention_includes_the_final_movement() {
     let (state, movements, _) = atomic_state(255);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
@@ -455,7 +455,7 @@ fn atomic_settlement_reference_retention_includes_the_final_movement() {
 #[test]
 fn atomic_settlement_actual_grant_then_revoke_rejects_without_movement() {
     let (state, movements, _) = atomic_state(255);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for revoked in [0, 127, 254] {
         let mut stx = block.transaction();
         let instruction = atomic_instruction(&stx, movements.clone());
@@ -487,7 +487,7 @@ fn atomic_settlement_actual_grant_then_revoke_rejects_without_movement() {
 #[test]
 fn atomic_settlement_other_scope_or_owner_consent_cannot_cover_signed_source() {
     let (state, movements, _) = atomic_state(3);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for wrong_scope in [false, true] {
         let mut stx = block.transaction();
         let instruction = atomic_instruction(&stx, movements.clone());
@@ -552,7 +552,7 @@ fn atomic_settlement_signed_scope_must_match_definition_and_execution_policies()
         // Deliberately inconsistent State fixtures prove fail-closed policy
         // handling, rather than relying on the source balance being absent.
         let (state, movements, _) = atomic_state_in_scope(3, scope, policy);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut stx = block.transaction();
         stx.current_dataspace_id = Some(route);
         stx.world.current_dataspace_id = Some(route);
@@ -572,7 +572,7 @@ fn atomic_settlement_restricted_exact_bucket_survives_universal_coordinator_exec
     let scope = AssetBalanceScope::Dataspace(DataSpaceId::new(7));
     let (state, movements, definition) =
         atomic_state_in_scope(3, scope, AssetBalancePolicy::DataspaceRestricted);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -609,7 +609,7 @@ fn atomic_settlement_restricted_exact_bucket_survives_universal_coordinator_exec
 #[test]
 fn atomic_settlement_final_source_or_destination_failure_preserves_all_prior_movements() {
     let (state, movements, _) = atomic_state(255);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for missing_destination in [false, true] {
         let mut stx = block.transaction();
         let mut payments = movements.clone();

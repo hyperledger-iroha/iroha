@@ -139,7 +139,6 @@ fn build_apply_fixture_from_current_parent_with_controls(
         NonZeroU64::new(context.height).expect("non-zero successor height"),
         Some(parent.hash()),
         None,
-        None,
         creation_time_ms,
         0,
     );

@@ -62,9 +62,96 @@
     }
   },
   {
-    "TriggerCompleted": {
-      "trigger_id": "data-bob-carol-0",
-      "outcome": "Success"
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
     }
   },
   {
@@ -99,9 +186,468 @@
     }
   },
   {
-    "TriggerCompleted": {
-      "trigger_id": "data-carol-dave-0",
-      "outcome": "Success"
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##eve@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##eve@wonderland",
+          "source": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "1",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "1",
+          "asset": "rose##dave@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "1",
+          "destination": "rose##dave@wonderland",
+          "source": "rose##carol@wonderland"
+        }
+      }
     }
   },
   {
@@ -137,39 +683,20 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "data-dave-eve-0",
+      "trigger_id": "data-bob-carol-0",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
+    "TriggerCompleted": {
+      "trigger_id": "data-carol-dave-0",
+      "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
+    "TriggerCompleted": {
+      "trigger_id": "data-dave-eve-0",
+      "outcome": "Success"
     }
   },
   {
@@ -179,108 +706,15 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-dave-eve-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
     }
   },
   {
@@ -290,108 +724,15 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-dave-eve-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
     }
   },
   {
@@ -401,108 +742,15 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-dave-eve-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
     }
   },
   {
@@ -512,108 +760,15 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-dave-eve-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
     }
   },
   {
@@ -623,71 +778,9 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
     }
   },
   {
@@ -697,108 +790,15 @@
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##carol@wonderland",
-          "source": "rose##bob@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-bob-carol-6",
       "outcome": "Success"
     }
   },
   {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##dave@wonderland",
-          "source": "rose##carol@wonderland"
-        }
-      }
-    }
-  },
-  {
     "TriggerCompleted": {
       "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Removed": {
-          "amount": "1",
-          "asset": "rose##dave@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Added": {
-          "amount": "1",
-          "asset": "rose##eve@wonderland"
-        }
-      }
-    }
-  },
-  {
-    "Data": {
-      "Asset": {
-        "Transferred": {
-          "amount": "1",
-          "destination": "rose##eve@wonderland",
-          "source": "rose##dave@wonderland"
-        }
-      }
     }
   },
   {

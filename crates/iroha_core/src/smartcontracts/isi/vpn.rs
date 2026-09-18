@@ -917,7 +917,6 @@ mod tests {
             std::num::NonZeroU64::new(1).expect("VPN test block height is non-zero"),
             None,
             None,
-            None,
             0,
             0,
         )

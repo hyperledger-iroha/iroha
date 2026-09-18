@@ -2965,15 +2965,21 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
     let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
         ValidationFail::NotPermitted("fixture contract permission denied".to_owned()),
     )));
+    let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+        iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+            input_index: 0,
+            result,
+            completions: Vec::new(),
+        },
+    );
     let transaction = CommittedTransaction {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"exact CLI transaction block")),
         entrypoint_hash: hash,
         entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
         entrypoint: TransactionEntrypoint::External(signed),
-        result_hash: result.hash(),
-        result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-        result,
-        merge_inclusion: None,
+        output_hash: iroha_crypto::HashOf::new(&output),
+        output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        output,
     };
     for mismatched_hash in [false, true] {
         let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
@@ -2986,7 +2992,6 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
                 hash.to_string()
             },
             transaction: transaction.clone(),
-            trigger_completions: Vec::new(),
         };
         let capabilities = iroha::http::Response::builder()
             .status(200)

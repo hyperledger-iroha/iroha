@@ -6,9 +6,10 @@ instantiations of the nine generic declarations. Its 320 type rows preserve 355
 populated values and 1,420 complete root, vector, option and map frames.
 
 The fixture SHA-256 is
-`baae76d11197718ee5a45f4418694e2aaea891d56aa79cf6992e12667703ef75`.
+`9da764b5c7ea5ef44f9e93049430b019133796135bbda358ef0a3c0c579618a5`.
 The inventory excludes the three unimplemented citizen-bond operations; all
-remaining captured frame bytes are unchanged. Names and directional hashes come from actual compiler captures before adding
+other captured frame bytes remain unchanged except for the explicitly recorded
+current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
 the independent identity declarations; no physical paths were guessed.
 
 The original instruction capture has SHA-256
@@ -36,3 +37,12 @@ separate work in [the identity design](../../../../specs/norito_schema_identity.
 
 `SettleAtomic` was captured with the current native codec on 2026-09-12,
 including exact root, vector, option and map decode/re-encode checks.
+
+`RegisterPrivacyProtocolActivationV1` was recaptured on 2026-09-17 from the current
+typed fixture and its real codec roundtrip helper. Its Proposed lifecycle contains
+only `proposed_at_height`; the retired automatic activation-height field is absent.
+All four frame forms were decoded, compared and exactly re-encoded by the generator.
+Only that one case's four frames changed; the other 354 cases, all nominal and
+directional identities, and the strict retired-field rejection tests are unchanged.
+The opt-in `capture_current_privacy_activation_instruction_identity_frames` test
+prints the actual capture to stdout and never writes the fixture itself.

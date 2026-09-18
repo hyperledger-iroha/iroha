@@ -1,8 +1,7 @@
 // Independent recounts deliberately walk test-owned maps; production sampling never does.
 fn recount_transaction_resident_associations(index: &super::TransactionEntrypointIndex) -> u64 {
     let mut count = index.indexed_heights.len()
-        + index.incomplete_merge_heights.len()
-        + index.incomplete_kaigi_signal_heights.len()
+        + index.incomplete_heights.len()
         + index.inventories_by_height.len();
     count += index
         .heights_by_entrypoint
@@ -45,7 +44,7 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
     use super::resident_inventory::ResidentOwner;
     let mut generator = DummyBlocks::new();
     let block = generator.next_with_results();
-    let distinct_entrypoints = block.entrypoint_hashes().collect::<BTreeSet<_>>().len();
+    let distinct_entrypoints = block.network_input_hashes().collect::<BTreeSet<_>>().len();
     assert!(distinct_entrypoints > 0);
     let mut index = super::TransactionEntrypointIndex::complete_empty();
     let assert_count = |index: &super::TransactionEntrypointIndex| {
@@ -58,7 +57,10 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
         Kura::insert_transaction_entrypoint_heights(
             &mut index,
             NonZeroUsize::new(height).unwrap(),
-            &block,
+            &network_index_block_at(
+                height as u64,
+                block.network_entrypoints().cloned().collect(),
+            ),
         );
         assert_count(&index);
     }
@@ -86,15 +88,23 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
         3
     );
     let before_duplicate = index.resident_associations().unwrap();
-    Kura::insert_transaction_entrypoint_heights(&mut index, nonzero!(2_usize), &block);
+    Kura::insert_transaction_entrypoint_heights(
+        &mut index,
+        nonzero!(2_usize),
+        &network_index_block_at(2, block.network_entrypoints().cloned().collect()),
+    );
     assert_eq!(index.resident_associations().unwrap(), before_duplicate);
     let call = kaigi_signal_test_call("resident-memberships");
-    for phase in [0, 1] {
-        insert_kaigi_signal_test_locator(&mut index, &call, kaigi_signal_test_locator(2, phase, 0));
+    for input_index in [0, 1] {
+        insert_kaigi_signal_test_locator(
+            &mut index,
+            &call,
+            kaigi_signal_test_locator(2, input_index),
+        );
         assert_count(&index);
     }
     let before_locator_duplicate = index.resident_associations().unwrap();
-    insert_kaigi_signal_test_locator(&mut index, &call, kaigi_signal_test_locator(2, 1, 0));
+    insert_kaigi_signal_test_locator(&mut index, &call, kaigi_signal_test_locator(2, 1));
     assert_eq!(
         index.resident_associations().unwrap(),
         before_locator_duplicate
@@ -116,7 +126,7 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
 }
 
 #[test]
-fn resident_merge_projection_and_real_kaigi_candidate_insertion_match_recount() {
+fn resident_network_projection_and_real_kaigi_candidate_insertion_match_recount() {
     use super::resident_inventory::ResidentOwner;
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
@@ -139,16 +149,14 @@ fn resident_merge_projection_and_real_kaigi_candidate_insertion_match_recount() 
         iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
     )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let entry = merge_entry_with_indexed_entrypoint(TransactionEntrypoint::External(transaction));
-    let batch = entry.execution_batch.as_ref().unwrap();
+    let entrypoint = TransactionEntrypoint::External(transaction);
     let mut index = super::TransactionEntrypointIndex::complete_empty();
-    let block_hash = batch.application_block_header.hash();
     for height in 1..=2 {
-        Kura::insert_merge_execution_index_heights(
+        let block = network_index_block_at(height, vec![entrypoint.clone()]);
+        Kura::insert_transaction_entrypoint_heights(
             &mut index,
-            NonZeroUsize::new(height).unwrap(),
-            block_hash,
-            batch,
+            NonZeroUsize::new(height as usize).unwrap(),
+            &block,
         );
         assert_eq!(
             index.resident_associations().unwrap(),
@@ -161,7 +169,11 @@ fn resident_merge_projection_and_real_kaigi_candidate_insertion_match_recount() 
         1
     );
     let before = index.resident_associations().unwrap();
-    Kura::insert_merge_execution_index_heights(&mut index, nonzero!(2_usize), block_hash, batch);
+    Kura::insert_transaction_entrypoint_heights(
+        &mut index,
+        nonzero!(2_usize),
+        &network_index_block_at(2, vec![entrypoint]),
+    );
     assert_eq!(index.resident_associations().unwrap(), before);
     Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(1_usize));
     assert_eq!(
@@ -338,7 +350,7 @@ fn resident_live_kura_publication_matches_real_index_owners_without_partial_snap
         observed,
         recount_transaction_resident_associations(&kura.transaction_entrypoint_index.lock())
     );
-    kura.set_transaction_entrypoint_index_entry(1, &first, 1, None);
+    kura.set_transaction_entrypoint_index_entry(1, &first, 1);
     assert_eq!(
         kura.resource_inventory
             .component_usage_for_tests(Family::ResidentTransaction)

@@ -1131,9 +1131,6 @@ mod codec_tests {
     fn dummy_proof_entry() -> MerkleProof<transaction::TransactionEntrypoint> {
         MerkleProof::from_audit_path(0, vec![])
     }
-    fn dummy_proof_result() -> MerkleProof<transaction::TransactionResult> {
-        MerkleProof::from_audit_path(0, vec![])
-    }
     #[derive(Clone)]
     struct TestAuthority {
         id: account::AccountId,
@@ -1176,16 +1173,17 @@ mod codec_tests {
             ))
         };
         let result = signed::TransactionResult::new(result_inner);
-        let result_hash = transaction::TransactionResult::hash_from_inner(&result.0);
         query::CommittedTransaction {
             block_hash: dummy_block_hash(),
             entrypoint_hash: entry_hash,
             entrypoint_proof: dummy_proof_entry(),
             entrypoint,
-            result_hash,
-            result_proof: dummy_proof_result(),
-            result,
-            merge_inclusion: None,
+            output_hash: iroha_crypto::HashOf::new(&crate::block::output_test_support::network(
+                0,
+                result.clone(),
+            )),
+            output_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+            output: crate::block::output_test_support::network(0, result),
         }
     }
     #[test]

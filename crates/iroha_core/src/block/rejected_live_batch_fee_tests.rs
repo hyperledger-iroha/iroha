@@ -73,7 +73,9 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     });
     let latest_signed: SignedBlock = latest_valid.into();
     finalize_test_genesis_assets(&state, &latest_signed);
-    let marker: Name = "rejected_batch_business_effect".parse().expect("metadata key");
+    let marker: Name = "rejected_batch_business_effect"
+        .parse()
+        .expect("metadata key");
     let business_effect = SetKeyValue::account(payer_id.clone(), marker.clone(), Json::from(true));
     let missing_domain_id = DomainId::try_new("missing-domain", "universal").unwrap();
     let fail_instruction = Unregister::domain(missing_domain_id.clone());
@@ -115,15 +117,29 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0)
     );
     let first_error = valid_block
         .as_ref()
-        .errors()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
         .next()
         .map(|(_, err)| format!("{err:?}"));
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("batch rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("batch rejection");
     assert!(
         matches!(
             rejection,
@@ -240,10 +256,9 @@ ledger::account::set_detail(
         )
         .with_active_code_hash(code_hash),
     );
-    world.contract_subject_addresses.insert(
-        contract_address.subject_id(),
-        contract_address.clone(),
-    );
+    world
+        .contract_subject_addresses
+        .insert(contract_address.subject_id(), contract_address.clone());
     let entrypoint_permission: Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
@@ -321,7 +336,9 @@ ledger::account::set_detail(
         .unpack(|_| {});
     let error = valid
         .as_ref()
-        .errors()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
         .next()
         .map(|(_, error)| error)
         .expect("the gas-capped contract call must fail");
@@ -429,7 +446,7 @@ fn successful_live_batches_accumulate_parent_block_gas() {
             .unpack(|_| {});
         let results = valid
             .as_ref()
-            .results()
+            .output_results()
             .map(|result| result.0.clone())
             .collect::<Vec<_>>();
         let successes = results.iter().filter(|result| result.is_ok()).count();

@@ -177,7 +177,7 @@ impl RuntimeStateFingerprint {
                 .map(|entry| entry.as_ref().clone())
                 .collect(),
             runtime_debug: format!(
-                "merge={:?}|da={:?}|confidential={:?}|receipt={:?}|shard={:?}|pin={:?}|relays={:?}|settled={:?}|nexus={:?}|incarnations={:?}|lineage={:?}|activations={:?}",
+                "merge={:?}|da={:?}|confidential={:?}|receipt={:?}|shard={:?}|pin={:?}|relays={:?}|nexus={:?}|incarnations={:?}|lineage={:?}|activations={:?}",
                 state.merge_admission.read(),
                 state.da_commitments.read(),
                 state.da_confidential_compute.read(),
@@ -185,11 +185,10 @@ impl RuntimeStateFingerprint {
                 state.da_shard_cursors.read(),
                 state.da_pin_intents.read(),
                 state.lane_relays.read(),
-                state.settled_nexus_fee_receipts.read(),
                 state.nexus.read(),
-                state.lane_incarnations.read(),
-                state.lane_incarnation_lineage.read(),
-                state.lane_incarnation_activation_heights.read(),
+                state.lane_incarnations_snapshot(),
+                state.lane_incarnation_lineage_snapshot(),
+                state.lane_incarnation_activation_heights_snapshot(),
             ),
         }
     }
@@ -752,7 +751,6 @@ impl StrictReplayFixture {
             NonZeroU64::new(height).expect("non-zero height"),
             Some(parent.hash()),
             None,
-            None,
             creation_time_ms,
             view,
         );
@@ -896,8 +894,25 @@ impl StrictReplayFixture {
         // certificates and application receipt are independently durable. Close
         // that real protocol boundary before asking the producer for a successor.
         self.finalize_applied_lane_proposals(&second_block, lane_proposals);
-        assert_eq!(second_block.results().len(), 1);
-        assert!(second_block.results().all(|result| result.as_ref().is_ok()));
+        second_block
+            .validate_output_merkle_cache()
+            .expect("actual applied successor has canonical complete outputs");
+        assert_eq!(second_block.network_entrypoint_count(), 1);
+        assert_eq!(
+            second_block.execution_outputs().len(),
+            1,
+            "this actual successor fixture has no internal invocations"
+        );
+        let (_, network) = second_block
+            .network_output_at(0)
+            .expect("actual successor output joins its sole Network input");
+        assert!(network.result.is_ok());
+        assert!(
+            second_block
+                .execution_outputs()
+                .iter()
+                .all(|output| output.result().is_ok())
+        );
         AppliedReplayBlock {
             context: second_context,
             block: second_block,
@@ -1280,9 +1295,7 @@ impl StrictReplayFixture {
                 .with_authenticated_v2_commit_authority(&artifact);
         kura.store_commit_manifest(manifest)
             .expect("store malformed-SCCP manifest");
-        let blocks_dir = RuntimeLaneConfig::default()
-            .primary()
-            .blocks_dir(&kura.store_root());
+        let blocks_dir = Kura::canonical_storage_paths(&kura.store_root()).0;
         let retained_dir = blocks_dir.join("retained_blocks");
         std::fs::create_dir_all(&retained_dir).expect("create retained-block directory");
         let retained = CorruptedKuraRetainedBlockRecord {

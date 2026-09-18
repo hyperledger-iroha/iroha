@@ -155,7 +155,7 @@ fn replay_sidecar_reads_and_writes_enforce_the_same_hard_byte_limit() {
 }
 #[test]
 fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
-    let kura = Kura::blank_kura_for_testing();
+    let (kura, _) = blank_kura_with_blocks();
     let blocks = store_dummy_block_arcs(&kura, 3);
     let retained_hash = Hash::new(b"retained checkpoint");
     let pruned_hash = Hash::new(b"pruned checkpoint");
@@ -177,7 +177,7 @@ fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
 }
 #[test]
 fn prune_to_height_removes_commit_manifests_above_new_tip() {
-    let kura = Kura::blank_kura_for_testing();
+    let (kura, _) = blank_kura_with_blocks();
     let blocks = store_dummy_block_arcs(&kura, 3);
     let retained_hash = Hash::new(b"retained manifest checkpoint");
     let pruned_hash = Hash::new(b"pruned manifest checkpoint");
@@ -541,9 +541,7 @@ fn fast_init_skips_disabled_writer_capacity_validation() {
 fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
     populate_strict_kura_store(&temp_dir, 3);
-    let merge_path = RuntimeLaneConfig::default()
-        .primary()
-        .merge_log_path(temp_dir.path());
+    let merge_path = Kura::canonical_storage_paths(temp_dir.path()).1;
     std::fs::remove_file(&merge_path).expect("remove deferred merge log");
     let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
     let invalid_geometry = [0xA5; 1024];
@@ -774,6 +772,7 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             Hash::new(b"Fast must not checkpoint lane geometry"),
+            None,
             3,
             Some(tip.hash()),
             Hash::new(b"Fast must not publish snapshot geometry"),

@@ -4615,22 +4615,8 @@ impl LaneConfigEntry {
             slug
         }
     }
-    /// Compute the canonical Kura segment directory for this lane.
-    #[must_use]
-    pub fn blocks_dir(&self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref().join("blocks").join(&self.kura_segment)
-    }
-    /// Compute the canonical merge-ledger log path for this lane.
-    #[must_use]
-    pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        debug_assert!(
-            !self.merge_segment.is_empty(),
-            "lane config entries always carry a stable merge segment label",
-        );
-        root.as_ref()
-            .join("merge_ledger")
-            .join(format!("{}.log", self.merge_segment))
-    }
+    // Lane aliases and cache labels do not identify consensus storage. Core owns
+    // physical addresses derived from authenticated network/route/incarnation/activation.
 }
 /// Lane-fusion tuning parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

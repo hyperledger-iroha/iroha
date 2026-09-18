@@ -653,6 +653,7 @@ pub(crate) fn export_bound_kura(
         supplied.push(SuppliedHeightEvidence {
             height: height.height,
             finality: height.finality,
+            contexts: height.contexts,
             queries: height.queries,
         });
     }

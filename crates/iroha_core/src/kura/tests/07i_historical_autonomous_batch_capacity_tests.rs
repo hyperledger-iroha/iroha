@@ -23,6 +23,14 @@ fn historical_capacity_payload_for_kura(
     let entrypoint = TransactionEntrypoint::External(transaction);
     let entrypoint_hash = Hash::from(entrypoint.hash());
     let mut proposal = source.origin_proposal.clone();
+    // Route identity is stable across heights and payload tags, but distinct
+    // routes cannot share an incarnation in the authenticated storage catalog.
+    proposal.descriptor.lane_incarnation = Hash::new_from_chunks(&[
+        b"iroha:kura:test:historical-capacity-incarnation:v1\0",
+        &network_id.encode(),
+        &lane_id.encode(),
+        &dataspace_id.encode(),
+    ]);
     proposal.descriptor.accepted_candidate_indices = vec![0];
     proposal.descriptor.accepted_transaction_hashes = vec![entrypoint_hash];
     proposal.descriptor.subject_hash = Hash::new_from_chunks(&[
@@ -262,6 +270,28 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         "different-route-height-one",
         &signer,
     );
+    assert_eq!(
+        lane_one_height_one
+            .origin_proposal
+            .descriptor
+            .lane_incarnation,
+        lane_one_height_two
+            .origin_proposal
+            .descriptor
+            .lane_incarnation,
+        "two heights retain the same lane incarnation",
+    );
+    assert_ne!(
+        lane_one_height_one
+            .origin_proposal
+            .descriptor
+            .lane_incarnation,
+        lane_zero_height_one
+            .origin_proposal
+            .descriptor
+            .lane_incarnation,
+        "different routes require distinct catalog incarnations",
+    );
     let record_two = historical_autonomous_recovery_record_for_kura(
         &lane_one_height_two,
         &signer,
@@ -285,6 +315,28 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
     ];
     let (mut kura, _) =
         open_historical_recovery_fixture(&config, &lane_config).expect("historical capacity Kura");
+    kura.bind_lane_storage_network(lane_one_height_one.network_id)
+        .expect("bind the common signed batch network");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([
+            (
+                lane_one.lane_id,
+                lane_one_height_one
+                    .origin_proposal
+                    .descriptor
+                    .lane_incarnation,
+            ),
+            (
+                lane_zero.lane_id,
+                lane_zero_height_one
+                    .origin_proposal
+                    .descriptor
+                    .lane_incarnation,
+            ),
+        ]),
+    );
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_one_height_one);
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_zero_height_one);
     for payload in [
@@ -478,6 +530,10 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
             .is_err(),
         "the injected append crash must stop before the second recovery seal",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let (_, input_index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane, temp_dir.path());
     let append_intent_path = Kura::bound_progress_append_intent_path(&input_index_path);
@@ -556,6 +612,10 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
             .is_err(),
         "the injected crash must retain the synced seal temp before rename",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let historical_directory =
         Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let stable_seal = Kura::historical_autonomous_recovery_path_for_entry(
@@ -682,7 +742,11 @@ fn historical_recovery_startup_rejects_payload_without_signed_lifecycle_custody(
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
         .expect("inject a payload without lifecycle custody");
-    let directory = lane.blocks_dir(temp.path()).join(LANE_ARTIFACTS_DIR_NAME);
+    let directory = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact persisted identity")
+        .blocks_dir(temp.path())
+        .join(LANE_ARTIFACTS_DIR_NAME);
     let snapshot = || {
         std::fs::read_dir(&directory)
             .expect("fixture sidecars")

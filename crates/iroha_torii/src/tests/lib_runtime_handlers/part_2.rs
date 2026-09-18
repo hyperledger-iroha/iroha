@@ -1998,7 +1998,6 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );

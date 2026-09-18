@@ -49,13 +49,13 @@ fn geometry_physical_assert_unavailable(kura: &Kura) {
 }
 
 fn geometry_physical_binding(label: &str) -> LaneGeometryBinding {
-    LaneGeometryBinding {
+    LaneGeometryBinding::from_identity(LaneStorageIdentity {
+        network_id: geometry_fixture_network_id(),
         lane_id: LaneId::new(20),
+        dataspace_id: DataSpaceId::UNIVERSAL,
         incarnation: Hash::new(label.as_bytes()),
         activation_height: 1,
-        blocks_path: format!("blocks/{label}/blocks"),
-        merge_path: format!("merge_ledger/{label}.log"),
-    }
+    })
 }
 
 #[test]
@@ -228,40 +228,49 @@ fn geometry_physical_authenticated_archive_quarantine_and_delete_are_one_delta()
         let fixture = prepare_retired_geometry_archive(&kura, &root);
         kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
         assert!(checkpoint_retired_geometry(&kura, &fixture, 20).is_err());
-        let journal = kura.read_lane_geometry_journal().unwrap();
-        assert!(!journal.pending_archive_gc.is_empty());
+        assert!(
+            !kura
+                .read_lane_geometry_journal()
+                .unwrap()
+                .pending_archive_gc
+                .is_empty()
+        );
         geometry_physical_initialize(&kura);
+        // Only the real collecting owner may move the retained instance into
+        // quarantine; Apply no longer creates a physical archive to delete.
+        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_ARCHIVE_QUARANTINE);
+        assert!(kura.resume_proven_lane_geometry_archive_gc().is_err());
+        geometry_physical_assert_unavailable(&kura);
         if interrupt {
-            kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_ARCHIVE_QUARANTINE);
-            assert!(
-                kura.remove_authenticated_geometry_archive(&journal.pending_archive_gc[0], &[])
-                    .is_err()
-            );
-            geometry_physical_assert_unavailable(&kura);
-        } else {
-            let mut removed_total = 0_u64;
-            let before = geometry_physical_assert_actual(&kura);
-            for pending in &journal.pending_archive_gc {
-                let (removed, did_remove) = kura
-                    .remove_authenticated_geometry_archive(pending, &[])
-                    .unwrap();
-                assert!(did_remove);
-                removed_total = removed_total.checked_add(removed).unwrap();
-                geometry_physical_assert_actual(&kura);
-                assert_eq!(
-                    kura.remove_authenticated_geometry_archive(pending, &[])
-                        .unwrap(),
-                    (0, false)
-                );
-            }
-            let after = geometry_physical_assert_actual(&kura);
-            assert!(removed_total >= GC_PAYLOAD_LEN as u64);
-            assert_eq!(
-                before[ResourceFamily::StorageBytes as usize].storage_bytes
-                    - after[ResourceFamily::StorageBytes as usize].storage_bytes,
-                removed_total
-            );
-            assert!(!fixture.archive_root.exists());
+            continue;
         }
+        geometry_physical_initialize(&kura);
+        let before = geometry_physical_assert_actual(&kura);
+        let summary = {
+            let _prune = kura.prune_lock.lock();
+            let _canonical = kura.canonical_chain_lock.lock();
+            let _geometry = kura.lane_geometry_lock.lock();
+            let mut journal = kura.read_lane_geometry_journal().unwrap();
+            let (summary, retained) = kura
+                .collect_released_lane_instances_locked(&mut journal)
+                .unwrap();
+            assert!(retained.is_none());
+            assert_eq!(summary.removed_archive_roots, 1);
+            geometry_physical_assert_actual(&kura);
+            let (retry, _) = kura
+                .collect_released_lane_instances_locked(&mut journal)
+                .unwrap();
+            assert_eq!(retry.removed_archive_roots, 0);
+            assert_eq!(retry.reclaimed_bytes, 0);
+            summary
+        };
+        let after = geometry_physical_assert_actual(&kura);
+        assert!(summary.reclaimed_bytes >= fixture.retained_bytes);
+        assert_eq!(
+            before[ResourceFamily::StorageBytes as usize].storage_bytes
+                - after[ResourceFamily::StorageBytes as usize].storage_bytes,
+            summary.reclaimed_bytes
+        );
+        assert!(!fixture.retained_blocks.exists());
     }
 }

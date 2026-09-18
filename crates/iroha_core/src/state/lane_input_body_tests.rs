@@ -5,66 +5,147 @@ fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture 
     let genesis = empty_global_block_after(None);
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_with_chain_and_network_id_for_testing(
-        World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
         (*DEFAULT_TEST_CHAIN_ID).clone(),
         iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
     );
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![
-        LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "input-secondary".into(), ..LaneConfig::default() },
-    ]).unwrap();
+    nexus.lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: LaneId::new(1),
+                alias: "input-secondary".into(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .unwrap();
     state.set_nexus(nexus).unwrap();
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
-    install_lane_manifest_registry(&state, &[
-        (LaneId::SINGLE, DataSpaceId::UNIVERSAL, ids.clone()),
-        (LaneId::new(1), DataSpaceId::UNIVERSAL, ids),
-    ]);
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL, ids.clone()),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL, ids),
+        ],
+    );
     let _ = configure_commit_topology_preserving_world_peers(&state, 1);
     kura.store_block(Arc::new(genesis.clone())).unwrap();
     commit_block_metadata_with_genesis_checkpoint_to_state(&state, &genesis);
     let parent = advance_queue_plan_fixture_to_beacon_parent(&state, genesis);
     let primary = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let secondary = crate::queue::RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
-    let plan = crate::queue::RoutingPlan::native_amx(primary, vec![
-        crate::queue::RouteLeg::new(primary, crate::queue::RouteLegRole::Participant),
-        crate::queue::RouteLeg::new(secondary, crate::queue::RouteLegRole::Participant),
-    ]);
+    let plan = crate::queue::RoutingPlan::native_amx(
+        primary,
+        vec![
+            crate::queue::RouteLeg::new(primary, crate::queue::RouteLegRole::Participant),
+            crate::queue::RouteLeg::new(secondary, crate::queue::RouteLegRole::Participant),
+        ],
+    );
     let (binding, complete) = queue_plan_admission_certificate_for_state_test(
-        &state, plan, &validators, parent.header().height().get(), 0x81,
+        &state,
+        plan,
+        &validators,
+        parent.header().height().get(),
+        0x81,
     );
     let publish = |parent: &SignedBlock, controls: Vec<Vec<u8>>| {
         let mut block = empty_global_block_after(Some(parent));
         let mut execution = block.execution_context().cloned().unwrap_or_default();
         execution.queue_plan_admissions = controls.clone();
         block.set_execution_context(Some(execution));
-        let opening = match state.kura.v2_finality_artifact(parent.header().height().get()).unwrap() {
+        // Changing proposal controls invalidates its previous result attachment.
+        // This carrier admits inputs only; their Network execution happens later.
+        // Bind an empty structural result to the final control bytes before the
+        // existing four-validator finality fixture authenticates this carrier.
+        assert_eq!(block.network_entrypoint_count(), 0);
+        block
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                BTreeMap::new(),
+                Vec::new(),
+                AxtPolicySnapshot::default(),
+                BTreeSet::new(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .unwrap();
+        let carrier_key = merge_carrier_finality_fixture_keypair();
+        block
+            .replace_signatures(BTreeSet::from([
+                iroha_data_model::block::BlockSignature::new(
+                    0,
+                    iroha_crypto::SignatureOf::from_hash(carrier_key.private_key(), block.hash()),
+                ),
+            ]))
+            .unwrap();
+        block.validate_proposal_commitments().unwrap();
+        block.validate_execution_result_structure().unwrap();
+        let opening = match state
+            .kura
+            .v2_finality_artifact(parent.header().height().get())
+            .unwrap()
+        {
             Some(exact_parent) => crate::sumeragi::v2_context::build_successor_height_context(
-                &exact_parent, exact_parent.height_context.nexus_amx_context_hash, None,
-            ).unwrap(),
+                &exact_parent,
+                exact_parent.height_context.nexus_amx_context_hash,
+                None,
+            )
+            .unwrap(),
             None => lane_opening_context_for_state_test(&state),
         };
-        let mut overlay = state.block_with_queue_plan_admissions(block.header(), &controls).unwrap();
-        overlay.finalize_lane_consensus_contexts(&block, Some(&opening)).unwrap();
+        let mut overlay = state
+            .block_with_queue_plan_admissions(block.header(), &controls)
+            .unwrap();
+        overlay
+            .finalize_lane_consensus_contexts(&block, Some(&opening))
+            .unwrap();
         let mut witness = ExecWitness::default();
-        overlay.capture_lane_consensus_contexts(&mut witness).unwrap();
+        overlay
+            .capture_lane_consensus_contexts(&mut witness)
+            .unwrap();
+        overlay
+            .stage_autoscale_sample_record_for_count(&block, 0)
+            .expect("admission fixture retains its actual runtime predecessor");
         overlay.block_hashes.push(block.hash());
         insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
         overlay.commit().unwrap();
         state.kura.store_block(Arc::new(block.clone())).unwrap();
-        let (artifact, receipt) = stage_lane_context_fixture_finality(&state, &block, opening.clone(), witness.clone());
-        state.kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
+        let (artifact, receipt) =
+            stage_lane_context_fixture_finality(&state, &block, opening.clone(), witness.clone());
+        state
+            .kura
+            .promote_kagemusha_finality_sidecar(&artifact, &receipt)
+            .unwrap();
         (block, opening, witness)
     };
     let parent = if block_secondary {
         let (_, earlier) = queue_plan_admission_certificate_for_state_test(
-            &state, crate::queue::RoutingPlan::single(secondary), &validators,
-            parent.header().height().get(), 0x80,
+            &state,
+            crate::queue::RoutingPlan::single(secondary),
+            &validators,
+            parent.header().height().get(),
+            0x80,
         );
         publish(&parent, vec![earlier]).0
-    } else { parent };
+    } else {
+        parent
+    };
     let (block, opening, witness) = publish(&parent, vec![complete]);
-    LaneContextVerifiedFixture { state, validators, binding, block, opening, witness }
+    LaneContextVerifiedFixture {
+        state,
+        validators,
+        binding,
+        block,
+        opening,
+        witness,
+    }
 }
 
 state_test! { sync lane_input_body_uses_one_exact_input_and_one_slot_per_distinct_route

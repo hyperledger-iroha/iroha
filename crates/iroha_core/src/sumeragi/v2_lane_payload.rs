@@ -9,7 +9,8 @@
 use iroha_crypto::Hash;
 use iroha_data_model::block::{
     consensus_v2 as wire,
-    lane_consensus::{LaneManifestV1, LaneValueRefV1, lane_availability_hash},
+    lane_consensus::{LaneManifestV1, LaneValueKindV1, LaneValueRefV1, lane_availability_hash},
+    lane_input::LaneInputPayloadV1,
 };
 
 use crate::state::{VerifiedLaneContext, VerifiedLaneInputBodyV1};
@@ -45,7 +46,32 @@ pub(crate) fn encode_lane_input(
     origin_view: u64,
 ) -> Result<EncodedLaneInputV1, String> {
     let frozen = lane.frozen();
-    let payload = body.payload();
+    if body.source().validated_input().certificate().binding_hash != frozen.admitted_binding_hash
+        || body.source().source().finality().height_context.network_id != frozen.network_id
+    {
+        return Err("native input differs from the frozen target instance".to_owned());
+    }
+    encode_frozen_lane_input(
+        lane,
+        body.payload(),
+        body.kind(),
+        body.canonical_bytes(),
+        origin_view,
+    )
+}
+
+/// Shared deterministic manifest calculation for live custody and offline evidence.
+/// The caller owns first-carrier authentication; this result grants no live authority.
+/// Both callers retain validated exact canonical payload bytes and its derived kind;
+/// this function preserves the shared slot, instance, leader and RS16 calculation.
+pub(crate) fn encode_frozen_lane_input(
+    lane: &VerifiedLaneContext,
+    payload: &LaneInputPayloadV1,
+    kind: LaneValueKindV1,
+    bytes: &[u8],
+    origin_view: u64,
+) -> Result<EncodedLaneInputV1, String> {
+    let frozen = lane.frozen();
     let slot = payload
         .descriptor
         .slots
@@ -59,9 +85,7 @@ pub(crate) fn encode_lane_input(
         || slot.lane_incarnation != frozen.lane_incarnation
         || slot.lane_height != frozen.next_lane_height
         || payload.descriptor.admission_priority != frozen.admission_priority
-        || body.source().validated_input().certificate().binding_hash
-            != frozen.admitted_binding_hash
-        || body.source().source().finality().height_context.network_id != frozen.network_id
+        || payload.input.certificate.binding.canonical_hash() != frozen.admitted_binding_hash
     {
         return Err("native input differs from the frozen target instance".to_owned());
     }
@@ -73,7 +97,6 @@ pub(crate) fn encode_lane_input(
         .position(|entry| entry.id() == leader)
         .and_then(|index| u32::try_from(index).ok())
         .ok_or_else(|| "native origin leader is absent from its exact frozen roster".to_owned())?;
-    let bytes = body.canonical_bytes();
     let chunks =
         wire::encode_payload_chunks(frozen.da_layout, bytes).map_err(|error| error.to_string())?;
     let chunk_hashes = chunks.iter().map(Hash::new).collect::<Vec<_>>();
@@ -88,7 +111,7 @@ pub(crate) fn encode_lane_input(
         value: LaneValueRefV1 {
             instance_id,
             admitted_binding_hash: frozen.admitted_binding_hash,
-            kind: body.kind(),
+            kind,
             origin_view,
             origin_producer,
             descriptor_hash: payload.descriptor.canonical_hash()?,

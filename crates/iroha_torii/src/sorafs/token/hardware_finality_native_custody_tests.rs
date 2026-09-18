@@ -30,9 +30,7 @@ use iroha_data_model::{
     isi::sorafs::MutateSorafsStreamTokenCustody,
     permission::{Permission, Permissions},
     sorafs::{capacity::ProviderId, stream_token_custody::SorafsStreamTokenCustodyActionV1},
-    transaction::{
-        DataTriggerSequence, FeePaymentIntent, TransactionBuilder, TransactionResultInner,
-    },
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody;
 use iroha_sccp::{
@@ -84,7 +82,6 @@ fn execute_fixture_block(
         height.try_into().expect("positive height"),
         state.view().latest_block_hash(),
         None,
-        None,
         now,
         0,
     );
@@ -110,10 +107,21 @@ fn execute_fixture_block(
         .expect("commit isolated native world fixture");
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(signed_transaction);
-    builder.push_result(TransactionResultInner::Ok(DataTriggerSequence::default()));
-    let signed = builder
+    let mut signed = builder
         .try_build_with_signature(0, key.private_key())
-        .expect("sign complete result-bearing fixture block");
+        .expect("sign fixture proposal");
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut signed,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
     let finalized = sccp_finalize_taira_block_test_fixture_v1(&signed, parent);
     let artifact = &finalized.proof().finality_artifact;
     artifact
@@ -472,7 +480,6 @@ fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     let header = BlockHeader::new(
         3.try_into().unwrap(),
         fixture.state.view().latest_block_hash(),
-        None,
         None,
         NOW_MS + 1,
         0,

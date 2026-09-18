@@ -181,7 +181,18 @@ impl ParallelAccountProfileFixture {
             .unpack(|_| {});
         let results = valid
             .as_ref()
-            .entrypoint_results()
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, output) = valid
+                    .as_ref()
+                    .network_output_at(
+                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    )
+                    .expect("every queried input has its explicit Network output");
+                assert_eq!(usize::try_from(output_index).unwrap(), index);
+                (index, entrypoint, &output.result)
+            })
             .map(|(_, _, result)| result.0.clone())
             .collect::<Vec<_>>();
         let values = self

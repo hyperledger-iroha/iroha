@@ -68,7 +68,7 @@ fn asset_balance_or_zero(tx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantit
 }
 
 fn occurrence_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0)
+    BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0)
 }
 
 fn expected_occurrence(

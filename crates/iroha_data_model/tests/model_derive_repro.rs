@@ -72,7 +72,7 @@ fn repro_blocksignature_bare_vs_header() {
         return;
     }
     let kp = KeyPair::try_random().expect("test fixture random key generation should succeed");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let sig = SignatureOf::try_from_hash(kp.private_key(), header.hash())
         .expect("fixture block signature must sign");
     let bs = iroha_data_model::prelude::BlockSignature::new(42, sig);

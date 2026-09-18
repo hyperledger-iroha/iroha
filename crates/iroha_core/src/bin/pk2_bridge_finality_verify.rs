@@ -1251,6 +1251,9 @@ fn compiled_build_identity() -> Result<iroha_core::release_identity::BuildIdenti
     iroha_core::compiled_build_identity!().map_err(|error| error.to_string())
 }
 #[cfg(test)]
+#[path = "../execution_output_test_support.rs"]
+mod execution_output_test_support;
+#[cfg(test)]
 mod tests {
     fn test_build_identity() -> iroha_core::release_identity::BuildIdentity {
         iroha_core::release_identity::BuildIdentity::from_compiled_parts(
@@ -1338,15 +1341,28 @@ mod tests {
             .external_entrypoints_cloned()
             .map(|entrypoint| entrypoint.hash())
             .collect::<Vec<_>>();
-        genesis_block
-            .set_transaction_results(
-                Vec::new(),
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &genesis_block,
                 &entrypoint_hashes,
                 vec![Ok(
                     iroha_data_model::transaction::DataTriggerSequence::default(),
                 )],
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            genesis_block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("attach canonical successful genesis result");
+        }
+        .expect("attach canonical successful genesis result");
         let final_signature = BlockSignature::new(
             0,
             SignatureOf::try_from_hash(genesis_signer.private_key(), genesis_block.hash())
@@ -1359,15 +1375,10 @@ mod tests {
             .validate_entrypoint_merkle_cache()
             .expect("canonical genesis entrypoint Merkle cache");
         genesis_block
-            .validate_result_merkle_cache()
+            .validate_output_merkle_cache()
             .expect("canonical genesis result Merkle cache");
         assert_eq!(genesis_block.committed_fragment_count(), Some(1));
-        assert_eq!(
-            genesis_block.header().result_merkle_root(),
-            genesis_block
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
-        );
+        assert!(genesis_block.output_merkle_commitment().is_some());
         let mut final_signatures = genesis_block.signatures();
         let final_signature = final_signatures
             .next()

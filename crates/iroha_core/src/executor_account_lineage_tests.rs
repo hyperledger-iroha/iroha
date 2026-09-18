@@ -52,7 +52,7 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 50, 0));
     let mut state_transaction = block.transaction();
     assert!(
         initial_accounts_share_active_lineage(&state_transaction, &retired, &active)

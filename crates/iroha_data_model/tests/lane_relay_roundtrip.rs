@@ -20,7 +20,6 @@ fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) 
         NonZeroU64::new(5).expect("non-zero height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     );

@@ -251,10 +251,13 @@ fn verify_raw_v1(
     let block = decode_executed_block_wire(input.executed_block_wire)?;
     // This is intentionally the only anchor construction path. The data-model
     // capability re-verifies the untrusted artifact, binds it to the decoded
-    // header and exact executed wire, and recomputes all roots and transcripts.
+    // header and exact executed wire, and recomputes all roots and transcripts. The target
+    // context below is trusted only because the pinned verifier accepted this exact proof;
+    // it can differ from input.trusted_context_id after the predecessor transition.
     let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
         &block,
         &finality.finality_artifact,
+        finality.finality_artifact.context_id(),
         &expected_entry_hash,
     )
     .map_err(|error| {

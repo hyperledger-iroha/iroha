@@ -1732,6 +1732,30 @@ CLIENT_STAGES += (('typed status failure SDK decoding without implicit retries',
 QUALIFICATION_SCOPES = ("basic", "full")
 
 
+STAGES += (('independently verified finality certificate witnesses', (
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_accepts_independent_certificate_witnesses',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_rejects_invalid_current_and_parent_witnesses',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_rejects_signed_conflicting_decisions',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_requires_authenticated_predecessor_for_alternate_witnesses',
+)), )
+
+KAGAMI_STAGES += (('read-only bounded native finality inspection', (
+    'kura::tests::finality_inspection_rejects_invalid_height_before_store_access',
+    'kura::tests::finality_inspection_failure_preserves_output_and_store',
+    'kura::tests::finality_command_rejects_output_inside_store',
+)), )
+
+CORE_FINALITY_INSPECTION_STAGES = (('read-only retained finality native validation', (
+    'kura::tests::block_store_read_only_finality_verifies_without_mutation',
+    'kura::tests::block_store_read_only_finality_rejects_invalid_signature_and_binding',
+    'kura::tests::block_store_read_only_finality_rejects_noncanonical_and_missing_records',
+    'kura::tests::block_store_read_only_finality_rejects_unpublished_journal_boundary',
+)), )
+CORE_STAGES += CORE_FINALITY_INSPECTION_STAGES
+CORE_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
+
+
 def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
     """Select honest test coverage without changing shipping features or artifacts."""
     if qualification_scope not in QUALIFICATION_SCOPES:

@@ -12,7 +12,7 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
@@ -45,7 +45,7 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     for backend in [crate::zk::ZK_BACKEND_STARK_FRI_V1] {
@@ -95,7 +95,7 @@ fn halo2_ipa_profile_labels_require_the_canonical_backend() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;

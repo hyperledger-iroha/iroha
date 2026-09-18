@@ -1890,7 +1890,6 @@ mod tests {
                 NonZeroU64::new(2).expect("non-zero block height"),
                 Some(base_state_hash),
                 None,
-                None,
                 7,
                 0,
             ),

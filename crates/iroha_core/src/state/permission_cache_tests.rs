@@ -36,7 +36,7 @@ fn revoke_permission_invalidates_trigger_cache() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission = CanRegisterTrigger {
@@ -128,7 +128,7 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     assert!(
@@ -179,7 +179,6 @@ fn assert_replayed_permission_cache(
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(parent.header().height().get() + 1).expect("next height"),
         Some(parent.hash()),
-        None,
         None,
         u64::try_from(
             (parent.header().creation_time() + std::time::Duration::from_secs(1)).as_millis(),
@@ -348,11 +347,11 @@ fn permission_cache_rebuilds_after_restart_impl() {
     for (label, expected, instructions) in rounds {
         let applied =
             fixture.append_instructions(&owner, owner_keypair.private_key(), instructions);
-        assert_eq!(applied.block.results().len(), 1);
+        assert_eq!(applied.block.output_results().len(), 1);
         assert!(
             applied
                 .block
-                .results()
+                .output_results()
                 .all(|result| result.as_ref().is_ok()),
             "{label} must really execute"
         );
@@ -375,7 +374,8 @@ fn permission_cache_rebuilds_after_restart_impl() {
             Some(applied.block.hash())
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&restarted),
+            crate::snapshot::canonical_state_snapshot_hash(&restarted)
+                .expect("stable valid fixture snapshot"),
             applied.checkpoint_hash
         );
         assert!(

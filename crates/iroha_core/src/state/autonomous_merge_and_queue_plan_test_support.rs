@@ -1238,7 +1238,6 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
         NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
         None,
-        None,
         u64::try_from(parent.header().creation_time().as_millis())
             .expect("fixture parent time fits u64")
             .saturating_add(1),
@@ -1310,32 +1309,31 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
     let mut carrier = certified_merge_carrier_after(&parent, &entry);
-    if requested_beacon.is_some()
-        || transfer_fixture.is_some()
-        || runtime_effect.is_some()
-        || wrap_in_sealed_reveal
-    {
-        // Count the source and actual native block-start work before attaching
-        // a pulse or signing/persisting the final carrier. The merge-only helper
-        // requires this effect-free precursor; native beacon composition later
-        // revalidates the final count. Never infer fragments from instructions.
-        let staged = state
-            .block_with_certified_merge_entry(
-                carrier.header().clone(),
-                &entry,
-                ConsensusMode::Permissioned,
-            )
-            .expect("derive fragments from the exact native certified carrier precursor");
-        let committed_fragments = u64::try_from(staged.committed_fragment_count())
-            .expect("native certified fragment count fits u64");
-        if requested_beacon.is_some() || transfer_fixture.is_some() || runtime_effect.is_some() {
+    if transfer_fixture.is_some() || runtime_effect.is_some() || wrap_in_sealed_reveal {
+        // Setting the certified execution context leaves a resultless proposal.
+        // Only the actual execution owner may attach its rows, fragment count,
+        // transcripts and policy; a fixture cannot copy nonexistent results.
+        let mut staged = state
+            .block_with_certified_merge_entry(carrier.header(), &entry, ConsensusMode::Permissioned)
+            .expect("stage the exact native runtime-effect carrier and source");
+        let validated = ValidBlock::validate_unchecked(carrier, &mut staged).unpack(|_| {});
+        carrier = validated.into();
+        let committed_fragments = carrier
+            .committed_fragment_count()
+            .expect("actual validation attaches the fragment count");
+        if transfer_fixture.is_some() || runtime_effect.is_some() {
             assert!(
                 committed_fragments > 0,
                 "successful source must commit a fragment"
             );
         }
+        assert_eq!(
+            committed_fragments,
+            u64::try_from(staged.committed_fragment_count())
+                .expect("native runtime-effect fragment count fits u64"),
+            "the carrier retains exactly its actual executed fragments"
+        );
         drop(staged);
-        carrier.set_committed_fragment_count(committed_fragments);
     }
     if let Some(pulse) = requested_beacon {
         carrier.set_npos_consensus_effects(Some(
@@ -1344,6 +1342,8 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
                 ..Default::default()
             },
         ));
+        // The complete authenticated execution owner must attach outputs after
+        // this proposal mutation; old result vectors cannot be retained.
     }
     state
         .kura
@@ -1376,12 +1376,20 @@ fn staged_autonomous_merge_commit_block<'state>(
         "successful re-execution must mint canonical WSV commit authorization"
     );
     stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, carrier);
-    let (time_entrypoints, time_hashes, time_results, time_execution_hashes) =
-        state_block.execute_time_triggers(&carrier.header());
-    assert!(time_entrypoints.is_empty());
-    assert!(time_hashes.is_empty());
-    assert!(time_results.is_empty());
-    assert!(time_execution_hashes.is_empty());
+    // TODO: migrate the callers' certified-merge preexecution to the authenticated
+    // native source capsule and its complete common owner. This legacy fixture
+    // must keep failing until that migration exists: its old empty Time tuple
+    // also executed maintenance and emitted an authorization-bound event.
+    let mut executed = carrier.canonical_resultless_proposal();
+    ValidBlock::execute_block_outputs_for_test(&mut executed, &mut state_block, None)
+        .expect("autonomous fixture requires the complete canonical native owner");
+    assert!(
+        executed.execution_outputs().iter().all(|output| matches!(
+            output,
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(_)
+        )),
+        "this fixture registers no internal invocation sources"
+    );
     state_block
         .validate_staged_merge_execution_authorization()
         .expect("pre-vote authorization must bind deterministic carrier events");
@@ -1456,7 +1464,7 @@ fn stage_exact_autonomous_carrier_membership_for_pre_vote(
 ) {
     let height = autonomous_carrier_transaction_height(state_block);
     state_block
-        .stage_canonical_carrier_membership(carrier.entrypoint_hashes(), height)
+        .stage_canonical_carrier_membership(carrier.network_input_hashes(), height)
         .expect("certified carrier membership must match its merge execution batch");
 }
 fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZeroUsize {

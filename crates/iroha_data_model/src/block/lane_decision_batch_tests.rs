@@ -17,7 +17,6 @@ fn decision_batch_header(
             b"actual parent block",
         ))),
         None,
-        None,
         1234,
         7,
     )

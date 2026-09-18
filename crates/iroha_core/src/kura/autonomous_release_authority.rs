@@ -283,7 +283,7 @@ impl Kura {
     fn persist_autonomous_lane_slot_retirement_for_replica_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         record: &AutonomousLaneBlockDurableRecord,
         retirement: &AutonomousLaneSlotRetirementV1,
         expected_network_id: iroha_data_model::NetworkId,
@@ -370,6 +370,7 @@ impl Kura {
         }
         self.write_autonomous_lane_block_view_state_record_locked(
             pending_canonical_bytes,
+            entry,
             &record.artifact.executable_payload,
             &state,
             &record.view_state_path,

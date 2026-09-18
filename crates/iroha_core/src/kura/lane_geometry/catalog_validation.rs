@@ -109,7 +109,6 @@ fn validate_lane_geometry_journal_structure(
     validate_pending_lane_geometry_gc_structure(store_root, journal)?;
     validate_lane_geometry_phase_frontier(store_root, journal)?;
     let mut transition_ids = BTreeSet::new();
-    let mut retained_paths = BTreeSet::new();
     if journal.records.windows(2).any(|pair| {
         pair[0].transition_sequence >= pair[1].transition_sequence
             || pair[0].transition_height > pair[1].transition_height
@@ -146,6 +145,13 @@ fn validate_lane_geometry_journal_structure(
         for bindings in [&record.previous_bindings, &record.updated_bindings] {
             validate_geometry_binding_set_structure(store_root, bindings)?;
         }
+        if record.previous_bindings[0].network_id != record.updated_bindings[0].network_id {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry transition changes the authenticated network",
+            ));
+        }
         if geometry_catalog_fingerprint(&record.previous_bindings) != record.previous_catalog
             || geometry_catalog_fingerprint(&record.updated_bindings) != record.updated_catalog
         {
@@ -166,7 +172,6 @@ fn validate_lane_geometry_journal_structure(
                 "lane geometry journal transition chain is not contiguous",
             ));
         }
-        let transition_hex = hex::encode(record.transition_id.as_ref());
         let previous_by_lane = record
             .previous_bindings
             .iter()
@@ -206,38 +211,38 @@ fn validate_lane_geometry_journal_structure(
                     "lane geometry journal contains duplicate or mismatched lane operations",
                 ));
             }
-            let expected_root = format!(
-                "retired/lane_geometry/{transition_hex}/lane_{:010}",
-                operation.lane_id.as_u32()
-            );
+            // Retained references name the original immutable instance. There is
+            // no second archive/staging location and no alias-derived target.
             let expected_paths = [
-                format!("{expected_root}/previous_blocks"),
-                format!("{expected_root}/previous_merge.log"),
-                format!("{expected_root}/unpublished_blocks"),
-                format!("{expected_root}/unpublished_merge.log"),
+                operation
+                    .previous
+                    .as_ref()
+                    .map_or("", |binding| binding.blocks_path.as_str()),
+                operation
+                    .previous
+                    .as_ref()
+                    .map_or("", |binding| binding.merge_path.as_str()),
+                operation
+                    .updated
+                    .as_ref()
+                    .map_or("", |binding| binding.blocks_path.as_str()),
+                operation
+                    .updated
+                    .as_ref()
+                    .map_or("", |binding| binding.merge_path.as_str()),
             ];
             let actual_paths = [
-                &operation.archived_blocks_path,
-                &operation.archived_merge_path,
-                &operation.unpublished_blocks_path,
-                &operation.unpublished_merge_path,
+                operation.archived_blocks_path.as_str(),
+                operation.archived_merge_path.as_str(),
+                operation.unpublished_blocks_path.as_str(),
+                operation.unpublished_merge_path.as_str(),
             ];
-            if actual_paths
-                .iter()
-                .zip(expected_paths.iter())
-                .any(|(actual, expected)| *actual != expected)
-                || actual_paths
-                    .iter()
-                    .any(|path| !retained_paths.insert((*path).clone()))
-            {
+            if actual_paths != expected_paths {
                 return Err(lane_geometry_journal_structure_error(
                     store_root,
                     ErrorKind::InvalidData,
-                    "lane geometry journal contains forged or colliding archive paths",
+                    "lane geometry contains a retargeted immutable instance reference",
                 ));
-            }
-            for (path, directory) in actual_paths.iter().zip([true, false, true, false]) {
-                validate_geometry_journal_relative_path(store_root, path, directory)?;
             }
             for binding in operation.previous.iter().chain(operation.updated.iter()) {
                 validate_geometry_binding_structure(store_root, binding)?;
@@ -265,16 +270,6 @@ fn validate_lane_geometry_journal_structure(
                     .is_some_and(|(previous, updated)| {
                         previous.incarnation != updated.incarnation
                             || previous.activation_height != updated.activation_height
-                    }),
-                LaneGeometryOperationKind::Relabel => operation
-                    .previous
-                    .as_ref()
-                    .zip(operation.updated.as_ref())
-                    .is_some_and(|(previous, updated)| {
-                        previous.incarnation == updated.incarnation
-                            && previous.activation_height == updated.activation_height
-                            && (previous.blocks_path != updated.blocks_path
-                                || previous.merge_path != updated.merge_path)
                     }),
             };
             if !shape_is_valid {
@@ -310,6 +305,7 @@ fn validate_lane_geometry_checkpoint_structure(
     checkpoint: &LaneGeometrySnapshotCheckpoint,
 ) -> Result<()> {
     validate_geometry_binding_set_structure(store_root, &checkpoint.bindings)?;
+    validate_geometry_binding_set_structure(store_root, &checkpoint.recovery_bindings)?;
     validate_geometry_merge_release_structure(
         store_root,
         &checkpoint.merge_releases,
@@ -323,6 +319,12 @@ fn validate_lane_geometry_checkpoint_structure(
             .all(|byte| *byte == 0)
         || checkpoint.catalog != geometry_catalog_fingerprint(&checkpoint.bindings)
         || lineage_root_is_zero(checkpoint.lineage_root)
+        || lineage_root_is_zero(checkpoint.recovery_lineage_root)
+        || checkpoint.bindings[0].network_id != checkpoint.recovery_bindings[0].network_id
+        || checkpoint
+            .recovery_bindings
+            .iter()
+            .any(|binding| binding.activation_height >= checkpoint.snapshot_height)
         || checkpoint.commitment != geometry_checkpoint_commitment(checkpoint)
         || checkpoint.snapshot_height == 0
         || checkpoint.snapshot_block_hash.is_none()
@@ -433,9 +435,48 @@ fn validate_pending_lane_geometry_gc_structure(
         .iter()
         .map(|record| record.transition_id)
         .collect::<BTreeSet<_>>();
+    let mut last_instance_owner = BTreeMap::new();
+    for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
+        for binding in pending
+            .intent
+            .operations
+            .iter()
+            .flat_map(|operation| operation.previous.iter().chain(operation.updated.iter()))
+        {
+            last_instance_owner.insert(binding.identity(), index);
+        }
+    }
+    let mut collecting_instances = BTreeSet::new();
     let mut pending_ids = BTreeSet::new();
     for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
         let intent = &pending.intent;
+        if pending.collecting.len() > MAX_GEOMETRY_BINDINGS.saturating_mul(2)
+            || pending
+                .collecting
+                .windows(2)
+                .any(|pair| pair[0].identity() >= pair[1].identity())
+            || pending.collecting.iter().any(|binding| {
+                last_instance_owner.get(&binding.identity()) != Some(&index)
+                    || !collecting_instances.insert(binding.identity())
+                    || !intent.operations.iter().any(|operation| {
+                        operation.previous.as_ref() == Some(binding)
+                            || operation.updated.as_ref() == Some(binding)
+                    })
+                    || checkpoint.bindings.contains(binding)
+                    || checkpoint.recovery_bindings.contains(binding)
+                    || journal.records.iter().any(|record| {
+                        record.previous_bindings.contains(binding)
+                            || record.updated_bindings.contains(binding)
+                    })
+            })
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry GC owns an unproven, active, recovery-pinned, or duplicate instance",
+            ));
+        }
+
         let standalone = LaneGeometryJournal {
             version: JOURNAL_VERSION,
             configured_catalog_hash: None,
@@ -514,6 +555,16 @@ fn validate_geometry_binding_structure(
             "lane geometry journal contains a zero incarnation",
         ));
     }
+    let identity = binding.identity();
+    if binding.blocks_path != identity.blocks_relative()
+        || binding.merge_path != identity.merge_relative()
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry path does not match its complete immutable identity",
+        ));
+    }
     validate_geometry_journal_relative_path(store_root, &binding.blocks_path, true)?;
     validate_geometry_journal_relative_path(store_root, &binding.merge_path, false)
 }
@@ -531,6 +582,17 @@ fn validate_geometry_binding_set_structure(
             store_root,
             ErrorKind::InvalidData,
             "lane geometry catalog bindings are empty, duplicated, or unsorted",
+        ));
+    }
+    let network_id = bindings[0].network_id;
+    if bindings
+        .iter()
+        .any(|binding| binding.network_id != network_id)
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry catalog mixes network identities",
         ));
     }
     let mut incarnations = BTreeSet::new();
@@ -557,6 +619,18 @@ fn validate_geometry_journal_relative_path(
 ) -> Result<()> {
     let relative = Path::new(relative);
     validate_relative_path(relative)?;
+    for reserved in [
+        Path::new("blocks/canonical"),
+        Path::new("merge_ledger/canonical.log"),
+    ] {
+        if relative.starts_with(reserved) || reserved.starts_with(relative) {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry cannot own the canonical-chain namespace",
+            ));
+        }
+    }
     let root_metadata = fs::symlink_metadata(store_root)
         .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
@@ -765,6 +839,8 @@ fn geometry_checkpoint_commitment(checkpoint: &LaneGeometrySnapshotCheckpoint) -
         None => payload.push(0),
     }
     payload.extend_from_slice(&checkpoint.bindings.clone().encode());
+    payload.extend_from_slice(&checkpoint.recovery_bindings.clone().encode());
+    payload.extend_from_slice(checkpoint.recovery_lineage_root.as_ref());
     payload.extend_from_slice(&checkpoint.merge_releases.clone().encode());
     match checkpoint.pending_archive_gc_root {
         Some(hash) => {
@@ -790,6 +866,8 @@ fn lane_geometry_snapshot_checkpoint(
     snapshot_state_hash: Hash,
     bindings: Vec<LaneGeometryBinding>,
     lineage_root: Hash,
+    recovery_bindings: Vec<LaneGeometryBinding>,
+    recovery_lineage_root: Hash,
     transition_sequence: Option<u64>,
     transition_height: Option<u64>,
     transition_previous_catalog: Option<Hash>,
@@ -811,6 +889,8 @@ fn lane_geometry_snapshot_checkpoint(
         transition_previous_lineage_root,
         transition_id,
         bindings,
+        recovery_bindings,
+        recovery_lineage_root,
         merge_releases,
         pending_archive_gc_root,
         commitment: Hash::prehashed([0; Hash::LENGTH]),

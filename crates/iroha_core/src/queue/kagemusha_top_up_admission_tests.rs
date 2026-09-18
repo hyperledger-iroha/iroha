@@ -198,7 +198,7 @@ mod kagemusha_top_up_admission_tests {
             LiveQueryStore::start_test(),
         );
         let mut state_block =
-            state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = state_block.transaction();
         let error = StateBlock::validate_stateful_admission(
             transaction,

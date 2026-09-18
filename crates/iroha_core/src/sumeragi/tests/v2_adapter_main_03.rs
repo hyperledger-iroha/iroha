@@ -911,7 +911,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         8_214,
         round.view,
     );

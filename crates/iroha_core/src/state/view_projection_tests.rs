@@ -13,7 +13,7 @@ async fn get_block_hashes_after_hash() {
         });
         let mut state_block = state.block(block.as_ref().header());
         block_hashes.push(block.as_ref().hash());
-        let _events = state_block.apply(&block, Vec::new());
+        let _events = state_block.apply_without_execution(&block, Vec::new());
         state_block.commit().unwrap();
     }
     assert!(
@@ -35,7 +35,7 @@ fn block_hashes_commit_applies_pending_only_on_commit() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     let initial_len = state.block_hashes.view().len();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let hash = header.hash();
     {
         let mut block_hashes = state.block_hashes.block();
@@ -56,7 +56,7 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let first_hash = first_header.hash();
     {
         let mut block_hashes = state.block_hashes.block();
@@ -66,7 +66,6 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
     let replacement_header = BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(first_hash),
-        None,
         None,
         0,
         0,
@@ -110,7 +109,7 @@ fn block_hashes_committed_height_cache_tracks_commits() {
         state.block_hashes.view().len(),
         "cached committed height must match block-hash journal length at genesis"
     );
-    let first_hash = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0).hash();
+    let first_hash = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0).hash();
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push(first_hash);
@@ -124,7 +123,6 @@ fn block_hashes_committed_height_cache_tracks_commits() {
     let replacement_hash = BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(first_hash),
-        None,
         None,
         0,
         0,
@@ -159,7 +157,7 @@ async fn get_blocks_from_height() {
             header.set_height(NonZeroU64::new(i as u64).unwrap());
         });
         let mut state_block = state.block(block.as_ref().header());
-        let _events = state_block.apply(&block, Vec::new());
+        let _events = state_block.apply_without_execution(&block, Vec::new());
         state_block.commit().unwrap();
         kura.store_block(block).expect("store block");
     }
@@ -188,7 +186,7 @@ async fn canonical_history_stops_at_missing_kura_entry() {
             header.set_height(NonZeroU64::new(height).unwrap());
         });
         let mut state_block = state.block(block.as_ref().header());
-        let _events = state_block.apply(&block, Vec::new());
+        let _events = state_block.apply_without_execution(&block, Vec::new());
         state_block.commit().unwrap();
         if height != 3 {
             kura.store_block(block).expect("store block");
@@ -213,7 +211,7 @@ async fn canonical_history_reports_authenticated_hash_only_body() {
         header.set_height(nonzero!(1_u64));
     });
     let mut state_block = state.block(block.as_ref().header());
-    let _events = state_block.apply(&block, Vec::new());
+    let _events = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
     kura.store_block(block).expect("store canonical test block");
     kura.force_hash_only_block_for_testing(nonzero!(1_usize))

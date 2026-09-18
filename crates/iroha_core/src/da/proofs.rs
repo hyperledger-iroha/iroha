@@ -485,14 +485,14 @@ mod tests {
     }
     fn header_with_hash(height: u64, da_hash: HashOf<DaCommitmentBundle>) -> BlockHeader {
         let height = NonZeroU64::new(height).expect("non-zero height");
-        let mut header = BlockHeader::new(height, None, None, None, 0, 0);
+        let mut header = BlockHeader::new(height, None, None, 0, 0);
         header.set_da_commitments_hash(Some(da_hash));
         header.set_da_proof_policies_hash(Some(HashOf::new(&policy_bundle())));
         header
     }
     fn header_without_da_hash(height: u64) -> BlockHeader {
         let height = NonZeroU64::new(height).expect("non-zero height");
-        BlockHeader::new(height, None, None, None, 0, 0)
+        BlockHeader::new(height, None, None, 0, 0)
     }
     fn sample_pin_intent(lane: u32, sequence: u64) -> DaPinIntent {
         let tag = u8::try_from(sequence).expect("test sequence fits u8");
@@ -519,7 +519,6 @@ mod tests {
     fn header_with_pin_intent_hash(height: u64, hash: HashOf<DaPinIntentBundle>) -> BlockHeader {
         let mut header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
-            None,
             None,
             None,
             0,

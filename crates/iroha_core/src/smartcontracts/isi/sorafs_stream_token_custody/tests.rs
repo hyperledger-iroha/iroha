@@ -102,7 +102,6 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
         height.try_into().expect("nonzero height"),
         state.view().latest_block_hash(),
         None,
-        None,
         now,
         0,
     );

@@ -818,6 +818,7 @@ struct PipelineStatusQuery {
     scope: Option<String>,
 }
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+#[norito(deny_unknown_fields)]
 struct TriggerCompletionQuery {
     #[norito(default)]
     id: Option<String>,
@@ -833,8 +834,6 @@ struct TriggerCompletionQuery {
     limit: Option<u64>,
     #[norito(default)]
     scan_limit_blocks: Option<u64>,
-    #[norito(default)]
-    include_reconstructed: Option<bool>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TriggerCompletionOutcomeFilter {
@@ -876,123 +875,6 @@ fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static st
         TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
     }
 }
-fn trigger_completion_summary_from_event(
-    event: &TriggerCompletedEvent,
-) -> TriggerCompletionSummary {
-    let (outcome, message) = trigger_completion_outcome(event.outcome());
-    TriggerCompletionSummary {
-        trigger_id: event.trigger_id().to_string(),
-        trigger_execution_hash: event.trigger_execution_hash().to_string(),
-        step_index: *event.step_index(),
-        outcome: outcome.to_owned(),
-        message,
-    }
-}
-fn trigger_completion_record_from_event(
-    block: &iroha_data_model::block::SignedBlock,
-    block_height: u64,
-    event: &TriggerCompletedEvent,
-    source: &str,
-) -> TriggerCompletionRecord {
-    let entrypoint_index = block
-        .entrypoint_hashes()
-        .position(|hash| hash == *event.trigger_execution_hash())
-        .and_then(|index| u64::try_from(index).ok());
-    TriggerCompletionRecord {
-        block_height,
-        entrypoint_index,
-        completion: trigger_completion_summary_from_event(event),
-        source: source.to_owned(),
-    }
-}
-fn trigger_completion_record_from_parts(
-    block_height: u64,
-    entrypoint_index: usize,
-    trigger_id: String,
-    trigger_execution_hash: String,
-    step_index: u32,
-    outcome: &str,
-    message: Option<String>,
-    source: &str,
-) -> TriggerCompletionRecord {
-    TriggerCompletionRecord {
-        block_height,
-        entrypoint_index: u64::try_from(entrypoint_index).ok(),
-        completion: TriggerCompletionSummary {
-            trigger_id,
-            trigger_execution_hash,
-            step_index,
-            outcome: outcome.to_owned(),
-            message,
-        },
-        source: source.to_owned(),
-    }
-}
-fn visit_reconstructed_trigger_completion_records<F>(
-    block: &iroha_data_model::block::SignedBlock,
-    block_height: u64,
-    visit: &mut F,
-) -> bool
-where
-    F: FnMut(TriggerCompletionRecord) -> bool,
-{
-    for (entrypoint_index, entrypoint, result) in block.entrypoint_results() {
-        let execution_hash = entrypoint.hash().to_string();
-        if let TransactionEntrypoint::Time(time_entrypoint) = &entrypoint {
-            let record = match &result.0 {
-                Ok(_) => trigger_completion_record_from_parts(
-                    block_height,
-                    entrypoint_index,
-                    time_entrypoint.id.to_string(),
-                    execution_hash.clone(),
-                    0,
-                    "Success",
-                    None,
-                    "reconstructed_result",
-                ),
-                Err(reason) => trigger_completion_record_from_parts(
-                    block_height,
-                    entrypoint_index,
-                    time_entrypoint.id.to_string(),
-                    execution_hash.clone(),
-                    0,
-                    "Failure",
-                    Some(reason.to_string()),
-                    "reconstructed_result",
-                ),
-            };
-            if !visit(record) {
-                return false;
-            }
-        }
-        let Ok(sequence) = &result.0 else {
-            continue;
-        };
-        let first_data_step = if matches!(entrypoint, TransactionEntrypoint::Time(_)) {
-            1_u32
-        } else {
-            0_u32
-        };
-        for (offset, step) in sequence.iter().enumerate() {
-            let step_index =
-                first_data_step.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
-            let record = trigger_completion_record_from_parts(
-                block_height,
-                entrypoint_index,
-                step.id.to_string(),
-                execution_hash.clone(),
-                step_index,
-                "Success",
-                None,
-                "reconstructed_result",
-            );
-            if !visit(record) {
-                return false;
-            }
-        }
-    }
-    true
-}
 fn trigger_completion_record_matches(
     record: &TriggerCompletionRecord,
     trigger_id: Option<&str>,
@@ -1014,32 +896,43 @@ fn trigger_completion_record_matches(
 fn visit_trigger_completion_records_for_block<F>(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
-    include_reconstructed: bool,
-    entrypoint_hash: Option<&str>,
     mut visit: F,
-) -> bool
+) -> Result<bool, Error>
 where
     F: FnMut(TriggerCompletionRecord) -> bool,
 {
-    let persisted = block.trigger_completions().unwrap_or_default();
-    let reconstruct = include_reconstructed
-        && (persisted.is_empty()
-            || entrypoint_hash.is_some_and(|entrypoint_hash| {
-                !persisted
-                    .iter()
-                    .any(|event| event.trigger_execution_hash().to_string() == entrypoint_hash)
-            }));
-    if reconstruct {
-        return visit_reconstructed_trigger_completion_records(block, block_height, &mut visit);
+    block
+        .validate_output_merkle_cache()
+        .map_err(pipeline_status_projection_error)?;
+    for output in block.execution_outputs() {
+        let call_hash = output
+            .execution_call_hash(block.hash(), block)
+            .map_err(pipeline_status_projection_error)?;
+        let entrypoint_index = match output {
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(row) => {
+                Some(u64::from(row.input_index))
+            }
+            _ => None,
+        };
+        for completion in output.completions() {
+            let (outcome, message) = trigger_completion_outcome(&completion.outcome);
+            if !visit(TriggerCompletionRecord {
+                block_height,
+                entrypoint_index,
+                completion: TriggerCompletionSummary {
+                    trigger_id: completion.trigger_id.to_string(),
+                    trigger_execution_hash: call_hash.to_string(),
+                    step_index: completion.callback_index,
+                    outcome: outcome.to_owned(),
+                    message,
+                },
+                source: "execution_output".to_owned(),
+            }) {
+                return Ok(false);
+            }
+        }
     }
-    persisted.iter().all(|event| {
-        visit(trigger_completion_record_from_event(
-            block,
-            block_height,
-            event,
-            "block_result",
-        ))
-    })
+    Ok(true)
 }
 fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
     let scan_limit = query
@@ -1060,7 +953,6 @@ fn trigger_completion_query_response(
         .limit
         .unwrap_or(TRIGGER_COMPLETION_DEFAULT_LIMIT)
         .clamp(1, TRIGGER_COMPLETION_MAX_LIMIT);
-    let include_reconstructed = query.include_reconstructed.unwrap_or(true);
     let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
     let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
     if latest_height == 0 || requested_to == 0 {
@@ -1084,46 +976,58 @@ fn trigger_completion_query_response(
             completions: Vec::new(),
         });
     }
+    let anchor_index = usize::try_from(requested_to - 1)
+        .map_err(|_| pipeline_status_projection_error("completion anchor exceeds host index"))?;
+    let anchor = app
+        .state
+        .view()
+        .block_hashes()
+        .get(anchor_index)
+        .copied()
+        .ok_or_else(|| {
+            pipeline_status_projection_error("completion history anchor is unavailable")
+        })?;
     let mut completions = Vec::new();
     let mut scanned_blocks = 0_u64;
+    let mut remaining_work = routing::app_query_limits().max_fetch_size;
+    let mut remaining_bytes =
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(remaining_work);
     for height in (from_height..=requested_to).rev() {
         scanned_blocks = scanned_blocks.saturating_add(1);
-        let Some(height_usize) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
-            continue;
-        };
-        let Some(block) = app.kura.get_block(height_usize) else {
-            continue;
-        };
+        let height_usize = usize::try_from(height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                pipeline_status_projection_error("completion height exceeds host index")
+            })?;
+        let carrier = app
+            .state
+            .read_finalized_execution_carrier(height_usize, remaining_work, remaining_bytes)
+            .map_err(pipeline_status_projection_error)?;
+        remaining_work -= carrier.work_items();
+        remaining_bytes -= carrier.wire_bytes();
         let mut reached_limit = false;
-        visit_trigger_completion_records_for_block(
-            block.as_ref(),
-            height,
-            include_reconstructed,
-            query.entrypoint_hash.as_deref(),
-            |record| {
-                if !trigger_completion_record_matches(
-                    &record,
-                    query.id.as_deref(),
-                    query.entrypoint_hash.as_deref(),
-                    outcome,
-                ) {
-                    return true;
-                }
-                completions.push(record);
-                reached_limit = u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit;
-                !reached_limit
-            },
-        );
+        visit_trigger_completion_records_for_block(carrier.block(), height, |record| {
+            if !trigger_completion_record_matches(
+                &record,
+                query.id.as_deref(),
+                query.entrypoint_hash.as_deref(),
+                outcome,
+            ) {
+                return true;
+            }
+            completions.push(record);
+            reached_limit = u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit;
+            !reached_limit
+        })?;
         if reached_limit {
-            return Ok(TriggerCompletionListResponse {
-                latest_height,
-                from_height,
-                to_height: requested_to,
-                scanned_blocks,
-                limit,
-                completions,
-            });
+            break;
         }
+    }
+    if app.state.view().block_hashes().get(anchor_index).copied() != Some(anchor) {
+        return Err(pipeline_status_projection_error(
+            "completion history changed during authentication",
+        ));
     }
     Ok(TriggerCompletionListResponse {
         latest_height,
@@ -1133,31 +1037,6 @@ fn trigger_completion_query_response(
         limit,
         completions,
     })
-}
-fn trigger_completion_summaries_for_entrypoint_hash(
-    app: &SharedAppState,
-    block_height: u64,
-    entrypoint_hash: &str,
-) -> Vec<TriggerCompletionSummary> {
-    let query = TriggerCompletionQuery {
-        id: None,
-        entrypoint_hash: Some(entrypoint_hash.to_owned()),
-        outcome: None,
-        from_height: Some(block_height),
-        to_height: Some(block_height),
-        limit: Some(TRIGGER_COMPLETION_MAX_LIMIT),
-        scan_limit_blocks: Some(1),
-        include_reconstructed: Some(true),
-    };
-    trigger_completion_query_response(app, &query)
-        .map(|response| {
-            response
-                .completions
-                .into_iter()
-                .map(|record| record.completion)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
@@ -1220,59 +1099,6 @@ fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
             "committed transaction status projection is inconsistent: {message}"
         )),
     ))
-}
-fn certified_merge_pipeline_transactions(
-    carrier_hash: HashOf<BlockHeader>,
-    reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
-    entry: &iroha_data_model::merge::MergeLedgerEntry,
-) -> Result<
-    Vec<(
-        HashOf<TransactionEntrypoint>,
-        Option<HashOf<SignedTransaction>>,
-        iroha_data_model::query::CommittedTransaction,
-    )>,
-    Error,
-> {
-    let transactions = iroha_core::smartcontracts::isi::tx::certified_merge_committed_transactions(
-        carrier_hash,
-        reference,
-        entry,
-    )
-    .map_err(pipeline_status_projection_error)?;
-    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
-        pipeline_status_projection_error(
-            "execution carrier references an entry without an execution batch",
-        )
-    })?;
-    let membership_identities = batch
-        .lanes
-        .iter()
-        .flat_map(|execution| {
-            execution.entrypoints.iter().map(|entrypoint| {
-                (
-                    entrypoint.hash(),
-                    signed_transaction_hash_for_entrypoint(entrypoint),
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    if transactions.len() != membership_identities.len() {
-        return Err(pipeline_status_projection_error(format!(
-            "authenticated transcript has {} transactions but State membership has {} hashes",
-            transactions.len(),
-            membership_identities.len()
-        )));
-    }
-    Ok(membership_identities
-        .into_iter()
-        .rev()
-        .zip(transactions)
-        .map(
-            |((entrypoint_hash, signed_transaction_hash), transaction)| {
-                (entrypoint_hash, signed_transaction_hash, transaction)
-            },
-        )
-        .collect())
 }
 #[derive(Clone, Debug)]
 enum CanonicalTransactionOutcome {
@@ -1361,118 +1187,52 @@ fn canonical_transaction_outcome_with_authenticator(
     }
     Ok(Some(outcome))
 }
-// The header hash selects the canonical carrier; it does not include execution
-// results. Kura's existing-block admission binds the exact result-bearing wire,
-// and finality forbids replacing/pruning committed carriers. Keep the complete
-// merge-transcript authentication below; State membership alone is insufficient.
+// State captures and rechecks membership; Kura authenticates the exact finalized
+// execution wire without retaining a world-state read guard across storage I/O.
 fn authenticate_canonical_transaction_outcome(
     kura: &Kura,
     hash: &HashOf<SignedTransaction>,
     anchor: CanonicalTransactionAnchor,
 ) -> Result<CanonicalTransactionOutcome, Error> {
-    let CanonicalTransactionAnchor {
-        entrypoint_hash,
-        height,
-        block_hash: expected_hash,
-    } = anchor;
-    let height_u64 = u64::try_from(height.get())
-        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
-    let height_nz = NonZeroU64::new(height_u64)
-        .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
-    let block = kura.get_block(height).ok_or_else(|| {
-        pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
+    let mut result = None;
+    let mut duplicate = false;
+    let work = routing::app_query_limits().max_fetch_size;
+    let header = iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
+        kura,
+        anchor.height,
+        anchor.block_hash,
+        work,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        |entrypoint, output| {
+            if transaction_entrypoint_matches_indexed_identity(entrypoint, &anchor.entrypoint_hash)
+            {
+                let outcome = output.as_ref().map(|_| ()).map_err(Clone::clone);
+                duplicate |= result.replace(outcome).is_some();
+            }
+        },
+    )
+    .map_err(pipeline_status_projection_error)?;
+    if duplicate {
+        return Err(pipeline_status_projection_error(format!(
+            "transaction {hash} occurs more than once in its finalized carrier"
+        )));
+    }
+    let result = result.ok_or_else(|| {
+        pipeline_status_projection_error(format!(
+            "transaction {hash} is absent from its finalized carrier"
+        ))
     })?;
-    let block_ref = block.as_ref();
-    if block_ref.header().height() != height_nz {
-        return Err(pipeline_status_projection_error(format!(
-            "Kura returned block height {} for indexed height {}",
-            block_ref.header().height(),
-            height.get()
-        )));
-    }
-    if block_ref.hash() != expected_hash {
-        return Err(pipeline_status_projection_error(format!(
-            "Kura block hash at height {} does not match the committed State journal",
-            height.get()
-        )));
-    }
     let settled_at = UNIX_EPOCH
-        .checked_add(block_ref.header().creation_time())
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "block {} creation time exceeds SystemTime",
-                height.get()
-            ))
-        })?;
-    let mut direct_result = None;
-    for (index, entrypoint, result) in block_ref.entrypoint_results() {
-        if index >= block_ref.external_entrypoint_count() {
-            break;
-        }
-        if !transaction_entrypoint_matches_indexed_identity(&entrypoint, &entrypoint_hash) {
-            continue;
-        }
-        if direct_result.replace(result).is_some() {
-            return Err(pipeline_status_projection_error(format!(
-                "transaction {hash} occurs more than once in canonical block {}",
-                height.get()
-            )));
-        }
-    }
-    if let Some(result) = direct_result {
-        return Ok(match &result.0 {
-            Ok(_) => CanonicalTransactionOutcome::Applied {
-                height: height_nz,
-                settled_at,
-            },
-            Err(reason) => CanonicalTransactionOutcome::Rejected {
-                height: height_nz,
-                reason: reason.clone(),
-            },
-        });
-    }
-    let reference = block_ref
-        .execution_context()
-        .and_then(|context| context.merge_entry.as_ref())
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "transaction {hash} is indexed at block {} but is absent from its external body and has no merge reference",
-                height.get()
-            ))
-        })?;
-    let entry = kura
-        .get_merge_entry_by_carrier_height(height)
-        .map_err(pipeline_status_projection_error)?
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "block {} has a merge reference but no canonical sidecar",
-                height.get()
-            ))
-        })?;
-    let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
-    let mut matches = transactions.iter().filter(|(_, _, transaction)| {
-        transaction_entrypoint_matches_indexed_identity(transaction.entrypoint(), &entrypoint_hash)
-    });
-    let transaction = matches.next().map(|(_, _, transaction)| transaction).ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
-                height.get()
-            ))
-        })?;
-    if matches.next().is_some() {
-        return Err(pipeline_status_projection_error(format!(
-            "transaction {hash} occurs more than once in merge carrier {}",
-            height.get()
-        )));
-    }
-    Ok(match &transaction.result().0 {
-        Ok(_) => CanonicalTransactionOutcome::Applied {
-            height: height_nz,
+        .checked_add(header.creation_time())
+        .ok_or_else(|| pipeline_status_projection_error("carrier time exceeds SystemTime"))?;
+    Ok(match result {
+        Ok(()) => CanonicalTransactionOutcome::Applied {
+            height: header.height(),
             settled_at,
         },
         Err(reason) => CanonicalTransactionOutcome::Rejected {
-            height: height_nz,
-            reason: reason.clone(),
+            height: header.height(),
+            reason,
         },
     })
 }
@@ -1725,55 +1485,44 @@ fn canonical_carrier_hash_for_indexed_transaction_identity(
     block_height: NonZeroUsize,
     indexed_identity: &HashOf<TransactionEntrypoint>,
 ) -> Result<HashOf<TransactionEntrypoint>, Error> {
-    let block = app.kura.get_block(block_height).ok_or_else(|| {
-        pipeline_status_projection_error(format!(
-            "canonical block {} is unavailable",
-            block_height.get()
-        ))
-    })?;
-    let block_ref = block.as_ref();
-    for (index, entrypoint, _) in block_ref.entrypoint_results() {
-        if index >= block_ref.external_entrypoint_count() {
-            break;
-        }
-        if transaction_entrypoint_matches_indexed_identity(&entrypoint, indexed_identity) {
-            return Ok(entrypoint.hash());
-        }
+    let expected_hash = app
+        .state
+        .view()
+        .block_hashes()
+        .get(block_height.get() - 1)
+        .copied()
+        .ok_or_else(|| {
+            pipeline_status_projection_error("indexed carrier is outside canonical history")
+        })?;
+    let work = routing::app_query_limits().max_fetch_size;
+    let mut matched = None;
+    let mut duplicate = false;
+    iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
+        &app.kura,
+        block_height,
+        expected_hash,
+        work,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        |entrypoint, _| {
+            if transaction_entrypoint_matches_indexed_identity(entrypoint, indexed_identity) {
+                duplicate |= matched.replace(entrypoint.hash()).is_some();
+            }
+        },
+    )
+    .map_err(pipeline_status_projection_error)?;
+    if duplicate {
+        return Err(pipeline_status_projection_error(
+            "indexed identity selects multiple Network inputs",
+        ));
     }
-    let reference = block_ref
-        .execution_context()
-        .and_then(|context| context.merge_entry.as_ref())
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "indexed transaction identity {indexed_identity} is absent from block {}",
-                block_height.get()
-            ))
-        })?;
-    let entry = app
-        .kura
-        .get_merge_entry_by_carrier_height(block_height)
-        .map_err(pipeline_status_projection_error)?
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "block {} has a merge reference but no canonical sidecar",
-                block_height.get()
-            ))
-        })?;
-    certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?
-        .into_iter()
-        .find(|(_, _, transaction)| {
-            transaction_entrypoint_matches_indexed_identity(
-                transaction.entrypoint(),
-                indexed_identity,
-            )
-        })
-        .map(|(carrier_hash, _, _)| carrier_hash)
-        .ok_or_else(|| {
-            pipeline_status_projection_error(format!(
-                "indexed transaction identity {indexed_identity} is absent from merge carrier {}",
-                block_height.get()
-            ))
-        })
+    if app.state.view().block_hashes().get(block_height.get() - 1) != Some(&expected_hash) {
+        return Err(pipeline_status_projection_error(
+            "canonical carrier changed during identity lookup",
+        ));
+    }
+    matched.ok_or_else(|| {
+        pipeline_status_projection_error("indexed identity is absent from its finalized carrier")
+    })
 }
 /// This code is reserved for absence of the one authenticated committed proof.
 /// Generic route/account failures must never masquerade as delayed proof visibility.
@@ -1807,7 +1556,6 @@ fn pipeline_transaction_details_response(
         block_height,
         &entrypoint_hash,
     )?;
-    let canonical_entrypoint_hash_text = canonical_entrypoint_hash.to_string();
     let state_view = app.state.view();
     let mut transactions =
         iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
@@ -1816,6 +1564,17 @@ fn pipeline_transaction_details_response(
                 entry_eq: Some(canonical_entrypoint_hash),
                 ..CommittedTxFilters::default()
             }),
+            iroha_core::smartcontracts::isi::tx::TransactionHistoryWorkLimits {
+                max_carrier_work: routing::app_query_limits().max_fetch_size,
+                max_total_work: routing::app_query_limits().max_fetch_size,
+                max_bytes: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
+                    routing::app_query_limits().max_fetch_size,
+                ),
+            },
+            routing::app_query_limits().max_fetch_size,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
+                routing::app_query_limits().max_fetch_size,
+            ),
         )
         .map_err(pipeline_status_projection_error)?;
     if transactions.len() != 1 {
@@ -1838,18 +1597,8 @@ fn pipeline_transaction_details_response(
             ),
         ));
     }
-    let block_height = u64::try_from(block_height.get())
-        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
     let hash = entrypoint_hash.to_string();
-    Ok(PipelineTransactionDetailsResponse {
-        trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
-            app,
-            block_height,
-            &canonical_entrypoint_hash_text,
-        ),
-        hash,
-        transaction,
-    })
+    Ok(PipelineTransactionDetailsResponse { hash, transaction })
 }
 fn pipeline_status_proxy_query(
     hash: &HashOf<SignedTransaction>,

@@ -2,7 +2,7 @@
 
 state_test! { sync native_lane_input_rs16_materializes_identical_codeword_for_every_route_and_preserves_origin
     use super::{FirstLaneAdmittedInputReadV1, LaneInputBodyPreparationV1};
-    use crate::sumeragi::v2_lane_payload::{encode_lane_input, verify_lane_input_manifest};
+    use crate::sumeragi::v2_lane_payload::{encode_frozen_lane_input, encode_lane_input, verify_lane_input_manifest};
     let fixture = all_route_input_fixture(false);
     let state = &fixture.state;
     let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
@@ -11,6 +11,11 @@ state_test! { sync native_lane_input_rs16_materializes_identical_codeword_for_ev
         let FirstLaneAdmittedInputReadV1::Ready(source) = state.first_lane_admitted_input(&observed, lane).unwrap() else { panic!("actual source"); };
         let LaneInputBodyPreparationV1::Ready(body) = state.prepare_lane_input_body(&observed, lane, &source).unwrap() else { panic!("same head everywhere"); };
         let (manifest, chunks) = encode_lane_input(lane, &body, 0).unwrap().into_parts();
+        let (offline_manifest, offline_chunks) = encode_frozen_lane_input(
+            lane, body.payload(), body.kind(), body.canonical_bytes(), 0,
+        ).unwrap().into_parts();
+        assert_eq!(offline_manifest, manifest, "shared historical calculation preserves the real live manifest");
+        assert_eq!(offline_chunks, chunks, "shared historical calculation preserves every live RS16 shard");
         manifest.validate_availability().unwrap();
         assert_eq!(manifest.layout, lane.frozen().da_layout);
         assert_eq!(manifest.value.instance_id, Hash::from(lane.instance_id().0));

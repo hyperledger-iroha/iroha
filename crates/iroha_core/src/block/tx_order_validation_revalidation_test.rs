@@ -88,8 +88,15 @@ async fn tx_order_same_in_validation_and_revalidation() {
     // The 1st transaction should fail and 2nd succeed
     let block_ref = valid_block.as_ref();
     let outcomes: Vec<_> = block_ref
-        .entrypoint_hashes()
-        .zip(block_ref.results())
+        .network_entrypoints()
+        .enumerate()
+        .map(|(index, input)| {
+            let (output_index, row) = block_ref
+                .network_output_at(u32::try_from(index).unwrap())
+                .expect("exact Network source output");
+            assert_eq!(usize::try_from(output_index).unwrap(), index);
+            (input.hash(), &row.result)
+        })
         .collect();
     let lookup = |hash: &_, label: &str| {
         outcomes

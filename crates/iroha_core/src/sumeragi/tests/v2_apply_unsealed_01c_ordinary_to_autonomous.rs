@@ -601,7 +601,7 @@ v2_apply_test!(
             Some(descriptor.descriptor_hash)
         );
 
-        fixture.state = Arc::new(restored);
+        fixture.state = Arc::from(restored);
         let (restart_events, _restart_receiver) = tokio::sync::broadcast::channel(32);
         let restart_queue = fixture_queue(fixture.state.as_ref(), restart_events.clone());
         fixture.service = V2ApplyService::new(

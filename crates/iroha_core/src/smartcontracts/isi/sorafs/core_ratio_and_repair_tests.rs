@@ -76,7 +76,6 @@ fn block_header_at_epoch(epoch: u64) -> iroha_data_model::block::BlockHeader {
         nonzero!(1_u64),
         None,
         None,
-        None,
         epoch
             .checked_mul(1_000)
             .expect("test consensus epoch must fit milliseconds"),
@@ -89,7 +88,6 @@ pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
 fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         nonzero!(1_u64),
-        None,
         None,
         None,
         1_700_000_128_000,
@@ -118,7 +116,6 @@ fn activate_reputation_policy(
 fn repair_block_header(height: u64, creation_time_ms: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("non-zero test block height"),
-        None,
         None,
         None,
         creation_time_ms,

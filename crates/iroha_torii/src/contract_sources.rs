@@ -27,7 +27,6 @@ use std::{
     fmt::{self, Write as _},
     fs,
     io::{self, Read as _, Write as _},
-    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
 };
@@ -1902,10 +1901,6 @@ fn locate_instruction_box(
                 .to_owned(),
         });
     }
-    let start_height = state.committed_height() as u64;
-    if start_height == 0 {
-        return Err(not_found());
-    }
     let target: iroha_crypto::HashOf<TransactionEntrypoint> = transaction_hash
         .trim()
         .parse()
@@ -1913,44 +1908,49 @@ fn locate_instruction_box(
     let lookup_index: usize = index
         .try_into()
         .map_err(|_| conversion_error("instruction index exceeds host pointer width"))?;
-    let mut height = start_height;
-    loop {
-        let Some(nonzero_height) = NonZeroUsize::new(height as usize) else {
-            break;
-        };
-        if let Some(block) = state.block_by_height(nonzero_height) {
-            let block_ref = block.as_ref();
-            for (entrypoint_index, entrypoint, _) in block_ref.entrypoint_results() {
-                if entrypoint_index >= block_ref.external_entrypoint_count() {
-                    break;
-                }
-                if entrypoint.hash() != target {
-                    continue;
-                }
-                let tx = match entrypoint {
-                    TransactionEntrypoint::External(tx) => tx,
-                    TransactionEntrypoint::SealedReveal(reveal) => {
-                        reveal.signed_transaction().clone()
-                    }
-                    TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                        return Err(not_found());
-                    }
-                };
-                let instruction = tx
-                    .instructions()
-                    .explicit_instructions()
-                    .nth(lookup_index)
-                    .ok_or_else(not_found)?;
-                return Ok(instruction.clone());
-            }
+    let height = state
+        .committed_entrypoint_height(&target)
+        .ok_or_else(not_found)?;
+    let work = crate::routing::app_query_limits().max_fetch_size;
+    let carrier = state
+        .read_finalized_execution_carrier(
+            height,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        )
+        .map_err(|error| conversion_error(error.to_string()))?;
+    let mut instruction = None;
+    let mut matched = false;
+    for (source_hash, signed, _) in crate::canonical_history::signed_calls(carrier.block())
+        .map_err(|error| conversion_error(error.to_string()))?
+    {
+        if !crate::signed_transaction_carrier_matches_indexed_identity(
+            &source_hash,
+            signed,
+            &target,
+        ) {
+            continue;
         }
-        if height == 1 {
-            break;
+        if matched {
+            return Err(conversion_error(
+                "indexed transaction has duplicate Network sources",
+            ));
         }
-        height -= 1;
+        matched = true;
+        instruction = signed
+            .instructions()
+            .explicit_instructions()
+            .nth(lookup_index)
+            .cloned();
     }
-    Err(not_found())
+    if state.committed_entrypoint_height(&target) != Some(height) {
+        return Err(conversion_error(
+            "transaction membership changed during instruction lookup",
+        ));
+    }
+    instruction.ok_or_else(not_found)
 }
+
 fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCodeViewDto, Error> {
     let mut code_hash = input.code_hash.clone().unwrap_or_default();
     let mut declared_code_hash = input.declared_code_hash.clone();
@@ -3126,7 +3126,6 @@ mod tests {
     ) -> Hash {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
-            None,
             None,
             None,
             0,

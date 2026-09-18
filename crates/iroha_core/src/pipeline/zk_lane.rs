@@ -731,7 +731,6 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
                 NonZeroU64::new(1).expect("non-zero constant"),
                 None,
                 None,
-                None,
                 0,
                 0,
             )

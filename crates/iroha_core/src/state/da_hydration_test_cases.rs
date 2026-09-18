@@ -5,7 +5,7 @@ use super::*;
 state_test! { sync block_by_height_reads_committed_kura_body_without_state_view
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
     let block_hash = block.hash();
     kura.store_block(Arc::new(block))
@@ -26,7 +26,7 @@ state_test! { sync block_by_height_reads_committed_kura_body_without_state_view
 state_test! { sync block_by_hash_reads_committed_kura_body_without_state_view
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
     let block_hash = block.hash();
     kura.store_block(Arc::new(block))
@@ -53,7 +53,7 @@ state_test! { sync block_by_hash_reads_committed_kura_body_without_state_view
 state_test! { sync block_query_consumers_reject_kura_body_not_committed_by_wsv
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let_row! { block = iroha_data_model::block::builder::BlockBuilder::new(header) .build_with_signature(0, keypair.private_key()) };
     let actual = block.hash();
     kura.store_block(Arc::new(block))

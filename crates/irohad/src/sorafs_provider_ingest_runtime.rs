@@ -2111,29 +2111,36 @@ impl NativeTransactionIngressV1 {
         let Some(block) = self.state.block_by_height(height) else {
             return ProviderIngestTransactionObservationV1::Unavailable;
         };
-        let Some(index) =
-            block
-                .external_entrypoints_cloned()
-                .enumerate()
-                .find_map(|(index, entrypoint)| match entrypoint {
-                    TransactionEntrypoint::External(transaction) if transaction.hash() == hash => {
-                        Some(index)
-                    }
-                    _ => None,
-                })
-        else {
-            return ProviderIngestTransactionObservationV1::Unavailable;
-        };
-        if !block.has_results() {
-            return ProviderIngestTransactionObservationV1::Unavailable;
-        }
-        match block.results().nth(index).map(|result| result.as_ref()) {
-            Some(Ok(_)) => ProviderIngestTransactionObservationV1::CommittedSuccess,
-            Some(Err(_)) => ProviderIngestTransactionObservationV1::CommittedRejected,
-            None => ProviderIngestTransactionObservationV1::Unavailable,
-        }
+        observe_committed_provider_transaction(&block, hash)
     }
 }
+/// Read a committed transaction through its explicit Network source/output join.
+/// Pipeline and Time outputs never supply an external transaction's disposition.
+fn observe_committed_provider_transaction(
+    block: &iroha_data_model::SignedBlock,
+    transaction_hash: HashOf<SignedTransaction>,
+) -> ProviderIngestTransactionObservationV1 {
+    let Some(index) = block.network_entrypoints().position(|entrypoint| {
+        matches!(entrypoint, TransactionEntrypoint::External(transaction)
+            if transaction.hash() == transaction_hash)
+    }) else {
+        return ProviderIngestTransactionObservationV1::Unavailable;
+    };
+    // This also validates proposal/source commitments and output ownership.
+    if block.validate_output_merkle_cache().is_err() {
+        return ProviderIngestTransactionObservationV1::Unavailable;
+    }
+    match u32::try_from(index)
+        .ok()
+        .and_then(|index| block.network_output_at(index))
+        .map(|(_, output)| output.result.as_ref())
+    {
+        Some(Ok(_)) => ProviderIngestTransactionObservationV1::CommittedSuccess,
+        Some(Err(_)) => ProviderIngestTransactionObservationV1::CommittedRejected,
+        None => ProviderIngestTransactionObservationV1::Unavailable,
+    }
+}
+
 impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     type Prepared = AcceptedTransaction<'static>;
     fn prepare(

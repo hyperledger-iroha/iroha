@@ -301,13 +301,13 @@ impl Client {
     ///
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
-    /// block hash match, its external-entrypoint/result roots and execution context match the
-    /// header commitments, its Merkle caches/counts are consistent, and the supplied successful
-    /// transaction verifies at its exact ordinary index or certified-merge reference.
+    /// block hash match, its proposal inputs and execution context match the header commitments, its full typed output
+    /// cache is consistent, and the supplied successful transaction verifies through its exact
+    /// Network input-index join and separate input/output proofs.
     ///
     /// The required commitment must come from an independently verified, externally anchored
     /// native finality proof for this carrier. Its exact wire hash and length authenticate results
-    /// and time triggers, which the consensus header hash alone does not bind. This reader verifies
+    /// and internal invocation outputs, which the consensus header hash alone does not bind. This reader verifies
     /// that binding; it does not establish finality or trust in a caller-supplied commitment.
     ///
     /// # Errors
@@ -363,11 +363,11 @@ impl Client {
             return Err(eyre!("executed block response has no execution results"));
         }
         block
-            .validate_entrypoint_merkle_cache()
-            .map_err(|error| eyre!("executed block entrypoint Merkle cache is invalid: {error}"))?;
+            .validate_proposal_commitments()
+            .map_err(|error| eyre!("executed block proposal commitments are invalid: {error}"))?;
         block
-            .validate_result_merkle_cache()
-            .map_err(|error| eyre!("executed block result Merkle cache is invalid: {error}"))?;
+            .validate_output_merkle_cache()
+            .map_err(|error| eyre!("executed block output Merkle cache is invalid: {error}"))?;
         if committed.result().is_err() {
             return Err(eyre!(
                 "committed transaction carries a rejected execution result"

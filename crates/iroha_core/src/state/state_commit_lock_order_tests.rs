@@ -12,7 +12,7 @@ fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock(
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let _write_guard = state.state_write_lock.lock();
     let barrier = Arc::new(Barrier::new(2));
     let commit_state = Arc::clone(&state);
@@ -73,7 +73,7 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
     let commit_state = Arc::clone(&state);
     let commit_done = done_tx.clone();
     let commit_barrier = Arc::clone(&barrier);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let commit_handle = thread::spawn(move || {
         commit_barrier.wait();
         let block = commit_state.block(header);
@@ -121,7 +121,7 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
     let commit_state = Arc::clone(&state);
     let commit_done = done_tx.clone();
     let commit_handle = thread::spawn(move || {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = commit_state.block(header);
         block_ready_tx
             .send(())
@@ -189,7 +189,7 @@ fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() 
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
 
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let block_catalog = block.nexus.lane_catalog.clone();
     let updated_catalog = iroha_data_model::nexus::LaneCatalog::new(
@@ -280,14 +280,16 @@ fn apply_without_execution_rejects_duplicate_sccp_records_before_state_mutation(
         .sign(leader.private_key())
         .unpack(|_| {})
         .into();
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![Ok(
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[entry_hash], vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
-        )
+            )]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hash should match payload");
     let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
     let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
@@ -332,14 +334,16 @@ fn apply_without_execution_rejects_invalid_sccp_record_payload_before_state_muta
         .sign(leader.private_key())
         .unpack(|_| {})
         .into();
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![Ok(
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[entry_hash], vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
-        )
+            )]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
     let kura = Kura::blank_kura_for_testing();
@@ -400,14 +404,16 @@ fn apply_without_execution_rejects_unbound_sccp_record_route_before_state_mutati
         .sign(leader.private_key())
         .unpack(|_| {})
         .into();
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![Ok(
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[entry_hash], vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
-        )
+            )]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
     let kura = Kura::blank_kura_for_testing();
@@ -468,14 +474,16 @@ fn apply_without_execution_rejects_scoped_sccp_asset_alias_before_state_mutation
         .sign(leader.private_key())
         .unpack(|_| {})
         .into();
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![Ok(
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[entry_hash], vec![Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
-        )
+            )]);
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
     let kura = Kura::blank_kura_for_testing();

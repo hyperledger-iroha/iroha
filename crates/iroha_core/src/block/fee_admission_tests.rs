@@ -114,7 +114,9 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         .unpack(|_| {});
     let errors = valid_block
         .as_ref()
-        .errors()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
         .map(|(idx, error)| (idx, format!("{error:?}")))
         .collect::<Vec<_>>();
     assert!(
@@ -242,7 +244,13 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert!(
-        valid_block.as_ref().errors().next().is_none(),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .is_none(),
         "supported non-transfer fee transaction should be accepted through sequential fallback"
     );
     let snapshot = crate::sumeragi::status::snapshot();
@@ -393,11 +401,23 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "insufficient fee must reject the transaction"
     );
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("fee rejection");
     let expected = format!(
         "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
     );
@@ -567,7 +587,13 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_durable_state_fallb
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert!(
-        valid_block.as_ref().errors().next().is_none(),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .is_none(),
         "fee-enabled transfer with an active data trigger should be accepted through fallback"
     );
     let snapshot = crate::sumeragi::status::snapshot();
@@ -732,7 +758,16 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         .unpack(|_| {});
     let results = valid
         .as_ref()
-        .entrypoint_results()
+        .network_entrypoints()
+        .enumerate()
+        .map(|(index, entrypoint)| {
+            let (output_index, output) = valid
+                .as_ref()
+                .network_output_at(u32::try_from(index).expect("fixture Network index fits u32"))
+                .expect("every queried input has its explicit Network output");
+            assert_eq!(usize::try_from(output_index).unwrap(), index);
+            (index, entrypoint, &output.result)
+        })
         .map(|(_, _, result)| result.0.clone())
         .collect::<Vec<_>>();
     assert!(
@@ -875,7 +910,18 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             .unpack(|_| {});
         let result = valid
             .as_ref()
-            .entrypoint_results()
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, output) = valid
+                    .as_ref()
+                    .network_output_at(
+                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    )
+                    .expect("every queried input has its explicit Network output");
+                assert_eq!(usize::try_from(output_index).unwrap(), index);
+                (index, entrypoint, &output.result)
+            })
             .next()
             .expect("one transaction result")
             .2
@@ -1015,11 +1061,23 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "missing payer fee asset must reject the transaction"
     );
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("fee rejection");
     let expected = format!(
         "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
     );
@@ -1148,7 +1206,13 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "fee debit must reject when the payer only has enough balance for the transfer itself"
     );
@@ -1300,7 +1364,12 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().count(),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .count(),
         1,
         "only one of the two transfers can pay the configured base fee"
     );
@@ -1313,7 +1382,13 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "signed fee admission must reject after the first debit drains the balance, before detached execution"
     );
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("fee rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("fee rejection");
     let expected = format!(
         "fee balance `{payer_fee_asset}` for authority `{payer_id}` is insufficient: requires 1, available 0"
     );
@@ -1463,7 +1538,13 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "the failing instruction after the transfer must reject the whole transaction"
     );
@@ -1477,7 +1558,13 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         1,
         "multi-instruction transfer transactions must not use detached transfer merge"
     );
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("instruction rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("instruction rejection");
     assert!(
         matches!(
             rejection,
@@ -1640,14 +1727,26 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "non-increasing tx_sequence must reject before transfer or fee application"
     );
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("sequence rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("sequence rejection");
     let expected = format!("Transaction sequence 5 for {payer_id} must exceed previous 5");
     assert!(
         matches!(
@@ -2010,7 +2109,13 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0),
         "invalid configured fee asset must reject the transaction"
     );
@@ -2020,7 +2125,13 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "invalid governed fee configuration must fail signed admission before execution"
     );
-    let (_, rejection) = valid_block.as_ref().errors().next().expect("configuration rejection");
+    let (_, rejection) = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .expect("configuration rejection");
     assert!(
         matches!(
             rejection,
@@ -2175,10 +2286,22 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert_eq!(
-        valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .map(|(idx, _)| idx),
         Some(0)
     );
-    let first_error = valid_block.as_ref().errors().next().map(|(_, err)| err);
+    let first_error = valid_block
+        .as_ref()
+        .output_results()
+        .enumerate()
+        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+        .next()
+        .map(|(_, err)| err);
     assert!(
         matches!(
             first_error,
@@ -2254,7 +2377,13 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     assert!(
-        valid_block.as_ref().errors().next().is_none(),
+        valid_block
+            .as_ref()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+            .next()
+            .is_none(),
         "self-register block path should not produce transaction errors"
     );
     assert!(

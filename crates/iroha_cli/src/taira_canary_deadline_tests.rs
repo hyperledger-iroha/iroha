@@ -101,6 +101,13 @@ fn exercise_final_canary_deadline(applied: bool) {
             assert!(applied, "pending status must not request committed proof");
             let transaction = server_transaction.lock().unwrap().clone().unwrap();
             let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+            let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result,
+                    completions: Vec::new(),
+                },
+            );
             let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
                 hash: transaction.hash_as_entrypoint().to_string(),
                 transaction: CommittedTransaction {
@@ -110,12 +117,10 @@ fn exercise_final_canary_deadline(applied: bool) {
                     entrypoint_hash: transaction.hash_as_entrypoint(),
                     entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                     entrypoint: TransactionEntrypoint::External(transaction),
-                    result_hash: result.hash(),
-                    result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                    result,
-                    merge_inclusion: None,
+                    output_hash: iroha_crypto::HashOf::new(&output),
+                    output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    output,
                 },
-                trigger_completions: Vec::new(),
             };
             MockResponse {
                 status: 200,

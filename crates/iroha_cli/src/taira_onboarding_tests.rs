@@ -376,6 +376,13 @@ impl iroha::http::HttpTransport for RecoveryTransport {
             ),
             "/v1/pipeline/transactions/details" => {
                 let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+                let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result,
+                        completions: Vec::new(),
+                    },
+                );
                 let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
                     hash: self.expected.hash_as_entrypoint().to_string(),
                     transaction: CommittedTransaction {
@@ -385,12 +392,10 @@ impl iroha::http::HttpTransport for RecoveryTransport {
                         entrypoint_hash: self.returned.hash_as_entrypoint(),
                         entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                         entrypoint: TransactionEntrypoint::External(self.returned.clone()),
-                        result_hash: result.hash(),
-                        result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                        result,
-                        merge_inclusion: None,
+                        output_hash: iroha_crypto::HashOf::new(&output),
+                        output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                        output,
                     },
-                    trigger_completions: Vec::new(),
                 };
                 ("application/x-norito", norito::to_bytes(&details)?)
             }

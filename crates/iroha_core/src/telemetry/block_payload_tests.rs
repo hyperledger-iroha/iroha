@@ -92,7 +92,6 @@ fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         NonZeroU64::new(height).expect("height must be > 0"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -114,7 +113,6 @@ fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBloc
     use std::num::NonZeroU64;
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height must be > 0"),
-        None,
         None,
         None,
         0,
@@ -165,7 +163,6 @@ fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock 
     }
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height must be > 0"),
-        None,
         None,
         None,
         0,

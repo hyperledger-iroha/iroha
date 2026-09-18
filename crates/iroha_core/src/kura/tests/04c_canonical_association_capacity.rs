@@ -5,6 +5,7 @@ fn canonical_association_stage_append_peak_rejects_before_any_stage_or_block_mut
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("association append Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let block = DummyBlocks::new().next();
     let stage_bytes = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
@@ -76,6 +77,7 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("association replace Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let original = DummyBlocks::new().next();
     let original_hash = original.hash();
     kura.store_block(original.clone())
@@ -176,7 +178,7 @@ fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
     let lane_block_height = 1;
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let block_hash = {
+    let (block_hash, network_id) = {
         let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let block = dummy_block_with_lane_payload_ownership(
             lane_id,
@@ -211,12 +213,18 @@ fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
             kura.store_block(DummyBlocks::new().next()),
             Err(Error::CanonicalStoragePoisoned)
         ));
-        block_hash
+        (block_hash, kura.bound_lane_storage_network().unwrap())
     };
     let (reopened, count) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("restart must finish the committed association stage");
     assert_eq!(count.0, 1);
+    assert!(reopened.lane_storage_entries.lock().is_empty());
+    assert!(!reopened.canonical_association_stage_path().exists());
+    reopened.bind_lane_storage_network(network_id).unwrap();
+    reopened
+        .restore_published_lane_geometry_for_test(&RuntimeLaneConfig::default())
+        .expect("restore the original geometry before querying active associations");
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),
         Some(block_hash)

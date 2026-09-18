@@ -162,7 +162,6 @@ fn active_policy_exempts_only_private_parliament_control_transactions() {
             .expect("test policy effective height is non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -230,7 +229,6 @@ fn parliament_authorization_certificate_hash_ignores_ambient_norito_layout() {
         std::num::NonZeroU64::new(1).expect("non-zero test height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -276,7 +274,6 @@ fn restored_effective_payout_policy_requires_its_exact_runtime_binding() {
         std::num::NonZeroU64::new(1).expect("non-zero test height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -313,7 +310,6 @@ fn restored_future_payout_policy_does_not_require_runtime_before_effective_heigh
     );
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("non-zero test height"),
-        None,
         None,
         None,
         0,
@@ -732,7 +728,6 @@ fn enacted_initial_policy_remains_inactive_until_delayed_effective_height() {
         std::num::NonZeroU64::new(9).expect("height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -761,7 +756,6 @@ fn active_policy_lookup_rejects_the_exact_expiry_height() {
     let expiry_height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(expiry_height).expect("expiry height is non-zero"),
-        None,
         None,
         None,
         0,
@@ -2049,7 +2043,6 @@ fn active_policy_admits_privacy_control_effects_without_granting_authority() {
         std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2174,7 +2167,6 @@ fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
     );
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
-        None,
         None,
         None,
         0,

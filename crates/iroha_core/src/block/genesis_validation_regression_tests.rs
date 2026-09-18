@@ -202,13 +202,19 @@ fn commit_result_bearing_synthetic_parent(
     let mut signed: SignedBlock = valid.into();
     let axt_policy_snapshot = state.block(signed.header()).axt_policy_snapshot();
     signed
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[],
-            Vec::new(),
+        .set_execution_outputs(
+            crate::execution_output_test_support::structural_network_outputs(
+                &signed,
+                &[],
+                Vec::new(),
+            ),
+            u64::try_from(signed.network_entrypoint_count()).expect("fixture input count fits u64"),
             BTreeMap::new(),
             Vec::new(),
             axt_policy_snapshot,
+            BTreeSet::new(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("attach the required synthetic-parent AXT policy snapshot");
     let block_hash = signed.hash();

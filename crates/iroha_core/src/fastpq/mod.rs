@@ -1737,14 +1737,7 @@ mod tests {
     }
     #[test]
     fn public_inputs_template_from_block_uses_header_and_roots() {
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height"),
-            None,
-            None,
-            None,
-            123,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 123, 0);
         let witness = ExecWitness {
             reads: vec![ExecKv {
                 key: b"key".to_vec(),
