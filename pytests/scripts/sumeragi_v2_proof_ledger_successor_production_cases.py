@@ -1989,7 +1989,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
         "pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {",
-        "failure: CertifiedFetchPreLedgerProductiveIngressErrorV1,",
+        "failure: CertifiedFetchBodyPersistencePreLedgerFailure,",
         "failure: (),",
         "certified Fetch pre-Ledger restart owner",
     ),
@@ -2003,8 +2003,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
         "pub(crate) fn complete_certified_fetch_body_persistence(",
-        "restart_invalid_leader_wire!(error, receipt);",
-        "retry!(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity, receipt);",
+        "CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error),",
+        "CertifiedFetchBodyPersistencePreLedgerFailure::Queue(FairIngressQueueCutError::QueueCutChanged),",
         "certified Fetch pre-dequeue invalid-owner fail-stop",
     ),
     (
@@ -2020,6 +2020,55 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "durable_registry.commit_after_exact_dequeue(dequeued);",
         "drop(dequeued);",
         "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "fn permits_fresh_queue_retry(&self)",
+        "Self::Queue(FairIngressQueueCutError::QueueCutChanged)",
+        "Self::Queue(_)",
+        "certified Fetch retry requires exactly a changed queue cut",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "fn permits_fresh_queue_retry(&self)",
+        "matches!(\n            self,",
+        "return true; matches!(\n            self,",
+        "certified Fetch retry requires exactly a changed queue cut",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "if failure.permits_fresh_queue_retry() {",
+        "if true {",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "fn cancel_excluded_decision(",
+        "!exclusion.matches_durable_body(receipt)",
+        "false",
+        "certified Fetch native Decision cancellation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "let durable_registry = if decision_exclusion.is_none()",
+        "let durable_registry = if true",
+        "certified Fetch Ready and cancellation authority split",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_execution.rs",
+        "pub(super) fn commit_cancelled_after_exact_dequeue(",
+        "assert!(exclusion.matches_durable_body(self.durable_receipt.durable_body()));",
+        "let _ = exclusion;",
+        "certified Fetch cancelled registry exact receipt",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_execution.rs",
+        "fn commit_response_dequeue(",
+        "if cancelled {",
+        "if false {",
+        "certified Fetch cancellation preserves exact dequeue checks",
     ),
     (
         "crates/iroha_core/src/sumeragi/mod.rs",
@@ -3621,7 +3670,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 431
+) == 438
 
 
 @pytest.mark.parametrize(

@@ -453,6 +453,18 @@ impl ApplyFixture {
             true,
         )
     }
+    /// Retain the real root lock across a completed-secondary archival/reopen test.
+    fn new_for_completed_secondary_archival(kura: Arc<Kura>) -> Self {
+        Self::new_with_options_and_retention_and_genesis_and_archival_kura(
+            false,
+            false,
+            true,
+            true,
+            iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            true,
+            Some(kura),
+        )
+    }
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
@@ -491,6 +503,26 @@ impl ApplyFixture {
         blocks_in_memory: NonZeroUsize,
         seed_genesis_domain: bool,
     ) -> Self {
+        Self::new_with_options_and_retention_and_genesis_and_archival_kura(
+            include_lane_payload,
+            include_projection_policies,
+            include_lane_lifecycle,
+            include_native_lane,
+            blocks_in_memory,
+            seed_genesis_domain,
+            None,
+        )
+    }
+    fn new_with_options_and_retention_and_genesis_and_archival_kura(
+        include_lane_payload: bool,
+        include_projection_policies: bool,
+        include_lane_lifecycle: bool,
+        include_native_lane: bool,
+        blocks_in_memory: NonZeroUsize,
+        seed_genesis_domain: bool,
+        archival_kura: Option<Arc<Kura>>,
+    ) -> Self {
+        let secondary_archival = archival_kura.is_some();
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -535,7 +567,10 @@ impl ApplyFixture {
             leader_seed: [0x63; 32],
         };
         context.validate().expect("valid fixture context");
-        let kura = if include_lane_lifecycle {
+        let kura = if let Some(kura) = archival_kura {
+            assert!(include_native_lane && include_lane_lifecycle);
+            kura
+        } else if include_lane_lifecycle {
             crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory)
         } else {
             Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory)
@@ -584,6 +619,26 @@ impl ApplyFixture {
         install_fixture_validator_authority(&state, &context, &validator_set_pops);
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
+        }
+        if secondary_archival {
+            // Freeze the actual secondary coordinator route before the genesis
+            // execution-policy hash and finality signatures are constructed.
+            let mut nexus = state.nexus_snapshot();
+            nexus.routing_policy.rules.insert(
+                0,
+                iroha_config::parameters::actual::LaneRoutingRule {
+                    lane: LaneId::new(1),
+                    dataspace: Some(DataSpaceId::new(7)),
+                    matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                        account: Some(transaction_authority.to_string()),
+                        instruction: None,
+                        description: None,
+                    },
+                },
+            );
+            state
+                .set_nexus(nexus)
+                .expect("install pre-genesis secondary coordinator route");
         }
         context.nexus_amx_context_hash =
             crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state)
@@ -1874,7 +1929,7 @@ fn reserve_transaction_for_lane_test_with_identity(
         assert_eq!(coordinator.leg.route, expected_route);
         coordinator.lane_incarnation
     };
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let binding = crate::torii_proxy::new_queue_plan_admission_binding(
         state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
@@ -2125,7 +2180,7 @@ fn reserve_autonomous_crash_batch(
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture autonomous crash admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,

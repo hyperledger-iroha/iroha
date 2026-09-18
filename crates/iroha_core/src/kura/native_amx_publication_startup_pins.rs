@@ -212,7 +212,8 @@ mod native_amx_publication_startup_pin_tests {
     ) -> NativeAmxPublicationIndexRecord {
         NativeAmxPublicationIndexRecord {
             carrier: current,
-            before_marker: before,
+            selection_marker: before,
+            origin: NativeAmxPublicationIndexOriginV1::CanonicalWrite,
             replaced,
             merge_entry_hash: None,
         }

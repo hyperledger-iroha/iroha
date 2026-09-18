@@ -487,7 +487,8 @@ pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
     }
     Ok((proof, ordinary_root))
 }
-fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
+/// Build a fixed-depth ordinary-write proof for an already selected exact key/value.
+pub(crate) fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
     let empty = Hash::new([]);
     let target_path = hash_bytes(&target.key).to_vec();
     let mut raw_paths = BTreeMap::<Vec<u8>, Vec<u8>>::new();

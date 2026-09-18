@@ -389,6 +389,7 @@ def copy_replenishment_regression_mutation_fixture(
 def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
     """Copy the shared QueuePlan identity kernel and every production consumer."""
     for relative in (
+        Path("crates/iroha_data_model/src/block/lane_admission.rs"),
         Path("crates/iroha_core/src/torii_proxy.rs"),
         Path("crates/iroha_core/src/queue.rs"),
         Path("crates/iroha_core/src/queue/journal.rs"),
@@ -16227,97 +16228,67 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
     (
         (
-            "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn queue_plan_synced_request_id_from_network_digest(",
-            "    Hash::new(\n"
-            "        norito::encode_canonical(&(\n"
-            "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,\n"
-            "            network_id_digest,\n"
-            "            entrypoint_hash,\n"
-            "        ))\n"
-            "        .expect(\"deterministic QueuePlanSynced request identity must encode\"),\n"
-            "    )",
-            "    Hash::prehashed([7; Hash::LENGTH])",
-            "exact nonconstant network-digest and entrypoint projection",
+            'crates/iroha_data_model/src/block/lane_admission.rs',
+            'pub fn queue_plan_synced_request_id_from_network_digest(',
+            '    Hash::new(\n        norito::encode_canonical(&(\n            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,\n            network_id_digest,\n            entrypoint_hash,\n        ))\n        .expect("deterministic QueuePlanSynced request identity must encode"),\n    )',
+            '    Hash::prehashed([7; Hash::LENGTH])',
+            'exact nonconstant network-digest and entrypoint projection',
         ),
         (
-            "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn queue_plan_synced_request_id_from_network_digest(",
-            "            network_id_digest,\n            entrypoint_hash,",
-            "            entrypoint_hash,\n            network_id_digest,",
-            "exact nonconstant network-digest and entrypoint projection",
+            'crates/iroha_data_model/src/block/lane_admission.rs',
+            'pub fn queue_plan_synced_request_id_from_network_digest(',
+            '            network_id_digest,\n            entrypoint_hash,',
+            '            entrypoint_hash,\n            network_id_digest,',
+            'exact nonconstant network-digest and entrypoint projection',
         ),
         (
-            "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn new(\n        network_id: &NetworkId,",
-            "request_id: queue_plan_synced_request_id_from_network_digest(\n"
-            "                network_id_digest,\n"
-            "                transaction.hash(),\n"
-            "            ),",
-            "request_id: Hash::new(b\"disconnected QueuePlan request\"),",
-            "constructor must derive the semantic request from the exact persisted inputs",
+            'crates/iroha_core/src/torii_proxy.rs',
+            'pub fn new_queue_plan_admission_binding(\n    network_id: &NetworkId,',
+            'request_id: queue_plan_synced_request_id_from_network_digest(\n            network_id_digest,\n            transaction.hash(),',
+            'request_id: Hash::new(b"disconnected QueuePlan request"),',
+            'constructor must derive the semantic request from the exact persisted inputs',
         ),
         (
-            "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn validate_structure(&self)",
-            "        if self.request_id\n"
-            "            != queue_plan_synced_request_id_from_network_digest(\n"
-            "                self.network_id_digest,\n"
-            "                self.entrypoint_hash.clone(),\n"
-            "            )\n"
-            "        {\n"
-            "            return Err(\n"
-            "                \"QueuePlan admission binding has a noncanonical semantic request identity\"\n"
-            "                    .to_owned(),\n"
-            "            );\n"
-            "        }\n",
-            "",
-            "structural QueuePlan validation must recompute the exact durable semantic identity",
+            'crates/iroha_data_model/src/block/lane_admission.rs',
+            'pub fn validate_structure(&self)',
+            '        if self.request_id\n            != queue_plan_synced_request_id_from_network_digest(\n                self.network_id_digest,\n                self.entrypoint_hash.clone(),\n            )\n        {\n            return Err(\n                "QueuePlan admission binding has a noncanonical semantic request identity"\n                    .to_owned(),\n            );\n        }\n',
+            '',
+            'structural QueuePlan validation must recompute the exact durable semantic identity',
         ),
         (
-            "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn validate_queue_plan_admission_certificate_for_network_digest_v1(",
-            "    certificate.binding.validate_structure()?;",
-            "    let _ = &certificate.binding;",
-            "certificate validation must invoke canonical semantic-request validation",
+            'crates/iroha_core/src/torii_proxy.rs',
+            'pub fn validate_queue_plan_admission_certificate_for_network_digest_v1(',
+            '    certificate.binding.validate_structure()?;',
+            '    let _ = &certificate.binding;',
+            'certificate validation must invoke canonical semantic-request validation',
         ),
         (
-            "crates/iroha_core/src/queue.rs",
-            "fn push_with_lane_internal_with_state_and_routing(",
-            "binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)",
-            "binding.validate_for_transaction_and_plan(tx.entrypoint(), &routing_plan)",
-            "core strict QueuePlan admission must invoke request-bound semantic validation",
+            'crates/iroha_core/src/queue.rs',
+            'fn push_with_lane_internal_with_state_and_routing(',
+            'crate::torii_proxy::validate_queue_plan_binding_for_request(\n                &binding,\n                state.network_id_ref(),\n                tx.entrypoint(),\n                &routing_plan,\n            )',
+            'crate::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(&binding, tx.entrypoint(), &routing_plan)',
+            'core strict QueuePlan admission must invoke request-bound semantic validation',
         ),
         (
-            "crates/iroha_core/src/queue/journal.rs",
-            "fn global_admission_binding(&self)",
-            "QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)",
-            "QueuePlanAdmissionBindingV1::try_from_durable_admission_unchecked(&durable_admission)",
-            "journal replay must pass its durable identity through the shared binding validator",
+            'crates/iroha_core/src/queue/journal.rs',
+            'fn global_admission_binding(&self)',
+            'crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable_admission)',
+            'crate::torii_proxy::queue_plan_binding_from_durable_admission_unchecked(&durable_admission)',
+            'journal replay must pass its durable identity through the shared binding validator',
         ),
         (
-            "crates/iroha_torii/src/lib.rs",
-            "fn queue_plan_synced_proxy_request_id_for_entrypoint(",
-            "    iroha_core::torii_proxy::queue_plan_synced_request_id(\n"
-            "        app.state.network_id_ref(),\n"
-            "        entrypoint_hash,\n"
-            "    )",
-            "    Hash::new(\n"
-            "        norito::to_bytes(&(\n"
-            "            \"torii:proxy:queue-plan-synced:v1\",\n"
-            "            app.state.network_id_ref(),\n"
-            "            entrypoint_hash,\n"
-            "        ))\n"
-            "        .expect(\"encode local QueuePlan request projection\"),\n"
-            "    )",
-            "Torii must delegate QueuePlan semantic identity to the shared core kernel",
+            'crates/iroha_torii/src/lib.rs',
+            'fn queue_plan_synced_proxy_request_id_for_entrypoint(',
+            '    iroha_core::torii_proxy::queue_plan_synced_request_id(\n        app.state.network_id_ref(),\n        entrypoint_hash,\n    )',
+            '    Hash::new(\n        norito::to_bytes(&(\n            "torii:proxy:queue-plan-synced:v1",\n            app.state.network_id_ref(),\n            entrypoint_hash,\n        ))\n        .expect("encode local QueuePlan request projection"),\n    )',
+            'Torii must delegate QueuePlan semantic identity to the shared core kernel',
         ),
         (
-            "crates/iroha_torii/src/lib.rs",
-            "async fn execute_torii_transaction_via_proxy(",
-            "binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)",
-            "binding.validate_for_transaction_and_plan(&transaction, &routing_plan)",
-            "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
+            'crates/iroha_torii/src/lib.rs',
+            'async fn execute_torii_transaction_via_proxy(',
+            'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n        &binding,\n        app.state.network_id_ref(),\n        &transaction,\n        &routing_plan,\n    )',
+            'iroha_core::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(&binding, &transaction, &routing_plan)',
+            'Torii QueuePlan execution must validate the shared semantic identity before dispatch',
         ),
     ),
 )

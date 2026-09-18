@@ -8,9 +8,9 @@
 //! implemented here.  Success is therefore deliberately non-authorizing and the
 //! composite boundary still reports the complete RNS/qPCS stage unavailable.
 
-use super::rns_native_qpcs_leaf::{
-    RnsNativeLeafCacheV1, RnsNativeLeafPayloadV1, RnsNativeOracleV1, oracle_node_hash_v1,
-};
+#[cfg(test)]
+use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
@@ -1685,6 +1685,7 @@ fn leaf_oracle_v1(
     })
 }
 
+#[cfg(test)]
 pub(super) fn tree_leaf_hash_v1(
     parameter_digest: [u8; 32],
     role: TreeRoleV1,

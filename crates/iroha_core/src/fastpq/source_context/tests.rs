@@ -372,6 +372,19 @@ fn extraction_moves_only_exact_selected_sources_and_rejects_missing_sources_atom
         Err(FastpqSourceCaptureError::MissingSource { entry_hash: absent })
     );
     assert_eq!(captures.sources(), Ok(&original));
+    captures
+        .validate_unsealed_selection(&BTreeSet::from([first]))
+        .unwrap();
+    assert_eq!(
+        captures.sources(),
+        Ok(&original),
+        "read-only native selection retains every capture"
+    );
+    assert_eq!(
+        captures.validate_unsealed_selection(&BTreeSet::from([absent])),
+        Err(FastpqSourceCaptureError::MissingSource { entry_hash: absent })
+    );
+    assert_eq!(captures.sources(), Ok(&original));
     let extracted = captures
         .take_unsealed_sources(&BTreeSet::from([first]))
         .unwrap();
@@ -396,6 +409,10 @@ fn extraction_cannot_mutate_a_sealed_inventory_or_clear_a_sticky_failure() {
         captures.take_unsealed_sources(&BTreeSet::from([hash])),
         Err(FastpqSourceCaptureError::CaptureAlreadySealed)
     );
+    assert_eq!(
+        captures.validate_unsealed_selection(&BTreeSet::from([hash])),
+        Err(FastpqSourceCaptureError::CaptureAlreadySealed)
+    );
     assert_eq!(captures.sealed_sources(), Ok(&original));
 
     let mut failed = FastpqSourceCaptureAccumulator::default();
@@ -403,6 +420,10 @@ fn extraction_cannot_mutate_a_sealed_inventory_or_clear_a_sticky_failure() {
     for selection in [BTreeSet::new(), BTreeSet::from([hash])] {
         assert_eq!(
             failed.take_unsealed_sources(&selection),
+            Err(FastpqSourceCaptureError::ExecutionIdentityMismatch)
+        );
+        assert_eq!(
+            failed.validate_unsealed_selection(&selection),
             Err(FastpqSourceCaptureError::ExecutionIdentityMismatch)
         );
         assert_eq!(

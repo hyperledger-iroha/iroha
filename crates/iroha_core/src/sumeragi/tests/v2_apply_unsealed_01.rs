@@ -2631,10 +2631,13 @@ v2_apply_test!(
         )
         .expect_err("partial atomic reservation group must fail closed");
         assert!(
-            matches!(error, V2ReservationLifecycleError::PartialCommittedGroup {
-                lane_id: LaneId::SINGLE,
-                proposal_height: 1,
-            }),
+            matches!(
+                error,
+                V2ReservationLifecycleError::PartialCommittedGroup {
+                    lane_id: LaneId::SINGLE,
+                    proposal_height: 1,
+                }
+            ),
             "partial State membership must fail whole-group preflight: {error:?}"
         );
         assert_eq!(
@@ -2718,7 +2721,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture strict FIFO discriminator admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
@@ -3651,7 +3654,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
     let admission_context = queue
         .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
         .expect("capture startup-gate probe admission context");
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let binding = crate::torii_proxy::new_queue_plan_admission_binding(
         fixture.state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,

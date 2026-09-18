@@ -54,17 +54,14 @@ fn ingress_restart_error(output_guard: &ConsensusOutputGuard) -> V2RunnerError {
     V2RunnerError::RestartRequired
 }
 
-/// Closed proof of whether ProducerTurn planning may run after one ingress batch.
+/// Ephemeral scheduling projection of the launched lifecycle owner.
 ///
-/// A non-eligible target is minted only after a typed lifecycle transaction
-/// queues asynchronous work. Claimed work retains the coordinator's sole
-/// non-Producer lease; terminal replay and a registered Validate sidecar wait
-/// retain separate serialized barriers without a lease. Pass-through turns
-/// preserve the exact target until its typed Completion path advances or
-/// releases it.
+/// Production reconstructs this value from retained completions, the coordinator
+/// lease, exact Apply custody and retained worker indices at each service boundary.
+/// It is never advanced from a remembered sequence of completion classifications.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
-    /// No authenticated in-flight lifecycle lease blocks ProducerTurn planning.
+    /// No retained lifecycle completion obligation blocks ProducerTurn planning.
     Eligible,
     /// One exact published/woken Validate successor must resolve before any
     /// ordinary owner can rediscover Apply.
@@ -199,15 +196,15 @@ struct LifecycleValidateSidecarPacemakerEscapePermitSealV1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleProducerClaimTransitionErrorV1 {
     Completion,
+    #[cfg(test)]
     Ingress,
 }
 
 impl LifecycleProducerClaimTransitionErrorV1 {
     const fn detail(self) -> &'static str {
         match self {
-            Self::Completion => {
-                "lifecycle Completion did not match the persisted non-Producer target"
-            }
+            Self::Completion => "lifecycle Completion did not select the exact Ready owner",
+            #[cfg(test)]
             Self::Ingress => "lifecycle Ingress did not match the persisted non-Producer target",
         }
     }
@@ -226,7 +223,8 @@ fn producer_claim_transition_error(
 }
 
 impl LifecycleProducerClaimDispositionV1 {
-    /// Initial state before this height has dispatched asynchronous lifecycle work.
+    /// Empty-owner fixture for permission and reference-transition tests.
+    #[cfg(test)]
     pub(in crate::sumeragi) const fn initial() -> Self {
         Self::Eligible
     }
@@ -255,6 +253,12 @@ impl LifecycleProducerClaimDispositionV1 {
         }
     }
 
+    /// Observe the two admission gates at real retained-owner cuts in tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn fresh_admission_permissions_for_test(self) -> (bool, bool) {
+        (self.permits_ready_completion(), !self.blocks_ingress())
+    }
+
     /// Return whether an empty physical cut must still select this exact child.
     const fn requires_exact_ready_selection(self) -> bool {
         matches!(self, Self::AwaitingLiveApplyQueue { .. })
@@ -275,6 +279,7 @@ impl LifecycleProducerClaimDispositionV1 {
         }
     }
 
+    #[cfg(test)]
     const fn validate_successor_ordinal(self) -> Option<u128> {
         match self {
             Self::AwaitingValidateSuccessor { ordinal }
@@ -468,26 +473,657 @@ impl LifecycleProducerClaimDispositionV1 {
             None
         }
     }
+}
 
-    fn observe_completion(
-        self,
-        selected: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
-    ) -> Result<Self, LifecycleProducerClaimTransitionErrorV1> {
-        use super::super::v2_lifecycle_coordinator::{
-            ProductionCompletionDispatchV1 as Dispatch,
-            ProductionLifecycleCompletionSelectionV1 as Completion,
-            ProductionRecoveredDecisionFetchStoreSettlementV1 as FetchSettlement,
-            ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 as ProposalSettlement,
-            ProductionRecoveredLifecycleSignBroadcastSettlementV1 as SignSettlement,
-            ProductionRecoveredLifecycleSignCompletionSelectionV1 as SignCompletion,
-            ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1 as VoteSettlement,
-        };
+/// Closed result of one bounded Completion/Runtime/Ingress batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct LifecycleV2IngressDrainDispositionV1 {
+    producer_claim: LifecycleProducerClaimDispositionV1,
+    retry_before_producer: bool,
+    terminal_settlement_stops_runtime: bool,
+    advance_executor_yield: Option<AdvanceExecutorYieldV1>,
+}
 
-        if selected.restart_required() {
-            return Ok(Self::Eligible);
+impl LifecycleV2IngressDrainDispositionV1 {
+    const fn ready(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: false,
+            terminal_settlement_stops_runtime: false,
+            advance_executor_yield: None,
         }
+    }
 
-        match (self, selected) {
+    const fn after_terminal_settlement(
+        producer_claim: LifecycleProducerClaimDispositionV1,
+    ) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: false,
+            terminal_settlement_stops_runtime: true,
+            advance_executor_yield: None,
+        }
+    }
+
+    const fn retry_before_producer(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: true,
+            terminal_settlement_stops_runtime: false,
+            advance_executor_yield: None,
+        }
+    }
+
+    const fn after_advance_executor_yield(
+        producer_claim: LifecycleProducerClaimDispositionV1,
+        advance_executor_yield: AdvanceExecutorYieldV1,
+    ) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: advance_executor_yield.requires_completion_retry(),
+            terminal_settlement_stops_runtime: false,
+            advance_executor_yield: Some(advance_executor_yield),
+        }
+    }
+
+    /// Return this batch's last owner-derived scheduling observation.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn producer_claim(self) -> LifecycleProducerClaimDispositionV1 {
+        self.producer_claim
+    }
+
+    /// Return whether this batch must yield before fresh Producer planning.
+    pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
+        self.retry_before_producer || self.producer_claim.requires_yield()
+    }
+
+    /// Return whether terminal settlement must precede all ordinary runtime service.
+    pub(in crate::sumeragi) const fn terminal_settlement_stops_runtime(self) -> bool {
+        self.terminal_settlement_stops_runtime
+    }
+
+    /// Whether the pre-Ingress runtime turn yielded on serialized executor debt.
+    pub(in crate::sumeragi) const fn advance_executor_yield(
+        self,
+    ) -> Option<AdvanceExecutorYieldV1> {
+        self.advance_executor_yield
+    }
+}
+
+fn recovered_output_drain_disposition(
+    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> Option<LifecycleV2IngressDrainDispositionV1> {
+    match settlement {
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {
+            None
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ))
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                producer_claim,
+            ))
+        }
+    }
+}
+
+fn settled_apply_output_drain_disposition(
+    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> Option<LifecycleV2IngressDrainDispositionV1> {
+    debug_assert!(producer_claim.apply_terminal_settled());
+    match settlement {
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ))
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                producer_claim,
+            ))
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => None,
+    }
+}
+
+const fn blocked_runtime_drain_disposition(
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> LifecycleV2IngressDrainDispositionV1 {
+    if producer_claim.apply_terminal_settled() {
+        LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
+    } else {
+        LifecycleV2IngressDrainDispositionV1::ready(producer_claim)
+    }
+}
+
+/// Drain one bounded ordinary Completion/Runtime/Ingress batch through the
+/// activated lifecycle owner.
+///
+/// Lifecycle completion and Decision-Fetch work receives the real borrow-bound
+/// runner turn before ordinary work. A pass-through keeps that same borrow
+/// alive until the ordinary completion/runtime tail runs, while an ordinary
+/// ingress winner is already dequeued and must enter the shared opaque
+/// post-dequeue consumer. Special certified-fence and timeout-vote episodes
+/// remain separate runner modes because they deliberately bypass the ordinary
+/// fair-turn census. The ingress `limit` bounds this batch; the separate
+/// `lane_output_limit` carries the control queue capacity for first dispatch
+/// immediately after each authenticated lane ingress consumer.
+// PendingKura intentionally uses a narrower no-clock decided-lane driver;
+// every ordinary height enters this owner-preserving batch here.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
+    activated: &mut super::super::v2_lifecycle_coordinator::ActivatedProductionLifecycleV1,
+    runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
+    receiver: &Arc<FairV2Ingress>,
+    lane_work: &mut V2LaneWorkAdapter,
+    kura: &Kura,
+    local_key: &KeyPair,
+    block_sync_server: &mut V2BlockSyncServer,
+    block_sync: &mut V2BlockSyncDiscovery,
+    block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
+    limit: usize,
+    lane_output_limit: usize,
+    terminal_finalization_cut: Option<&LifecycleTerminalFinalizationCutV1>,
+) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
+    let mut producer_claim = activated.producer_claim_projection()?;
+    if terminal_finalization_cut.is_some() || producer_claim.apply_terminal_settled() {
+        // Make an expired lower direct-output row visible to the cold-output
+        // order check before it can service a higher recovered Broadcast.
+        // Waking is itself a bounded state transition, so re-enter Completion
+        // on the next outer iteration rather than combining it with service I/O.
+        let direct_output_woken = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                let fence = executor.lifecycle_reducer_fence_observation();
+                match owner.wake_apply_terminal_direct_broadcast_if_fenced(fence) {
+                    Ok(woken) => Ok(woken),
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            "Sumeragi v2 post-Apply direct-output fence wake failed closed"
+                        );
+                        services
+                            .lifecycle_output_guard()
+                            .close_admission_for_restart();
+                        Err(V2RunnerError::RestartRequired)
+                    }
+                }
+            },
+        )?;
+        if direct_output_woken {
+            return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ));
+        }
+    }
+    if producer_claim.apply_terminal_settled() {
+        // Applied is already the exact reducer terminal. First drain retained,
+        // authenticated cold-open output rows required by the finalization
+        // census. If none owns this turn, continue only far enough for the
+        // ordinary Completion pre-gate and authenticated Ready classifier to
+        // park a recovered signed Broadcast on its exact-output wait. Runtime,
+        // Ingress, and Producer remain fenced by `ApplyTerminalSettled`.
+        let settlement = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                    owner, executor, services,
+                )
+                .map_err(V2RunnerError::from)
+            },
+        )?;
+        if let Some(disposition) =
+            settled_apply_output_drain_disposition(settlement, producer_claim)
+        {
+            return Ok(disposition);
+        }
+    }
+    let (context_id, height, output_guard) =
+        activated.with_runner_runtime(runner, |_owner, executor, services, _local_proposal| {
+            (
+                executor.context().id(),
+                executor.context().height,
+                services.lifecycle_output_guard(),
+            )
+        });
+
+    let mut outer_turns = outer_ingress_turns(limit, context_id, height);
+    while let Some(current_turn) = outer_turns.next_current() {
+        producer_claim = activated.producer_claim_projection()?;
+        if !producer_claim.blocks_runtime() {
+            let recovered_output_settlement = activated.with_runner_runtime(
+                runner,
+                |owner, executor, services, _local_proposal| {
+                    super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                        owner, executor, services,
+                    )
+                    .map_err(V2RunnerError::from)
+                },
+            )?;
+            if let Some(disposition) =
+                recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
+            {
+                // A preceding completion may have exposed this exact ordinal as
+                // the new Ready minimum. Settle it before the turn driver can
+                // acquire a registry-backed lease for the cold-only carrier.
+                return Ok(disposition);
+            }
+        }
+        match current_turn.target() {
+            LifecycleRunnerRankTarget::Completion => {
+                use super::super::v2_lifecycle_coordinator::{
+                    ProductionLifecycleCompletionPreGateV1 as PreGate,
+                    ProductionLifecycleCompletionTurnV1 as CompletionTurn,
+                };
+                let proposal_sign_preemption =
+                    producer_claim.ready_proposal_sign_preemption_permit();
+                let pre_gate = match proposal_sign_preemption.as_ref() {
+                    Some(permit) => activated
+                        .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
+                            current_turn,
+                            lane_work,
+                            permit,
+                        ),
+                    None => activated.drive_completion_pre_gate(current_turn, lane_work),
+                };
+                let selected = match pre_gate {
+                    PreGate::Ordinary(ordinary_turn) => {
+                        activated.with_runner_runtime(
+                            runner,
+                            |_owner, executor, services, _local_proposal| {
+                                services
+                                    .drain_one_ordinary_completion_after_lifecycle_pass_through(
+                                        executor,
+                                    )?;
+                                Ok::<(), V2RunnerError>(())
+                            },
+                        )?;
+                        drop(ordinary_turn);
+                        None
+                    }
+                    PreGate::Selected(selected) => Some(selected),
+                    PreGate::Ready(ready) if terminal_finalization_cut.is_some() => {
+                        let permit = terminal_finalization_cut
+                            .expect("the terminal cut remains borrowed for this Completion turn")
+                            .terminal_ready_broadcast_permit();
+                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
+                            CompletionTurn::PassThrough(empty_turn) => {
+                                drop(empty_turn);
+                                None
+                            }
+                            CompletionTurn::Selected(selected) => Some(selected),
+                        }
+                    }
+                    PreGate::Ready(ready) if producer_claim.apply_terminal_settled() => {
+                        let permit = producer_claim
+                            .apply_terminal_ready_broadcast_permit()
+                            .expect("the terminal Apply disposition mints its sealed Ready permit");
+                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
+                            CompletionTurn::PassThrough(empty_turn) => {
+                                // Completion I/O and an empty census retain the exact cursor.
+                                // Dropping it advances only to the existing Runtime fence below.
+                                drop(empty_turn);
+                                None
+                            }
+                            CompletionTurn::Selected(selected) => Some(selected),
+                        }
+                    }
+                    PreGate::Ready(ready) if producer_claim.permits_ready_completion() => {
+                        let completion = match producer_claim.required_ready_ordinal() {
+                            Some(ordinal) => activated
+                                .drive_ready_completion_turn_requiring_ordinal(ready, ordinal),
+                            None => activated.drive_ready_completion_turn(ready),
+                        };
+                        match completion {
+                            CompletionTurn::PassThrough(empty_turn) => {
+                                if producer_claim.requires_exact_ready_selection() {
+                                    drop(empty_turn);
+                                    return Err(producer_claim_transition_error(
+                                        &output_guard,
+                                        LifecycleProducerClaimTransitionErrorV1::Completion,
+                                    ));
+                                }
+                                // Ready census was empty. Do not generic-drain:
+                                // a lifecycle completion may arrive after the
+                                // physical pre-gate and must be reclassified.
+                                drop(empty_turn);
+                                None
+                            }
+                            CompletionTurn::Selected(selected) => Some(selected),
+                        }
+                    }
+                    PreGate::Ready(ready) => {
+                        // The existing non-Producer target owns this turn.
+                        // Dropping the opaque empty cursor advances to Runtime
+                        // without authorizing a second Ready claim.
+                        drop(ready);
+                        None
+                    }
+                };
+                if let Some(selected) = selected {
+                    if selected.restart_required() || output_guard.restart_required() {
+                        return Err(V2RunnerError::RestartRequired);
+                    }
+                    producer_claim = activated.producer_claim_projection()?;
+                    if completion_selection_retries_before_runtime(&selected) {
+                        // The move-only published-successor token is retained
+                        // ahead of physical completion classification. Yield
+                        // this iteration so Runtime cannot precede its exact
+                        // same-address consumption.
+                        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                            producer_claim,
+                        ));
+                    }
+                    if completion_selection_stops_batch(&selected) {
+                        // Settlement makes the adjacent ProducerTurn Ready.
+                        // Let run_inner claim it before any Runtime or
+                        // Ingress owner can add another Serve to the census.
+                        return Ok(
+                            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                                producer_claim,
+                            ),
+                        );
+                    }
+                }
+                if terminal_finalization_cut.is_some() {
+                    // The sealed cut owns exactly the Completion-ranked turn.
+                    // Return before asking the cursor for Runtime or Ingress.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
+            }
+            LifecycleRunnerRankTarget::Runtime => {
+                debug_assert!(
+                    terminal_finalization_cut.is_none(),
+                    "terminal finalization cannot acquire a Runtime turn"
+                );
+                if producer_claim.blocks_runtime() {
+                    // A typed Apply or registered Validate sidecar wait can
+                    // advance outside this batch. Ordinary Runtime and Ingress
+                    // remain inert; run_inner separately admits only the
+                    // sidecar claim's sealed pacemaker Progress escape.
+                    return Ok(blocked_runtime_drain_disposition(producer_claim));
+                }
+                let (pre_timeout_cut, pre_timeout_advanced) = activated.with_runner_runtime(
+                    runner,
+                    |_owner, executor, services, _local_proposal| {
+                        let now = Instant::now();
+                        let Some(cut) = executor.freeze_pre_timeout_locked_prepare_qc_cut(
+                            now,
+                            receiver.next_physical_admission_ordinal(),
+                        )?
+                        else {
+                            return Ok::<_, V2RunnerError>((None, false));
+                        };
+                        match executor
+                            .step_pre_timeout_locked_prepare_qc_once(now, &cut, services)?
+                        {
+                            EffectExecutorStep::Idle => Ok((Some(cut), false)),
+                            EffectExecutorStep::Advanced { .. } => {
+                                let _ = reconcile_executor_locked_body(executor, services)?;
+                                Ok((None, true))
+                            }
+                        }
+                    },
+                )?;
+                if pre_timeout_advanced {
+                    // One exact already-admitted Prepare carrier advanced
+                    // ahead of the frozen timeout owner. Re-enter
+                    // Completion/Runtime so either the next pre-cut witness or
+                    // the resulting WAL fence settles before any Producer or
+                    // ordinary timeout turn.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                        producer_claim,
+                    ));
+                }
+                if let Some(pre_timeout_cut) = pre_timeout_cut {
+                    use super::super::v2_lifecycle_coordinator::ProductionPreTimeoutLockedPrepareQcIngressTurnV1 as PreTimeoutIngress;
+                    match activated
+                        .prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)
+                    {
+                        PreTimeoutIngress::Empty => {}
+                        PreTimeoutIngress::RestartRequired => {
+                            return Err(ingress_restart_error(&output_guard));
+                        }
+                        PreTimeoutIngress::ObsoletePredecessor(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_beacon,
+                                lane_output_limit,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            // Dequeue retirement strictly lowers the fixed
+                            // pre-cut predecessor rank. A fresh outer turn
+                            // remints the same timeout owner/cut and cannot see
+                            // any later producer append.
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
+                        }
+                        PreTimeoutIngress::ExactPrepareProgress(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_beacon,
+                                lane_output_limit,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            activated.with_runner_runtime(
+                                runner,
+                                |_owner, executor, services, _local_proposal| match executor
+                                    .step_pre_timeout_locked_prepare_qc_once(
+                                        Instant::now(),
+                                        &pre_timeout_cut,
+                                        services,
+                                    )? {
+                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(()),
+                                    EffectExecutorStep::Advanced { .. } => {
+                                        let _ = reconcile_executor_locked_body(executor, services)?;
+                                        Ok(())
+                                    }
+                                },
+                            )?;
+                            // Authentication or ordinary admission can retire
+                            // a previewed duplicate/version-mismatched carrier
+                            // without queueing the runtime command. Whether it
+                            // advanced or stuttered, retry the same frozen
+                            // physical prefix: its roster-bounded rank strictly
+                            // decreased, so this cannot admit a post-cut
+                            // carrier or defer the timeout forever.
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
+                        }
+                    }
+                }
+                let (installed_terminal, executor_slice) = activated.with_runner_runtime(
+                    runner,
+                    |owner, executor, services, _local_proposal| {
+                        let was_terminal = executor
+                            .local_proposal_directive()?
+                            .decided_subject()
+                            .is_some();
+                        let executor_slice = advance_executor(
+                            receiver,
+                            owner,
+                            executor,
+                            services,
+                            producer_claim.required_ready_ordinal(),
+                            1,
+                        )?;
+                        let is_terminal = executor
+                            .local_proposal_directive()?
+                            .decided_subject()
+                            .is_some();
+                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, executor_slice))
+                    },
+                )?;
+                producer_claim = activated.producer_claim_projection()?;
+                if installed_terminal {
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
+                match executor_slice {
+                    AdvanceExecutorSliceOutcomeV1::Idle
+                    | AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}
+                    AdvanceExecutorSliceOutcomeV1::Yielded(advance_executor_yield) => {
+                        return Ok(
+                            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                                producer_claim,
+                                advance_executor_yield,
+                            ),
+                        );
+                    }
+                }
+                if producer_claim.blocks_ingress() {
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
+            }
+            LifecycleRunnerRankTarget::Ingress => {
+                debug_assert!(
+                    terminal_finalization_cut.is_none(),
+                    "terminal finalization must stop before the open Ingress turn"
+                );
+                match activated.drive_ingress_turn(current_turn) {
+                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::PassThrough(
+                        empty_turn,
+                    ) => {
+                        drop(empty_turn);
+                        break;
+                    }
+                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Ordinary(
+                        ordinary,
+                    ) => {
+                        let consumed = activated.consume_prepared_ordinary_ingress_turn(
+                            runner,
+                            ordinary,
+                            lane_work,
+                            kura,
+                            local_key,
+                            block_sync_server,
+                            block_sync,
+                            block_sync_request,
+                            npos_beacon,
+                            lane_output_limit,
+                        );
+                        if let Err(error) = consumed {
+                            iroha_logger::error!(
+                                %error,
+                                "Sumeragi v2 ordinary ingress consumption failed closed"
+                            );
+                            return Err(error);
+                        }
+                    }
+                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Selected(
+                        selected,
+                    ) => {
+                        use super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1;
+                        if matches!(selected, ProductionLifecycleIngressSelectionV1::RestartRequired) {
+                            return Err(ingress_restart_error(&output_guard));
+                        }
+                        producer_claim = activated.producer_claim_projection()?;
+                        if ingress_selection_retries_before_producer(&selected) {
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
+                        }
+                        match selected {
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady
+                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchQueued
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeQueued
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal => {
+                                return Ok(LifecycleV2IngressDrainDispositionV1::ready(
+                                    producer_claim,
+                                ));
+                            }
+                            ProductionLifecycleIngressSelectionV1::RestartRequired => {
+                                return Err(ingress_restart_error(&output_guard));
+                            }
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
+                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeRetry => {
+                                unreachable!(
+                                    "recovered Fetch retained retries return before the terminal match"
+                                )
+                            }
+                        }
+                    }
+                }
+                producer_claim = activated.producer_claim_projection()?;
+                if producer_claim.requires_yield() {
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
+            }
+        }
+    }
+    Ok(LifecycleV2IngressDrainDispositionV1::ready(
+        activated.producer_claim_projection()?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    // Reference behavior during migration; production reads retained owners.
+    impl LifecycleProducerClaimDispositionV1 {
+        // TODO: replace the historical transition oracle with owner-fixture differential
+        // coverage once every state has a production projection regression. Production
+        // has no event-driven shadow scheduler.
+        #[cfg(test)]
+        fn observe_completion(
+            self,
+            selected: &crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
+        ) -> Result<Self, LifecycleProducerClaimTransitionErrorV1> {
+            use crate::sumeragi::v2_lifecycle_coordinator::{
+                ProductionCompletionDispatchV1 as Dispatch,
+                ProductionLifecycleCompletionSelectionV1 as Completion,
+                ProductionRecoveredDecisionFetchStoreSettlementV1 as FetchSettlement,
+                ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 as ProposalSettlement,
+                ProductionRecoveredLifecycleSignBroadcastSettlementV1 as SignSettlement,
+                ProductionRecoveredLifecycleSignCompletionSelectionV1 as SignCompletion,
+                ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1 as VoteSettlement,
+            };
+
+            if selected.restart_required() {
+                return Ok(Self::Eligible);
+            }
+
+            match (self, selected) {
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
@@ -550,7 +1186,7 @@ impl LifecycleProducerClaimDispositionV1 {
                 Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
                     parent_ordinal,
                     child_ordinal,
-                    child: super::super::v2_lifecycle_coordinator::LifecycleWorkClass::Apply,
+                    child: crate::sumeragi::v2_lifecycle_coordinator::LifecycleWorkClass::Apply,
                 })),
             ) if self
                 .validate_successor_ordinal()
@@ -568,8 +1204,8 @@ impl LifecycleProducerClaimDispositionV1 {
                 Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
                     parent_ordinal,
                     child:
-                        super::super::v2_lifecycle_coordinator::LifecycleWorkClass::SignVote
-                        | super::super::v2_lifecycle_coordinator::LifecycleWorkClass::InvalidBodyReport,
+                        crate::sumeragi::v2_lifecycle_coordinator::LifecycleWorkClass::SignVote
+                        | crate::sumeragi::v2_lifecycle_coordinator::LifecycleWorkClass::InvalidBodyReport,
                     ..
                 })),
             ) if self
@@ -730,663 +1366,48 @@ impl LifecycleProducerClaimDispositionV1 {
             ) => Ok(self),
             _ => Err(LifecycleProducerClaimTransitionErrorV1::Completion),
         }
-    }
-
-    fn observe_ingress(
-        self,
-        selected: &super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1,
-    ) -> Result<Self, LifecycleProducerClaimTransitionErrorV1> {
-        use super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1 as Ingress;
-
-        match (self, selected) {
-            (_, Ingress::RestartRequired) => Ok(self),
-            (
-                Self::Eligible,
-                Ingress::CertifiedFetchCapacityPending | Ingress::CertifiedFetchRetry,
-            ) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::CertifiedFetchCompetingReady) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::CertifiedFetchQueued) => Ok(Self::AwaitingCompletion),
-            (
-                Self::Eligible,
-                Ingress::RecoveredDecisionFetchCapacityPending
-                | Ingress::RecoveredDecisionFetchPreparationRetry,
-            ) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::RecoveredDecisionFetchCompetingReady) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::CertifiedServeCompetingReady) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::RecoveredDecisionFetchQueued) => Ok(Self::AwaitingCompletion),
-            (
-                Self::Eligible,
-                Ingress::CertifiedServeCapacityPending | Ingress::CertifiedServeRetry,
-            ) => Ok(Self::Eligible),
-            (Self::Eligible, Ingress::CertifiedServeQueued) => Ok(Self::AwaitingCompletion),
-            (Self::Eligible, Ingress::CertifiedServeReplayQueued) => {
-                Ok(Self::AwaitingReplayCompletion)
-            }
-            (Self::Eligible, Ingress::CertifiedServeTerminal) => Ok(Self::Eligible),
-            _ => Err(LifecycleProducerClaimTransitionErrorV1::Ingress),
         }
-    }
-}
 
-/// Closed result of one bounded Completion/Runtime/Ingress batch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) struct LifecycleV2IngressDrainDispositionV1 {
-    producer_claim: LifecycleProducerClaimDispositionV1,
-    retry_before_producer: bool,
-    terminal_settlement_stops_runtime: bool,
-    advance_executor_yield: Option<AdvanceExecutorYieldV1>,
-}
+        #[cfg(test)]
+        fn observe_ingress(
+            self,
+            selected: &crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1,
+        ) -> Result<Self, LifecycleProducerClaimTransitionErrorV1> {
+            use crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1 as Ingress;
 
-impl LifecycleV2IngressDrainDispositionV1 {
-    const fn ready(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
-        Self {
-            producer_claim,
-            retry_before_producer: false,
-            terminal_settlement_stops_runtime: false,
-            advance_executor_yield: None,
-        }
-    }
-
-    const fn after_terminal_settlement(
-        producer_claim: LifecycleProducerClaimDispositionV1,
-    ) -> Self {
-        Self {
-            producer_claim,
-            retry_before_producer: false,
-            terminal_settlement_stops_runtime: true,
-            advance_executor_yield: None,
-        }
-    }
-
-    const fn retry_before_producer(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
-        Self {
-            producer_claim,
-            retry_before_producer: true,
-            terminal_settlement_stops_runtime: false,
-            advance_executor_yield: None,
-        }
-    }
-
-    const fn after_advance_executor_yield(
-        producer_claim: LifecycleProducerClaimDispositionV1,
-        advance_executor_yield: AdvanceExecutorYieldV1,
-    ) -> Self {
-        Self {
-            producer_claim,
-            retry_before_producer: advance_executor_yield.requires_completion_retry(),
-            terminal_settlement_stops_runtime: false,
-            advance_executor_yield: Some(advance_executor_yield),
-        }
-    }
-
-    /// Persist the exact Producer-claim target into the next outer iteration.
-    pub(in crate::sumeragi) const fn producer_claim(self) -> LifecycleProducerClaimDispositionV1 {
-        self.producer_claim
-    }
-
-    /// Return whether this batch must yield before fresh Producer planning.
-    pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
-        self.retry_before_producer || self.producer_claim.requires_yield()
-    }
-
-    /// Return whether terminal settlement must precede all ordinary runtime service.
-    pub(in crate::sumeragi) const fn terminal_settlement_stops_runtime(self) -> bool {
-        self.terminal_settlement_stops_runtime
-    }
-
-    /// Whether the pre-Ingress runtime turn yielded on serialized executor debt.
-    pub(in crate::sumeragi) const fn advance_executor_yield(
-        self,
-    ) -> Option<AdvanceExecutorYieldV1> {
-        self.advance_executor_yield
-    }
-}
-
-fn recovered_output_drain_disposition(
-    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
-    producer_claim: LifecycleProducerClaimDispositionV1,
-) -> Option<LifecycleV2IngressDrainDispositionV1> {
-    match settlement {
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
-        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => {
-            None
-        }
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
-            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ))
-        }
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                producer_claim,
-            ))
-        }
-    }
-}
-
-fn settled_apply_output_drain_disposition(
-    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
-    producer_claim: LifecycleProducerClaimDispositionV1,
-) -> Option<LifecycleV2IngressDrainDispositionV1> {
-    debug_assert!(producer_claim.apply_terminal_settled());
-    match settlement {
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
-            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ))
-        }
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                producer_claim,
-            ))
-        }
-        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
-        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => None,
-    }
-}
-
-const fn blocked_runtime_drain_disposition(
-    producer_claim: LifecycleProducerClaimDispositionV1,
-) -> LifecycleV2IngressDrainDispositionV1 {
-    if producer_claim.apply_terminal_settled() {
-        LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
-    } else {
-        LifecycleV2IngressDrainDispositionV1::ready(producer_claim)
-    }
-}
-
-/// Drain one bounded ordinary Completion/Runtime/Ingress batch through the
-/// activated lifecycle owner.
-///
-/// Lifecycle completion and Decision-Fetch work receives the real borrow-bound
-/// runner turn before ordinary work. A pass-through keeps that same borrow
-/// alive until the ordinary completion/runtime tail runs, while an ordinary
-/// ingress winner is already dequeued and must enter the shared opaque
-/// post-dequeue consumer. Special certified-fence and timeout-vote episodes
-/// remain separate runner modes because they deliberately bypass the ordinary
-/// fair-turn census. The ingress `limit` bounds this batch; the separate
-/// `lane_output_limit` carries the control queue capacity for first dispatch
-/// immediately after each authenticated lane ingress consumer.
-// PendingKura intentionally uses a narrower no-clock decided-lane driver;
-// every ordinary height enters this owner-preserving batch here.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
-    activated: &mut super::super::v2_lifecycle_coordinator::ActivatedProductionLifecycleV1,
-    runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
-    receiver: &Arc<FairV2Ingress>,
-    lane_work: &mut V2LaneWorkAdapter,
-    kura: &Kura,
-    local_key: &KeyPair,
-    block_sync_server: &mut V2BlockSyncServer,
-    block_sync: &mut V2BlockSyncDiscovery,
-    block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_beacon: &mut V2GlobalBeaconLifecycle,
-    limit: usize,
-    lane_output_limit: usize,
-    mut producer_claim: LifecycleProducerClaimDispositionV1,
-    terminal_finalization_cut: Option<&LifecycleTerminalFinalizationCutV1>,
-) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
-    if terminal_finalization_cut.is_some() || producer_claim.apply_terminal_settled() {
-        // Make an expired lower direct-output row visible to the cold-output
-        // order check before it can service a higher recovered Broadcast.
-        // Waking is itself a bounded state transition, so re-enter Completion
-        // on the next outer iteration rather than combining it with service I/O.
-        let direct_output_woken = activated.with_runner_runtime(
-            runner,
-            |owner, executor, services, _local_proposal| {
-                let fence = executor.lifecycle_reducer_fence_observation();
-                match owner.wake_apply_terminal_direct_broadcast_if_fenced(fence) {
-                    Ok(woken) => Ok(woken),
-                    Err(error) => {
-                        iroha_logger::error!(
-                            ?error,
-                            "Sumeragi v2 post-Apply direct-output fence wake failed closed"
-                        );
-                        services
-                            .lifecycle_output_guard()
-                            .close_admission_for_restart();
-                        Err(V2RunnerError::RestartRequired)
-                    }
+            match (self, selected) {
+                (_, Ingress::RestartRequired) => Ok(self),
+                (
+                    Self::Eligible,
+                    Ingress::CertifiedFetchCapacityPending | Ingress::CertifiedFetchRetry,
+                ) => Ok(Self::Eligible),
+                (Self::Eligible, Ingress::CertifiedFetchCompetingReady) => Ok(Self::Eligible),
+                (Self::Eligible, Ingress::CertifiedFetchQueued) => Ok(Self::AwaitingCompletion),
+                (
+                    Self::Eligible,
+                    Ingress::RecoveredDecisionFetchCapacityPending
+                    | Ingress::RecoveredDecisionFetchPreparationRetry,
+                ) => Ok(Self::Eligible),
+                (Self::Eligible, Ingress::RecoveredDecisionFetchCompetingReady) => {
+                    Ok(Self::Eligible)
                 }
-            },
-        )?;
-        if direct_output_woken {
-            return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ));
-        }
-    }
-    if producer_claim.apply_terminal_settled() {
-        // Applied is already the exact reducer terminal. First drain retained,
-        // authenticated cold-open output rows required by the finalization
-        // census. If none owns this turn, continue only far enough for the
-        // ordinary Completion pre-gate and authenticated Ready classifier to
-        // park a recovered signed Broadcast on its exact-output wait. Runtime,
-        // Ingress, and Producer remain fenced by `ApplyTerminalSettled`.
-        let settlement = activated.with_runner_runtime(
-            runner,
-            |owner, executor, services, _local_proposal| {
-                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                    owner, executor, services,
-                )
-                .map_err(V2RunnerError::from)
-            },
-        )?;
-        if let Some(disposition) =
-            settled_apply_output_drain_disposition(settlement, producer_claim)
-        {
-            return Ok(disposition);
-        }
-    }
-    let (context_id, height, output_guard) =
-        activated.with_runner_runtime(runner, |_owner, executor, services, _local_proposal| {
-            (
-                executor.context().id(),
-                executor.context().height,
-                services.lifecycle_output_guard(),
-            )
-        });
-
-    let mut outer_turns = outer_ingress_turns(limit, context_id, height);
-    while let Some(current_turn) = outer_turns.next_current() {
-        if !producer_claim.blocks_runtime() {
-            let recovered_output_settlement = activated.with_runner_runtime(
-                runner,
-                |owner, executor, services, _local_proposal| {
-                    super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                        owner, executor, services,
-                    )
-                    .map_err(V2RunnerError::from)
-                },
-            )?;
-            if let Some(disposition) =
-                recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
-            {
-                // A preceding completion may have exposed this exact ordinal as
-                // the new Ready minimum. Settle it before the turn driver can
-                // acquire a registry-backed lease for the cold-only carrier.
-                return Ok(disposition);
-            }
-        }
-        match current_turn.target() {
-            LifecycleRunnerRankTarget::Completion => {
-                use super::super::v2_lifecycle_coordinator::{
-                    ProductionLifecycleCompletionPreGateV1 as PreGate,
-                    ProductionLifecycleCompletionTurnV1 as CompletionTurn,
-                };
-                let proposal_sign_preemption =
-                    producer_claim.ready_proposal_sign_preemption_permit();
-                let pre_gate = match proposal_sign_preemption.as_ref() {
-                    Some(permit) => activated
-                        .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
-                            current_turn,
-                            lane_work,
-                            permit,
-                        ),
-                    None => activated.drive_completion_pre_gate(current_turn, lane_work),
-                };
-                let selected = match pre_gate {
-                    PreGate::Ordinary(ordinary_turn) => {
-                        activated.with_runner_runtime(
-                            runner,
-                            |_owner, executor, services, _local_proposal| {
-                                services
-                                    .drain_one_ordinary_completion_after_lifecycle_pass_through(
-                                        executor,
-                                    )?;
-                                Ok::<(), V2RunnerError>(())
-                            },
-                        )?;
-                        drop(ordinary_turn);
-                        None
-                    }
-                    PreGate::Selected(selected) => Some(selected),
-                    PreGate::Ready(ready) if terminal_finalization_cut.is_some() => {
-                        let permit = terminal_finalization_cut
-                            .expect("the terminal cut remains borrowed for this Completion turn")
-                            .terminal_ready_broadcast_permit();
-                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
-                            CompletionTurn::PassThrough(empty_turn) => {
-                                drop(empty_turn);
-                                None
-                            }
-                            CompletionTurn::Selected(selected) => Some(selected),
-                        }
-                    }
-                    PreGate::Ready(ready) if producer_claim.apply_terminal_settled() => {
-                        let permit = producer_claim
-                            .apply_terminal_ready_broadcast_permit()
-                            .expect("the terminal Apply disposition mints its sealed Ready permit");
-                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
-                            CompletionTurn::PassThrough(empty_turn) => {
-                                // Completion I/O and an empty census retain the exact cursor.
-                                // Dropping it advances only to the existing Runtime fence below.
-                                drop(empty_turn);
-                                None
-                            }
-                            CompletionTurn::Selected(selected) => Some(selected),
-                        }
-                    }
-                    PreGate::Ready(ready) if producer_claim.permits_ready_completion() => {
-                        let completion = match producer_claim.required_ready_ordinal() {
-                            Some(ordinal) => activated
-                                .drive_ready_completion_turn_requiring_ordinal(ready, ordinal),
-                            None => activated.drive_ready_completion_turn(ready),
-                        };
-                        match completion {
-                            CompletionTurn::PassThrough(empty_turn) => {
-                                if producer_claim.requires_exact_ready_selection() {
-                                    drop(empty_turn);
-                                    return Err(producer_claim_transition_error(
-                                        &output_guard,
-                                        LifecycleProducerClaimTransitionErrorV1::Completion,
-                                    ));
-                                }
-                                // Ready census was empty. Do not generic-drain:
-                                // a lifecycle completion may arrive after the
-                                // physical pre-gate and must be reclassified.
-                                drop(empty_turn);
-                                None
-                            }
-                            CompletionTurn::Selected(selected) => Some(selected),
-                        }
-                    }
-                    PreGate::Ready(ready) => {
-                        // The existing non-Producer target owns this turn.
-                        // Dropping the opaque empty cursor advances to Runtime
-                        // without authorizing a second Ready claim.
-                        drop(ready);
-                        None
-                    }
-                };
-                if let Some(selected) = selected {
-                    producer_claim = producer_claim
-                        .observe_completion(&selected)
-                        .map_err(|error| producer_claim_transition_error(&output_guard, error))?;
-                    if completion_selection_retries_before_runtime(&selected) {
-                        // The move-only published-successor token is retained
-                        // ahead of physical completion classification. Yield
-                        // this iteration so Runtime cannot precede its exact
-                        // same-address consumption.
-                        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                            producer_claim,
-                        ));
-                    }
-                    if completion_selection_stops_batch(&selected) {
-                        // Settlement makes the adjacent ProducerTurn Ready.
-                        // Let run_inner claim it before any Runtime or
-                        // Ingress owner can add another Serve to the census.
-                        return Ok(
-                            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                                producer_claim,
-                            ),
-                        );
-                    }
-                    if selected.restart_required() || output_guard.restart_required() {
-                        return Err(V2RunnerError::RestartRequired);
-                    }
+                (Self::Eligible, Ingress::CertifiedServeCompetingReady) => Ok(Self::Eligible),
+                (Self::Eligible, Ingress::RecoveredDecisionFetchQueued) => {
+                    Ok(Self::AwaitingCompletion)
                 }
-                if terminal_finalization_cut.is_some() {
-                    // The sealed cut owns exactly the Completion-ranked turn.
-                    // Return before asking the cursor for Runtime or Ingress.
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                (
+                    Self::Eligible,
+                    Ingress::CertifiedServeCapacityPending | Ingress::CertifiedServeRetry,
+                ) => Ok(Self::Eligible),
+                (Self::Eligible, Ingress::CertifiedServeQueued) => Ok(Self::AwaitingCompletion),
+                (Self::Eligible, Ingress::CertifiedServeReplayQueued) => {
+                    Ok(Self::AwaitingReplayCompletion)
                 }
-            }
-            LifecycleRunnerRankTarget::Runtime => {
-                debug_assert!(
-                    terminal_finalization_cut.is_none(),
-                    "terminal finalization cannot acquire a Runtime turn"
-                );
-                if producer_claim.blocks_runtime() {
-                    // A typed Apply or registered Validate sidecar wait can
-                    // advance outside this batch. Ordinary Runtime and Ingress
-                    // remain inert; run_inner separately admits only the
-                    // sidecar claim's sealed pacemaker Progress escape.
-                    return Ok(blocked_runtime_drain_disposition(producer_claim));
-                }
-                let (pre_timeout_cut, pre_timeout_advanced) = activated.with_runner_runtime(
-                    runner,
-                    |_owner, executor, services, _local_proposal| {
-                        let now = Instant::now();
-                        let Some(cut) = executor.freeze_pre_timeout_locked_prepare_qc_cut(
-                            now,
-                            receiver.next_physical_admission_ordinal(),
-                        )?
-                        else {
-                            return Ok::<_, V2RunnerError>((None, false));
-                        };
-                        match executor
-                            .step_pre_timeout_locked_prepare_qc_once(now, &cut, services)?
-                        {
-                            EffectExecutorStep::Idle => Ok((Some(cut), false)),
-                            EffectExecutorStep::Advanced { .. } => {
-                                let _ = reconcile_executor_locked_body(executor, services)?;
-                                Ok((None, true))
-                            }
-                        }
-                    },
-                )?;
-                if pre_timeout_advanced {
-                    // One exact already-admitted Prepare carrier advanced
-                    // ahead of the frozen timeout owner. Re-enter
-                    // Completion/Runtime so either the next pre-cut witness or
-                    // the resulting WAL fence settles before any Producer or
-                    // ordinary timeout turn.
-                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                        producer_claim,
-                    ));
-                }
-                if let Some(pre_timeout_cut) = pre_timeout_cut {
-                    use super::super::v2_lifecycle_coordinator::ProductionPreTimeoutLockedPrepareQcIngressTurnV1 as PreTimeoutIngress;
-                    match activated
-                        .prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)
-                    {
-                        PreTimeoutIngress::Empty => {}
-                        PreTimeoutIngress::RestartRequired => {
-                            return Err(ingress_restart_error(&output_guard));
-                        }
-                        PreTimeoutIngress::ObsoletePredecessor(prepared) => {
-                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
-                                runner,
-                                prepared,
-                                lane_work,
-                                kura,
-                                local_key,
-                                block_sync_server,
-                                block_sync,
-                                block_sync_request,
-                                npos_beacon,
-                                lane_output_limit,
-                            )?;
-                            match consumption {
-                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
-                            }
-                            // Dequeue retirement strictly lowers the fixed
-                            // pre-cut predecessor rank. A fresh outer turn
-                            // remints the same timeout owner/cut and cannot see
-                            // any later producer append.
-                            return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
-                            );
-                        }
-                        PreTimeoutIngress::ExactPrepareProgress(prepared) => {
-                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
-                                runner,
-                                prepared,
-                                lane_work,
-                                kura,
-                                local_key,
-                                block_sync_server,
-                                block_sync,
-                                block_sync_request,
-                                npos_beacon,
-                                lane_output_limit,
-                            )?;
-                            match consumption {
-                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
-                            }
-                            activated.with_runner_runtime(
-                                runner,
-                                |_owner, executor, services, _local_proposal| match executor
-                                    .step_pre_timeout_locked_prepare_qc_once(
-                                        Instant::now(),
-                                        &pre_timeout_cut,
-                                        services,
-                                    )? {
-                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(()),
-                                    EffectExecutorStep::Advanced { .. } => {
-                                        let _ = reconcile_executor_locked_body(executor, services)?;
-                                        Ok(())
-                                    }
-                                },
-                            )?;
-                            // Authentication or ordinary admission can retire
-                            // a previewed duplicate/version-mismatched carrier
-                            // without queueing the runtime command. Whether it
-                            // advanced or stuttered, retry the same frozen
-                            // physical prefix: its roster-bounded rank strictly
-                            // decreased, so this cannot admit a post-cut
-                            // carrier or defer the timeout forever.
-                            return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
-                            );
-                        }
-                    }
-                }
-                let (installed_terminal, executor_slice) = activated.with_runner_runtime(
-                    runner,
-                    |owner, executor, services, _local_proposal| {
-                        let was_terminal = executor
-                            .local_proposal_directive()?
-                            .decided_subject()
-                            .is_some();
-                        let executor_slice = advance_executor(
-                            receiver,
-                            owner,
-                            executor,
-                            services,
-                            producer_claim.required_ready_ordinal(),
-                            1,
-                        )?;
-                        let is_terminal = executor
-                            .local_proposal_directive()?
-                            .decided_subject()
-                            .is_some();
-                        Ok::<_, V2RunnerError>((!was_terminal && is_terminal, executor_slice))
-                    },
-                )?;
-                if installed_terminal {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
-                }
-                match executor_slice {
-                    AdvanceExecutorSliceOutcomeV1::Idle
-                    | AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}
-                    AdvanceExecutorSliceOutcomeV1::Yielded(advance_executor_yield) => {
-                        return Ok(
-                            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
-                                producer_claim,
-                                advance_executor_yield,
-                            ),
-                        );
-                    }
-                }
-                if producer_claim.blocks_ingress() {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
-                }
-            }
-            LifecycleRunnerRankTarget::Ingress => {
-                debug_assert!(
-                    terminal_finalization_cut.is_none(),
-                    "terminal finalization must stop before the open Ingress turn"
-                );
-                match activated.drive_ingress_turn(current_turn) {
-                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::PassThrough(
-                        empty_turn,
-                    ) => {
-                        drop(empty_turn);
-                        break;
-                    }
-                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Ordinary(
-                        ordinary,
-                    ) => {
-                        let consumed = activated.consume_prepared_ordinary_ingress_turn(
-                            runner,
-                            ordinary,
-                            lane_work,
-                            kura,
-                            local_key,
-                            block_sync_server,
-                            block_sync,
-                            block_sync_request,
-                            npos_beacon,
-                            lane_output_limit,
-                        );
-                        if let Err(error) = consumed {
-                            iroha_logger::error!(
-                                %error,
-                                "Sumeragi v2 ordinary ingress consumption failed closed"
-                            );
-                            return Err(error);
-                        }
-                    }
-                    super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Selected(
-                        selected,
-                    ) => {
-                        use super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1;
-                        producer_claim = producer_claim
-                            .observe_ingress(&selected)
-                            .map_err(|error| producer_claim_transition_error(&output_guard, error))?;
-                        if ingress_selection_retries_before_producer(&selected) {
-                            return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
-                            );
-                        }
-                        match selected {
-                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady
-                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchQueued
-                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady
-                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeQueued
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal => {
-                                return Ok(LifecycleV2IngressDrainDispositionV1::ready(
-                                    producer_claim,
-                                ));
-                            }
-                            ProductionLifecycleIngressSelectionV1::RestartRequired => {
-                                return Err(ingress_restart_error(&output_guard));
-                            }
-                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
-                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry
-                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
-                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending
-                            | ProductionLifecycleIngressSelectionV1::CertifiedServeRetry => {
-                                unreachable!(
-                                    "recovered Fetch retained retries return before the terminal match"
-                                )
-                            }
-                        }
-                    }
-                }
-                if producer_claim.requires_yield() {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
-                }
+                (Self::Eligible, Ingress::CertifiedServeTerminal) => Ok(Self::Eligible),
+                _ => Err(LifecycleProducerClaimTransitionErrorV1::Ingress),
             }
         }
     }
-    Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))
-}
-
-#[cfg(test)]
-mod tests {
     use super::*;
 
     #[test]

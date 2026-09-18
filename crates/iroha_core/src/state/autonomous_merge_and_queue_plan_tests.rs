@@ -1508,9 +1508,11 @@ fn assert_queue_plan_native_exact_compare_and_set() {
     );
     let key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
         .expect("fixture registry key");
-    let expected_payload =
-        State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
-            .expect("fixture registry value");
+    let expected_payload = State::queue_plan_admission_registry_marker_payload(
+        &binding.registry_value(),
+        QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap(),
+    )
+    .expect("fixture registry value");
     assert_eq!(
         state_block.world.smart_contract_state.get(&key),
         Some(&expected_payload)
@@ -1526,8 +1528,12 @@ fn assert_queue_plan_native_exact_compare_and_set() {
         let mut world = state.world.block();
         world.smart_contract_state.insert(
             key,
-            State::queue_plan_admission_registry_marker_payload(&conflicting_value)
-                .expect("well-formed conflicting registry value"),
+            State::queue_plan_admission_registry_marker_payload(
+                &conflicting_value,
+                QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0)
+                    .unwrap(),
+            )
+            .expect("well-formed conflicting registry value"),
         );
         world.commit();
     }
@@ -1554,11 +1560,9 @@ fn assert_queue_plan_native_multi_route_preflight_is_atomic() {
         queue_plan_authority_height_for_state_test(&state),
         0x79,
     );
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        &certificate,
-    )
-    .expect("fixture multi-route QueuePlan admission");
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, &certificate)
+            .expect("fixture multi-route QueuePlan admission");
     let obligation = State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture multi-route pending obligation");
     let coordinator_route = obligation.routes[0];
@@ -1583,8 +1587,19 @@ fn assert_queue_plan_native_multi_route_preflight_is_atomic() {
         world.smart_contract_state.insert(
             State::queue_plan_admission_registry_marker_key(&admission.registry_key)
                 .expect("fixture multi-route registry key"),
-            State::queue_plan_admission_registry_marker_payload(&admission.registry_value)
-                .expect("fixture multi-route registry value"),
+            State::queue_plan_admission_registry_marker_payload(
+                &admission.registry_value,
+                QueuePlanAdmissionPriorityV1::new(
+                    admission
+                        .certificate
+                        .binding
+                        .admission_context
+                        .proposal_height,
+                    0,
+                )
+                .unwrap(),
+            )
+            .expect("fixture multi-route registry value"),
         );
         world.smart_contract_state.insert(
             participant_member_key.clone(),
@@ -1655,20 +1670,18 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
         queue_plan_authority_height_for_state_test(&state),
         0x7A,
     );
-    let first_registry_key_for_order =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &state.network_id,
-            &first_certificate,
-        )
-        .expect("fixture first batch admission")
-        .registry_key;
-    let second_registry_key_for_order =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &state.network_id,
-            &second_certificate,
-        )
-        .expect("fixture second batch admission")
-        .registry_key;
+    let first_registry_key_for_order = validated_queue_plan_input_certificate_for_state_test(
+        &state.network_id,
+        &first_certificate,
+    )
+    .expect("fixture first batch admission")
+    .registry_key;
+    let second_registry_key_for_order = validated_queue_plan_input_certificate_for_state_test(
+        &state.network_id,
+        &second_certificate,
+    )
+    .expect("fixture second batch admission")
+    .registry_key;
     let mut ordered_admissions = [
         (first_registry_key_for_order, first_certificate),
         (second_registry_key_for_order, second_certificate),
@@ -1678,18 +1691,16 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
         .into_iter()
         .map(|(_, certificate)| certificate)
         .collect::<Vec<_>>();
-    let first_admission =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &state.network_id,
-            &ordered_certificates[0],
-        )
-        .expect("fixture first canonical batch admission");
-    let second_admission =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &state.network_id,
-            &ordered_certificates[1],
-        )
-        .expect("fixture second canonical batch admission");
+    let first_admission = validated_queue_plan_input_certificate_for_state_test(
+        &state.network_id,
+        &ordered_certificates[0],
+    )
+    .expect("fixture first canonical batch admission");
+    let second_admission = validated_queue_plan_input_certificate_for_state_test(
+        &state.network_id,
+        &ordered_certificates[1],
+    )
+    .expect("fixture second canonical batch admission");
     let first_obligation = State::queue_plan_pending_obligation_from_admission(&first_admission)
         .expect("fixture first canonical batch obligation");
     let second_obligation = State::queue_plan_pending_obligation_from_admission(&second_admission)
@@ -1875,8 +1886,12 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         let mut world = state.world.block();
         world.smart_contract_state.insert(
             registry_key,
-            State::queue_plan_admission_registry_marker_payload(&partial_conflict)
-                .expect("fixture partial conflict payload"),
+            State::queue_plan_admission_registry_marker_payload(
+                &partial_conflict,
+                QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0)
+                    .unwrap(),
+            )
+            .expect("fixture partial conflict payload"),
         );
         world.commit();
     }
@@ -1887,7 +1902,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         "a conflicting hash without owner evidence is corruption, not a definitive conflict"
     );
     let conflicting_entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
-    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let conflicting_binding = crate::torii_proxy::new_queue_plan_admission_binding(
         &state.network_id,
         &conflicting_entrypoint,
         &routing_plan,
@@ -1986,8 +2001,12 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         world.smart_contract_state.insert(
             State::queue_plan_admission_registry_marker_key(&binding.registry_key())
                 .expect("fixture exact applied registry key"),
-            State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
-                .expect("fixture exact applied registry value"),
+            State::queue_plan_admission_registry_marker_payload(
+                &binding.registry_value(),
+                QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0)
+                    .unwrap(),
+            )
+            .expect("fixture exact applied registry value"),
         );
         world.commit();
     }
@@ -2033,7 +2052,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         queue_plan_authority_height_for_state_test(&state),
         sealed_tag,
     );
-    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let sealed_binding = crate::torii_proxy::new_queue_plan_admission_binding(
         &state.network_id,
         &sealed_entrypoint,
         &routing_plan,
@@ -2151,7 +2170,7 @@ fn queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed() {
             salt,
         ),
     );
-    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let sealed_binding = crate::torii_proxy::new_queue_plan_admission_binding(
         &state.network_id,
         &sealed_entrypoint,
         &routing_plan,
@@ -2702,15 +2721,13 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         queue_plan_authority_height_for_state_test(&state),
         tag,
     );
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        &certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, &certificate)
+            .expect("fixture QueuePlan admission certificate");
     let original = State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture authenticated pending obligation");
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let alternate_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let alternate_binding = crate::torii_proxy::new_queue_plan_admission_binding(
         &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, tag),
         &routing_plan,
@@ -2863,12 +2880,11 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             queue_plan_authority_height_for_state_test(&state),
             0x72,
         );
-        let first_admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                &state.network_id,
-                &first_certificate,
-            )
-            .expect("fixture first QueuePlan admission certificate");
+        let first_admission = validated_queue_plan_input_certificate_for_state_test(
+            &state.network_id,
+            &first_certificate,
+        )
+        .expect("fixture first QueuePlan admission certificate");
         let first_obligation = queue_plan_pending_obligation_for_test(&state, &first_certificate);
         let second_obligation = queue_plan_pending_obligation_for_test(&state, &second_certificate);
         assert_eq!(first_obligation.routes, second_obligation.routes);
@@ -3019,11 +3035,8 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             0x73,
         );
         let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                &state.network_id,
-                &certificate,
-            )
-            .expect("fixture oversized-member QueuePlan admission certificate");
+            validated_queue_plan_input_certificate_for_state_test(&state.network_id, &certificate)
+                .expect("fixture oversized-member QueuePlan admission certificate");
         let obligation = queue_plan_pending_obligation_for_test(&state, &certificate);
         let route = obligation.routes[0];
         let member_identity = State::queue_plan_pending_route_member_identity(&obligation, route)
@@ -3387,8 +3400,11 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
     );
     let key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
         .expect("fixture registry key");
-    let payload = State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
-        .expect("fixture registry value");
+    let payload = State::queue_plan_admission_registry_marker_payload(
+        &binding.registry_value(),
+        QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap(),
+    )
+    .expect("fixture registry value");
     {
         let mut world = state.world.block();
         world
@@ -3464,9 +3480,13 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         authority_height,
         tag,
     );
-    binding
-        .validate_for_request(&state.network_id, &entrypoint, &routing_plan)
-        .expect("fixture certificate binds the autonomous transaction");
+    crate::torii_proxy::validate_queue_plan_binding_for_request(
+        &binding,
+        &state.network_id,
+        &entrypoint,
+        &routing_plan,
+    )
+    .expect("fixture certificate binds the autonomous transaction");
     {
         let mut world = state.world.block();
         world.accounts.insert(
@@ -3955,7 +3975,17 @@ fn pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarna
         b"mutated-pending-queue-plan-predecessor",
     ));
     predecessor_binding.admission_context.predecessor_block_hash = Some(forged_predecessor);
+    let predecessor_entrypoint = queue_plan_entrypoint_for_state_test(&state, 0x65);
+    let predecessor_binding = crate::torii_proxy::new_queue_plan_admission_binding(
+        state.network_id_ref(),
+        &predecessor_entrypoint,
+        &routing_plan,
+        predecessor_binding.admission_context,
+        predecessor_binding.enqueue_timestamp_ms,
+    )
+    .expect("exact journal claim with an independently invalid historical predecessor");
     let predecessor_certificate = queue_plan_admission_certificate_bytes_for_state_test(
+        &predecessor_entrypoint,
         &predecessor_binding,
         &validator_keypairs,
     );
@@ -3974,22 +4004,27 @@ fn pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarna
         0x67,
     );
     let mut below_quorum = norito::decode_from_bytes::<
-        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
     >(&roster_certificate)
     .expect("decode quorum certificate fixture");
-    assert_eq!(below_quorum.attestations.len(), 2);
+    assert_eq!(below_quorum.certificate.attestations.len(), 2);
     let retained_signer_ids = below_quorum
+        .certificate
         .attestations
         .iter()
         .map(|attestation| {
-            let validator = below_quorum.binding.admission_context.route_incarnations[0]
+            let validator = below_quorum
+                .certificate
+                .binding
+                .admission_context
+                .route_incarnations[0]
                 .validator_set
                 .get(usize::from(attestation.validator_index))
                 .expect("fixture signer index is in bounds");
             AccountId::new(validator.public_key().clone())
         })
         .collect::<Vec<_>>();
-    below_quorum.attestations.pop();
+    below_quorum.certificate.attestations.pop();
     let below_quorum = norito::to_bytes(&below_quorum).expect("encode below-quorum fixture");
 
     let successor = empty_global_block_after(Some(&parent));
@@ -4265,8 +4300,30 @@ fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
             );
             assert_eq!(
                 calls.get(),
+                0,
+                "malformed framing is rejected before cryptographic authentication"
+            );
+            let mut invalid = norito::decode_canonical::<
+                iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+            >(&certificate)
+            .expect("canonical complete fixture");
+            invalid.certificate.attestations[0].signature = iroha_crypto::Signature::try_new(
+                validator_keypairs[0].private_key(),
+                b"wrong admission attestation preimage",
+            )
+            .expect("canonical signature over a different claim");
+            assert!(
+                state
+                    .persist_classified_queue_plan_admission(
+                        &norito::encode_canonical(&invalid).expect("canonical invalid signature"),
+                        crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                calls.get(),
                 1,
-                "malformed input still passes through authentication"
+                "decodable invalid evidence authenticates once outside the publication fence"
             );
         },
     );
@@ -4295,6 +4352,7 @@ fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
         0x68,
     );
     let second_certificate = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &queue_plan_entrypoint_for_state_test(&state, 0x68),
         &binding,
         &validator_keypairs,
         &[2, 3],
@@ -4620,19 +4678,23 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
         old_carrier,
         0x75,
     );
-    let decoded = norito::decode_from_bytes::<crate::torii_proxy::QueuePlanAdmissionCertificateV1>(
-        &fixture_certificate,
-    )
+    let decoded = norito::decode_from_bytes::<
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    >(&fixture_certificate)
     .expect("decode the existing authenticated fixture");
     let certificate = norito::encode_canonical(&decoded).unwrap();
-    let validated = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        state.network_id_ref(),
-        &certificate,
-    )
-    .expect("the original canonical certificate must pass exact quorum authentication");
+    let validated =
+        validated_queue_plan_input_certificate_for_state_test(state.network_id_ref(), &certificate)
+            .expect("the original canonical certificate must pass exact quorum authentication");
     assert_eq!(validated.certificate.binding, binding);
     assert_eq!(
-        norito::encode_canonical(&validated.certificate).unwrap(),
+        norito::encode_canonical(
+            &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+                entrypoint: decoded.entrypoint.clone(),
+                certificate: validated.certificate.clone(),
+            }
+        )
+        .unwrap(),
         certificate
     );
     let classify = |bytes: &[u8], carrier| {
@@ -4667,7 +4729,7 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
     wrong_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
         b"wrong-current-queue-plan-predecessor",
     )));
-    let wrong_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let wrong_binding = crate::torii_proxy::new_queue_plan_admission_binding(
         state.network_id_ref(),
         &queue_plan_entrypoint_for_state_test(&state, 0x75),
         &routing_plan,
@@ -4675,14 +4737,17 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
         binding.enqueue_timestamp_ms,
     )
     .expect("recompute every exact digest for the authenticated wrong predecessor");
-    let wrong_predecessor =
-        queue_plan_admission_certificate_bytes_for_state_test(&wrong_binding, &validator_keypairs);
+    let wrong_predecessor = queue_plan_admission_certificate_bytes_for_state_test(
+        &queue_plan_entrypoint_for_state_test(&state, 0x75),
+        &wrong_binding,
+        &validator_keypairs,
+    );
     let wrong_predecessor = norito::decode_from_bytes::<
-        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
     >(&wrong_predecessor)
     .unwrap();
     let wrong_predecessor = norito::encode_canonical(&wrong_predecessor).unwrap();
-    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+    validated_queue_plan_input_certificate_for_state_test(
         state.network_id_ref(),
         &wrong_predecessor,
     )
@@ -4696,12 +4761,12 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
     }
 
     let mut bad_schema = decoded.clone();
-    bad_schema.version = u16::MAX;
+    bad_schema.certificate.version = u16::MAX;
     let bad_schema = norito::encode_canonical(&bad_schema).unwrap();
-    let wrong_wire_schema = norito::encode_canonical(&decoded.binding).unwrap();
+    let wrong_wire_schema = norito::encode_canonical(&decoded.certificate.binding).unwrap();
     let mut bad_signature = decoded.clone();
     let wrong_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal).unwrap();
-    let attestation = &mut bad_signature.attestations[0];
+    let attestation = &mut bad_signature.certificate.attestations[0];
     let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
         binding.canonical_hash(),
         attestation.validator_index,
@@ -4709,7 +4774,7 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
     .unwrap();
     let signing_validator = &binding.admission_context.route_incarnations[0].validator_set
         [usize::from(attestation.validator_index)];
-    decoded.attestations[0]
+    decoded.certificate.attestations[0]
         .signature
         .verify(signing_validator.public_key(), &preimage)
         .expect("the unchanged signature authenticates this exact binding/index preimage");
@@ -4730,18 +4795,23 @@ fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
             let decode_error = classify(malformed, carrier).unwrap_err();
             assert!(
                 matches!(decode_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
-                if reason.starts_with("pending queue-plan admission certificate is invalid: QueuePlan admission certificate cannot be decoded:"))
+                if reason.starts_with("pending queue-plan admission certificate is invalid: complete lane admitted input cannot be decoded:"))
             );
         }
     }
 
     let signer_accounts = decoded
+        .certificate
         .attestations
         .iter()
         .map(|attestation| {
             AccountId::new(
-                decoded.binding.admission_context.route_incarnations[0].validator_set
-                    [usize::from(attestation.validator_index)]
+                decoded
+                    .certificate
+                    .binding
+                    .admission_context
+                    .route_incarnations[0]
+                    .validator_set[usize::from(attestation.validator_index)]
                 .public_key()
                 .clone(),
             )

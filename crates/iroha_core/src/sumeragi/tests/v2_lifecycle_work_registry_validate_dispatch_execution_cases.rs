@@ -1266,12 +1266,18 @@ fn cold_ready_validate_runtime_at_durable(
             .expect("aggregate the cold Ready Validate PrepareQC"),
     };
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                prepare.clone(),
+            )),
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated cold Ready Validate PrepareQC");
     let crate::sumeragi::v2_runtime::RuntimeStep::Advanced(fetch_effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch cold Ready Validate PrepareQC")
     else {
         panic!("cold Ready Validate PrepareQC unexpectedly idled")
@@ -2976,6 +2982,12 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
         );
     let (mut lane_work, _) =
         crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("read actual owners"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
 
     let (dispatched, after_validate_dispatch) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
@@ -3019,6 +3031,15 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
         }
     );
 
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("queued real Validate custody")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "queued Validate excludes both another Ready worker and certified-response Phase A",
+    );
+
     let deadline = started + round_timeout;
     if completes_after_deadline {
         std::thread::sleep(
@@ -3046,6 +3067,23 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
     assert_eq!(physical_completion.completion_pending(), 1);
     assert_eq!(physical_completion.completion_owners(), 1);
     let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
+    for _ in 0..2 {
+        assert_eq!(
+            launched
+                .producer_claim_projection()
+                .expect("physical completion still owns its lease"),
+            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+        );
+    }
+
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("unacknowledged real Validate result")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "result arrival cannot reopen either admission gate before acknowledgement",
+    );
 
     if !completes_after_deadline {
         assert_eq!(
@@ -3089,6 +3127,23 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             ordinal
         } if ordinal == validate_ordinal
     ));
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("publication transfers ownership to the successor"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor {
+            ordinal: validate_ordinal,
+        },
+    );
+
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("exact retained Ready Validate token")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "Validate acknowledgement transfers the exclusion to its Ready successor without a gap",
+    );
 
     let (successor, after_validate_successor) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
@@ -3118,6 +3173,12 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             super::super::ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal }
         )) if ordinal == validate_ordinal
     ));
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("retired Validate has no remaining lease or token"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
     assert_eq!(
         launched
             .runtime_queue_snapshot_for_ready_sign_test(deadline)
@@ -3321,7 +3382,10 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     );
     let (command_identity, ready_replay) = published.into_entry();
     let crate::sumeragi::v2_runtime::RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("execute the exact local ProposalReady command")
     else {
         panic!("local ProposalReady command unexpectedly idled")
@@ -3469,16 +3533,19 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     )
     .expect("aggregate the pending timeout certificate");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![wire::TimeoutVoteGroup {
-                    highest_prepare_qc: None,
-                    signers: timeout_signers,
-                    aggregate_signature: timeout_aggregate,
-                }],
-            }),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                wire::TimeoutCertificate {
+                    round: timeout_round,
+                    groups: vec![wire::TimeoutVoteGroup {
+                        highest_prepare_qc: None,
+                        signers: timeout_signers,
+                        aggregate_signature: timeout_aggregate,
+                    }],
+                },
+            )),
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("queue one authenticated timeout certificate behind the Ready Proposal Sign");
     let queue_now = std::time::Instant::now();
     let queue_before = runtime.queue_snapshot(queue_now);
@@ -3562,10 +3629,11 @@ fn local_proposal_intent_live_wal_sign_fixture() {
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
             |runner| {
-                let permit =
-                    super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial()
-                        .ready_proposal_sign_preemption_permit()
-                        .expect("an eligible height mints the exact Proposal Sign exception");
+                let permit = launched
+                    .producer_claim_projection()
+                    .expect("derive eligibility from owners")
+                    .ready_proposal_sign_preemption_permit()
+                    .expect("an eligible height mints the exact Proposal Sign exception");
                 let ready = match launched
                     .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
                         runner,
@@ -3605,6 +3673,12 @@ fn local_proposal_intent_live_wal_sign_fixture() {
         dispatched,
         super::super::ProductionCompletionDispatchV1::SignQueued { ordinal }
     );
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("the Sign worker owns the lease"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+    );
     assert!(
         launched.ordinary_completion_head_retained_for_ready_sign_test(),
         "Proposal Sign preemption must not acknowledge or remove the ordinary physical head"
@@ -3638,6 +3712,12 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     assert_eq!(
         launched.settle_recovered_lifecycle_proposal_prepare_wal(),
         super::super::ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+    );
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("Sign settlement releases the worker lease"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
     );
     assert!(
         launched
@@ -4097,6 +4177,16 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
             )
         });
+        assert_eq!(
+            launched
+                .producer_claim_projection()
+                .expect("deferred Validate retains one owner"),
+            if registered {
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            } else {
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            },
+        );
     }
     let registration_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
         load_registration_for_test(&owner.coordinator)
@@ -4265,8 +4355,9 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             retained_after_admission.1, retained_before.1,
             "ingress admission cannot mutate the registered private work registry"
         );
-        let claim =
-            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        let claim = launched
+            .producer_claim_projection()
+            .expect("derive the retained sidecar barrier");
         assert!(
             claim
                 .decided_validate_sidecar_recovery_permit(false)

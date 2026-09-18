@@ -101,7 +101,7 @@ fn queue_plan_direct_application_without_signed_alias_rejects_terminal_marker() 
         let mut storage = state.world.smart_contract_state.block();
         storage.insert(
             registry_key,
-            State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
+            State::queue_plan_admission_registry_marker_payload(&binding.registry_value(), QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap())
                 .expect("fixture registry value"),
         );
         storage.commit();
@@ -207,7 +207,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let_row! { _ = state .lane_incarnations .write() .insert(participant_lane, participant_incarnation) };
     let_row! { registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()) .expect("fixture registry key") };
     let_row! { conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1, binding_hash: Hash::new(b"different-immutable-queue-plan-binding"), } };
-    let_row! { conflicting_payload = State::queue_plan_admission_registry_marker_payload(&conflicting_value) .expect("fixture conflicting registry value") };
+    let_row! { conflicting_payload = State::queue_plan_admission_registry_marker_payload(&conflicting_value, QueuePlanAdmissionPriorityV1::new(binding.admission_context.proposal_height, 0).unwrap()) .expect("fixture conflicting registry value") };
     {
         let mut world = state.world.block();
         world
@@ -2956,6 +2956,7 @@ state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_
     let mut dataspace = prospective.dataspace_catalog.by_id(DataSpaceId::UNIVERSAL).unwrap().clone();
     dataspace.fault_tolerance = 42;
     prospective.dataspace_catalog = DataSpaceCatalog::new(vec![dataspace]).unwrap();
+    prospective.configured_dataspace_catalog = prospective.dataspace_catalog.clone();
     let additions = (1..191_u32).map(|index| iroha_data_model::nexus::LaneConfig {
         id: LaneId::new(index), alias: format!("geometry-{index}"),
         ..iroha_data_model::nexus::LaneConfig::default()
@@ -3007,8 +3008,8 @@ state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_
     invalid_dataspaces[0].fault_tolerance = 43;
     invalid_policy.dataspace_catalog = DataSpaceCatalog::new(invalid_dataspaces).unwrap();
     let error = state.set_nexus(invalid_policy)
-        .expect_err("same-catalog runtime policy changes must pass aggregate geometry admission");
-    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+        .expect_err("runtime configuration cannot replace committed dataspace policy");
+    assert!(matches!(error, LaneLifecycleError::RuntimeCatalog(_)), "runtime policy: {error:?}");
     assert_eq!(state.nexus_snapshot().lane_catalog, before.lane_catalog);
     assert_eq!(state.state_view_generation(), generation);
 }

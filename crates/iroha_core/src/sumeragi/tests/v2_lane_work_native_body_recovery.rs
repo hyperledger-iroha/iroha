@@ -1933,13 +1933,16 @@ fn persist_and_evict_native_body(
         adapter
             .kura
             .evict_block_bodies(payload_len)
-            .expect("evict exact Native carrier"),
-        payload_len
+            .expect("pending Native publication remains pinned"),
+        0,
+        "an unfinished Native carrier must remain a local publication recovery source"
     );
+    // Model loss of the pinned local body explicitly. Normal retention must not
+    // manufacture this recovery scenario by evicting unfinished publication work.
     adapter
         .kura
-        .remove_evicted_block_sidecar_for_testing(height)
-        .expect("remove local Native carrier sidecar");
+        .remove_block_body_for_recovery_test(height)
+        .expect("simulate missing local Native carrier");
     assert!(adapter.kura.get_block(height).is_none());
     marker
 }

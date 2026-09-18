@@ -157,7 +157,7 @@ pub struct BlockProofs {
     pub result_commitment: MerkleTreeCommitment<TransactionResult>,
     /// Execution result proof under `BlockHeader::result_merkle_root`.
     pub result_proof: ExecutionReceiptProof,
-    /// Claimed FASTPQ transfer transcripts grouped by transaction entrypoint hash.
+    /// Claimed FASTPQ transfer transcripts grouped by exact execution-call hash.
     pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
 }
 /// Trusted block identity, Merkle commitments, and executed transcript projection used to verify
@@ -650,6 +650,15 @@ mod tests {
         block: &SignedBlock,
         execution_commitment: &ExecutionCommitment,
     ) -> V2FinalityArtifact {
+        finalized_artifact_for_block_with_layout(block, execution_commitment, None, None)
+    }
+    #[cfg(feature = "transparent_api")]
+    pub(super) fn finalized_artifact_for_block_with_layout(
+        block: &SignedBlock,
+        execution_commitment: &ExecutionCommitment,
+        layout: Option<DataAvailabilityLayout>,
+        snapshot_bootstrap: Option<crate::block::consensus_v2::SnapshotBootstrapAnchor>,
+    ) -> V2FinalityArtifact {
         let mut key_pairs = core::iter::repeat_with(|| {
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
                 .expect("generate checked finality fixture keypair")
@@ -657,7 +666,11 @@ mod tests {
         .take(4)
         .collect::<Vec<_>>();
         key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let context = finality_context_for_block(block, &key_pairs);
+        let mut context = finality_context_for_block(block, &key_pairs);
+        context.snapshot_bootstrap = snapshot_bootstrap;
+        if let Some(layout) = layout {
+            context.da_layout = layout;
+        }
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
@@ -1105,3 +1118,39 @@ mod tests {
 
 #[cfg(test)]
 mod captured_proofs_schema_tests;
+
+/// Reuse real BLS/PoP finality fixtures for native-output anchor controls.
+#[cfg(all(test, feature = "transparent_api"))]
+pub(super) fn finalized_native_output_artifact_for_test(
+    block: &SignedBlock,
+    commitment: &ExecutionCommitment,
+) -> V2FinalityArtifact {
+    let header = block.header();
+    let batch = block
+        .execution_context()
+        .and_then(|context| context.native_lane_decisions.as_deref())
+        .expect("native output fixture has an exact source batch");
+    assert_eq!(
+        batch.base_state_height.checked_add(1),
+        Some(header.height().get())
+    );
+    // This pure proof fixture declares its exact pre-State trust root. It does not claim
+    // to have executed that State or authenticate the native input certificates.
+    let snapshot_bootstrap = super::consensus_v2::SnapshotBootstrapAnchor {
+        snapshot_height: batch.base_state_height,
+        snapshot_block_hash: header
+            .prev_block_hash()
+            .expect("non-genesis native carrier"),
+        snapshot_block_creation_time_ms: header
+            .creation_time_ms
+            .checked_sub(1)
+            .expect("fixture successor timestamp follows its anchor"),
+        snapshot_state_hash: batch.base_state_hash.into(),
+    };
+    tests::finalized_artifact_for_block_with_layout(
+        block,
+        commitment,
+        Some(super::consensus_v2::recommended_data_availability_layout()),
+        Some(snapshot_bootstrap),
+    )
+}

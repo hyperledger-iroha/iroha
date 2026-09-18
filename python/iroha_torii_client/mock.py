@@ -1093,10 +1093,23 @@ class _MockState:
         if not hashes:
             raise ValueError("missing hash query parameter")
         hash_value = str(hashes[0])
+        scope = params.get("scope", ["global"])[0]
+        if scope not in {"local", "global"}:
+            raise ValueError("scope must be local or global")
         with self._lock:
             sequence = self.pipeline_sequences.get(hash_value)
             if sequence is None:
-                raise KeyError("pipeline status")
+                # Absence is a typed observation bound to the exact lookup, as in Torii.
+                return _json_response(HTTPStatus.NOT_FOUND, {
+                    "code": "pipeline_transaction_status_not_found",
+                    "message": "No transaction status is available for the exact requested hash and scope.",
+                    "details": {
+                        "pipeline_transaction_status_not_found": {
+                            "hash": hash_value,
+                            "scope": scope,
+                        },
+                    },
+                })
             remaining = sequence["remaining"]
             if remaining:
                 current = dict(remaining.pop(0))

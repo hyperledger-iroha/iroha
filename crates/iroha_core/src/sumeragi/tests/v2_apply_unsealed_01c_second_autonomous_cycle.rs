@@ -461,6 +461,13 @@ fn terminal_cycle_certificate(
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>()
     );
+    assert!(
+        keys.iter().all(|key| fixture
+            .validator_keys
+            .iter()
+            .any(|known| known.public_key() == key.public_key())),
+        "all fixture lane signers are authenticated validators"
+    );
     let availability = crate::lane_consensus::lane_payload_availability_body(
         payload,
         proposal,
@@ -468,6 +475,13 @@ fn terminal_cycle_certificate(
         payload.epoch,
     )
     .expect("exact second-cycle executable availability");
+    let validator_set_pops = keys
+        .iter()
+        .map(|validator_key| {
+            iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
+                .expect("PoP in the exact lane committee order")
+        })
+        .collect::<Vec<_>>();
     let votes = |phase| {
         keys[..3]
             .iter()
@@ -478,7 +492,7 @@ fn terminal_cycle_certificate(
                     crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
                         availability.clone(),
                         signer.clone(),
-                        fixture.service.validator_set_pops.clone(),
+                        validator_set_pops.clone(),
                         key.private_key(),
                     )
                     .expect("sign exact second-cycle READY")

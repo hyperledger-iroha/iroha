@@ -7593,3 +7593,4 @@ mod four_reducer_network {
 }
 
 include!("tests/terminal_result_replay.rs");
+include!("tests/finalized_state_anchor.rs");

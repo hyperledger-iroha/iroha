@@ -47,10 +47,8 @@ impl QueuePlanBatchSources {
     ) -> Result<Hash, String> {
         let hash = Hash::new(bytes);
         if !self.validated.contains(&hash) {
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                network_id, bytes,
-            )
-            .map_err(|error| format!("invalid QueuePlan admission handoff: {error}"))?;
+            crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(network_id, bytes)
+                .map_err(|error| format!("invalid QueuePlan admission handoff: {error}"))?;
             #[cfg(test)]
             _kura
                 .pending_queue_plan_admission_batch_validations

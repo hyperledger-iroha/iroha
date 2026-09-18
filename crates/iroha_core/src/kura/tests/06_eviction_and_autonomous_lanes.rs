@@ -1423,6 +1423,18 @@ impl DummyBlocks {
             .expect("the generated block is retained") = Arc::clone(&block);
         block
     }
+    /// Build a merge carrier whose external execution lives only in its certified sidecar.
+    fn next_empty_with_results(&mut self) -> Arc<SignedBlock> {
+        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, self.blocks.last().map(AsRef::as_ref))
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        attach_ok_results_to_block(&mut block);
+        let block = Arc::new(block);
+        self.blocks.push(Arc::clone(&block));
+        block
+    }
     fn get(&self, i: usize) -> Option<Arc<SignedBlock>> {
         self.blocks.get(i).cloned()
     }
@@ -3308,4 +3320,50 @@ fn consensus_body_read_with_verified_finality_authenticates_pending_and_publishe
         fs::read(finality_path).unwrap(),
         b"corrupt occupied finality"
     );
+}
+
+#[test]
+fn first_admission_carrier_read_distinguishes_remote_body_from_missing_or_corrupt_proof() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let blocks = store_dummy_block_arcs(&kura, 4);
+    let height = nonzero!(2_usize);
+    assert!(matches!(kura.read_first_admission_carrier(height, blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })));
+    let (_, payload_len) = advertise_required_replicas(&kura, height);
+    let local = kura.read_first_admission_carrier(height, blocks[1].hash()).unwrap();
+    assert_eq!(local.body.as_deref(), Some(blocks[1].as_ref()));
+    assert!(kura.read_first_admission_carrier(height, blocks[2].hash()).is_err());
+    assert!(kura.evict_block_bodies(payload_len).unwrap() >= payload_len);
+    kura.remove_evicted_block_sidecar_for_testing(height).unwrap();
+    let remote = kura.read_first_admission_carrier(height, blocks[1].hash()).unwrap();
+    assert!(remote.body.is_none());
+    assert_eq!(remote.finality, local.finality, "body absence retains exact QC/proposal and executed-wire identities");
+    let path = kura.v2_finality_artifact_path_for_testing(2);
+    let exact = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(kura.read_first_admission_carrier(height, blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })));
+    let mut corrupt = exact;
+    corrupt[0] ^= 1;
+    fs::write(&path, &corrupt).unwrap();
+    assert!(kura.read_first_admission_carrier(height, blocks[1].hash()).is_err());
+    assert_eq!(fs::read(path).unwrap(), corrupt);
+}
+
+#[test]
+fn first_admission_carrier_read_rejects_occupied_body_corruption_even_with_warm_cache() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    assert_eq!(kura.get_block(height).as_deref(), Some(blocks[1].as_ref()));
+    let (path, slot) = {
+        let mut store = kura.block_store.lock();
+        (store.path_to_blockchain.join(DATA_FILE_NAME), store.read_block_index(1).unwrap())
+    };
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.seek(SeekFrom::Start(slot.start)).unwrap();
+    file.write_all(&vec![0; usize::try_from(slot.length).unwrap()]).unwrap();
+    assert!(kura.read_first_admission_carrier(height, blocks[1].hash()).is_err(),
+        "occupied corruption cannot become CanonicalBodyRecoveryRequired");
 }

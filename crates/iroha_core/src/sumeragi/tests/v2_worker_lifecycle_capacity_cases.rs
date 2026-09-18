@@ -117,6 +117,7 @@ fn receiver_teardown_rejects_queued_or_active_lifecycle_serve() {
                 request_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"lifecycle Serve teardown residue",
                 )),
+                authority: LifecycleServeAuthorityKindV1::Claimed,
                 state,
             },
         );
@@ -142,6 +143,7 @@ fn receiver_teardown_preserves_completion_pending_lifecycle_serve() {
             request_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"completion-pending lifecycle Serve teardown",
             )),
+            authority: LifecycleServeAuthorityKindV1::Claimed,
             state: V2IoWorkState::CompletionPending,
         },
     );
@@ -974,6 +976,14 @@ impl LifecyclePlannerIoFixture {
         &mut self,
         output_guard: Arc<ConsensusOutputGuard>,
     ) {
+        self.execute_one_certified_fetch_with_active_observer(output_guard, || {});
+    }
+    /// Observe the retained owner after real dequeue and before persistence.
+    pub(in crate::sumeragi) fn execute_one_certified_fetch_with_active_observer(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+        observe_active: impl FnOnce(),
+    ) {
         let command = self
             .command_rx
             .try_recv()
@@ -982,6 +992,11 @@ impl LifecyclePlannerIoFixture {
             panic!("expected the exact certified-Fetch persistence command")
         };
         let work_id = task.work_id();
+        assert_eq!(
+            self.command_rx.queue.lock().work[&work_id].state,
+            V2IoWorkState::Active
+        );
+        observe_active();
         let completion = task
             .persist(&mut self.body_store)
             .unwrap_or_else(|(error, _)| panic!("persist certified-Fetch body: {error}"));

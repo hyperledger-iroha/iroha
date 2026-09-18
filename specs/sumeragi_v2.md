@@ -501,16 +501,15 @@ Three round identities are deliberately distinct. The reducer owner tag
 transition. A signed `proposal_round` names the immutable origin of the proposal bytes, manifest,
 header, durable body, and validation receipt. A vote or QC `round` names the round in which that
 Prepare or Commit evidence is certified. The lifecycle owner is never substituted for either wire
-round. Prepare requires `proposal_round == round`; Commit requires the same context and height and
-`proposal_round.view <= round.view`. Both rounds are authenticated by every Vote and QC signature.
+round. Both Prepare and Commit require `proposal_round == round`. Both rounds are authenticated
+by every Vote and QC signature. A later-view re-proposal has a new origin and must complete its
+own same-round Prepare and Commit path; old votes and receipts are never relabelled.
 
-1. An unlocked expected leader broadcasts a proposal and payload manifest. View zero is justified
-   by the parent CommitQC. A later unlocked view may carry the previous view's TimeoutCertificate
-   only when that certificate selects no PrepareQC. A Timeout-justified Proposal carrying any
-   selected PrepareQC is structurally invalid. Validators instead install that certificate through
-   the ordinary durable timeout path, retain its exact proposal origin as their lock, and commit
-   that lock directly; they do not create a new proposal origin for equal block bytes. The Proposal
-   signature authenticates the current leader and the proposal round.
+1. The expected leader broadcasts a proposal and payload manifest. View zero is justified by the
+   parent CommitQC. A later view carries the previous view's TimeoutCertificate. If that certificate
+   selects a PrepareQC, the proposal must preserve its subject. A validator also checks its own
+   durable lock: it accepts the same subject, or a different subject justified by a strictly newer
+   selected PrepareQC. The Proposal signature authenticates the current leader and proposal round.
 2. A validator reconstructs the complete canonical body, checks all chunk and payload hashes,
    validates it deterministically against the certified parent, and stores it durably under the
    exact proposal origin. Only after the body and a Prepare sign-once record are durable may it
@@ -518,16 +517,15 @@ round. Prepare requires `proposal_round == round`; Commit requires the same cont
    `proposal_round`.
 3. A PrepareQC certifies validity and availability. Its honest signers have the exact body in the
    durable payload store and must serve it after restart.
-4. On a valid PrepareQC, a validator with the exact validated body atomically persists its lock and
-   a Commit sign-once record. The Commit vote uses the active finality round while retaining the
-   PrepareQC's immutable `proposal_round`; only the persistence acknowledgement releases the
-   signature. The exact TC-promoted lock case described below uses the same
-   persistence-before-sign ordering after body recovery and validation. A received Commit vote
-   enters a volatile pool only when its proposal origin and subject match the exact durable lock.
+4. On a valid current-round PrepareQC, a validator with the exact validated body atomically persists
+   its lock and a same-round Commit sign-once record. Only the persistence acknowledgement releases
+   the signature. A TC-promoted historical lock alone cannot authorize a new Commit intent: its
+   retained body supplies the safe value for a later same-subject re-proposal. A received Commit
+   vote enters a volatile pool only when its origin and subject match the exact durable lock.
 5. A CommitQC decides the subject. The node persists the decision before applying or publishing it.
-   Its certification round may be later than its proposal origin. The canonical block header's
-   view-change index, body fetch, deterministic validation, and application all bind the CommitQC's
-   `proposal_round`, not its later certification view. A node missing the body records
+   Its certification round equals its proposal origin, even if it arrives in a later local view.
+   Body fetch, deterministic validation and application bind that authenticated `proposal_round`,
+   independently of the receiving node's current lifecycle tag. A node missing the body records
    `PendingApply`, fetches that exact origin from certified signers, validates it, and does not vote
    at the next height until application completes.
 
@@ -537,10 +535,11 @@ the commit-topology transition from its frozen `HeightContext.roster`; ordinary,
 unchecked commits cannot mint it. Restart recreates the same capability only after Kura has
 cryptographically verified the current V2 artifact and rebound the exact result-bearing block.
 
-A validator prepares a proposal only when it is unlocked or when a duplicate proposal has the
-exact same origin and subject as its lock. A TC-selected PrepareQC may supersede a lower lock, but
-the selected proposal is then committed directly. Equal bytes at another view are a different
-origin and are rejected instead of being re-proposed. Locks never move to a lower certificate.
+A validator prepares a proposal only when it is unlocked, the proposal preserves its locked
+subject, or the TC selects a strictly newer PrepareQC for the proposed subject. A re-proposal in
+a later view establishes a new origin and new same-round voting authority. Locks never move to a
+lower certificate. The [liveness contract](sumeragi_v2_liveness.md#progress-ownership) describes
+retained old-round Commit ownership and body reconstruction across view changes.
 
 ## Certified view changes
 
@@ -551,8 +550,9 @@ two seconds.
 On expiry, a validator persists one `TimeoutVote(height, view, highest_prepare_qc)`. That durable
 record closes the ordinary voting path for the view: the validator can no longer create a Prepare
 vote or an arbitrary Commit vote for it. The validator remains in the view until it receives a
-valid TimeoutCertificate. The sole historical-vote exception is the exact TC-promoted locked Commit
-reconstruction below; a timeout intent by itself does not authorize it.
+valid TimeoutCertificate. An already-durable exact old-round Commit intent may resume only while
+it still matches the active lock. Neither a timeout intent nor TC installation creates a new
+historical Commit intent.
 
 After the TC is durably installed, the reducer discards the closed view's active individual-vote
 pools. The adapter keeps semantic fingerprints and an equivocation-reported bit in a map separate
@@ -561,9 +561,10 @@ authenticated conflict pairs are not yet persisted for penalties. This bounded h
 invalidate a complete earlier-view CommitQC, which remains admissible and decisive.
 
 A current-view Commit which arrives before the matching `LockAndCommit` acknowledgement is ignored
-recoverably. Once that acknowledgement makes the later-finality same-origin intent durable, the
+recoverably. Once that acknowledgement makes the exact same-round intent durable, the
 adapter advances the locked-Commit consumer epoch and may admit the same exact authenticated vote
-once. The reducer then removes every older Commit pool for that proposal origin before releasing
+once. The reducer then removes older-round vote pools, including an earlier proposal of the same
+subject, before releasing
 its local current Commit signature; it never removes the old reconstruction source before
 successful persistence. Retained outbound Commit
 control continues to serve peers, but cannot alone reconstruct the sender's local pool because
@@ -585,25 +586,24 @@ no high QC, or with an equal or lower Prepare origin, is rejected as a replay re
 Installing the TC may make its selected highest PrepareQC the node's active durable lock even when
 that node never created a Commit intent for the PrepareQC's round. TC installation does not itself
 authorize a signature. The reducer first recovers, stores, and deterministically validates the exact
-locked body at the PrepareQC's `proposal_round`. Validation may then append one `LockAndCommit`
-whose Commit vote is signed in the active finality round but retains that historical proposal
-origin; only the successful WAL acknowledgement releases the local Commit signature. Every other
-proposal origin or subject remains behind the timeout fence, and this path never creates a Prepare
-vote or a replacement proposal.
+locked body at the PrepareQC's `proposal_round`. Historical validation preserves body custody but
+cannot append a split-round `LockAndCommit`. An existing durable Commit intent for the exact active
+lock may resume unchanged. Otherwise a later leader re-proposes the safe subject under a new
+origin, with a new manifest, validation and same-round PrepareQC before any new Commit intent.
 
 Validation can finish after the active finality round's `TimeoutIntent` is already durable. In that
 ordering the reducer does not append or sign a Commit in the closed view. The exact acknowledged
 current-view timeout is instead a typed recovery witness for the validated historical lock. The
-next installed TC creates a new owner generation, reacquires and revalidates the same immutable
-proposal origin, and may append `LockAndCommit` in the new open finality round. Stale, wrong-view,
-wrong-signer, volatile-only, or non-exact timeout state is not a progress witness and still fails
-closed.
+next installed TC creates a new owner generation and retains recovery for the same safe subject.
+Validation of the old origin still cannot create a Commit in the new view; only a later same-subject
+re-proposal and its same-round PrepareQC can establish that authority. Stale, wrong-view,
+wrong-signer, volatile-only, or non-exact timeout state is not a progress witness and fails closed.
 
-WAL replay enforces the same boundary in record order. A historical `LockAndCommit` is valid only
-after an installed TC has advanced the view while the exact same PrepareQC is the active lock.
-Without that prerequisite, or when the proposal origin or subject differs, replay fails closed. An
-`InstallTimeout` without the later exact `LockAndCommit` therefore resumes body reconstruction and
-validation rather than inferring a Commit signature from the certificate alone.
+WAL replay enforces the same boundary in record order. A `LockAndCommit` must name the replayed
+current round, with equal proposal and certification rounds and the exact matching PrepareQC,
+before that round's timeout. Later TC records may retain its already-durable intent, but cannot
+authorize appending a split-round replacement. An `InstallTimeout` without an existing exact
+Commit intent resumes body reconstruction rather than inferring a signature from the TC alone.
 
 An earlier-view CommitQC remains decisive even when its final shares are assembled or delivered
 after a TC. The timeout fence prevents new honest Commit votes in the closed view. For every old
@@ -1156,13 +1156,12 @@ already oversized complete prefix. These are deterministic WAL-retention invaria
 memory limits.
 
 The WAL records Prepare intent, observed PrepareQC/high QC, atomic lock plus Commit intent, timeout
-intent, installed TC, and decision. A `LockAndCommit` whose proposal origin is older than the
-replayed current view is accepted only when the preceding records leave its exact PrepareQC as the
-active lock after view installation and no higher proposal-origin local Prepare intent or known
-PrepareQC exists, including evidence for the same subject bytes. Its Commit round is the active
-finality round; its proposal origin remains the lock's exact earlier round. Any higher Prepare
-origin fences reconstruction rather than relabelling that origin or creating a replacement
-proposal. The timeout fence still rejects every other historical vote. An incomplete
+intent, installed TC, and decision. Every `LockAndCommit` must match the replayed current view,
+have equal proposal and certification rounds, match its same-round PrepareQC and subject, and
+precede the timeout for that round. Replay rejects lock regression and all split-round records.
+A subsequent TC may retain the already-durable old-round intent; reconstruction does not change
+its round. Without that intent, historical body recovery feeds a later same-subject re-proposal
+and its complete same-round voting path. An incomplete
 final frame is an unacknowledged crash tail and is discarded. A checksum failure, broken hash chain,
 non-monotonic sequence, identity mismatch, or historical-lock mismatch before that tail fails
 closed. Records are pruned only after the decided block and its certificate are durable in Kura.
@@ -1258,6 +1257,33 @@ completion replaces a restart-restored stage-7 producer, any required durable
 producer removal is persisted before its runtime lane is changed. A failed
 store rolls the producer maps and dormant index back and therefore cannot
 partially coalesce or partially retire a body pipeline.
+
+An ordinary certified-response persistence command retains its exact Fetch,
+signed request and pipeline owner through physical acknowledgement. View/lock
+cleanup and signature-capacity preemption cannot retire or rebind that admitted
+owner. A redundant reconstruction result remains retained while disk persistence
+owns settlement; selecting that local result must not block the disk completion.
+Phase B revalidates the response and exact queue occurrence before publication.
+If the current durable Decision selects another body, the same ledger transaction
+cancels the obsolete Fetch and retires its exact registry, executor, service and
+worker custody instead of publishing a Ready continuation. Final Decision cleanup
+remains strict, and retained generic Apply waits until that custody is settled.
+
+The launched owner derives admission permissions from current retained work and
+worker indexes. Validate and ordinary certified persistence keep ingress and fresh
+Ready dispatch closed through acknowledgement; a retained Ready Validate token
+continues that exclusion without an ownership gap. Live Validate-to-Apply checks
+this invariant before its WAL seal and child publication. Runtime arbitration
+borrows its bounded external-owner census from executor owners at each cut; it
+has no independently published cached owner list.
+
+Before the Phase-B ledger boundary, only a changed queue snapshot permits another
+attempt with a fresh selector. Missing or inconsistent exact ownership, response
+identity, registry state, service custody or refinement authority is a permanent
+diagnostic and closes output. The complete opaque result is retained for restart
+diagnostics; retrying unchanged invalid bytes is forbidden. Fail-stop is not
+counted as consensus progress. Every error after ledger publication starts remains
+restart-only.
 
 The generic productive leader-wire lifecycle gate advances from the same
 durable safety frontier. After a certified `EnterView`, and again after the

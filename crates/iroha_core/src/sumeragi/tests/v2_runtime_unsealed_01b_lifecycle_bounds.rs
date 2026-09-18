@@ -14,7 +14,10 @@ fn selected_owner_without_a_runtime_minted_ordinal_fails_closed() {
         start,
     ));
 
-    assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     assert!(runtime.fail_closed);
     assert!(runtime.last_scheduler_ownership().is_none());
 }
@@ -350,7 +353,10 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
         .arm_live_clocks(clock_start)
         .expect("arm timeout for the post-cut replay regression");
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(clock_start + runtime.base_round_timeout)
+        .frozen_timeout_owner_for_test(
+            clock_start + runtime.base_round_timeout,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze one exact timeout owner");
     assert!(replay_owner.lifecycle_ordinal() < timeout_owner.lifecycle_ordinal());
     assert_eq!(runtime.timeout_owner_physical_cut, Some(target_cut));
@@ -390,7 +396,10 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
         "later ingress cannot refresh the frozen timeout cut"
     );
     let arbitration = runtime
-        .scheduler_arbitration_inputs(clock_start + runtime.base_round_timeout)
+        .scheduler_arbitration_inputs(
+            clock_start + runtime.base_round_timeout,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the frozen timeout compares against its original physical cut");
     assert!(
         arbitration.timeout_due,
@@ -409,7 +418,10 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
     runtime.retransmit_started_at = clock_start;
     let periodic_due_at = clock_start + runtime.retransmit_interval;
     runtime
-        .freeze_due_clock_owners(periodic_due_at)
+        .freeze_due_clock_owners(
+            periodic_due_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze one exact periodic lifecycle and physical cut");
     let frozen_periodic_owner = runtime
         .retransmit_owner
@@ -463,7 +475,10 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
     );
     assert_eq!(runtime.retransmit_owner_physical_cut, Some(periodic_cut));
     let arbitration = runtime
-        .scheduler_arbitration_inputs(periodic_due_at)
+        .scheduler_arbitration_inputs(
+            periodic_due_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("periodic arbitration uses the frozen physical prefix");
     assert!(
         arbitration.periodic_timer_due,
@@ -482,7 +497,10 @@ fn deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences() {
 
     runtime.retransmit_owner_physical_cut = None;
     assert!(matches!(
-        runtime.scheduler_arbitration_inputs(periodic_due_at),
+        runtime.scheduler_arbitration_inputs(
+            periodic_due_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(EnqueueError::FailClosed)
     ));
     runtime.retransmit_owner_physical_cut = Some(periodic_cut);
@@ -608,12 +626,11 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
             b"older external exact request",
         )
         .expect("mint the older externally retained lifecycle");
-    runtime
-        .configure_external_lifecycle_owner_capacity(4)
-        .expect("install the independent asynchronous bound");
-    runtime
-        .set_external_lifecycle_owners(vec![older.clone()])
-        .expect("publish the older external owner");
+    let mut external_owners = vec![older.clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     enqueue_fake(
         &mut runtime,
         owner_tag,
@@ -623,7 +640,7 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
     .expect("enqueue later unrelated work");
 
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start),
+        runtime.step_and_take_scheduler_ownership_for_test(start, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 9)]);
@@ -631,7 +648,7 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
 
     let due = start + Duration::from_secs(10);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert!(runtime.timeout_owner.is_none());
@@ -663,13 +680,13 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
         )
         .expect("enqueue the exact older completion");
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert_eq!(runtime.driver.retransmits, vec![owner_tag]);
     assert_eq!(runtime.queued_commands(), 1);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(
@@ -678,9 +695,11 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
     );
     assert_eq!(runtime.queued_commands(), 0);
 
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("the asynchronous owner retires after its exact completion handoff");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert!(runtime.retransmit_owner.is_none());
 }
 
@@ -688,15 +707,12 @@ fn passive_external_owner_cannot_fence_fifo_or_absolute_timeout() {
 fn external_owner_bound_uses_effect_capacity_not_small_ingress_capacity() {
     let start = Instant::now();
     let owner_tag = tag(0);
-    let mut runtime = runtime(
+    let runtime = runtime(
         FakeDriver::new(owner_tag),
         start,
         RuntimeQueueConfig::new(8, 2, 2),
     );
     let pending_bound = 1_024usize;
-    runtime
-        .configure_external_lifecycle_owner_capacity(pending_bound)
-        .expect("configure the executor's independent pending-work bound");
     let exact_capacity = pending_bound + 2 * MAX_EFFECTS_PER_STEP;
     let owners = (0..exact_capacity)
         .map(|ordinal| {
@@ -714,10 +730,9 @@ fn external_owner_bound_uses_effect_capacity_not_small_ingress_capacity() {
             .expect("synthetic external owner binds its first ordinal")
         })
         .collect::<Vec<_>>();
-    runtime
-        .set_external_lifecycle_owners(owners)
+    let external = RuntimeExternalLifecycleCensus::new(owners.iter(), pending_bound)
         .expect("pending owners plus two retained batches fit despite ingress capacity 8");
-    assert_eq!(runtime.external_lifecycle_owners.len(), exact_capacity);
+    assert_eq!(external.len(), exact_capacity);
     assert!(!runtime.fail_closed);
 }
 
@@ -753,7 +768,10 @@ fn restart_and_periodic_historical_retries_reuse_one_lifecycle_owner() {
     let mut retry_owners = Vec::new();
     for elapsed in [2, 4] {
         let RuntimeStep::Advanced(effects) = runtime
-            .step(start + Duration::from_secs(elapsed))
+            .step(
+                start + Duration::from_secs(elapsed),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("periodic historical retry dispatches")
         else {
             panic!("periodic historical retry must advance");
@@ -779,7 +797,10 @@ fn restart_and_periodic_historical_retries_reuse_one_lifecycle_owner() {
     assert_ne!(cache_after_owned_retries, 0);
     for elapsed in [6, 8] {
         let RuntimeStep::Advanced(effects) = runtime
-            .step(start + Duration::from_secs(elapsed))
+            .step(
+                start + Duration::from_secs(elapsed),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("drained historical lifecycle still services its periodic clock")
         else {
             panic!("the periodic clock must advance even after exact work drains")
@@ -1051,7 +1072,7 @@ fn restart_dormant_local_fifo_reservation_survives_full_class_churn() {
         "the dormant Local stage consumes one physical completion slot"
     );
     assert_eq!(
-        runtime.minimum_active_lifecycle_ordinal(),
+        runtime.minimum_active_lifecycle_ordinal(&RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(Some(1)),
         "the complete active inventory retains restart-dormant lifecycle debt"
     );
@@ -1112,7 +1133,7 @@ fn restart_dormant_local_fifo_reservation_survives_full_class_churn() {
     assert_eq!(runtime.queued_commands(), 6);
     assert_eq!(runtime.remaining_completion_capacity(), 0);
     assert_eq!(
-        runtime.minimum_active_lifecycle_ordinal(),
+        runtime.minimum_active_lifecycle_ordinal(&RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(Some(1)),
         "the restored FIFO owner retains the pre-restart lifecycle age"
     );
@@ -1136,7 +1157,10 @@ fn restart_dormant_local_fifo_reservation_survives_full_class_churn() {
     );
 
     let RuntimeStep::Advanced(effects) = runtime
-        .step(started_at)
+        .step(
+            started_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the exact replacement becomes the global ready owner")
     else {
         panic!("the exact replacement must dispatch before younger queued work");
@@ -1418,5 +1442,79 @@ fn restored_producer_preflight_cannot_change_completion_service_class() {
         runtime.ingress.len(),
         0,
         "a caller-class mutation cannot acquire a priority position"
+    );
+}
+
+#[test]
+fn borrowed_external_census_deduplicates_exact_aliases_and_rejects_conflicts() {
+    let owner = RuntimeLifecycleOwner::new(
+        RuntimeCandidateCausalOrigin::mint_fresh_root(
+            tag(0),
+            CommandClass::Progress,
+            RuntimeFreshRootKind::HistoricalLockedRetransmit,
+            b"borrowed external owner",
+        ),
+        7,
+    )
+    .expect("valid external owner");
+    let alias = owner.clone();
+    let external = RuntimeExternalLifecycleCensus::new([&owner, &alias], 1)
+        .expect("equal fanout aliases deduplicate");
+    assert_eq!(external.len(), 1);
+    assert!(external.contains(&owner));
+    assert!(std::ptr::eq(
+        external.iter().next().expect("one owner"),
+        &owner
+    ));
+    let conflicting = RuntimeLifecycleOwner::new(
+        RuntimeCandidateCausalOrigin::mint_fresh_root(
+            tag(0),
+            CommandClass::Progress,
+            RuntimeFreshRootKind::HistoricalLockedRetransmit,
+            b"different external owner at the same ordinal",
+        ),
+        7,
+    )
+    .expect("individually valid conflicting owner");
+    assert!(RuntimeExternalLifecycleCensus::new([&owner, &conflicting], 1).is_err());
+    assert!(!external.contains(&conflicting));
+    let mut invalid = owner.clone();
+    invalid.projection_hash = iroha_crypto::Hash::new(b"invalid external projection");
+    assert!(RuntimeExternalLifecycleCensus::new([&invalid], 1).is_err());
+    assert!(RuntimeExternalLifecycleCensus::new([&owner], 0).is_err());
+    assert!(RuntimeExternalLifecycleCensus::new([&owner], usize::MAX).is_err());
+}
+
+#[test]
+fn borrowed_external_census_enforces_the_exact_distinct_owner_bound() {
+    let pending = 1;
+    let capacity = RuntimeExternalLifecycleCensus::capacity_for_pending_work(pending)
+        .expect("bounded external work");
+    let owners = (1..=capacity + 1)
+        .map(|ordinal| {
+            RuntimeLifecycleOwner::new(
+                RuntimeCandidateCausalOrigin::mint_fresh_root(
+                    tag(0),
+                    CommandClass::Progress,
+                    RuntimeFreshRootKind::HistoricalLockedRetransmit,
+                    &ordinal.to_le_bytes(),
+                ),
+                ordinal as u128,
+            )
+            .expect("valid distinct owner")
+        })
+        .collect::<Vec<_>>();
+    let exact = RuntimeExternalLifecycleCensus::new(owners[..capacity].iter(), pending)
+        .expect("exact pending plus two-batch bound fits");
+    assert_eq!(exact.len(), capacity);
+    assert!(RuntimeExternalLifecycleCensus::new(owners.iter(), pending).is_err());
+    assert_eq!(
+        RuntimeExternalLifecycleCensus::new(
+            owners[..capacity].iter().chain(owners[..capacity].iter()),
+            pending,
+        )
+        .expect("identical fanout aliases do not consume more owner capacity")
+        .len(),
+        capacity,
     );
 }

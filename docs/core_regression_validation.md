@@ -1,9 +1,45 @@
 # Core first-release regression validation
 
-This repair follows the reported Core run with 13,623 passing tests and 973
-failures. It targets the current first-release contracts. No compatibility
-decoder, obsolete instruction alias, consensus bypass, or new ignored test is
-introduced.
+These records describe focused repairs against the current first-release
+contracts. They do not establish full workspace or release qualification.
+
+## September 16 committed-carrier and recovery regressions
+
+The reported Core run passed 15,335 tests and failed 82. The original executable
+reproduced all 82 failures in a focused run. Fixtures now count actual applied
+fragments, bind certified merge execution to its exact carrier header, keep
+ordinary payloads out of execution-bearing merge carriers, and configure the
+complete startup dataspace baseline. Geometry fixtures admit the primary anchor
+and journal incarnation replacement through the geometry owner. AXT replay
+checks retain the permanent counter across rejected physical reconfiguration
+and explicit policy revocation/recreation.
+
+Native AMX publication can reopen an authenticated committed carrier for repair.
+Its bounded durable locator records that repair explicitly, validates the exact
+selected executed wire, and cannot classify missing or changed committed bytes
+as an uncommitted append. Late body-store completions may settle through an
+exact authenticated publication marker after pipeline ownership transfers;
+missing or conflicting ownership without that proof still fails. The native
+body-loss fixture preserves indexed recovery length and first verifies that
+ordinary eviction cannot discard pending publication work.
+
+All 449 focused tests pass, with no failures or ignored tests: all 82 reported
+test names and 367 additional block, geometry, publication, query,
+autonomous-execution and lifecycle checks. The final run completed in 636.29
+seconds directly from the rebuilt executable with eight libtest workers.
+The build and supporting checks are:
+
+```sh
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry --no-run
+cargo fmt -p iroha_core --check
+python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
+python3 scripts/tests/sumeragi_v2_lifecycle_launch_source_compaction_test.py
+scripts/check_no_legacy_codec.sh
+```
+
+Both Python suites pass (6 and 11 checks), as do formatting and the codec guard.
+The full Core and workspace test suites are outside this focused validation.
 
 ## September 15 certified-fetch registry stack overflow
 

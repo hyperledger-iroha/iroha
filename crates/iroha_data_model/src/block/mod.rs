@@ -50,6 +50,15 @@ pub mod consensus_v2;
 pub mod execution_context;
 #[doc = "Block header structures and helpers."]
 pub mod header;
+/// Canonical routing and QueuePlan admission input values.
+pub mod lane_admission;
+/// Native lane consensus messages and immutable frozen authority values.
+pub mod lane_consensus;
+/// Ordered native Decision sources and their exact applying pre-State.
+pub mod lane_decision_batch;
+/// Immutable complete admitted inputs and exact distinct route slots.
+pub mod lane_input;
+mod native_results;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 #[cfg(feature = "transparent_api")]
@@ -136,6 +145,8 @@ pub enum SetTransactionResultsError {
         /// Merkle root already present in the block header.
         actual: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
     },
+    /// Native source/output structure or exact native/Time indices do not match.
+    InvalidNativeExecution,
     /// The supplied AXT policy snapshot was not canonical.
     InvalidAxtPolicySnapshot(crate::nexus::AxtPolicySnapshotValidationError),
 }
@@ -162,6 +173,9 @@ impl fmt::Display for SetTransactionResultsError {
                 f,
                 "existing block header Merkle root mismatch: expected {expected:?}, got {actual:?}",
             ),
+            Self::InvalidNativeExecution => {
+                f.write_str("native source and canonical full output commitments differ")
+            }
             Self::InvalidAxtPolicySnapshot(error) => {
                 write!(f, "invalid AXT policy snapshot: {error}")
             }
@@ -190,6 +204,8 @@ impl std::error::Error for SetLaneFinalityStatementsError {}
 pub enum SetBatchTransferOutcomesError {
     /// The block does not yet carry transaction results.
     MissingTransactionResults,
+    /// The requested outcome mutation would create malformed native source/output structure.
+    InvalidNativeOutputStructure,
     /// Entrypoint and result counts differ.
     ResultCountMismatch {
         /// Number of canonical entrypoint hashes.
@@ -226,6 +242,9 @@ impl fmt::Display for SetBatchTransferOutcomesError {
                 f,
                 "cannot attach batch outcomes to misaligned block results: {entrypoints} entrypoints, {results} results",
             ),
+            Self::InvalidNativeOutputStructure => {
+                f.write_str("batch outcome mutation has malformed native source/output structure")
+            }
             Self::UnknownEntrypoint { hash } => {
                 write!(f, "batch outcomes reference unknown entrypoint {hash}")
             }
@@ -319,7 +338,7 @@ impl SignedBlock {
     /// # Errors
     ///
     /// Returns [`SetTransactionResultsError`] when the supplied entrypoint hashes do not cover
-    /// the block payload, do not match external entrypoints, would make the existing header
+    /// the block payload, do not match canonical network inputs, would make the existing header
     /// consensus Merkle root inconsistent, or the AXT policy snapshot is not canonical.
     #[cfg(feature = "transparent_api")]
     pub fn set_transaction_results(
@@ -342,7 +361,7 @@ impl SignedBlock {
     /// # Errors
     ///
     /// Returns [`SetTransactionResultsError`] when the supplied entrypoint hashes do not cover
-    /// the block payload, do not match external entrypoints, or would make the existing header
+    /// the block payload, do not match canonical network inputs, or would make the existing header
     /// consensus Merkle root inconsistent.
     #[cfg(feature = "transparent_api")]
     pub fn set_transaction_results_with_transcripts(
@@ -354,24 +373,43 @@ impl SignedBlock {
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
     ) -> Result<(), SetTransactionResultsError> {
-        self.set_transaction_results_with_transcripts_phase_one(
+        if self
+            .execution_context()
+            .is_some_and(|context| context.native_lane_decisions.is_some())
+        {
+            return Err(SetTransactionResultsError::InvalidNativeExecution);
+        }
+        let committed_fragment_count =
+            u64::try_from(results.iter().filter(|result| result.is_ok()).count())
+                .unwrap_or(u64::MAX);
+        self.set_full_transaction_results_with_transcripts(
             time_triggers,
             hashes,
-            results,
+            results.into_iter().map(TransactionResult::from).collect(),
+            committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
             axt_policy_snapshot,
         )
     }
-    // Phase one fixes the result-bearing header while keeping the required
-    // lane-finality field explicitly empty. Phase two attaches statements that
-    // bind that final header via `set_lane_finality_statements`.
+    /// Attach exact full results, preserving independent-batch outcomes, and
+    /// validate native source/output structure before changing any header/result state.
+    /// `committed_fragment_count` is the actual execution overlay count, never
+    /// inferred from successful result leaves; Core must authenticate it.
+    /// Lane-finality statements are attached separately after final metadata.
+    ///
+    /// # Errors
+    /// The inner-result wrappers reject native carriers; native callers must supply
+    /// full results and the actual fragment count through this owner.
+    /// Rejects misaligned inputs/results, malformed native sources, malformed
+    /// native FASTPQ vectors or a noncanonical AXT policy snapshot atomically.
     #[cfg(feature = "transparent_api")]
-    fn set_transaction_results_with_transcripts_phase_one(
+    pub fn set_full_transaction_results_with_transcripts(
         &mut self,
         time_triggers: Vec<TimeTriggerEntrypoint>,
         hashes: &[HashOf<TransactionEntrypoint>],
-        results: Vec<TransactionResultInner>,
+        results: Vec<TransactionResult>,
+        committed_fragment_count: u64,
         fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
@@ -379,15 +417,30 @@ impl SignedBlock {
         axt_policy_snapshot
             .validate()
             .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
-        let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
-        let external_hashes = self
-            .external_entrypoints_cloned()
+        let result_hashes = results.iter().map(TransactionResult::hash);
+        let prefix_hashes = self
+            .network_entrypoints()
             .map(|entrypoint| entrypoint.hash())
             .collect::<Vec<_>>();
-        let external_count = external_hashes.len();
-        if hashes.len() < external_count {
+        let prefix_count = prefix_hashes.len();
+        let native = self
+            .execution_context()
+            .is_some_and(|context| context.native_lane_decisions.is_some());
+        if native {
+            let canonical = prefix_hashes.iter().copied().chain(
+                time_triggers
+                    .iter()
+                    .map(TimeTriggerEntrypoint::hash_as_entrypoint),
+            );
+            if !canonical.eq(hashes.iter().copied()) {
+                return Err(SetTransactionResultsError::InvalidNativeExecution);
+            }
+            self.validate_native_output_rows(&time_triggers, &results, &fastpq_transcripts)
+                .map_err(|_| SetTransactionResultsError::InvalidNativeExecution)?;
+        }
+        if hashes.len() < prefix_count {
             return Err(SetTransactionResultsError::TooFewEntrypointHashes {
-                expected: external_count,
+                expected: prefix_count,
                 actual: hashes.len(),
             });
         }
@@ -397,7 +450,7 @@ impl SignedBlock {
                 actual: results.len(),
             });
         }
-        for (index, (expected, actual)) in external_hashes
+        for (index, (expected, actual)) in prefix_hashes
             .iter()
             .copied()
             .zip(hashes.iter().copied())
@@ -411,21 +464,24 @@ impl SignedBlock {
                 });
             }
         }
-        let canonical_hashes = external_hashes
+        let canonical_hashes = prefix_hashes
             .iter()
             .copied()
-            .chain(hashes.iter().copied().skip(external_count))
+            .chain(hashes.iter().copied().skip(prefix_count))
             .collect::<Vec<_>>();
-        // Merkle tree over all entrypoints (external transactions first, then time triggers).
+        // Canonical network-input prefix followed by actual Time entries.
         let merkle = MerkleTree::from_iter(canonical_hashes);
-        // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_merkle: MerkleTree<TransactionEntrypoint> =
-            external_hashes.iter().copied().collect();
+        // Preserve the physical-external consensus root. Native source is bound
+        // once by execution_context_hash; native+Time membership is result.merkle.
+        let external_merkle: MerkleTree<TransactionEntrypoint> = self
+            .external_entrypoints_slice()
+            .iter()
+            .map(TransactionEntrypoint::hash)
+            .collect();
         let external_root = external_merkle.root();
-        if self.payload.header.merkle_root.is_none() {
-            // Allow tests that construct raw headers without setting merkle roots.
-            self.payload.header.merkle_root = external_root;
-        } else if self.payload.header.merkle_root != external_root {
+        if self.payload.header.merkle_root.is_some()
+            && self.payload.header.merkle_root != external_root
+        {
             return Err(
                 SetTransactionResultsError::ExistingHeaderMerkleRootMismatch {
                     expected: external_root,
@@ -438,15 +494,9 @@ impl SignedBlock {
             .as_ref()
             .map_or_else(Vec::new, |result| result.trigger_completions.clone());
         let result_merkle: MerkleTree<TransactionResult> = result_hashes.collect();
-        let transaction_results: Vec<_> =
-            results.into_iter().map(TransactionResult::from).collect();
-        let committed_fragment_count = u64::try_from(
-            transaction_results
-                .iter()
-                .filter(|result| result.as_ref().is_ok())
-                .count(),
-        )
-        .unwrap_or(u64::MAX);
+        let transaction_results = results;
+        // Every fallible check precedes the first mutation.
+        self.payload.header.merkle_root = external_root;
         self.payload.header.result_merkle_root = result_merkle.root();
         self.result = Some(BlockResult {
             time_triggers,
@@ -550,7 +600,7 @@ impl SignedBlock {
         let entrypoints = self.entrypoints_cloned().collect::<Vec<_>>();
         let result = self
             .result
-            .as_mut()
+            .as_ref()
             .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
         if entrypoints.len() != result.transaction_results.len() {
             return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
@@ -596,12 +646,21 @@ impl SignedBlock {
             }
             assignments.push((index, receipts));
         }
-        for transaction_result in &mut result.transaction_results {
+        let mut changed = result.transaction_results.clone();
+        for transaction_result in &mut changed {
             transaction_result.set_batch_transfer_outcomes(Vec::new());
         }
         for (index, receipts) in assignments {
-            result.transaction_results[index].set_batch_transfer_outcomes(receipts);
+            changed[index].set_batch_transfer_outcomes(receipts);
         }
+        self.validate_native_output_rows(
+            &result.time_triggers,
+            &changed,
+            &result.fastpq_transcripts,
+        )
+        .map_err(|_| SetBatchTransferOutcomesError::InvalidNativeOutputStructure)?;
+        let result = self.result.as_mut().expect("checked result owner");
+        result.transaction_results = changed;
         result.result_merkle = result
             .transaction_results
             .iter()
@@ -638,6 +697,9 @@ impl SignedBlock {
         result: &TransactionResultInner,
     ) -> bool {
         use crate::transaction::signed::TransactionResult;
+        if self.validate_native_lane_results().is_err() {
+            return false;
+        }
         let Some(result_state) = self.result.as_mut() else {
             return false;
         };

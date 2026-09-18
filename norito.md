@@ -486,6 +486,62 @@ Admission does not assume shared rosters; exact encoded-size checks still apply.
 See [`specs/merge_ledger.md`](specs/merge_ledger.md) for finalized carrier binding
 and the distinction between historical read authority and live write authority.
 
+## Native lane Decision carrier field
+
+The first-release `BlockExecutionContextBundle` encodes these required fields
+in order: `version`, `external`, `autonomous_lane_payloads`,
+`lane_payload_ownerships`, `queue_plan_admissions`, `merge_entry`, and
+`native_lane_decisions`. The final two fields are explicit nullable slots.
+The native slot is `Option<Box<LaneDecisionBatchV1>>`, with Norito's canonical
+owned-value length prefix. Omitted slots, the old field name, and output-bearing
+native batch layouts are rejected; there is no compatibility decoder.
+
+`block::lane_decision_batch::LaneDecisionBatchV1` encodes exactly
+`base_state_height`, `base_state_hash`, and `groups` in that order. The hash is
+an exact canonical WSV snapshot identity, not a global block hash. Groups are
+strictly ordered by actual first-admission priority, have distinct route slots,
+and do not repeat outer entrypoint, inner signed, or sealed commitment owners.
+Each group contains its complete input once and the route-ordered native
+CommitQCs. Batch hashing covers `iroha:lane-consensus:decision-batch:v1\0`
+followed by its complete canonical Norito encoding. Shape, signature, actual
+first-carrier inclusion, current membership, and pre-State authentication remain
+distinct checks; decoding supplies no execution or finality authority.
+
+No economic result, settlement, replay alias, FASTPQ output claim, applying
+header copy, or execution-prefix write root belongs in this proposal field.
+Execution uses the actual carrier header; proposal construction cannot depend
+on outputs that themselves persist that header's hash. Full `TransactionResult`
+values (including independent-batch outcomes), FASTPQ vectors, and the actual
+committed-fragment count occur once in the existing `BlockResult`. The global
+CommitQC's `ExecutionCommitment` authenticates the complete executed wire and
+state transition. State's private execution seals are not additional proposal
+claims or a second finality authority.
+
+Canonical executed indices derive native inputs from `groups`, then append
+actual Time entries. Physical `external_*` APIs keep their named payload-field
+semantics. The header input Merkle root remains physical external only (absent
+for a native-only carrier); native membership is bound by
+`execution_context_hash`. Existing `BlockResult` entry/result trees cover the
+network prefix and Time with one full result at each index. A SealedReveal's
+outer entrypoint identifies its result/proof position, while the transcript map
+and each `TransferTranscript.batch_hash` retain the inner execution-call hash.
+Time display entries may repeat; Core assigns and authenticates their actual
+invocation identities. Additional protocol/nested map keys likewise remain
+structural evidence until Core verifies its captured-source inventory.
+
+The full-result setter checks cardinality, source shape, nonempty correctly
+keyed transcript vectors, and canonical indices before mutation. It cannot
+infer which outputs execution should have produced. A different but structurally
+valid output can have a valid Merkle proof while failing the original global
+finality anchor because its executed-wire hash changed.
+
+The native field remains inactive in production until the sole consumer and
+Apply cutover are complete. It cannot coexist with another economic carrier
+form (external execution context, autonomous envelope, lane ownership, or merge
+entry). Other State-changing controls require deliberate one-overlay composition
+and enclosing capacity checks; model shape alone does not authorize that work.
+Historical inclusion additionally requires exact applying pre-State replay.
+
 ## Sumeragi v2 Consensus Evidence Layout
 
 Sumeragi v2 votes and quorum certificates carry both `round` and
@@ -564,6 +620,16 @@ height, Commit phase, subject, and execution commitment. Consequently nodes
 that decide an unchanged body in different reproposal rounds derive one
 successor context, while body- or execution-distinct parent decisions cannot
 alias.
+
+## Kura Native AMX publication locator
+
+`NativeAmxPublicationIndexRecordV1` carries a required `origin` enum and
+`selection_marker` in its sole first-release canonical layout. `CanonicalWrite`
+admits an exact append or tip replacement; `CompletedRepair` binds repair of the
+complete already committed carrier within the selected frontier and forbids
+`replaced`. Repair records never infer that a missing or different carrier was
+uncommitted. Frames remain bounded at 4,096 bytes and require exact canonical
+decoding; layouts without the explicit origin are rejected.
 
 ## Hardware Acceleration Validation
 

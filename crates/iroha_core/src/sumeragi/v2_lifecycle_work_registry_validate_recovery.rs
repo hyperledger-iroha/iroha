@@ -2286,7 +2286,10 @@ impl ReadyValidateSuccessorV1 {
         if !matches!(wait.source(), WaitSource::External(_))
             || self
                 .reducer_fence_wait
-                .is_some_and(|current| current.source() != wait.source())
+                .is_some_and(|current| {
+                    current.source() != wait.source()
+                        || current.observed_generation() > wait.observed_generation()
+                })
         {
             return None;
         }

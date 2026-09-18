@@ -198,7 +198,7 @@ fn enqueue_autonomous_test_transactions_with_builder(
             let admission_context = queue
                 .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
                 .expect("capture autonomous fixture admission context");
-            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            let binding = crate::torii_proxy::new_queue_plan_admission_binding(
                 adapter.state.network_id_ref(),
                 accepted.entrypoint(),
                 &routing_plan,
@@ -2540,7 +2540,7 @@ fn remote_hint_free_loser_without_queue_reservation_binds_empty_winner() {
         let admission_context = queue
             .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
             .expect("capture the remote observer admission context");
-        let admission_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let admission_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             adapter.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
@@ -6255,3 +6255,5 @@ fn active_autonomous_queue_still_rejects_corrupt_lane_planning_input() {
     assert!(queue.live_lane_reservations().is_empty());
     assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
 }
+
+include!("tests/v2_lane_work_initial_author_loss_counterexample.rs");

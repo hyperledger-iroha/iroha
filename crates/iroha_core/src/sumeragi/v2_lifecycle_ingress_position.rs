@@ -76,7 +76,7 @@ impl PendingFairIngressIdentity {
 }
 /// Failure to freeze or revalidate one exact pre-dequeue fair-ingress cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sumeragi) enum FairIngressQueueCutError {
+pub(crate) enum FairIngressQueueCutError {
     /// The selected physical ordinal is the reserved zero value.
     ZeroTargetOrdinal,
     /// The selected physical ordinal is absent from this queue cut.

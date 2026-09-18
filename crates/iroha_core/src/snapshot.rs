@@ -181,6 +181,10 @@ fn serialize_state_snapshot(state: &State, out: &mut String) {
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
+    out.push(',');
+    json::write_json_string("lane_consensus_contexts", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&view.lane_consensus_contexts, out);
     out.push('}');
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
@@ -295,6 +299,10 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
+    out.push(',');
+    json::write_json_string("lane_consensus_contexts", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(state.lane_consensus_contexts.get(), out);
     out.push('}');
 }
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.

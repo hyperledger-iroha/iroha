@@ -375,12 +375,18 @@ v2_apply_test!(
         for previous_view in 0..target_view {
             let tc = ordinary_frontier_timeout_certificate(active.context(), &keys, previous_view);
             runtime
-                .enqueue_network(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::TimeoutCertificate(tc),
-                ))
+                .enqueue_network(
+                    wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::TimeoutCertificate(tc),
+                    ),
+                    &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("admit authenticated timeout certificate");
             let RuntimeStep::Advanced(effects) = runtime
-                .step(started)
+                .step(
+                    started,
+                    &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("install actual timeout certificate")
             else {
                 panic!("authenticated TC must advance the successor view");

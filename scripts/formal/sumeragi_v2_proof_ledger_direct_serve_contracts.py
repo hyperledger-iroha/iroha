@@ -3771,12 +3771,136 @@ _LIFECYCLE_SERVE_RECONCILED_OWNER_PATHS = {
 }
 
 
+_LIFECYCLE_OWNER_DERIVED_SCHEDULER_PATHS = {
+    "turn": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+    "height": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+    "ordinary": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+    "worker_ownership": "crates/iroha_core/src/sumeragi/v2_worker/lifecycle_serve_ownership.rs",
+}
+
+
+def _lifecycle_owner_derived_scheduler_errors(repo_root: Path = ROOT_DIR) -> list[str]:
+    """Check owner reads and scheduling boundaries, without asserting liveness proof."""
+
+    errors: list[str] = []
+    sources = {
+        role: _read_reviewed_rust_source(
+            repo_root, relative, errors, "owner-derived lifecycle scheduler",
+        )
+        for role, relative in _LIFECYCLE_OWNER_DERIVED_SCHEDULER_PATHS.items()
+    }
+    if errors:
+        return errors
+
+    def item(role, name, owner=None):
+        path, source = sources[role]
+        if owner is None:
+            return _require_rust_item(path, source, name, errors)
+        return _require_qualified_rust_item(
+            path, source, owner, name, errors, "owner-derived lifecycle scheduler",
+        )
+
+    def require(role, actual, description, expected, count=1):
+        _require_rust_token_sequence(
+            sources[role][0], actual, expected,
+            "owner-derived scheduler " + description, errors, count=count,
+        )
+
+    projection = item("turn", "producer_claim_projection", "LaunchedProductionLifecycleV1")
+    owner_reads = (
+        ("terminal Apply owner", "if self.executor.lifecycle_decision_apply_is_complete()"),
+        ("parked completion owner", "if let Some(pending) = self.pending_lifecycle_completion.as_ref()"),
+        ("source-bound successor fence", "match successor.reducer_fence_wait()"),
+        ("active coordinator lease", "if let Some(lease) = self.owner.coordinator.active_lease.as_ref()"),
+        ("unleased physical completion owner", ".has_unleased_lifecycle_completion_work()"),
+        ("exact Ready Apply key", "if let Some(key) = self.executor.live_lifecycle_decision_apply_key()"),
+        ("Ready Apply registry join", ".prepare_ready_live_decision_apply_reconciliation("),
+        ("exact Apply custody", "!self.executor.exactly_owns_live_lifecycle_decision_apply(&authority)"),
+        ("retained Serve worker owner", ".lifecycle_serve_ownership_snapshot()"),
+    )
+    for description, expected in owner_reads:
+        require("turn", projection, description, expected)
+    if projection is not None:
+        tokens = rust_code_tokens(projection.source)
+        cursor = 0
+        for description, expected in owner_reads:
+            needle = rust_code_tokens(expected)
+            match = next((index for index in range(cursor, len(tokens) - len(needle) + 1)
+                          if tokens[index:index + len(needle)] == needle), None)
+            if match is None:
+                errors.append(f"{sources['turn'][0]}: owner-derived scheduler priority lost {description}")
+                break
+            cursor = match + len(needle)
+    for expected in (
+        "LifecycleWorkClass::Apply => return Ok(Claim::AwaitingApplyCompletion)",
+        "LifecycleWorkClass::ProducerTurn => {}",
+        "_ => return Ok(Claim::AwaitingCompletion)",
+        "if authority.dispatch_key() != key",
+        "parent_ordinal: authority.validate_predecessor_ordinal()",
+        "child_ordinal: key.lifecycle_ordinal()",
+        "serve.authority == LifecycleServeAuthorityKindV1::Claimed",
+        '.any(|serve| serve.authority == LifecycleServeAuthorityKindV1::Claimed) { return Err("claimed Serve has no active lifecycle lease".to_owned()); }',
+        "if !serves.is_empty() { return Ok(Claim::AwaitingReplayCompletion); }",
+    ):
+        require("turn", projection, "typed owner classification", expected)
+
+    census = item("worker_ownership", "has_unleased_lifecycle_completion_work", "ProductionV2Services")
+    require("worker_ownership", census, "unleased custody survives physical completion", """
+self.io.as_ref().map(|io| {
+    let state = io.command_tx.queue.lock();
+    !state.lifecycle_validates.is_empty()
+        || state.work.values().any(|tracked| {
+            matches!(&tracked.descriptor, V2IoWorkDescriptor::PersistCertifiedFetchBody { .. })
+        })
+})
+""")
+    serve = item("worker_ownership", "lifecycle_serve_ownership_snapshot", "V2IoCommandQueue")
+    require("worker_ownership", serve, "Serve census reads retained exact index", """
+self.lock().lifecycle_serves.iter().map(|(&lifecycle_ordinal, tracked)| LifecycleServeOwnershipV1 {
+    lifecycle_ordinal, request_hash: tracked.request_hash, authority: tracked.authority,
+}).collect()
+""")
+
+    activated = item("turn", "producer_claim_projection", "ActivatedProductionLifecycleV1")
+    require("turn", activated, "activated owner forwards fresh projection", "self.launched.producer_claim_projection().map_err(")
+    require("turn", activated, "inconsistent owner fails closed", "self.launched.close_output_for_restart();")
+    drain = item("height", "drain_lifecycle_v2_ingress")
+    ordinary = item("ordinary", "run_lifecycle_active_height")
+    require("height", drain, "drain starts from actual owner", "let mut producer_claim = activated.producer_claim_projection()?;")
+    require("height", drain, "each rank re-reads actual owner", """
+while let Some(current_turn) = outer_turns.next_current() {
+    producer_claim = activated.producer_claim_projection()?;
+""")
+    require("ordinary", ordinary, "all ingress drains re-read actual owner", """
+terminal_finalization_cut.as_ref(),
+)?;
+producer_claim = activated.producer_claim_projection()?;
+""", count=3)
+    require("ordinary", ordinary, "Runtime refresh precedes Producer", """
+producer_claim = activated.producer_claim_projection()?;
+if producer_claim.requires_yield() {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+if terminal_finalization_cut.is_none()
+""")
+    for role, actual in (("height", drain), ("ordinary", ordinary)):
+        for forbidden in ("observe_completion", "observe_ingress", "drain_disposition.producer_claim()"):
+            if actual is not None and _token_sequence_count(rust_code_tokens(actual.source), rust_code_tokens(forbidden)):
+                errors.append(f"{sources[role][0]}: owner-derived scheduler retains shadow transition {forbidden}")
+    for name in ("observe_completion", "observe_ingress"):
+        for actual in rust_items(sources["height"][1], name):
+            if ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests") not in actual.brace_context:
+                errors.append(f"{sources['height'][0]}: shadow transition {name} escaped its test oracle")
+    return errors
+
+
 def _lifecycle_certified_serve_reconciled_owner_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
     """Check reviewed owner deltas independently of complete-item seals."""
 
-    errors: list[str] = []
+    errors: list[str] = _lifecycle_owner_derived_scheduler_errors(repo_root)
     sources = {}
     for role, relative in _LIFECYCLE_SERVE_RECONCILED_OWNER_PATHS.items():
         sources[role] = _read_reviewed_rust_source(
@@ -3874,7 +3998,7 @@ let _ = settle_historical_body_serve_completion(
     receiver, block_sync_server, services, output_guard.as_ref(),
 )?;
 retry_recovered_decision_fetch_if_due(
-""")
+""", count=2)
     require("ordinary", None, "run_lifecycle_active_height",
             "active rollover retains historical output owner", """
 let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
@@ -3896,14 +4020,14 @@ block_sync_request, npos_beacon, lane_output_limit,
 )
 """, count=3)
     require("ordinary", None, "run_lifecycle_active_height",
-            "ordinary batch preserves distinct ingress and output budgets", """
+            "all ordinary batches preserve distinct ingress and output budgets", """
 drain_lifecycle_v2_ingress(
     &mut activated, &mut active_runner, receiver, &mut lane_work,
     kura.as_ref(), &common_config.key_pair, block_sync_server, block_sync,
     &mut block_sync_request, npos_beacon, body_queue_capacity,
-    control_queue_capacity, producer_claim, terminal_finalization_cut.as_ref(),
+    control_queue_capacity, terminal_finalization_cut.as_ref(),
 )?;
-""")
+""", count=3)
 
     require("ordinary", None, "run_lifecycle_active_height",
             "sidecar ingress needs typed permit and prepared owner", """
@@ -3949,8 +4073,16 @@ if let Err(error) = activated.settle_certified_serve_completion_for_no_clock_rec
 """)
     require("pending", None, "run_pending_active_height",
             "pending rollover retains historical output owner", """
-let ready = ready_to_finish && !terminal_exact_output_pending
-    && !block_sync_server.has_pending_historical_body_serve();
+let ready = ready_to_finish && !block_sync_server.has_pending_historical_body_serve();
+""")
+    require("pending", None, "run_pending_active_height",
+            "pending rollover authenticates retained finalization custody", """
+if !ready {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
+let rollover_ready = if finalization_ready {
 """)
     require("pending", None, "run_pending_active_height",
             "closed-prefix drain settles historical completion first", """

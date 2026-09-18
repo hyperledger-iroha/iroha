@@ -96,7 +96,7 @@ state_test! { sync ordinary_lane_frontier_extends_autonomous_application_and_unb
         AppliedMergeLaneFrontierMarker {
             version: 1, lane_id: lane, dataspace_id: dataspace, lane_incarnation: incarnation,
             lane_block_height: 1, lane_block_descriptor_hash: autonomous_hash,
-        },
+         applied_global_height: 1, },
     ).unwrap()]).expect("previous autonomous application frontier");
     overlay.stage_ordinary_lane_frontiers(&ordinary).expect("ordinary successor shares frontier");
     overlay.verify_ordinary_lane_frontiers(&ordinary).expect("ordinary application frontier");

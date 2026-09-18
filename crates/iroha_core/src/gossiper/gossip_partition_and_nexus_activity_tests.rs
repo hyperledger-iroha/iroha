@@ -147,7 +147,7 @@ fn gossip_roundtrip_preserves_cached_payload() {
     assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
     assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
     assert_eq!(decoded.plane, GossipPlane::Public);
-    assert!(decoded.txs[0].queue_plan_certificate().is_none());
+    assert!(decoded.txs[0].queue_plan_admitted_input().is_none());
     assert_eq!(
         decoded.txs[0].encoded_len_exact(),
         Some(decoded.txs[0].encode().len())
@@ -155,15 +155,14 @@ fn gossip_roundtrip_preserves_cached_payload() {
 }
 #[test]
 fn gossip_roundtrip_preserves_queue_plan_certificate_and_exact_length() {
-    let (signed, _accepted) = build_transaction("certified-gossip");
+    let (_gossiper, signed, _binding, certificate, _journal) =
+        exact_pending_queue_plan_gossip_fixture("certified-gossip");
     let payload = payload_for(&signed);
-    let certificate = vec![0xA5; 257];
     let message = TransactionGossip {
-        txs: vec![GossipTransaction::with_encoded_and_queue_plan_certificate(
-            signed.clone(),
-            Arc::clone(&payload),
-            certificate.clone(),
-        )],
+        txs: vec![
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(certificate.clone()))
+                .expect("structural complete input"),
+        ],
         routes: vec![GossipRoute {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -179,10 +178,16 @@ fn gossip_roundtrip_preserves_queue_plan_certificate_and_exact_length() {
     assert_eq!(decoded.txs.len(), 1);
     assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
     assert_eq!(
-        decoded.txs[0].queue_plan_certificate(),
+        decoded.txs[0].queue_plan_admitted_input(),
         Some(certificate.as_slice())
     );
-    assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
+    assert_eq!(decoded.txs[0].encoded.as_slice(), certificate.as_slice());
+    assert_eq!(decoded.txs[0].payload().as_slice(), payload.as_slice());
+    assert_eq!(
+        decoded.txs[0].encode().len(),
+        1 + certificate.len(),
+        "one tag and one complete-input frame"
+    );
     assert_eq!(decoded.encoded_len_exact(), Some(encoded.len()));
 }
 #[test]
@@ -239,14 +244,14 @@ fn partition_gossip_batch_keeps_sealed_commitments() {
     ));
 }
 #[test]
-fn gossip_transaction_len_hints_include_admission_suffix() {
+fn gossip_transaction_len_hints_include_explicit_payload_tag() {
     let (signed, _accepted) = build_transaction("hint");
     let payload = payload_for(&signed);
     let tx = GossipTransaction::with_encoded(signed, Arc::clone(&payload));
     let wire_len = tx.encode().len();
     assert!(
         wire_len > payload.len(),
-        "wire includes the admission suffix"
+        "wire includes the explicit item discriminant"
     );
     assert_eq!(
         ncore::SerializePayload::encoded_len_hint(&tx),
@@ -259,7 +264,9 @@ fn gossip_transaction_len_hints_include_admission_suffix() {
 }
 #[test]
 fn partition_withholds_awaiting_certificate_and_counts_certified_wire() {
-    let (signed, accepted) = build_transaction("awaiting-certificate");
+    let (_gossiper, signed, _binding, certificate, _journal) =
+        exact_pending_queue_plan_gossip_fixture("awaiting-certificate");
+    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
     let awaiting = GossipBatchEntry {
         tx: accepted.clone(),
         routing: RoutingDecision::default(),
@@ -272,7 +279,7 @@ fn partition_withholds_awaiting_certificate_and_counts_certified_wire() {
     assert!(withheld.message.txs.is_empty());
     assert_eq!(withheld.requeue, vec![signed.hash_as_entrypoint()]);
 
-    let certificate = Arc::new(vec![0x5A; 257]);
+    let certificate = Arc::new(certificate);
     let certified = GossipBatchEntry {
         tx: accepted.clone(),
         routing: RoutingDecision::default(),
@@ -285,7 +292,7 @@ fn partition_withholds_awaiting_certificate_and_counts_certified_wire() {
     assert!(included.requeue.is_empty());
     assert_eq!(included.message.txs.len(), 1);
     assert_eq!(
-        included.message.txs[0].queue_plan_certificate(),
+        included.message.txs[0].queue_plan_admitted_input(),
         Some(certificate.as_slice())
     );
     let exact_len = included.message.encode().len();
@@ -346,28 +353,46 @@ fn transaction_gossip_encoded_len_exact_matches_encode() {
 #[test]
 fn gossip_transaction_decode_rejects_trailing_bytes() {
     let (signed, _accepted) = build_transaction("trailing");
-    let mut encoded = ncore::to_bytes(&TransactionEntrypoint::External(signed))
-        .expect("encode transaction entrypoint");
+    let mut encoded = GossipTransaction::from(signed).encode();
     encoded.extend_from_slice(&[0xAA, 0xBB]);
     let err = ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
     assert!(matches!(err, ncore::Error::LengthMismatch));
 }
 #[test]
-fn gossip_transaction_decode_rejects_oversized_certificate_before_decode() {
-    let (signed, _accepted) = build_transaction("oversized-certificate");
-    let mut encoded = payload_for(&signed).as_ref().clone();
-    let max_vec_payload = crate::kura::MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES
-        + core::mem::size_of::<u64>();
-    let max_option_payload = 1 + ncore::len_prefix_len(max_vec_payload) + max_vec_payload;
-    let oversized = max_option_payload + 1;
-    ncore::write_len_header_to_vec(
-        &mut encoded,
-        u64::try_from(oversized).expect("test bound fits u64"),
-    );
-    encoded.resize(encoded.len() + oversized, 0);
-    let error = decode_gossip_transaction_payload(&encoded)
-        .expect_err("oversized certificate field must fail before semantic decode");
-    assert!(matches!(error, ncore::Error::LengthMismatch));
+fn gossip_transaction_decode_rejects_oversized_complete_input_before_decode() {
+    let oversized = vec![0; iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 1];
+    assert!(matches!(
+        GossipTransaction::from_queue_plan_admitted_input(Arc::new(oversized)),
+        Err(ncore::Error::LengthMismatch)
+    ));
+    let (_gossiper, _signed, _, mut input, _journal) =
+        exact_pending_queue_plan_gossip_fixture("oversized-wire-input");
+    // A complete canonical frame declaration exceeds the control cap before
+    // semantic decoding; the discriminator selects exactly the complete-input schema.
+    let mut typed = norito::decode_canonical::<
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    >(&input)
+    .unwrap();
+    let signed = TransactionBuilder::new(
+        test_network_id(),
+        (*ALICE_ID).clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "x".repeat(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES),
+    )])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .sign(ALICE_KEYPAIR.private_key());
+    typed.entrypoint = signed.into();
+    input = norito::encode_canonical(&typed).unwrap();
+    assert!(input.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES);
+    let mut wire = vec![GossipTransactionKind::CertifiedInput as u8];
+    wire.extend_from_slice(&input);
+    assert!(matches!(
+        decode_gossip_transaction_payload(&wire),
+        Err(ncore::Error::LengthMismatch)
+    ));
 }
 #[test]
 fn gossip_network_message_roundtrip_cached_payload_is_context_free() {

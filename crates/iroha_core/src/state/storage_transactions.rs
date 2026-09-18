@@ -244,6 +244,8 @@ mod block {
         MergeAdmission,
         /// Finalized FASTPQ source ownership is invalid at block commit
         FastpqSourceInventory,
+        /// Frozen lane consensus metadata changed after its authenticated capture
+        LaneConsensusContexts,
         /// Permanent AXT handle counter could not finalize its block transition
         AxtCounterRatchet,
         /// Live asset-definition incarnations are inconsistent with the registry

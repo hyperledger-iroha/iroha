@@ -1570,6 +1570,7 @@ impl LifecycleDecisionApplyRetryTaskV1 for LifecycleDecisionApplyRetryTaskFixtur
 #[derive(Debug)]
 struct V2IoTrackedLifecycleServeV1 {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
+    authority: LifecycleServeAuthorityKindV1,
     state: V2IoWorkState,
 }
 #[derive(Debug)]
@@ -1993,6 +1994,18 @@ impl LifecycleIoCapacityReservation<'_> {
         let ordinal = task.lifecycle_ordinal();
         let tracked = V2IoTrackedLifecycleServeV1 {
             request_hash: task.request_hash(),
+            authority: match task
+                .authority
+                .as_ref()
+                .expect("preflighted Serve retains authority")
+            {
+                LifecycleCertifiedServeTaskAuthorityV1::Claimed(_) => {
+                    LifecycleServeAuthorityKindV1::Claimed
+                }
+                LifecycleCertifiedServeTaskAuthorityV1::TerminalReplay(_) => {
+                    LifecycleServeAuthorityKindV1::TerminalReplay
+                }
+            },
             state: V2IoWorkState::Queued,
         };
         let mut state = self
@@ -3629,6 +3642,7 @@ include!("v2_worker_io_execution.rs");
 include!("v2_worker_exact_output.rs");
 include!("v2_worker_services.rs");
 include!("v2_worker_services_impl.rs");
+include!("v2_worker/lifecycle_serve_ownership.rs");
 /// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
 pub(super) mod tests {
@@ -3638,6 +3652,7 @@ pub(super) mod tests {
     include!("tests/v2_worker_main_00.rs");
     include!("tests/v2_worker_main_01.rs");
     include!("tests/v2_worker_lifecycle_capacity_cases.rs");
+    include!("v2_worker/lifecycle_serve_ownership_tests.rs");
     include!("tests/v2_worker_equivocation_fixture.rs");
     include!("v2_worker/applied_height_handoff_tests.rs");
     include!("v2_worker/queue_plan_admission_handoff_tests.rs");

@@ -3938,9 +3938,13 @@ fn native_amx_uncommitted_association_cleanup_failure_blocks_mutation_until_cold
             .records
             .get(&carrier)
             .expect("pending Native record");
-        assert_eq!(record.before_marker.count, before_count);
         assert_eq!(
-            record.before_marker.tip_hash,
+            record.origin,
+            NativeAmxPublicationIndexOriginV1::CanonicalWrite
+        );
+        assert_eq!(record.selection_marker.count, before_count);
+        assert_eq!(
+            record.selection_marker.tip_hash,
             old.as_ref().map(|old| old.hash())
         );
         assert!(

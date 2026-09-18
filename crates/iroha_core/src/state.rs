@@ -386,7 +386,38 @@ pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
 };
+mod lane_admitted_input;
+mod lane_decision_batch;
+mod native_lane_batch_replay;
+mod native_lane_fastpq;
+pub(crate) use native_lane_batch_replay::{
+    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+};
+mod lane_decision_execution;
+mod lane_decision_group;
+mod lane_input_body;
+pub(crate) use lane_decision_group::{LaneDecisionGroupPreparationV1, VerifiedLaneDecisionGroupV1};
+pub(crate) use lane_input_body::{
+    LaneInputBodyPreparationV1, LaneInputDependencyV1, VerifiedLaneInputBodyV1,
+};
 mod lane_authority;
+mod lane_consensus_authority;
+mod lane_consensus_commitment;
+mod lane_consensus_context;
+mod lane_consensus_state;
+mod lane_consensus_verified;
+pub(crate) use lane_admitted_input::{
+    AuthenticatedLaneAdmittedInputSourceV1, FirstLaneAdmittedInputReadV1,
+    VerifiedFirstLaneAdmittedInputV1,
+};
+pub(crate) use lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY;
+mod lane_consensus_witness;
+pub(crate) use lane_consensus_commitment::LaneConsensusContextsCommitmentV1;
+pub(crate) use lane_consensus_context::{FrozenLaneConsensusContextV1, LaneConsensusContextsV1};
+pub(crate) use lane_consensus_verified::{VerifiedLaneContext, VerifiedLaneContexts};
+pub(crate) use lane_consensus_witness::LaneConsensusContextsWitnessV1;
+mod queue_plan_priority;
+pub(crate) use queue_plan_priority::QueuePlanAdmissionPriorityV1;
 mod tiered;
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
@@ -2214,6 +2245,8 @@ struct AppliedMergeLaneFrontierMarker {
     lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_descriptor_hash: Hash,
+    /// Actual canonical carrier that applied this lane frontier.
+    applied_global_height: u64,
 }
 #[cfg(test)]
 mod remaining_state_frame_identity_tests {
@@ -2360,6 +2393,7 @@ mod merge_marker_frame_identity_tests {
             lane_incarnation: Hash::new(b"frame-owner-incarnation"),
             lane_block_height: 41,
             lane_block_descriptor_hash: Hash::new(b"frame-owner-descriptor"),
+            applied_global_height: 1,
         };
         assert_private_settlement_frame_v1(
             &batch,
@@ -2537,7 +2571,7 @@ mod queue_plan_pending_frame_identity_tests {
                 durability_threshold: 1,
             }],
         };
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             &network_id,
             &transaction,
             &plan,
@@ -3012,6 +3046,19 @@ pub enum MergeLedgerCommitError {
     /// Merge execution batch failed structural or cryptographic validation.
     #[error("merge execution batch is invalid: {0}")]
     ExecutionBatchInvalid(String),
+    /// Valid native inputs exceed the remaining carrier budget; choose a shorter
+    /// oldest prefix without terminating any input or publishing scratch writes.
+    #[error(
+        "native execution batch is full after {fitting_prefix} inputs (limit={gas_limit}, used={gas_used})"
+    )]
+    ExecutionBatchFull {
+        /// Number of leading groups that fit, including deterministic rejections.
+        fitting_prefix: usize,
+        /// Current governed whole-block limit (zero means unlimited).
+        gas_limit: u64,
+        /// Gas already owned by other canonical carrier work.
+        gas_used: u64,
+    },
     /// Certified merge entries must be ordered by a canonical global block.
     #[error("certified merge entries require a globally committed carrier block")]
     ExecutionRequiresGlobalBlock,
@@ -3768,6 +3815,18 @@ impl MergeBindingHistory {
         Ok(history)
     }
 }
+/// Economic fields required to drain one executor-owned settlement batch.
+/// Native group consensus evidence stays in its authenticated source; no old
+/// participant signature or proposal is manufactured for this projection.
+struct LaneExecutionSettlementInput<'a> {
+    route: crate::queue::RoutingDecision,
+    lane_incarnation: Hash,
+    lane_height: u64,
+    entrypoints: &'a [TransactionEntrypoint],
+    native_amx_receipts: &'a [Option<iroha_data_model::block::consensus::NativeAmxReceipt>],
+    atomic_group: bool,
+}
+
 /// Single authoritative snapshot for all merge-admission progression state.
 ///
 /// Query caches remain separate and bounded, but epoch, incarnation, relay-tip,
@@ -12211,6 +12270,8 @@ pub struct State {
     pub commit_topology: Cell<Vec<PeerId>>,
     /// Topology used to commit previous block
     pub prev_commit_topology: Cell<Vec<PeerId>>,
+    /// Globally authenticated open lane instances; independent of economic World writes.
+    pub(crate) lane_consensus_contexts: Cell<LaneConsensusContextsV1>,
     /// Ledger-derived DA commitment index hydrated from committed Kura blocks.
     pub da_commitments: parking_lot::RwLock<DaCommitmentStore>,
     /// In-memory confidential-compute receipt index derived from DA commitments.
@@ -13258,6 +13319,10 @@ pub struct StateBlock<'state> {
     pub commit_topology: CellBlock<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
     pub prev_commit_topology: CellBlock<'state, Vec<PeerId>>,
+    /// Transaction-isolated consensus metadata published with this carrier.
+    pub(crate) lane_consensus_contexts: CellBlock<'state, LaneConsensusContextsV1>,
+    /// Exact full-set snapshot retained after witness capture, including the empty set.
+    lane_consensus_contexts_seal: Option<Hash>,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: &'state IVM,
     /// Shared immutable artifacts and owned runtimes for pipeline workers.
@@ -13416,6 +13481,9 @@ pub struct StateBlock<'state> {
     merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
+    /// Private native source seal; roots bind the shared start+native prefix.
+    /// Publication remains forbidden until the sole consumer owns the final seal.
+    native_lane_stage: Option<Box<lane_decision_batch::NativeLaneStageSealV1>>,
     /// Exact proposal-native QueuePlan certificates staged before ordinary
     /// carrier-block effects. These controls are ordered by the Sumeragi QC,
     /// independently from the Nexus merge ledger.
@@ -15117,6 +15185,8 @@ pub struct StateView<'state> {
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
     pub prev_commit_topology: CellView<'state, Vec<PeerId>>,
+    /// Coherent clone of the immutable open-instance set.
+    pub(crate) lane_consensus_contexts: LaneConsensusContextsV1,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: &'state IVM,
     /// Process-persistent immutable prepared contracts shared by pipeline workers.
@@ -27932,8 +28002,7 @@ impl State {
     pub(crate) fn matches_kura_instance(&self, kura: &Arc<Kura>) -> bool {
         Arc::ptr_eq(&self.kura, kura)
     }
-    /// Clone the block storage handle used by isolated snapshot-state reconstruction.
-    #[cfg(test)]
+    /// Clone this state's block storage handle for consensus owners and snapshot reconstruction.
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
@@ -29444,6 +29513,7 @@ impl State {
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
+            lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
             merge_ledger: MergeLedgerStore::with_default_capacity(),
             merge_admission: parking_lot::RwLock::new(MergeAdmissionState::default()),
             replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
@@ -30474,12 +30544,26 @@ impl State {
             .block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
             .expect("infallible pristine block stage"))
     }
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn block_with_pristine_stage<E>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
     ) -> Result<StateBlock<'_>, E> {
+        self.block_with_owned_start_stages(curr_block, stage, |_, ()| Ok(()))
+            .map(|(block, ())| *block)
+    }
+
+    /// Own one overlay across pre-State authentication, all shared start effects,
+    /// and a one-use after-start continuation. The continuation's value can only
+    /// come from the before-start closure on this SAME overlay. Native callers
+    /// retain the heap owner; old callers keep their existing return convention.
+    #[allow(clippy::too_many_lines)]
+    fn block_with_owned_start_stages<'state, E, T, R>(
+        &'state self,
+        curr_block: BlockHeader,
+        before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
+        after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
+    ) -> Result<(Box<StateBlock<'state>>, R), E> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         let nexus_snapshot = self.nexus_snapshot();
@@ -30517,7 +30601,7 @@ impl State {
             world.privacy_consensus_policy.get().current_limits,
         )
         .expect("persisted privacy consensus policy was validated before block construction");
-        let mut sb = StateBlock {
+        let mut sb = Box::new(StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
             world,
@@ -30525,6 +30609,8 @@ impl State {
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
             prev_commit_topology: self.prev_commit_topology.block(),
+            lane_consensus_contexts: self.lane_consensus_contexts.block(),
+            lane_consensus_contexts_seal: None,
             ivm: &self.ivm,
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
@@ -30578,6 +30664,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -30613,10 +30700,10 @@ impl State {
             committed_fragments: 0,
             authenticated_replay_commit: false,
             replay_prevalidation: false,
-        };
+        });
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
-        stage(&mut sb)?;
+        let continuation = before_start(&mut sb)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
                 .unwrap_or_else(|error| {
@@ -30760,7 +30847,8 @@ impl State {
         Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
         Self::apply_block_start_confidential_policies(&mut sb, now_h);
         sb.start_of_block_effects_applied = true;
-        Ok(sb)
+        let result = after_start(&mut sb, continuation)?;
+        Ok((sb, result))
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]
@@ -31231,6 +31319,8 @@ impl State {
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
             prev_commit_topology: self.prev_commit_topology.block(),
+            lane_consensus_contexts: self.lane_consensus_contexts.block(),
+            lane_consensus_contexts_seal: None,
             ivm: &self.ivm,
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
@@ -31286,6 +31376,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -31372,6 +31463,8 @@ impl State {
             transactions: self.transactions.block_and_revert(),
             commit_topology: self.commit_topology.block_and_revert(),
             prev_commit_topology: self.prev_commit_topology.block_and_revert(),
+            lane_consensus_contexts: self.lane_consensus_contexts.block_and_revert(),
+            lane_consensus_contexts_seal: None,
             ivm: &self.ivm,
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
@@ -31427,6 +31520,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -32364,6 +32458,7 @@ impl State {
             let commit_topology_wait = commit_topology_start.elapsed();
             let prev_commit_topology_start = Instant::now();
             let prev_commit_topology = self.prev_commit_topology.view();
+            let lane_consensus_contexts = self.lane_consensus_contexts.view().get().clone();
             let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
             let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
             let generation_after = self.state_view_generation();
@@ -32423,6 +32518,7 @@ impl State {
                 transactions,
                 commit_topology,
                 prev_commit_topology,
+                lane_consensus_contexts,
                 ivm: &self.ivm,
                 pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
                 da_receipt_cursors: &self.da_receipt_cursors,
@@ -36028,16 +36124,16 @@ impl State {
         let mut validated = Vec::with_capacity(admissions.len());
         let mut previous_registry_key = None;
         for bytes in admissions {
-            let admission =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                    state_view.network_id(),
-                    bytes,
-                )
-                .map_err(|error| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                        "queue-plan admission certificate is invalid: {error}"
-                    ))
-                })?;
+            let admission = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                state_view.network_id(),
+                bytes,
+            )
+            .map(|input| input.certificate().clone())
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "queue-plan admission certificate is invalid: {error}"
+                ))
+            })?;
             if previous_registry_key
                 .as_ref()
                 .is_some_and(|previous| previous >= &admission.registry_key)
@@ -36160,15 +36256,13 @@ impl State {
         bytes: &[u8],
     ) -> Result<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1, MergeLedgerCommitError>
     {
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &self.network_id,
-            bytes,
-        )
-        .map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "pending queue-plan admission certificate is invalid: {error}"
-            ))
-        })
+        crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(&self.network_id, bytes)
+            .map(|input| input.certificate().clone())
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "pending queue-plan admission certificate is invalid: {error}"
+                ))
+            })
     }
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
@@ -36411,16 +36505,16 @@ impl State {
                     self.kura.pending_queue_plan_admission_capacity(),
                 )?;
             for (hash, existing_bytes) in pending {
-                let existing =
-                    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                        &self.network_id,
-                        &existing_bytes,
-                    )
-                    .map_err(|error| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "pending QueuePlan inventory certificate is invalid: {error}"
-                        ))
-                    })?;
+                let existing = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                    &self.network_id,
+                    &existing_bytes,
+                )
+                .map(|input| input.certificate().clone())
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "pending QueuePlan inventory certificate is invalid: {error}"
+                    ))
+                })?;
                 if existing.registry_key != incoming.registry_key {
                     continue;
                 }
@@ -40359,7 +40453,12 @@ impl State {
             Self::decode_exact_queue_plan_pending_obligation_marker(&obligation_key, payload)
                 .map_err(|error| error.to_string())?;
         let binding = &obligation.binding;
-        binding.validate_for_request(state.network_id(), entrypoint, routing_plan)?;
+        crate::torii_proxy::validate_queue_plan_binding_for_request(
+            &binding,
+            state.network_id(),
+            entrypoint,
+            routing_plan,
+        )?;
         if execution_height < binding.admission_context.proposal_height {
             return Err(
                 "QueuePlan pending binding is newer than the proposed execution height".to_owned(),
@@ -40538,57 +40637,6 @@ impl State {
                 "queue-plan admission registry key cannot be represented in WSV".to_owned(),
             )
         })
-    }
-    fn queue_plan_admission_registry_marker_payload(
-        registry_value: &crate::torii_proxy::QueuePlanAdmissionRegistryValueV1,
-    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
-        if registry_value.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1
-            || registry_value
-                .binding_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "queue-plan admission registry value is malformed".to_owned(),
-            ));
-        }
-        let payload = norito::to_bytes(registry_value).map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "queue-plan admission registry value cannot be encoded: {error}"
-            ))
-        })?;
-        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "queue-plan admission registry value is empty or oversized".to_owned(),
-            ));
-        }
-        Ok(payload)
-    }
-    fn decode_exact_queue_plan_admission_registry_marker(
-        key: &StatePath,
-        payload: &[u8],
-    ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV1, MergeLedgerCommitError> {
-        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
-            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                "queue-plan admission registry marker `{key}` is empty or oversized"
-            )));
-        }
-        let value = norito::decode_from_bytes::<
-            crate::torii_proxy::QueuePlanAdmissionRegistryValueV1,
-        >(payload)
-        .map_err(|_| {
-            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                "queue-plan admission registry marker `{key}` is not exact canonical Norito"
-            ))
-        })?;
-        let canonical = Self::queue_plan_admission_registry_marker_payload(&value)?;
-        if canonical.as_slice() != payload {
-            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                "queue-plan admission registry marker `{key}` is not canonical"
-            )));
-        }
-        Ok(value)
     }
     fn queue_plan_pending_obligation_from_admission(
         admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
@@ -41805,10 +41853,14 @@ impl State {
     ) -> Result<(), MergeLedgerCommitError> {
         let obligation = Self::queue_plan_pending_obligation_from_binding(binding)?;
         let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
+        let priority = self.queue_plan_fixture_priority_for_binding(binding)?;
         let mut world = self.world.block();
         world.smart_contract_state.insert(
             registry_key,
-            Self::queue_plan_admission_registry_marker_payload(&binding.registry_value())?,
+            Self::queue_plan_admission_registry_marker_payload(
+                &binding.registry_value(),
+                priority,
+            )?,
         );
         Self::stage_queue_plan_pending_obligation_marker_in_storage(
             &mut world.smart_contract_state,
@@ -41828,10 +41880,11 @@ impl State {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             binding_hash: conflicting_binding_hash,
         };
+        let priority = self.queue_plan_fixture_priority_for_binding(binding)?;
         let mut world = self.world.block();
         world.smart_contract_state.insert(
             registry_key,
-            Self::queue_plan_admission_registry_marker_payload(&conflicting_value)?,
+            Self::queue_plan_admission_registry_marker_payload(&conflicting_value, priority)?,
         );
         world.commit();
         Ok(())
@@ -42461,6 +42514,7 @@ impl State {
     }
     fn merge_lane_execution_frontier_marker_payloads(
         batch: &MergeExecutionBatch,
+        applied_global_height: u64,
     ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         batch
             .lanes
@@ -42474,6 +42528,7 @@ impl State {
                     lane_incarnation: descriptor.lane_incarnation,
                     lane_block_height: descriptor.lane_block_height,
                     lane_block_descriptor_hash: descriptor.descriptor_hash,
+                    applied_global_height,
                 };
                 Self::encode_merge_lane_frontier_marker(marker)
             })
@@ -42512,6 +42567,7 @@ impl State {
         if canonical.as_slice() != payload
             || marker.version != 1
             || marker.lane_block_height == 0
+            || marker.applied_global_height == 0
             || marker
                 .lane_incarnation
                 .as_ref()
@@ -42534,23 +42590,40 @@ impl State {
         }
         Ok(marker)
     }
+    /// Read the applied lane identity and its actual global carrier from one
+    /// exact replicated cell. An absent frontier is `(0, None, 0)`; an occupied
+    /// cell must retain a nonzero carrier height. Callers must authenticate the
+    /// historical carrier before deriving its committee or execution policy.
+    pub(crate) fn canonical_merged_lane_frontier_with_anchor_from_world(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<(u64, Option<Hash>, u64), MergeLedgerCommitError> {
+        let key = Self::merge_lane_frontier_marker_key(lane_id, dataspace_id, lane_incarnation)?;
+        let Some(payload) = world.smart_contract_state().get(&key) else {
+            return Ok((0, None, 0));
+        };
+        let marker = Self::decode_exact_merge_lane_frontier_marker(&key, payload)?;
+        Ok((
+            marker.lane_block_height,
+            Some(marker.lane_block_descriptor_hash),
+            marker.applied_global_height,
+        ))
+    }
     fn canonical_merged_lane_frontier_from_world(
         world: &impl WorldReadOnly,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> Result<(u64, Option<Hash>), MergeLedgerCommitError> {
-        let key = Self::merge_lane_frontier_marker_key(lane_id, dataspace_id, lane_incarnation)?;
-        let Some(payload) = world.smart_contract_state().get(&key) else {
-            return Ok((0, None));
-        };
-        let marker = Self::decode_exact_merge_lane_frontier_marker(&key, payload)?;
-        Ok({
-            (
-                marker.lane_block_height,
-                Some(marker.lane_block_descriptor_hash),
-            )
-        })
+        Self::canonical_merged_lane_frontier_with_anchor_from_world(
+            world,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+        .map(|(height, descriptor_hash, _)| (height, descriptor_hash))
     }
     /// Derive the one exact evidence-aware frontier admitted by every drain phase.
     ///
@@ -42656,59 +42729,56 @@ impl State {
     ) -> Result<(), MergeLedgerCommitError> {
         Self::validate_lane_frontier_successor(
             world,
-            &AppliedMergeLaneFrontierMarker {
-                version: 1,
-                lane_id: descriptor.lane_id,
-                dataspace_id: descriptor.dataspace_id,
-                lane_incarnation: descriptor.lane_incarnation,
-                lane_block_height: descriptor.lane_block_height,
-                lane_block_descriptor_hash: descriptor.descriptor_hash,
-            },
+            (
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+            ),
+            descriptor.lane_block_height,
             descriptor.previous_lane_block_height,
             descriptor.previous_lane_block_descriptor_hash,
         )
     }
     fn validate_lane_frontier_successor(
         world: &impl WorldReadOnly,
-        descriptor: &AppliedMergeLaneFrontierMarker,
+        route: (LaneId, DataSpaceId, Hash),
+        lane_block_height: u64,
         previous_height: u64,
         previous_hash: Option<Hash>,
     ) -> Result<(), MergeLedgerCommitError> {
+        let (lane_id, dataspace_id, lane_incarnation) = route;
         let expected_predecessor = Self::canonical_merged_lane_frontier_from_world(
             world,
-            descriptor.lane_id,
-            descriptor.dataspace_id,
-            descriptor.lane_incarnation,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
         )?;
         let actual_predecessor = (previous_height, previous_hash);
         if actual_predecessor != expected_predecessor {
             return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                 "lane {} dataspace {} incarnation {} predecessor {:?} does not match replicated frontier {:?}",
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_incarnation,
-                actual_predecessor,
-                expected_predecessor,
+                lane_id, dataspace_id, lane_incarnation, actual_predecessor, expected_predecessor,
             )));
         }
         let expected_height = expected_predecessor.0.checked_add(1).ok_or_else(|| {
             MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                 "lane {} dataspace {} incarnation {} frontier height cannot advance",
-                descriptor.lane_id, descriptor.dataspace_id, descriptor.lane_incarnation,
+                lane_id, dataspace_id, lane_incarnation,
             ))
         })?;
-        if descriptor.lane_block_height != expected_height {
+        if lane_block_height != expected_height {
             return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
-                lane_id: descriptor.lane_id,
-                dataspace_id: descriptor.dataspace_id,
+                lane_id,
+                dataspace_id,
                 expected_height,
-                attempted_height: descriptor.lane_block_height,
+                attempted_height: lane_block_height,
             });
         }
         Ok(())
     }
     fn merge_lane_snapshot_frontier_marker_payloads(
         snapshots: &[MergeLaneSnapshot],
+        applied_global_height: u64,
     ) -> Result<Vec<(StatePath, Vec<u8>)>, MergeLedgerCommitError> {
         snapshots
             .iter()
@@ -42730,6 +42800,7 @@ impl State {
                     lane_incarnation: snapshot.lane_incarnation,
                     lane_block_height: snapshot.lane_block_height,
                     lane_block_descriptor_hash: descriptor_hash,
+                    applied_global_height,
                 };
                 Self::encode_merge_lane_frontier_marker(marker)
             })
@@ -44531,14 +44602,16 @@ impl State {
                     lane_incarnation: descriptor.lane_incarnation,
                     lane_block_height: descriptor.lane_block_height,
                     lane_block_descriptor_hash: descriptor.descriptor_hash,
+                    applied_global_height: entry.merge_qc.carrier_height,
                 };
                 let (key, payload) = Self::encode_merge_lane_frontier_marker(marker)?;
                 world.smart_contract_state.insert(key, payload);
             }
         } else {
-            for (key, payload) in
-                Self::merge_lane_snapshot_frontier_marker_payloads(&entry.lane_snapshots)?
-            {
+            for (key, payload) in Self::merge_lane_snapshot_frontier_marker_payloads(
+                &entry.lane_snapshots,
+                entry.merge_qc.carrier_height,
+            )? {
                 world.smart_contract_state.insert(key, payload);
             }
         }
@@ -52862,7 +52935,14 @@ impl<'state> StateBlock<'state> {
     /// work, or mismatched ordinary transcript contents and unexpected prepared batches.
     /// Content failures remain latched and invalidate every cached witness-derived output.
     pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+        self.verify_lane_consensus_contexts_seal()?;
         if self.authenticated_replay_commit {
+            self.lane_consensus_contexts_seal = Some(
+                self.lane_consensus_contexts
+                    .get()
+                    .canonical_hash()
+                    .map_err(|error| error.to_string())?,
+            );
             self.clear_cached_exec_witness();
             let _ = crate::sumeragi::witness::drain_exec_witness();
             return Ok(());
@@ -52933,6 +53013,7 @@ impl<'state> StateBlock<'state> {
                 value: casting_value,
             });
             self.parliament_timed_ovn_casting_bindings = Some(casting_bindings);
+            self.capture_lane_consensus_contexts(&mut witness)?;
             witness
                 .writes
                 .sort_by(|left, right| left.key.cmp(&right.key));
@@ -52988,7 +53069,9 @@ impl<'state> StateBlock<'state> {
         &self,
         inventory: &FastpqSourceInventoryV1,
     ) -> Result<(), String> {
+        self.verify_lane_consensus_contexts_seal()?;
         if let Some(witness) = &self.exec_witness {
+            self.verify_lane_consensus_contexts_witness(witness)?;
             if !witness.fastpq_batches.is_empty() {
                 return Err("ordinary captured witness contains prebuilt FASTPQ batches".into());
             }
@@ -53294,6 +53377,9 @@ impl<'state> StateBlock<'state> {
         declared
     }
     fn validate_merge_carrier_entrypoint_binding(&self) -> Result<(), MergeLedgerCommitError> {
+        if self.native_lane_stage.is_some() {
+            return self.validate_native_lane_stage_membership();
+        }
         let expected = self.expected_merge_carrier_entrypoints();
         if self.merge_carrier_entrypoints == expected
             && self.declared_merge_carrier_entrypoints() == expected
@@ -53385,6 +53471,7 @@ impl<'state> StateBlock<'state> {
     fn ensure_pristine_execution_control_stage(&self) -> Result<(), MergeLedgerCommitError> {
         if self.start_of_block_effects_applied
             || self.staged_merge_entry.is_some()
+            || self.native_lane_stage.is_some()
             || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
@@ -53485,7 +53572,10 @@ impl<'state> StateBlock<'state> {
                     })?;
             }
             self.stage_merge_lane_frontier_markers(
-                State::merge_lane_snapshot_frontier_marker_payloads(&entry.lane_snapshots)?,
+                State::merge_lane_snapshot_frontier_marker_payloads(
+                    &entry.lane_snapshots,
+                    self._curr_block.height().get(),
+                )?,
             )?;
             let settlement_plan = self
                 .state_ref
@@ -53901,6 +53991,11 @@ impl<'state> StateBlock<'state> {
         active_lanes: &[MergeLaneBinding],
         carrier_height: u64,
     ) -> Result<(), MergeLedgerCommitError> {
+        if carrier_height != self._curr_block.height().get() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "QueuePlan admission priority must use the exact carrier height".to_owned(),
+            ));
+        }
         let admissions = State::validate_queue_plan_admissions_for_carrier_in_view(
             self,
             admission_bytes,
@@ -53909,7 +54004,9 @@ impl<'state> StateBlock<'state> {
         )?;
         let admissions = admissions
             .into_iter()
-            .map(|admission| {
+            .enumerate()
+            .map(|(index, admission)| {
+                let priority = QueuePlanAdmissionPriorityV1::new(carrier_height, index)?;
                 let obligation = State::queue_plan_pending_obligation_from_admission(&admission)?;
                 let outer_committed =
                     self.has_entrypoint(admission.certificate.binding.entrypoint_hash);
@@ -53922,6 +54019,7 @@ impl<'state> StateBlock<'state> {
                     &obligation,
                 );
                 Ok((
+                    priority,
                     admission,
                     obligation,
                     outer_committed,
@@ -53931,16 +54029,26 @@ impl<'state> StateBlock<'state> {
             })
             .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
         let mut markers = self.world.smart_contract_state.transaction();
-        for (admission, obligation, outer_committed, signed_committed, active) in admissions {
+        for (priority, admission, obligation, outer_committed, signed_committed, active) in
+            admissions
+        {
             let key = State::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            let payload =
-                State::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
             if let Some(current_payload) = markers.get(&key) {
-                let current = State::decode_exact_queue_plan_admission_registry_marker(
+                let current = State::decode_exact_queue_plan_admission_registry_record(
                     &key,
                     current_payload,
                 )?;
-                if current != admission.registry_value {
+                if current.claim != admission.registry_value
+                    || current.priority.carrier_height > carrier_height
+                    || (current.priority.carrier_height == carrier_height
+                        && current.priority.admission_index != priority.admission_index)
+                    || current.priority.carrier_height
+                        < admission
+                            .certificate
+                            .binding
+                            .admission_context
+                            .proposal_height
+                {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "queue-plan admission registry key has a conflicting binding: `{key}`"
                     )));
@@ -53959,6 +54067,10 @@ impl<'state> StateBlock<'state> {
                     "queue-plan admission registry key `{key}` was absent after its outer or signed identity committed"
                 )));
             }
+            let payload = State::queue_plan_admission_registry_marker_payload(
+                &admission.registry_value,
+                priority,
+            )?;
             markers.insert_queue_plan_marker(key, payload);
             State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;
         }
@@ -54246,6 +54358,7 @@ impl<'state> StateBlock<'state> {
                     lane_incarnation: ownership.lane_incarnation,
                     lane_block_height: ownership.lane_block_height,
                     lane_block_descriptor_hash: descriptor_hash,
+                    applied_global_height: block.header().height().get(),
                 },
                 ownership.previous_lane_block_height,
                 ownership.previous_lane_block_descriptor_hash,
@@ -54264,7 +54377,8 @@ impl<'state> StateBlock<'state> {
         for (marker, previous_height, previous_hash) in updates {
             State::validate_lane_frontier_successor(
                 &self.world,
-                &marker,
+                (marker.lane_id, marker.dataspace_id, marker.lane_incarnation),
+                marker.lane_block_height,
                 previous_height,
                 previous_hash,
             )?;
@@ -54278,7 +54392,7 @@ impl<'state> StateBlock<'state> {
         block: &SignedBlock,
     ) -> Result<(), MergeLedgerCommitError> {
         for (marker, _, _) in Self::ordinary_lane_frontier_updates(block)? {
-            let actual = State::canonical_merged_lane_frontier_from_world(
+            let actual = State::canonical_merged_lane_frontier_with_anchor_from_world(
                 &self.world,
                 marker.lane_id,
                 marker.dataspace_id,
@@ -54288,6 +54402,7 @@ impl<'state> StateBlock<'state> {
                 != (
                     marker.lane_block_height,
                     Some(marker.lane_block_descriptor_hash),
+                    marker.applied_global_height,
                 )
             {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -54312,7 +54427,10 @@ impl<'state> StateBlock<'state> {
             self.world.smart_contract_state.insert(key, payload);
         }
         self.stage_merge_lane_frontier_markers(
-            State::merge_lane_execution_frontier_marker_payloads(batch)?,
+            State::merge_lane_execution_frontier_marker_payloads(
+                batch,
+                self._curr_block.height().get(),
+            )?,
         )
     }
     fn stage_merge_lane_frontier_markers(
@@ -54329,6 +54447,12 @@ impl<'state> StateBlock<'state> {
             let proposed = State::decode_exact_merge_lane_frontier_marker(key, payload)?;
             if let Some(current_payload) = self.world.smart_contract_state.get(key) {
                 let current = State::decode_exact_merge_lane_frontier_marker(key, current_payload)?;
+                if proposed.applied_global_height < current.applied_global_height {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "frontier marker `{key}` regresses global application height {} from {}",
+                        proposed.applied_global_height, current.applied_global_height
+                    )));
+                }
                 if proposed.lane_block_height <= current.lane_block_height {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "frontier marker `{key}` regresses or repeats height {} from {}",
@@ -54365,6 +54489,7 @@ impl<'state> StateBlock<'state> {
                     lane_incarnation: marker.lane_incarnation,
                     lane_block_height: marker.lane_block_height,
                     lane_block_descriptor_hash: marker.lane_block_descriptor_hash,
+                    applied_global_height: block.header().height().get(),
                 },
             )?);
             decoded.push((key, payload, marker));
@@ -54425,10 +54550,12 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
-    fn take_merge_lane_fastpq_transcripts(
-        &mut self,
+    /// Shared exact outer/call selection for old export and retained native output.
+    /// It validates every binding before either caller mutates transcript custody.
+    fn lane_fastpq_transcript_selection(
+        &self,
         entrypoints: &[TransactionEntrypoint],
-    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+    ) -> Result<(BTreeMap<Hash, Hash>, BTreeSet<Hash>), MergeLedgerCommitError> {
         if self.fastpq_source_inventory.is_some() {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "lane execution cannot extract FASTPQ evidence after source inventory finalization"
@@ -54466,6 +54593,14 @@ impl<'state> StateBlock<'state> {
             }
             selected_call_hashes.insert(call_hash);
         }
+        Ok((entrypoint_bindings, selected_call_hashes))
+    }
+    fn take_merge_lane_fastpq_transcripts(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+        let (entrypoint_bindings, selected_call_hashes) =
+            self.lane_fastpq_transcript_selection(entrypoints)?;
         // Certified lane execution exports these transcripts in the lane bundle. Their
         // local captures must leave with them before the carrier seals its own inventory.
         // Preflight both maps completely so a rejected extraction changes neither one.
@@ -54496,6 +54631,26 @@ impl<'state> StateBlock<'state> {
         execution: &MergeLaneExecution,
     ) -> Result<LaneBlockCommitment, MergeLedgerCommitError> {
         let descriptor = &execution.proposal.descriptor;
+        self.drain_lane_execution_settlement(LaneExecutionSettlementInput {
+            route: crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id),
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_height: descriptor.lane_block_height,
+            entrypoints: &execution.entrypoints,
+            native_amx_receipts: &execution.native_amx_receipts,
+            atomic_group: false,
+        })
+    }
+    fn drain_lane_execution_settlement(
+        &mut self,
+        source: LaneExecutionSettlementInput<'_>,
+    ) -> Result<LaneBlockCommitment, MergeLedgerCommitError> {
+        if source.entrypoints.len() != source.native_amx_receipts.len()
+            || (source.atomic_group && source.entrypoints.len() != 1)
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane settlement source does not align its exact input evidence".into(),
+            ));
+        }
         let mut settlements = self.drain_settlement_records();
         let mut nexus_fees = self.drain_nexus_fee_records();
         let mut tx_count = 0u64;
@@ -54507,12 +54662,10 @@ impl<'state> StateBlock<'state> {
         let mut receipts = Vec::new();
         let mut nexus_fee_receipts = Vec::new();
         let mut native_amx_receipts = Vec::new();
-        for (entrypoint, native_amx_receipt) in execution
-            .entrypoints
-            .iter()
-            .zip(&execution.native_amx_receipts)
+        for (entrypoint, native_amx_receipt) in
+            source.entrypoints.iter().zip(source.native_amx_receipts)
         {
-            let mut counted = false;
+            let mut counted = source.atomic_group;
             let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(entrypoint);
             if let Some(record) = signed_transaction_hash
                 .as_ref()
@@ -54571,9 +54724,9 @@ impl<'state> StateBlock<'state> {
                 .and_then(|hash| nexus_fees.remove(hash))
             {
                 nexus_fee_receipts.push(record.into_lane_receipt(
-                    descriptor.lane_block_height,
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
+                    source.lane_height,
+                    source.route.lane_id,
+                    source.route.dataspace_id,
                 ));
                 counted = true;
             }
@@ -54591,10 +54744,10 @@ impl<'state> StateBlock<'state> {
             ));
         }
         Ok(LaneBlockCommitment {
-            block_height: descriptor.lane_block_height,
-            lane_id: descriptor.lane_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            dataspace_id: descriptor.dataspace_id,
+            block_height: source.lane_height,
+            lane_id: source.route.lane_id,
+            lane_incarnation: source.lane_incarnation,
+            dataspace_id: source.route.dataspace_id,
             tx_count,
             total_local_amount,
             total_xor_due,
@@ -54609,6 +54762,20 @@ impl<'state> StateBlock<'state> {
     fn stage_merge_execution_nexus_fee_settlement(
         &mut self,
         executions: &[MergeLaneExecution],
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.stage_lane_execution_nexus_fee_settlement(executions.iter().map(|execution| {
+            (
+                &execution.settlement_commitment,
+                execution.settlement_hash,
+                execution.proposal.descriptor.proposal_height,
+            )
+        }))
+    }
+    fn stage_lane_execution_nexus_fee_settlement<'e>(
+        &mut self,
+        executions: impl IntoIterator<
+            Item = (&'e LaneBlockCommitment, HashOf<LaneBlockCommitment>, u64),
+        >,
     ) -> Result<(), MergeLedgerCommitError> {
         if self.nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
             return Ok(());
@@ -54627,12 +54794,11 @@ impl<'state> StateBlock<'state> {
                     "invalid nexus fee asset id for merge execution".to_owned(),
                 )
             })?;
-        for execution in executions {
-            let commitment = &execution.settlement_commitment;
+        for (commitment, settlement_hash, authority_height) in executions {
             if commitment.nexus_fee_receipts.is_empty() {
                 continue;
             }
-            let settlement_root = *execution.settlement_hash;
+            let settlement_root = *settlement_hash;
             let settlement_key = State::nexus_fee_settlement_marker_key(
                 commitment.dataspace_id,
                 commitment.lane_id,
@@ -54682,7 +54848,7 @@ impl<'state> StateBlock<'state> {
                         let allocation = State::verified_fee_sponsor_allocation_for_receipt(
                             &self.world,
                             receipt,
-                            execution.proposal.descriptor.proposal_height,
+                            authority_height,
                         )?
                         .ok_or_else(|| {
                             MergeLedgerCommitError::InvalidNexusFeeReceipt(
@@ -54842,6 +55008,7 @@ impl<'state> StateBlock<'state> {
             || self.pending_autoscale_lifecycle.is_some()
             || self.autoscale_sample_history_dirty
             || self.staged_merge_entry.is_some()
+            || self.native_lane_stage.is_some()
             || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
@@ -54938,6 +55105,21 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
+        // TODO: replace this refusal only with the sole ValidBlock final witness,
+        // exact native carrier publication authorization and durable Apply gate.
+        // An empty old-merge authorization or authenticated replay flag cannot
+        // grant publication to a native execution prefix.
+        if self.native_lane_stage.is_some() {
+            error!("native stage has no canonical publication authorization yet");
+            return Err(TransactionsBlockError::MergeAdmission);
+        }
+        if let Err(error) = self.verify_lane_consensus_contexts_publication() {
+            error!(
+                ?error,
+                "lane consensus metadata does not match its captured state"
+            );
+            return Err(TransactionsBlockError::LaneConsensusContexts);
+        }
         // Extracting the witness does not end the overlay's lifetime. Retain the
         // applied-source seal through publication so a later transaction cannot
         // commit effects omitted from the already-extracted witness. Untouched
@@ -55004,6 +55186,7 @@ impl<'state> StateBlock<'state> {
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
+            lane_consensus_contexts,
             authenticated_replay_commit,
             replay_prevalidation,
             state_write_lock,
@@ -55466,6 +55649,9 @@ impl<'state> StateBlock<'state> {
             } else {
                 Duration::ZERO
             };
+            if publish_block_runtime_effects {
+                lane_consensus_contexts.commit();
+            }
             let prev_topology_hold = if publish_block_runtime_effects {
                 let prev_topology_start = Instant::now();
                 prev_committed_topology.commit();
@@ -56189,7 +56375,7 @@ impl<'state> StateBlock<'state> {
         // rolling State cache is intentionally published only after this
         // StateBlock commits successfully. Refreshing from the old cache here
         // would overwrite the certified staged values.
-        if self.staged_merge_entry.is_none() {
+        if self.staged_merge_entry.is_none() && self.native_lane_stage.is_none() {
             self.refresh_merge_metadata_from_latest_entry();
         }
         let prev_topology = self.commit_topology.take_vec();

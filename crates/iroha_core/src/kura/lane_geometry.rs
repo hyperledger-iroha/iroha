@@ -12221,6 +12221,55 @@ impl Kura {
             }
         }
     }
+    /// Authenticate an immutable archived pair against its completed journal owner.
+    /// This read-only test boundary reuses the production marker and content checks.
+    #[cfg(test)]
+    pub(crate) fn validate_archived_lane_pair_for_test(
+        &self,
+        original: &LaneConfigEntry,
+        incarnation: Hash,
+        activation_height: u64,
+        archived_blocks: &Path,
+        archived_merge: &Path,
+    ) -> Result<()> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let expected = LaneGeometryBinding {
+            lane_id: original.lane_id,
+            incarnation,
+            activation_height,
+            blocks_path: self.relative_geometry_path(&original.blocks_dir(&self.store_root))?,
+            merge_path: self.relative_geometry_path(&original.merge_log_path(&self.store_root))?,
+        };
+        let blocks_relative = self.relative_geometry_path(archived_blocks)?;
+        let merge_relative = self.relative_geometry_path(archived_merge)?;
+        let journal = self.read_lane_geometry_journal()?;
+        let mut owners = journal
+            .records
+            .iter()
+            .filter(|record| record.phase == LaneGeometryPhase::CatalogPublished)
+            .flat_map(|record| record.operations.iter())
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    LaneGeometryOperationKind::Retire | LaneGeometryOperationKind::Replace
+                ) && operation.previous.as_ref() == Some(&expected)
+                    && operation.archived_blocks_path == blocks_relative
+                    && operation.archived_merge_path == merge_relative
+            });
+        if owners.next().is_none() || owners.next().is_some() {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "archived test pair has no unique completed geometry journal owner",
+            ));
+        }
+        self.require_sealed_geometry_pair_at(
+            &expected,
+            archived_blocks,
+            archived_merge,
+            archived_blocks,
+            archived_merge,
+        )
+    }
     #[cfg(test)]
     pub(super) fn seal_native_amx_reservation_pair_move_for_test(
         &self,

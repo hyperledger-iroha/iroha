@@ -16978,6 +16978,11 @@ impl Kura {
             || staged.block_hash != artifact.block_hash
             || staged.ordinary_writes_root != commitment.ordinary_writes_root
             || staged.post_state_root != commitment.post_state_root
+            || !staged.lane_consensus_contexts_witness.verify(
+                artifact.height_context.network_id,
+                artifact.height,
+                commitment.ordinary_writes_root,
+            )
             || validation_fee_snapshot.evaluated_height != staged.height
             || !staged
                 .validation_fee_policy_witness
@@ -17018,6 +17023,7 @@ impl Kura {
                 block_hash: sidecar.block_hash,
                 ordinary_writes_root: sidecar.ordinary_writes_root,
                 post_state_root: sidecar.post_state_root,
+                lane_consensus_contexts_witness: sidecar.lane_consensus_contexts_witness.clone(),
                 validation_fee_policy_witness: sidecar.validation_fee_policy_witness.clone(),
                 parliament_timed_ovn_casting_witness: sidecar
                     .parliament_timed_ovn_casting_witness
@@ -17100,6 +17106,9 @@ impl Kura {
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
                 .map_err(Error::KagemushaFinalitySidecar)?;
+        let (lane_consensus_contexts_witness, lane_contexts_root) =
+            crate::state::LaneConsensusContextsWitnessV1::from_witness(witness)
+                .map_err(Error::KagemushaFinalitySidecar)?;
         let (parliament_timed_ovn_casting_witness, casting_root) =
             crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)
                 .map_err(Error::KagemushaFinalitySidecar)?;
@@ -17107,6 +17116,9 @@ impl Kura {
             crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)
                 .map_err(Error::KagemushaFinalitySidecar)?;
         if validation_fee_root != expected.ordinary_writes_root
+            || lane_contexts_root != expected.ordinary_writes_root
+            || lane_consensus_contexts_witness.carrier_height() != height
+            || !lane_consensus_contexts_witness.verify_root(expected.ordinary_writes_root)
             || casting_root != expected.ordinary_writes_root
             || kagemusha_root != expected.ordinary_writes_root
             || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
@@ -17149,6 +17161,7 @@ impl Kura {
             block_hash,
             ordinary_writes_root: expected.ordinary_writes_root,
             post_state_root: expected.post_state_root,
+            lane_consensus_contexts_witness,
             validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
@@ -17285,6 +17298,7 @@ impl Kura {
             ordinary_writes_root: staged.ordinary_writes_root,
             post_state_root: staged.post_state_root,
             finality_artifact_hash: receipt.artifact_hash,
+            lane_consensus_contexts_witness: staged.lane_consensus_contexts_witness,
             validation_fee_policy_witness: staged.validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings,
@@ -17769,6 +17783,36 @@ impl Kura {
         }
         self.validate_kagemusha_mint_outbox_entry_v1(&entry)?;
         Ok(Some(entry.result))
+    }
+    /// Recover the exact lane context-set proof together with verified carrier finality.
+    /// A verified stage awaiting final publication returns `None`; missing or
+    /// corrupt retention after finality remains a storage error.
+    pub(crate) fn lane_consensus_contexts_finality(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            V2FinalityArtifact,
+            crate::state::LaneConsensusContextsWitnessV1,
+        )>,
+    > {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            let staged_path = self.kagemusha_finality_staging_path(height);
+            if let Some((staged, _)) = self.decode_staged_kagemusha_finality(&staged_path)? {
+                Self::validate_staged_kagemusha_finality(&staged, &artifact)?;
+                return Ok(None);
+            }
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality artifact has no lane context witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
+        Ok(Some((artifact, sidecar.lane_consensus_contexts_witness)))
     }
     /// Return the finalized fixed-key validation-fee registry witness proof for one block.
     pub fn validation_fee_policy_witness_proof_v1(
@@ -21008,6 +21052,17 @@ impl Kura {
             let _ = Self::remove_bound_progress_temp_if_present(namespace, temp_path);
             let _ = Self::sync_bound_progress_intent_directories(namespace);
             return Err(Error::IO(error, temp_path.to_path_buf()));
+        }
+        #[cfg(test)]
+        if FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.replace(false)) {
+            // Retain the actual synced temporary exactly as a crash between
+            // write/fsync and promotion would; no synthetic artifact is installed.
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected Native evidence interruption after temporary fsync",
+                ),
+                temp_path.to_path_buf(),
+            ));
         }
         if let Err(error) =
             Self::promote_bound_progress_temp_noreplace(namespace, temp_path, path, &temporary)
@@ -43061,6 +43116,13 @@ include!("kura/autonomous_application_evidence.rs");
 include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/consensus_storage_reads.rs");
+#[path = "kura/lane_admission_source.rs"]
+mod lane_admission_source;
+#[path = "kura/native_lane_batch_source.rs"]
+mod native_lane_batch_source;
+pub(crate) use native_lane_batch_source::{
+    FinalizedNativeLaneBatchV1, NativeLaneBatchCarrierReadV1, NativeLaneBatchRecoveryV1,
+};
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
 impl BlockStore {

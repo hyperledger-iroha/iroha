@@ -2730,12 +2730,14 @@ impl TransactionEntrypoint {
             Self::SealedCommitment(_) | Self::SealedReveal(_) | Self::Time(_) => HashOf::new(self),
         }
     }
-    /// Hash identifying the signed execution call behind this entrypoint.
+    /// Network execution-call hash, or display hash for a Time entry.
     ///
     /// Result leaves and block entrypoint Merkle trees always use [`Self::hash`]. A sealed reveal,
     /// however, executes its inner signed transaction, whose call hash keys execution-scoped
-    /// evidence such as native batch receipts and FASTPQ transcripts. All other entrypoint kinds
-    /// execute under their canonical outer hash.
+    /// evidence such as native batch receipts and FASTPQ transcripts. Other network entrypoints
+    /// use their canonical outer hash. For [`Self::Time`] this returns only its display hash;
+    /// the execution owner separately assigns actual Time invocation identities, including
+    /// distinct identities for repeated invocations with equal display entrypoints.
     #[inline]
     pub fn execution_call_hash(&self) -> HashOf<Self> {
         match self {

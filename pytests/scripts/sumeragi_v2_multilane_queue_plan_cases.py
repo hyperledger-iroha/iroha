@@ -1020,7 +1020,7 @@ def test_queue_plan_pending_membership_contract_rejects_persistence_guard_drift(
         (
             "crates/iroha_torii/src/lib.rs",
             "persist_queue_plan_admission_certificate",
-            "snapshot.body = durable_certificate;",
+            "let (certificate_hash, durable_input) = match outcome",
             "disseminate_queue_plan_admission_publication(",
         ),
     ],

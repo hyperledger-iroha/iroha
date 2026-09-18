@@ -92,3 +92,8 @@ fn unique_retired_path(base: &Path, stem: &str, extension: Option<&str>) -> Path
         counter = counter.saturating_add(1);
     }
 }
+
+#[cfg(test)]
+fn fail_after_next_native_amx_evidence_temp_sync_for_tests() {
+    FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.set(true));
+}

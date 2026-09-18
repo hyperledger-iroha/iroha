@@ -1644,11 +1644,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             || self.durable_bodies.get(&key) != Some(durable)
         {
             return Err(EffectExecutorError::Contract(
-                "cold certified Fetch guard changed its authenticated body or startup cut".to_owned(),
+                "cold certified Fetch guard changed its authenticated body or startup cut"
+                    .to_owned(),
             ));
         }
         let current = self.runtime.authoritative_tag().ok_or_else(|| {
-            EffectExecutorError::Contract("cold certified Fetch guard lost its reducer tag".to_owned())
+            EffectExecutorError::Contract(
+                "cold certified Fetch guard lost its reducer tag".to_owned(),
+            )
         })?;
         if current != tag {
             if current.strictly_advances(tag) && tag.height() == self.context.height {
@@ -1664,8 +1667,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             || self.rejected_bodies.contains_key(&key)
             || self.pending_durable_validate_admissions.contains_key(&key)
             || self.durable_validate_retry_seals.contains_key(&key)
-            || self.published_lifecycle_store_retry_markers.contains_key(&key)
-            || self.published_lifecycle_validate_retry_markers.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
         {
             return Err(EffectExecutorError::Contract(
                 "cold certified Fetch guard overlaps another body owner".to_owned(),
@@ -1906,7 +1913,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .to_owned(),
             ));
         }
-        if self.body_pipeline_owners.contains_key(&(durable_receipt.round(), durable_receipt.subject())) {
+        if self
+            .body_pipeline_owners
+            .contains_key(&(durable_receipt.round(), durable_receipt.subject()))
+        {
             return Err(EffectExecutorError::Contract(
                 "recovered Store overlaps an authenticated Ready Fetch guard".to_owned(),
             ));
@@ -3225,6 +3235,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             Err(reason) => {
                 return Err(self.close(EffectExecutorError::Contract(reason.to_owned()), services));
             }
+        }
+        if pending.decision().is_some()
+            && !self.decision_persistence_readiness(services)?.is_ready()
+        {
+            // Retain the exact cached outcome before any reducer mutation,
+            // terminal cleanup, or Apply child WAL publication.
+            return Ok(0);
         }
         let pending = self
             .pending_resolved_validate_replay

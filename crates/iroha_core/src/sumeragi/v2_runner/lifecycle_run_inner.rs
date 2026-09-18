@@ -855,7 +855,6 @@ fn run_lifecycle_active_height(
     let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
-    let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
     let mut canonical_lane_body_recovered = false;
     let mut terminal_finalization_cut = None;
     let mut finalized_ingress_closed = false;
@@ -927,6 +926,7 @@ fn run_lifecycle_active_height(
                 ))
             },
         )?;
+        let mut producer_claim = activated.producer_claim_projection()?;
         if executor_ready_to_finish {
             successor_timings.record_first(SuccessorTimingStage::ExecutorReady, Instant::now());
         }
@@ -1326,17 +1326,16 @@ fn run_lifecycle_active_height(
             npos_beacon,
             body_queue_capacity,
             control_queue_capacity,
-            producer_claim,
             terminal_finalization_cut.as_ref(),
         )?;
-        producer_claim = drain_disposition.producer_claim();
+        producer_claim = activated.producer_claim_projection()?;
         if let Some(reason) = drain_disposition.advance_executor_yield() {
             last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
         }
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
         }
-        if drain_disposition.requires_yield() {
+        if drain_disposition.requires_yield() || producer_claim.requires_yield() {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -1533,6 +1532,11 @@ fn run_lifecycle_active_height(
             }
         }
 
+        producer_claim = activated.producer_claim_projection()?;
+        if producer_claim.requires_yield() {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
         if terminal_finalization_cut.is_none() {
             let (decided_subject_present, executor_ready_to_finish) = activated
                 .with_runner_runtime(
@@ -1739,15 +1743,15 @@ fn run_lifecycle_active_height(
                         npos_beacon,
                         body_queue_capacity,
                         control_queue_capacity,
-                        producer_claim,
                         terminal_finalization_cut.as_ref(),
                     )?;
-                    producer_claim = drain_disposition.producer_claim();
+                    producer_claim = activated.producer_claim_projection()?;
                     if let Some(reason) = drain_disposition.advance_executor_yield() {
                         last_advance_executor_yield =
                             Some(("open-preflight", reason, Instant::now()));
                     }
                     if drain_disposition.requires_yield()
+                        || producer_claim.requires_yield()
                         || block_sync_server.has_pending_historical_body_serve()
                     {
                         return Ok(false);
@@ -1973,14 +1977,13 @@ fn run_lifecycle_active_height(
                     npos_beacon,
                     body_queue_capacity,
                     control_queue_capacity,
-                    producer_claim,
                     terminal_finalization_cut.as_ref(),
                 )?;
-                producer_claim = drain_disposition.producer_claim();
+                producer_claim = activated.producer_claim_projection()?;
                 if let Some(reason) = drain_disposition.advance_executor_yield() {
                     last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
                 }
-                if drain_disposition.requires_yield() {
+                if drain_disposition.requires_yield() || producer_claim.requires_yield() {
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }

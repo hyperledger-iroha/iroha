@@ -964,7 +964,6 @@ fn recover_stale_prepare_decision_crash_fixture(
         launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
             assert_eq!(executor.runtime.queued_commands(), 0);
             executor
-                .runtime
                 .enqueue_network(wire::ConsensusMessageV2::new(
                     wire::ConsensusMessageV2Payload::QuorumCertificate(duplicate_commit),
                 ))

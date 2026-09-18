@@ -40,11 +40,10 @@ fn retained_publication_message(
     Option<Arc<TransactionGossip>>,
 ) {
     let message = TransactionGossip {
-        txs: vec![GossipTransaction::with_encoded_and_queue_plan_certificate(
-            signed.clone(),
-            payload_for(signed),
-            certificate,
-        )],
+        txs: vec![
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(certificate))
+                .expect("structural complete input"),
+        ],
         routes: vec![GossipRoute {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -52,6 +51,11 @@ fn retained_publication_message(
         plans: vec![default_plan()],
         plane: GossipPlane::Public,
     };
+    assert_eq!(
+        message.txs[0].payload().as_slice(),
+        payload_for(signed).as_slice(),
+        "fixture's sole certified input retains exact original signed bytes"
+    );
     let message = Arc::new(decode_gossip_message(&message));
     let extra = shared.then(|| Arc::clone(&message));
     let (retained, count) = RetainedGossip::with_count_for_test(message);
@@ -77,8 +81,7 @@ fn assert_exact_publication_body(
         .unwrap()
         .expect("body owns the exact durable admission claim");
     assert_eq!(
-        crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(&claim)
-            .unwrap(),
+        crate::torii_proxy::queue_plan_binding_from_durable_admission(&claim).unwrap(),
         binding
     );
     assert_eq!(
@@ -209,9 +212,10 @@ fn corrupt_and_foreign_roster_future_certificates_never_install_pending_body() {
         let (gossiper, signed, _, certificate, _journal) =
             publication_queue_plan_gossip_fixture("unauthorized future", true);
         let mut certificate = norito::decode_canonical::<
-            crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+            iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
         >(&certificate)
-        .unwrap();
+        .unwrap()
+        .certificate;
         if foreign_roster {
             let mut foreign = (0..4_u8)
                 .map(|i| KeyPair::try_from_seed(vec![0xE0 + i; 32], Algorithm::BlsNormal).unwrap())
@@ -224,7 +228,7 @@ fn corrupt_and_foreign_roster_future_certificates_never_install_pending_body() {
                 .map(|key| PeerId::new(key.public_key().clone()))
                 .collect();
             source.validator_set_hash = HashOf::new(&source.validator_set);
-            certificate.binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            certificate.binding = crate::torii_proxy::new_queue_plan_admission_binding(
                 gossiper.state.network_id_ref(),
                 &TransactionEntrypoint::External(signed.clone()),
                 &default_plan(),
@@ -250,9 +254,15 @@ fn corrupt_and_foreign_roster_future_certificates_never_install_pending_body() {
                 iroha_crypto::Signature::try_new(BOB_KEYPAIR.private_key(), b"wrong admission")
                     .unwrap();
         }
-        let certificate = norito::encode_canonical(&certificate).unwrap();
+        let certificate = norito::encode_canonical(
+            &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+                entrypoint: TransactionEntrypoint::External(signed.clone()),
+                certificate,
+            },
+        )
+        .unwrap();
         if foreign_roster {
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+            crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
                 gossiper.state.network_id_ref(),
                 &certificate,
             )
@@ -357,27 +367,26 @@ fn larger_durable_skew_retires_body_without_weakening_exact_fence() {
 
 #[test]
 fn partial_batch_keeps_completed_and_rejected_entries_final_across_future_retry() {
-    let (_, first, _, first_certificate, _first_journal) =
+    let (_, _first, _, first_certificate, _first_journal) =
         exact_pending_queue_plan_gossip_fixture("first ready");
-    let (gossiper, future, _, future_certificate, _journal) =
+    let (gossiper, _future, _, future_certificate, _journal) =
         publication_queue_plan_gossip_fixture("second future", true);
+    let mut rejected = norito::decode_canonical::<
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    >(&future_certificate)
+    .unwrap();
+    rejected.certificate.attestations[0].signature =
+        iroha_crypto::Signature::try_new(BOB_KEYPAIR.private_key(), b"bad partial batch authority")
+            .unwrap();
+    let rejected = norito::encode_canonical(&rejected).unwrap();
     let message = TransactionGossip {
         txs: vec![
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                first.clone(),
-                payload_for(&first),
-                first_certificate,
-            ),
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                future.clone(),
-                payload_for(&future),
-                vec![0],
-            ),
-            GossipTransaction::with_encoded_and_queue_plan_certificate(
-                future.clone(),
-                payload_for(&future),
-                future_certificate,
-            ),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(first_certificate))
+                .expect("structural complete input"),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(rejected))
+                .expect("structural complete input"),
+            GossipTransaction::from_queue_plan_admitted_input(Arc::new(future_certificate))
+                .expect("structural complete input"),
         ],
         routes: vec![
             GossipRoute {
@@ -517,10 +526,11 @@ fn authenticated_conflicting_binding_is_terminal_without_pending_retention() {
     let (gossiper, signed, _, certificate, _journal) =
         exact_pending_queue_plan_gossip_fixture("conflicting binding");
     let mut certificate = norito::decode_canonical::<
-        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
     >(&certificate)
-    .unwrap();
-    certificate.binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    .unwrap()
+    .certificate;
+    certificate.binding = crate::torii_proxy::new_queue_plan_admission_binding(
         gossiper.state.network_id_ref(),
         &TransactionEntrypoint::External(signed.clone()),
         &default_plan(),
@@ -529,8 +539,14 @@ fn authenticated_conflicting_binding_is_terminal_without_pending_retention() {
     )
     .unwrap();
     resign_current_gossip_authority(&mut certificate);
-    let certificate = norito::encode_canonical(&certificate).unwrap();
-    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+    let certificate = norito::encode_canonical(
+        &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+            entrypoint: TransactionEntrypoint::External(signed.clone()),
+            certificate,
+        },
+    )
+    .unwrap();
+    crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
         gossiper.state.network_id_ref(),
         &certificate,
     )
@@ -572,10 +588,11 @@ fn quorum_certified_future_with_invalid_body_signature_cannot_retain_credit() {
     corrupt_signature(&mut signed);
     assert!(signed.verify_signature().is_err());
     let mut certificate = norito::decode_canonical::<
-        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
     >(&certificate)
-    .unwrap();
-    certificate.binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    .unwrap()
+    .certificate;
+    certificate.binding = crate::torii_proxy::new_queue_plan_admission_binding(
         gossiper.state.network_id_ref(),
         &TransactionEntrypoint::External(signed.clone()),
         &default_plan(),
@@ -584,7 +601,13 @@ fn quorum_certified_future_with_invalid_body_signature_cannot_retain_credit() {
     )
     .unwrap();
     resign_current_gossip_authority(&mut certificate);
-    let certificate = norito::encode_canonical(&certificate).unwrap();
+    let certificate = norito::encode_canonical(
+        &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+            entrypoint: TransactionEntrypoint::External(signed.clone()),
+            certificate,
+        },
+    )
+    .unwrap();
     assert!(matches!(
         validate_queue_plan_gossip_certificate(
             &gossiper.state,

@@ -51,7 +51,7 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
     runtime.retransmit_owner = Some(periodic_owner.clone());
     runtime.retransmit_owner_physical_cut = Some(runtime.ingress_physical_cut);
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("freeze the new process's absolute-timeout owner");
     let timeout_physical_cut = runtime
         .timeout_owner_physical_cut
@@ -82,7 +82,7 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         "the durable TimeoutIntent must execute before a restored vote can cross retained debt"
     );
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the frozen absolute timeout runs before the restored replay");
     let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
         panic!("frozen timeout unexpectedly idled")
@@ -104,9 +104,11 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
     let timeout_effect_ownership = runtime
         .take_effect_ownership(timeout_effects.len())
         .expect("persisted TimeoutIntent transfers one signer owner");
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
+    let external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert!(runtime.retransmit_owner.is_none());
     assert!(runtime.retransmit_owner_physical_cut.is_none());
     assert!(
@@ -116,7 +118,11 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
             .is_some_and(|episode| episode.pre_frozen_retransmit.is_none())
     );
     runtime
-        .freeze_due_clock_owners(deadline)
+        .freeze_due_clock_owners(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("a fresh post-timeout periodic episode remains enabled");
     let post_timeout_retransmit = runtime
         .retransmit_owner
@@ -185,7 +191,12 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
     ));
     assert_eq!(restored_plan.count_transition(), (0, 1));
     runtime
-        .enqueue_network_with_ingress_ownership(message, restored_runtime)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            restored_runtime,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("authenticate and enqueue the retained TimeoutVote");
     let coalesced_retry = runtime
         .timeout_vote_episode_admission_plan(Some(pre_cut_candidate))
@@ -214,7 +225,11 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         "TimeoutVote recovery remains ordinary Progress rather than certificate authority"
     );
     let replay_step = runtime
-        .try_step_pacemaker_escape(deadline)
+        .try_step_pacemaker_escape(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("ordinary Progress replay preserves the live pacemaker")
         .expect("the retained TimeoutVote receives one bounded turn");
     assert!(matches!(
@@ -275,7 +290,7 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     ));
     let deadline = started_at + runtime.round_timeout();
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("freeze the timeout after the vote scheduler owner was reserved");
     let timeout_physical_cut = runtime
         .timeout_owner_physical_cut
@@ -297,7 +312,7 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
         "the vote cannot cross before TimeoutIntent owns its durable turn"
     );
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the absolute timeout runs before the straddled vote");
     let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
         panic!("frozen timeout unexpectedly idled")
@@ -315,9 +330,11 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     let timeout_effect_ownership = runtime
         .take_effect_ownership(timeout_effects.len())
         .expect("durable TimeoutIntent transfers one signer owner");
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
+    let external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let mut inbound = leader_wire_ingress
         .try_recv_if(|inbound| {
             let BlockMessage::V2(candidate) = inbound.message() else {
@@ -357,7 +374,12 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     ));
     assert_eq!(plan.count_transition(), (0, 1));
     runtime
-        .enqueue_network_with_ingress_ownership(message, ownership)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("authenticate and enqueue the straddled TimeoutVote");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
@@ -384,7 +406,7 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         .expect("publish the empty fair-ingress cut before timeout");
     let deadline = started_at + runtime.round_timeout();
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the local absolute timeout opens its finite TV episode");
     assert_eq!(
         runtime
@@ -411,9 +433,11 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         ] => (*tag, vote.signature_preimage()),
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_owner.owner().clone()])
-        .expect("publish the pending local timeout signer");
+    let mut external_owners = vec![timeout_effect_owner.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let timeout_ordinal = runtime
         .timeout_recovery_episode
         .as_ref()
@@ -520,7 +544,12 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         ));
         assert_eq!(first_plan.count_transition(), (0, 1));
         runtime
-            .enqueue_network_with_ingress_ownership(message.clone(), ownership)
+            .enqueue_network_with_ingress_ownership(
+                message.clone(),
+                ownership,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners"),
+            )
             .expect("authenticate and admit the fresh TimeoutVote");
         let coalesced_plan = runtime
             .timeout_vote_episode_admission_plan(Some(candidate.clone()))
@@ -646,15 +675,21 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     runtime
         .enqueue_signature_with_owner(signature_tag, local_signature, timeout_effect_owner)
         .expect("enqueue the local timeout signature at the inclusive timeout cut");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the external signer after queuing its completion");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let mut saw_local_timeout_vote = false;
     let mut saw_timeout_certificate = false;
     let mut saw_enter_view = false;
     for _ in 0..12 {
         let step = runtime
-            .try_step_pacemaker_escape(deadline)
+            .try_step_pacemaker_escape(
+                deadline,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners"),
+            )
             .expect("finite TV episode keeps the typed pacemaker live")
             .expect("local completion or one admitted TV remains runnable");
         runtime
@@ -721,7 +756,10 @@ fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share()
         .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
         .expect("publish the empty fair-ingress cut before timeout");
     let timeout_step = runtime
-        .step(started_at + runtime.round_timeout())
+        .step(
+            started_at + runtime.round_timeout(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the local timeout opens its finite TV episode");
     let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
         panic!("absolute timeout unexpectedly idled")
@@ -739,9 +777,11 @@ fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share()
     let [timeout_effect_owner] = timeout_effect_ownership.as_slice() else {
         panic!("timeout emits one exact signing effect")
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_owner.owner().clone()])
-        .expect("publish the pending local timeout signer");
+    let external_owners = vec![timeout_effect_owner.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     let mismatched_message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
     let mismatched_origin = context.roster[2].validator.clone();
@@ -786,7 +826,12 @@ fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share()
             .take_ingress_ownership()
             .expect("the valid share retains exact checked-dequeue ownership");
         runtime
-            .enqueue_network_with_ingress_ownership(valid_message.clone(), valid_ownership)
+            .enqueue_network_with_ingress_ownership(
+                valid_message.clone(),
+                valid_ownership,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners"),
+            )
             .expect("the valid share enters the protected Progress prefix");
     }
     assert_eq!(leader_wire_ingress.len(), 1);
@@ -825,7 +870,12 @@ fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share()
         mismatched_ownership.leader_wire_runtime_receipt().is_some(),
         "runner terminalization receives the exact runtime receipt"
     );
-    match runtime.enqueue_network_with_ingress_ownership(mismatched_message, mismatched_ownership) {
+    match runtime.enqueue_network_with_ingress_ownership(
+        mismatched_message,
+        mismatched_ownership,
+        &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+            .expect("valid borrowed executor owners"),
+    ) {
         Err(NetworkIngressError::Authentication(
             AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
                 signer,
@@ -963,7 +1013,7 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
         .expect("publish the restored selector high-watermark before freezing timeout");
     let deadline = started_at + runtime.round_timeout();
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("freeze the post-restart absolute timeout owner");
     assert!(token.scheduler_ordinal() < timeout_owner.lifecycle_ordinal());
     let timeout_cut = runtime
@@ -990,7 +1040,7 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
         "the restored carrier remains queued until TimeoutIntent is durable"
     );
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("absolute timeout dispatches before the restored handoff");
     let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
         panic!("frozen timeout unexpectedly idled")
@@ -1012,9 +1062,11 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     let timeout_effect_ownership = runtime
         .take_effect_ownership(timeout_effects.len())
         .expect("persisted TimeoutIntent transfers one signer owner");
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
+    let external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let mut replay = restored_ingress
         .try_recv_if(|inbound| {
             let BlockMessage::V2(candidate) = inbound.message() else {
@@ -1045,7 +1097,12 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
             .is_some_and(|cut| cut > u128::from(replay_physical_ordinal))
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message, replay_ownership)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            replay_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("authenticated atomic handoff enters ordinary Progress capacity");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
@@ -1068,6 +1125,7 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
             .enqueue_network_with_ingress_ownership(
                 message.clone(),
                 fair_network_ownership(&message, first_source),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
             )
             .expect("the first authenticated carrier owns the runtime command"),
         owner_tag
@@ -1077,6 +1135,7 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
             .enqueue_network_with_ingress_ownership(
                 message.clone(),
                 fair_network_ownership(&message, second_source),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
             )
             .expect("an exact QC from another source coalesces"),
         owner_tag
@@ -1144,7 +1203,7 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
         ));
     let deadline = now + runtime.round_timeout();
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("install a runtime-owned local signing fence");
     runtime
         .take_last_scheduler_ownership()
@@ -1165,15 +1224,19 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
         ] => {}
         effects => panic!("unexpected timeout effects: {effects:?}"),
     }
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
+    let mut external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     for source in &keys[..2] {
         assert_eq!(
             runtime
                 .enqueue_network_with_ingress_ownership(
                     message.clone(),
                     fair_network_ownership(&message, PeerId::new(source.public_key().clone()),),
+                    &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                        .expect("valid borrowed executor owners"),
                 )
                 .expect("each authenticated TC carrier coalesces"),
             owner_tag
@@ -1189,7 +1252,11 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
     assert_eq!(queued.direct.len(), 2);
     assert!(queued.validate_exact());
     let step = runtime
-        .try_step_pacemaker_escape(deadline)
+        .try_step_pacemaker_escape(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("certified pacemaker selection remains valid")
         .expect("the queued TC owns one typed pacemaker turn");
     let RuntimeStep::Advanced(effects) = step else {
@@ -1223,9 +1290,11 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
     runtime
         .take_effect_ownership(effects.len())
         .expect("the executor consumes the TC EnterView owner");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("the executor retires the superseded signer owner");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert_eq!(runtime.queued_commands(), 0);
     assert!(runtime.deferred_ingress_ownership.is_empty());
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
@@ -1258,7 +1327,11 @@ fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
     let first_ownership =
         fair_network_ownership_with_route(&message, source.clone(), source.clone(), first_route);
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), first_ownership.clone())
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            first_ownership.clone(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the first exact route owns the authenticated QC");
     let retained_before = runtime
         .ingress
@@ -1275,7 +1348,11 @@ fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
         "the runtime must reject a carrier whose cursor projection substitutes a forged tenure"
     );
     assert!(matches!(
-        runtime.enqueue_network_with_ingress_ownership(message.clone(), conflicting_ownership),
+        runtime.enqueue_network_with_ingress_ownership(
+            message.clone(),
+            conflicting_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::FailClosed)
     ));
     let retained_after = runtime
@@ -1305,7 +1382,11 @@ fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
         fair_network_ownership(&message, source)
     };
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), carrier())
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            carrier(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the first disjoint carrier owns the authenticated QC");
     for _ in 1..MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
         let candidate = RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, carrier())
@@ -1330,7 +1411,11 @@ fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
     let queued_before = runtime.queued_commands();
     let excess_carrier = carrier();
     assert!(matches!(
-        runtime.enqueue_network_with_ingress_ownership(message, excess_carrier),
+        runtime.enqueue_network_with_ingress_ownership(
+            message,
+            excess_carrier,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::Backpressure(EnqueueError::Full))
     ));
     let retained_after = runtime
@@ -1636,7 +1721,7 @@ fn store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership(
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(
         runtime
-            .minimum_active_lifecycle_ordinal()
+            .minimum_active_lifecycle_ordinal(&RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("inspect the exact Busy-deferred store owner"),
         Some(store_owner.lifecycle_ordinal())
     );
@@ -1658,7 +1743,7 @@ fn store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership(
     assert!(runtime.deferred_ingress_ownership.is_empty());
     assert_eq!(
         runtime
-            .minimum_active_lifecycle_ordinal()
+            .minimum_active_lifecycle_ordinal(&RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("retirement cannot retain a phantom store owner"),
         None
     );
@@ -1720,9 +1805,15 @@ fn authenticated_remote_proposal_fetch_consumer_retag_preserves_replay_owner() {
         .arm_live_clocks(now)
         .expect("arm runtime for authenticated Proposal retag");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xA6))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0xA6),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue exact authenticated Proposal");
-    let RuntimeStep::Advanced(effects) = runtime.step(now).expect("dispatch Proposal") else {
+    let RuntimeStep::Advanced(effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch Proposal")
+    else {
         panic!("authenticated Proposal unexpectedly idled")
     };
     runtime
@@ -1881,10 +1972,14 @@ fn set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch() {
         unreachable!("signed runtime Proposal fixture carries Proposal")
     };
     runtime
-        .enqueue_network(message.clone())
+        .enqueue_network(
+            message.clone(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue exact authenticated Proposal for Set B");
-    let RuntimeStep::Advanced(initial_effects) =
-        runtime.step(now).expect("dispatch Set-B Proposal")
+    let RuntimeStep::Advanced(initial_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch Set-B Proposal")
     else {
         panic!("authenticated Set-B Proposal unexpectedly idled")
     };
@@ -1902,11 +1997,12 @@ fn set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch() {
     assert!(runtime.has_dormant_remote_proposal_replay());
 
     runtime
-        .enqueue_network(message)
+        .enqueue_network(message, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("an exact Proposal replay remains idempotent");
     if runtime.queued_commands() != 0 {
-        let RuntimeStep::Advanced(duplicate_effects) =
-            runtime.step(now).expect("dispatch exact Proposal replay")
+        let RuntimeStep::Advanced(duplicate_effects) = runtime
+            .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+            .expect("dispatch exact Proposal replay")
         else {
             panic!("queued exact Proposal replay unexpectedly idled")
         };
@@ -1926,7 +2022,10 @@ fn set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch() {
 
     let periodic_at = now + runtime.retransmit_interval();
     let RuntimeStep::Advanced(effects) = runtime
-        .step(periodic_at)
+        .step(
+            periodic_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("periodic Set-B fallback advances")
     else {
         panic!("periodic Set-B fallback unexpectedly idled")
@@ -1996,13 +2095,21 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     };
     wrong.signature[0] ^= 0xFF;
     assert!(
-        runtime.enqueue_network(wrong_signature).is_err(),
+        runtime
+            .enqueue_network(
+                wrong_signature,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
+            .is_err(),
         "a substituted signature cannot mint remote Proposal replay authority"
     );
     runtime
-        .enqueue_network(proposal)
+        .enqueue_network(proposal, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("enqueue exact authenticated Proposal");
-    let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("dispatch Proposal") else {
+    let RuntimeStep::Advanced(fetch_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch Proposal")
+    else {
         panic!("authenticated Proposal unexpectedly idled")
     };
     runtime
@@ -2094,7 +2201,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     runtime
         .commit_body_available(reservation)
         .expect("publish exact BodyAvailable successor");
-    let RuntimeStep::Advanced(store_effects) = runtime.step(now).expect("dispatch BodyAvailable")
+    let RuntimeStep::Advanced(store_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch BodyAvailable")
     else {
         panic!("BodyAvailable unexpectedly idled")
     };
@@ -2168,7 +2277,9 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
             &store_ownership,
         )
         .expect("enqueue exact durable Store completion");
-    let RuntimeStep::Advanced(validate_effects) = runtime.step(now).expect("dispatch BodyStored")
+    let RuntimeStep::Advanced(validate_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch BodyStored")
     else {
         panic!("BodyStored unexpectedly idled")
     };
@@ -2241,9 +2352,14 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
         .arm_live_clocks(now)
         .expect("arm runtime for production dispatch");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8C))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x8C),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal");
-    let RuntimeStep::Advanced(proposal_effects) = runtime.step(now).expect("dispatch proposal")
+    let RuntimeStep::Advanced(proposal_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch proposal")
     else {
         panic!("proposal dispatch unexpectedly idled")
     };
@@ -2270,8 +2386,9 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
     runtime
         .commit_body_available(reservation)
         .expect("publish the owned body reconstruction completion");
-    let RuntimeStep::Advanced(store_effects) =
-        runtime.step(now).expect("dispatch body reconstruction")
+    let RuntimeStep::Advanced(store_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("dispatch body reconstruction")
     else {
         panic!("body reconstruction unexpectedly idled")
     };
@@ -2296,9 +2413,11 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
         .expect("ordinary StoreBody retains an exact body statement");
     assert_eq!(incumbent_statement.phase, None);
     assert_eq!(incumbent_statement.execution_commitment, None);
-    runtime
-        .set_external_lifecycle_owners(vec![incumbent_store_ownership.owner().clone()])
-        .expect("publish the in-flight StoreBody owner to scheduler arbitration");
+    let external_owners = vec![incumbent_store_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert_eq!(
         runtime
             .driver
@@ -2334,8 +2453,13 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
             )),
         )
         .expect("enqueue the authenticated CommitQC");
-    let RuntimeStep::Advanced(decision_effects) =
-        runtime.step(now).expect("install the durable Decision")
+    let RuntimeStep::Advanced(decision_effects) = runtime
+        .step(
+            now,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
+        .expect("install the durable Decision")
     else {
         panic!("CommitQC dispatch unexpectedly idled")
     };
@@ -2359,7 +2483,11 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
         .expect("outer Decision reconciliation preserves body recovery");
     let periodic_at = now + runtime.retransmit_interval();
     let RuntimeStep::Advanced(recovery_effects) = runtime
-        .step(periodic_at)
+        .step(
+            periodic_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("periodic durable-Decision recovery advances")
     else {
         panic!("periodic durable-Decision recovery unexpectedly idled")
@@ -2436,11 +2564,16 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
         commitment,
     );
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                prepare.clone(),
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate the complete current PrepareQC");
-    let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("persist observed Prepare")
+    let RuntimeStep::Advanced(fetch_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("persist observed Prepare")
     else {
         panic!("observed Prepare unexpectedly idled")
     };
@@ -2476,7 +2609,10 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
     runtime
         .commit_body_available(reservation)
         .expect("publish certified reconstruction");
-    let RuntimeStep::Advanced(store_effects) = runtime.step(now).expect("publish Store") else {
+    let RuntimeStep::Advanced(store_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("publish Store")
+    else {
         panic!("reconstruction unexpectedly idled")
     };
     runtime
@@ -2491,9 +2627,11 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
         .expect("Store ownership")
         .pop()
         .expect("one Store owner");
-    runtime
-        .set_external_lifecycle_owners(vec![store_owner.owner().clone()])
-        .expect("retain the one physical body owner");
+    let mut external_owners = vec![store_owner.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     let mut other_subject = manifest.subject;
     other_subject.payload_hash = Hash::new(b"another current Prepare body");
@@ -2536,8 +2674,13 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
             Some(prepare.clone())
         );
         let at = now + runtime.retransmit_interval() * stage;
-        let RuntimeStep::Advanced(effects) =
-            runtime.step(at).expect("periodic current Prepare recovery")
+        let RuntimeStep::Advanced(effects) = runtime
+            .step(
+                at,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners"),
+            )
+            .expect("periodic current Prepare recovery")
         else {
             panic!("current Prepare recovery unexpectedly idled")
         };
@@ -2593,8 +2736,13 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
                     &store_owner,
                 )
                 .expect("complete the exact physical Store");
-            let RuntimeStep::Advanced(validate_effects) =
-                runtime.step(at).expect("publish Validate")
+            let RuntimeStep::Advanced(validate_effects) = runtime
+                .step(
+                    at,
+                    &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                        .expect("valid borrowed executor owners"),
+                )
+                .expect("publish Validate")
             else {
                 panic!("Store completion unexpectedly idled")
             };
@@ -2610,9 +2758,11 @@ fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
                 .expect("Validate ownership")
                 .pop()
                 .expect("one Validate owner");
-            runtime
-                .set_external_lifecycle_owners(vec![validate_owner.owner().clone()])
-                .expect("retain the physical Validate owner");
+            external_owners = vec![validate_owner.owner().clone()];
+            assert!(
+                RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+                "retain an exact bounded external-owner handoff"
+            );
         }
     }
     assert!(!runtime.fail_closed);
@@ -2631,10 +2781,16 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         .arm_live_clocks(now)
         .expect("arm runtime for Prepare-lock recovery");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8E))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0x8E),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal");
     let RuntimeStep::Advanced(proposal_effects) = runtime
-        .step_and_take_scheduler_ownership_for_test(now)
+        .step_and_take_scheduler_ownership_for_test(
+            now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch proposal")
     else {
         panic!("proposal dispatch unexpectedly idled")
@@ -2654,7 +2810,7 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         .expect("enqueue reconstructed proposal body");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch reconstructed body"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
@@ -2676,7 +2832,7 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         .expect("enqueue durable proposal body");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch durable proposal body"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
@@ -2720,7 +2876,7 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         )
         .expect("enqueue exact Prepare signature completion");
     let RuntimeStep::Advanced(prepare_broadcasts) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("dispatch Prepare signature completion")
     else {
         panic!("Prepare signature completion unexpectedly idled")
@@ -2762,8 +2918,9 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
             )),
         )
         .expect("enqueue the authenticated PrepareQC");
-    let RuntimeStep::Advanced(lock_effects) =
-        runtime.step(now).expect("install the durable Prepare lock")
+    let RuntimeStep::Advanced(lock_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("install the durable Prepare lock")
     else {
         panic!("PrepareQC dispatch unexpectedly idled")
     };
@@ -2792,19 +2949,27 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
             .expect("query durable body authority"),
         Some(prepare.clone()),
     );
-    runtime
-        .set_external_lifecycle_owners(vec![lock_effect_ownership[0].owner().clone()])
-        .expect("publish the pending Commit signer owner");
+    let mut external_owners = vec![lock_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                 signed_runtime_timeout_certificate(&context, &keys),
-            ),
-        ))
+            )),
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("enqueue the authenticated timeout certificate");
     let RuntimeStep::Advanced(enter_view_effects) = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(
+            now,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the timeout certificate remains schedulable")
         .expect("the timeout certificate owns one pacemaker turn")
     else {
@@ -2868,9 +3033,11 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         Some(wire::GlobalPhase::Prepare),
     );
     let _timeout_terminals = runtime.take_leader_wire_runtime_terminals();
-    runtime
-        .set_external_lifecycle_owners(vec![commit_sign_ownership.owner().clone()])
-        .expect("replace the superseded Commit signer with its new-view retry");
+    external_owners = vec![commit_sign_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let recovery_tag = runtime.round_tag();
     assert_eq!(recovery_tag.view(), proposal_tag.view() + 1);
     runtime
@@ -2888,11 +3055,17 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
     runtime
         .enqueue_signature_with_owner(*commit_sign_tag, commit_signature, &commit_sign_ownership)
         .expect("enqueue the reissued Commit signature completion");
-    runtime
-        .set_external_lifecycle_owners(vec![fetch_ownership.owner().clone()])
-        .expect("the reconstructed body remains under the shared TC owner");
+    external_owners = vec![fetch_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let RuntimeStep::Advanced(commit_broadcasts) = runtime
-        .step_and_take_scheduler_ownership_for_test(now)
+        .step_and_take_scheduler_ownership_for_test(
+            now,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("dispatch the reissued Commit signature completion")
     else {
         panic!("reissued Commit signature completion unexpectedly idled")
@@ -2915,11 +3088,17 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
     runtime
         .commit_body_available(reservation)
         .expect("publish locked body reconstruction");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the completed locked FetchBody owner");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let RuntimeStep::Advanced(store_effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("dispatch locked body reconstruction")
     else {
         panic!("locked body reconstruction unexpectedly idled")
@@ -2948,13 +3127,19 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         store_statement.execution_commitment,
         Some(prepare.execution_commitment),
     );
-    runtime
-        .set_external_lifecycle_owners(vec![incumbent_store_ownership.owner().clone()])
-        .expect("publish the in-flight locked StoreBody owner");
+    external_owners = vec![incumbent_store_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     let store_retry_at = now + runtime.retransmit_interval();
     let RuntimeStep::Advanced(store_retry_effects) = runtime
-        .step(store_retry_at)
+        .step(
+            store_retry_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("periodic locked StoreBody retry advances")
     else {
         panic!("periodic locked StoreBody retry unexpectedly idled")
@@ -3002,11 +3187,17 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
             &incumbent_store_ownership,
         )
         .expect("enqueue completion under the physical StoreBody incumbent");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the completed StoreBody owner");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let RuntimeStep::Advanced(validate_effects) = runtime
-        .step(store_retry_at)
+        .step(
+            store_retry_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("dispatch durable locked body")
     else {
         panic!("durable locked body unexpectedly idled")
@@ -3031,13 +3222,19 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         incumbent_validate_ownership.candidate_semantic_statement(),
         Some(store_statement),
     );
-    runtime
-        .set_external_lifecycle_owners(vec![incumbent_validate_ownership.owner().clone()])
-        .expect("publish the in-flight locked ValidateBody owner");
+    external_owners = vec![incumbent_validate_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     let validate_retry_at = store_retry_at + runtime.retransmit_interval();
     let RuntimeStep::Advanced(validate_retry_effects) = runtime
-        .step(validate_retry_at)
+        .step(
+            validate_retry_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("periodic locked ValidateBody retry advances")
     else {
         panic!("periodic locked ValidateBody retry unexpectedly idled")
@@ -3072,9 +3269,11 @@ fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
         validate_retry_ownership.candidate_semantic_statement(),
         Some(store_statement),
     );
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the in-flight ValidateBody owner");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert!(!runtime.fail_closed);
 }
 
@@ -3484,18 +3683,29 @@ fn due_timeout_dispatches_an_exact_admitted_pre_cut_locked_prepare_qc_first() {
         .set_ingress_physical_cut(physical_cut)
         .expect("publish the receiver cut after the admitted PrepareQC");
     runtime
-        .enqueue_network_with_ingress_ownership(exact_message.clone(), ownership)
+        .enqueue_network_with_ingress_ownership(
+            exact_message.clone(),
+            ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate and admit the exact pre-cut PrepareQC");
 
     let deadline = now + runtime.round_timeout();
     let cut = runtime
-        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .freeze_pre_timeout_locked_prepare_qc_cut(
+            deadline,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze the already-due timeout owner")
         .expect("the unchanged locked body mints one pre-timeout cut");
     assert_eq!(cut.physical_cut(), physical_cut);
     assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &exact_message.payload));
     let Some(RuntimeStep::Advanced(effects)) = runtime
-        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .try_step_pre_timeout_locked_prepare_qc(
+            deadline,
+            &cut,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch the exact pre-cut PrepareQC")
     else {
         panic!("exact pre-cut PrepareQC did not advance")
@@ -3619,13 +3829,20 @@ fn due_timeout_drains_two_exact_pre_cut_locked_prepare_votes_to_commit() {
                 .is_some_and(|ordinal| u128::from(ordinal) < physical_cut)
         );
         runtime
-            .enqueue_network_with_ingress_ownership(message, ownership)
+            .enqueue_network_with_ingress_ownership(
+                message,
+                ownership,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("authenticate and admit one exact pre-cut Prepare vote");
     }
 
     let deadline = now + runtime.round_timeout();
     let cut = runtime
-        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .freeze_pre_timeout_locked_prepare_qc_cut(
+            deadline,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze the already-due timeout owner")
         .expect("the unchanged locked body mints one fixed-cut episode");
     assert_eq!(cut.physical_cut(), physical_cut);
@@ -3633,7 +3850,11 @@ fn due_timeout_drains_two_exact_pre_cut_locked_prepare_votes_to_commit() {
     assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &second_message.payload,));
 
     let Some(RuntimeStep::Advanced(first_effects)) = runtime
-        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .try_step_pre_timeout_locked_prepare_qc(
+            deadline,
+            &cut,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch the first exact pre-cut Prepare vote")
     else {
         panic!("first exact pre-cut Prepare vote did not advance")
@@ -3660,7 +3881,11 @@ fn due_timeout_drains_two_exact_pre_cut_locked_prepare_votes_to_commit() {
     assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &second_message.payload,));
 
     let Some(RuntimeStep::Advanced(second_effects)) = runtime
-        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .try_step_pre_timeout_locked_prepare_qc(
+            deadline,
+            &cut,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch the quorum-completing pre-cut Prepare vote")
     else {
         panic!("quorum-completing pre-cut Prepare vote did not advance")
@@ -3760,11 +3985,18 @@ fn exhausted_pre_cut_prepare_votes_do_not_grace_a_post_cut_quorum_witness() {
         .set_ingress_physical_cut(physical_cut)
         .expect("publish the receiver cut after the first Prepare vote");
     runtime
-        .enqueue_network_with_ingress_ownership(first_message, first_ownership)
+        .enqueue_network_with_ingress_ownership(
+            first_message,
+            first_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate and admit the sole pre-cut Prepare vote");
     let deadline = now + runtime.round_timeout();
     let cut = runtime
-        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .freeze_pre_timeout_locked_prepare_qc_cut(
+            deadline,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze the already-due timeout owner")
         .expect("mint the fixed-cut locked-Prepare episode");
     assert_eq!(cut.physical_cut(), physical_cut);
@@ -3793,11 +4025,19 @@ fn exhausted_pre_cut_prepare_votes_do_not_grace_a_post_cut_quorum_witness() {
         .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
         .expect("refresh the live receiver high-watermark after the post-cut vote");
     runtime
-        .enqueue_network_with_ingress_ownership(post_cut_message.clone(), post_cut_ownership)
+        .enqueue_network_with_ingress_ownership(
+            post_cut_message.clone(),
+            post_cut_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate and admit the exact post-cut Prepare vote");
 
     let Some(RuntimeStep::Advanced(first_effects)) = runtime
-        .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+        .try_step_pre_timeout_locked_prepare_qc(
+            deadline,
+            &cut,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch the one exact pre-cut Prepare vote")
     else {
         panic!("the exact pre-cut Prepare vote did not advance")
@@ -3816,14 +4056,18 @@ fn exhausted_pre_cut_prepare_votes_do_not_grace_a_post_cut_quorum_witness() {
     assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &post_cut_message.payload,));
     assert!(
         runtime
-            .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+            .try_step_pre_timeout_locked_prepare_qc(
+                deadline,
+                &cut,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("fixed-cut exhaustion is a successful stutter")
             .is_none()
     );
     assert!(runtime.take_last_scheduler_ownership().is_none());
 
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("dispatch the already-owned timeout after fixed-cut exhaustion")
     else {
         panic!("ordinary due timeout unexpectedly idled")
@@ -3885,7 +4129,10 @@ fn wrong_or_post_cut_prepare_qc_gets_no_grace_before_the_due_timeout() {
         .expect("publish the empty receiver cut before the exact PrepareQC");
     let deadline = now + runtime.round_timeout();
     let cut = runtime
-        .freeze_pre_timeout_locked_prepare_qc_cut(deadline)
+        .freeze_pre_timeout_locked_prepare_qc_cut(
+            deadline,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("freeze the already-due timeout owner")
         .expect("the unchanged locked body mints one pre-timeout cut");
     assert_eq!(cut.physical_cut(), physical_cut);
@@ -3920,19 +4167,27 @@ fn wrong_or_post_cut_prepare_qc_gets_no_grace_before_the_due_timeout() {
         .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
         .expect("refresh the live receiver cut after post-cut publication");
     runtime
-        .enqueue_network_with_ingress_ownership(exact_message.clone(), ownership)
+        .enqueue_network_with_ingress_ownership(
+            exact_message.clone(),
+            ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate and admit the exact post-cut PrepareQC");
     assert!(runtime.wire_previews_pre_timeout_locked_prepare_qc(&cut, &exact_message.payload));
     assert!(
         runtime
-            .try_step_pre_timeout_locked_prepare_qc(deadline, &cut)
+            .try_step_pre_timeout_locked_prepare_qc(
+                deadline,
+                &cut,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("post-cut absence is a successful stutter")
             .is_none()
     );
     assert!(runtime.take_last_scheduler_ownership().is_none());
 
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("dispatch the ordinary due timeout")
     else {
         panic!("ordinary due timeout unexpectedly idled")

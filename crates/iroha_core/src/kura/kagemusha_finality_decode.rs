@@ -1,6 +1,7 @@
 //! Bounded borrowed-field decoding for Kura's fixed-V1 Kagemusha sidecars.
 //!
-//! The durable encoding is unchanged. Repeated casting bindings are decoded
+//! The single first-release layout includes the mandatory lane-context proof.
+//! Repeated casting bindings are decoded
 //! from borrowed field slices, avoiding whole-vector and whole-binding copies
 //! and their cumulative allocation charges. Owned vectors and all allocations
 //! inside ordinary Norito field decoders remain charged before allocation.
@@ -29,6 +30,7 @@ pub(super) fn decode_staged(bytes: &[u8]) -> Result<StagedKagemushaFinalitySidec
             block_hash: fields.decode()?,
             ordinary_writes_root: fields.decode()?,
             post_state_root: fields.decode()?,
+            lane_consensus_contexts_witness: fields.decode()?,
             validation_fee_policy_witness: fields.decode()?,
             parliament_timed_ovn_casting_witness: fields.decode()?,
             parliament_timed_ovn_casting_bindings: fields.bindings()?,
@@ -46,6 +48,7 @@ pub(super) fn decode_finalized(bytes: &[u8]) -> Result<KagemushaFinalitySidecarV
             ordinary_writes_root: fields.decode()?,
             post_state_root: fields.decode()?,
             finality_artifact_hash: fields.decode()?,
+            lane_consensus_contexts_witness: fields.decode()?,
             validation_fee_policy_witness: fields.decode()?,
             parliament_timed_ovn_casting_witness: fields.decode()?,
             parliament_timed_ovn_casting_bindings: fields.bindings()?,

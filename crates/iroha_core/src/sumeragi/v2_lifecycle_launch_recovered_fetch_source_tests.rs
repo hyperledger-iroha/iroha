@@ -130,7 +130,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
     let ordinary_discovery = source_region(
         run_inner,
         "let discovery_was_outstanding =",
-        "producer_claim = drain_disposition.producer_claim();",
+        "producer_claim = activated.producer_claim_projection()?;",
     );
     let reconciled_turn = source_region(
         ordinary_discovery,
@@ -188,7 +188,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
     let permit = source_region(
         height_driver,
         ") -> Option<LifecycleBlockedOrdinaryLaneLocalIngressPermitV1> {",
-        "fn observe_completion(",
+        "/// Closed result of one bounded Completion/Runtime/Ingress batch.",
     );
     assert_source_tokens_in_order(
         permit,
@@ -220,13 +220,14 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
 
     let post_drain = source_region(
         run_inner,
-        "producer_claim = drain_disposition.producer_claim();",
+        "let drain_disposition = drain_lifecycle_v2_ingress(",
         "let (ready_to_finish, executor_slice, ready_proposal_sign_preempts_producer)",
     );
     assert_source_tokens_in_order(
         post_drain,
         &[
-            "if drain_disposition.requires_yield()",
+            "producer_claim = activated.producer_claim_projection()?;",
+            "if drain_disposition.requires_yield() || producer_claim.requires_yield()",
             "wake_rx.recv_timeout(IDLE_POLL)",
             "continue;",
         ],

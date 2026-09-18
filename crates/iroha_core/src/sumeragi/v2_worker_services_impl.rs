@@ -125,15 +125,11 @@ impl ProductionV2Services {
         // they are already retained on this serialized service. A full FIFO
         // therefore permits one relief step at the present cut; otherwise the
         // next Completion turn can consume them directly.
-        if !self.local_completions.is_empty() {
+        if let Some(completion) = self.available_local_completion() {
             if runtime_capacity_available {
                 return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
             }
-            let blocked_ordinal = self
-                .local_completions
-                .front()
-                .expect("non-empty local completion queue has a head")
-                .runtime_lifecycle_ordinal();
+            let blocked_ordinal = completion.runtime_lifecycle_ordinal();
             return capacity_relief_cut(Instant::now(), blocked_ordinal);
         }
 
@@ -2801,8 +2797,7 @@ impl ProductionV2Services {
                         completion: None,
                         retained_runtime: false,
                     } if runtime_capacity_available => self
-                        .local_completions
-                        .front()
+                        .available_local_completion()
                         .cloned()
                         .map_or_else(IoCompletionTake::unavailable, |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
@@ -2810,7 +2805,7 @@ impl ProductionV2Services {
                     completion => completion,
                 },
                 CompletionSource::Local if runtime_capacity_available => {
-                    self.local_completions.front().cloned().map_or_else(
+                    self.available_local_completion().cloned().map_or_else(
                         || self.take_io_completion(true),
                         |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
@@ -2897,7 +2892,7 @@ impl ProductionV2Services {
         }
         if self.held_io_completion.is_none()
             && self.next_completion_source == CompletionSource::Local
-            && !self.local_completions.is_empty()
+            && self.available_local_completion().is_some()
         {
             return Ok(true);
         }
@@ -2905,11 +2900,11 @@ impl ProductionV2Services {
             return Ok(!completion.is_dedicated_lifecycle_completion());
         }
         let Some(io) = self.io.as_ref() else {
-            return Ok(!self.local_completions.is_empty());
+            return Ok(self.available_local_completion().is_some());
         };
         let completion = match io.try_recv_completion_unacknowledged() {
             Ok(completion) => completion,
-            Err(_) => return Ok(!self.local_completions.is_empty()),
+            Err(_) => return Ok(self.available_local_completion().is_some()),
         };
         let ordinary = !completion.is_dedicated_lifecycle_completion();
         assert!(
@@ -2935,7 +2930,7 @@ impl ProductionV2Services {
         }
         if self.held_io_completion.is_none()
             && self.next_completion_source == CompletionSource::Local
-            && !self.local_completions.is_empty()
+            && self.available_local_completion().is_some()
         {
             return Ok(LifecycleCompletionTakeV1::PassThrough);
         }
@@ -2947,7 +2942,7 @@ impl ProductionV2Services {
                 return Ok(LifecycleCompletionTakeV1::None);
             };
             let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-                return if self.local_completions.is_empty() {
+                return if self.available_local_completion().is_none() {
                     Ok(LifecycleCompletionTakeV1::None)
                 } else {
                     Ok(LifecycleCompletionTakeV1::PassThrough)

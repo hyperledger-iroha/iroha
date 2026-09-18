@@ -2454,7 +2454,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                     "complete_certified_fetch_for_test(",
                     "RestartRequiredBeforeLedger(",
                     "assert_eq!(failure.work_id(), work_id)",
-                    "assert_eq!( failure.failure(), CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken, )",
+                    "assert_eq!( failure.productive_ingress_failure(), Some(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken), )",
                     "fixture.executor.output_guard.restart_required()",
                     "owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source)",
                     "owner.fetch_registry_snapshot_for_test()",
@@ -2526,18 +2526,38 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             "certified Fetch pre-Ledger restart owner",
             preledger_restart,
             (
-                "failure: CertifiedFetchPreLedgerProductiveIngressErrorV1",
+                "failure: CertifiedFetchBodyPersistencePreLedgerFailure",
                 "completion: PreparedCertifiedFetchBodyPersistenceCompletion",
-                "pub(crate) const fn failure(&self)",
-                "self.failure",
-                "match self.failure",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound",
+                "pub(crate) const fn productive_ingress_failure(",
+                "match &self.failure",
+                "CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error) => Some(*error)",
+                "_ => None",
+                "pub(crate) const fn reason(&self)",
+                "self.failure.reason()",
+                "pub(crate) fn detail(&self)",
+                "self.failure.detail()",
                 "pub(crate) const fn work_id(&self)",
                 "self.completion.work_id()",
             ),
+        )
+        retry_classifier = _require_qualified_rust_item(
+            lifecycle_selector_path, lifecycle_selector_source,
+            "CertifiedFetchBodyPersistencePreLedgerFailure", "permits_fresh_queue_retry",
+            errors, "certified Fetch changing-queue retry classifier",
+        )
+        _require_rust_token_sequence(
+            lifecycle_selector_path, retry_classifier,
+            """fn permits_fresh_queue_retry(&self) -> bool { matches!(self,
+                Self::FreshSelector(LifecycleIngressSelectorError::QueueCutChanged)
+                | Self::FreshSelector(LifecycleIngressSelectorError::QueueCutCapture(
+                    FairIngressQueueCutError::QueueCutChanged))
+                | Self::Queue(FairIngressQueueCutError::QueueCutChanged)
+            ) }""",
+            "certified Fetch retry requires exactly a changed queue cut", errors,
+        )
+        reject_tokens(
+            lifecycle_selector_path, "certified Fetch permanent rejection is not retry authority",
+            preledger_restart, ("fn into_completion",),
         )
         preledger_error = region(
             lifecycle_selector_path,
@@ -2697,17 +2717,24 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             "complete_certified_fetch_body_persistence",
             certified_fetch_persistence,
             (
+                "let output_guard = services.lifecycle_output_guard()",
+                "macro_rules! reject_before_ledger",
+                "let failure = $failure",
+                "PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(",
+                "if failure.permits_fresh_queue_retry()",
+                "CertifiedFetchBodyPersistenceCompletionError::Retry(",
+                "output_guard.close_admission_for_restart()",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
                 ".prepare_selected_certified_fetch_completion(",
                 ".bind_durable_body_receipt(receipt)",
                 "executor.prepare_lifecycle_certified_fetch_completion( candidate, &authenticated, durable_registry.durable_body_receipt(), )",
-                "let output_guard = services.lifecycle_output_guard()",
-                "output_guard.close_admission_for_restart()",
-                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
-                "failure: $failure",
+                "let decision_exclusion = executor_prepared.decision_exclusion().copied()",
+                "if let Some(exclusion) = decision_exclusion.as_ref()",
+                "staged.cancel_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
                 "certified_fetch_preledger_ingress_mode(family.inbound.as_ref())",
                 "Err(error)",
                 "durable_registry.abort_before_dequeue()",
-                "restart_invalid_leader_wire!(error, receipt)",
+                "reject_before_ledger!(CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error), receipt)",
                 ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
                 "exact_dequeue.lock(ingress)",
                 "let Some(operation) = output_guard.begin_fail_stop_operation()",
@@ -2717,6 +2744,8 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "dequeued.inbound()",
                 "&selected_ingress_mode",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+                "if let Some(exclusion) = decision_exclusion.as_ref()",
+                "durable_registry.commit_cancelled_after_exact_dequeue(dequeued, exclusion)",
                 "durable_registry.commit_after_exact_dequeue(dequeued)",
                 "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
                 "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
@@ -2725,11 +2754,59 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "if let Some(runtime_receipt) = runtime_receipt",
                 "mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                "if decision_exclusion.is_none()",
                 "services.retry_locked_candidate_after_durable_body(subject)",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(format!(",
                 "operation.complete()",
             ),
         )
+        cancellation = _require_rust_item(
+            lifecycle_selector_path, lifecycle_selector_source, "cancel_excluded_decision", errors,
+        )
+        if cancellation is not None:
+            require_order(
+                lifecycle_selector_path, "certified Fetch native Decision cancellation",
+                cancellation.source,
+                ("!exclusion.matches_durable_body(receipt)",
+                 "self.location.ordinal()", "self.next.records.get(&ordinal)",
+                 "record.work_class != LifecycleWorkClass::Fetch",
+                 "record.state != LifecycleState::Ready",
+                 "self.next.finish_terminal(ordinal, super::TerminalOutcome::Cancelled)"),
+            )
+        require_order(
+            lifecycle_selector_path, "certified Fetch Ready and cancellation authority split",
+            certified_fetch_persistence,
+            ("let durable_registry = if decision_exclusion.is_none()",
+             "check_production_historical_body_pipeline_transition(historical_trace)",
+             "retain_historical_body_pipeline_owner(checked_transition, durable_registry)",
+             "checked_transition.into_projection()", "let exact_dequeue = match exact_dequeue.lock(ingress)"),
+        )
+        registry_execution_path, registry_execution_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_execution.rs"
+        )
+        cancelled_commit = _require_rust_item(
+            registry_execution_path, registry_execution_source,
+            "commit_cancelled_after_exact_dequeue", errors,
+        )
+        if cancelled_commit is not None:
+            require_order(
+                registry_execution_path, "certified Fetch cancelled registry exact receipt",
+                cancelled_commit.source,
+                ("assert!(exclusion.matches_durable_body(self.durable_receipt.durable_body()))",
+                 "self.commit_response_dequeue(dequeued, true)"),
+            )
+        registry_commit = _require_rust_item(
+            registry_execution_path, registry_execution_source, "commit_response_dequeue", errors,
+        )
+        if registry_commit is not None:
+            require_order(
+                registry_execution_path, "certified Fetch cancellation preserves exact dequeue checks",
+                registry_commit.source,
+                ("assert_eq!(dequeued.ingress_identity(), self.ingress_identity)",
+                 "assert!(incumbent.validates_at(address))", "assert!(exact_selected_response_matches(",
+                 ".remove(&address)", "if cancelled { return; }",
+                 "let completion = CertifiedFetchCompletion", "self.registry.entries.insert(address, row)"),
+            )
         dequeue_marker = "let dequeued = exact_dequeue.commit()"
         dequeue_offset = certified_fetch_persistence.find(dequeue_marker)
         if dequeue_offset < 0:
@@ -2751,7 +2828,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 lifecycle_selector_path,
                 "certified Fetch pre-dequeue invalid-owner fail-stop",
                 pre_dequeue,
-                "restart_invalid_leader_wire!(error, receipt)",
+                "reject_before_ledger!(CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error), receipt)",
                 1,
             )
             reject_tokens(

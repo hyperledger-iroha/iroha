@@ -294,6 +294,7 @@ impl KuraSeed {
                 transactions: TransactionsStorage::new(),
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
+                lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
                 ivm: IVM::new(0),
                 nexus,
                 lane_incarnations,
@@ -366,6 +367,7 @@ impl KuraSeed {
             "space_directory_manifests",
             "commit_topology",
             "prev_commit_topology",
+            "lane_consensus_contexts",
         ];
         const WITH_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -382,6 +384,7 @@ impl KuraSeed {
             "space_directory_manifests",
             "commit_topology",
             "prev_commit_topology",
+            "lane_consensus_contexts",
         ];
         let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
             WITH_BOOTSTRAP
@@ -454,6 +457,20 @@ impl KuraSeed {
         let transactions = take_required(&mut map, "transactions")?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
+        let lane_consensus_contexts: LaneConsensusContextsV1 =
+            take_required(&mut map, "lane_consensus_contexts")?;
+        lane_consensus_contexts.validate().map_err(|error| json::Error::InvalidField {
+            field: "lane_consensus_contexts".to_owned(),
+            message: error.to_string(),
+        })?;
+        if lane_consensus_contexts.contexts.iter().any(|context| {
+            context.network_id != network_id || context.opening_global_height > committed_height
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "lane_consensus_contexts".to_owned(),
+                message: "lane context belongs to another network or a future carrier".to_owned(),
+            });
+        }
         if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
             crate::privacy_state::validate_privacy_exact12_qualification_registration_v1(
                 qualification,
@@ -560,6 +577,12 @@ impl KuraSeed {
                 field: "state.world.numeric_ledgers".to_owned(),
                 message,
             })?;
+        lane_consensus_state::validate_committed_lane_consensus_contexts(
+            &lane_consensus_contexts, &world.view(), &restored_nexus,
+            &lane_incarnations, network_id, committed_height,
+        ).map_err(|message| json::Error::InvalidField {
+            field: "lane_consensus_contexts".to_owned(), message,
+        })?;
         let state = build_state(
             BuildStateInputs {
                 world,
@@ -567,6 +590,7 @@ impl KuraSeed {
                 transactions,
                 commit_topology,
                 prev_commit_topology,
+                lane_consensus_contexts: Cell::new(lane_consensus_contexts),
                 ivm: ivm_runtime,
                 nexus: restored_nexus,
                 lane_incarnations,

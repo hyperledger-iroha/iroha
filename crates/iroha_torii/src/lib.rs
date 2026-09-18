@@ -17887,17 +17887,18 @@ fn queue_plan_synced_admission_response(
     durable_admission: queue::QueuePlanDurableAdmissionV1,
 ) -> Response {
     let receipt_signer = PeerId::new(app.torii_proxy_bridge_signer.public_key().clone());
-    let durable_binding =
-        match QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission) {
-            Ok(binding) => binding,
-            Err(error) => {
-                return torii_proxy_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "queue_plan_synced_receipt_signing_failed",
-                    format!("durable admission binding is malformed: {error}"),
-                );
-            }
-        };
+    let durable_binding = match iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(
+        &durable_admission,
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "queue_plan_synced_receipt_signing_failed",
+                format!("durable admission binding is malformed: {error}"),
+            );
+        }
+    };
     if durable_binding != expected_binding {
         return torii_proxy_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -22962,7 +22963,11 @@ fn queue_plan_synced_acceptance_expectation(
         .clone()
         .try_into_routing_plan()
         .map_err(|error| format!("QueuePlanSynced routing plan is malformed: {error}"))?;
-    admission_binding.validate_for_transaction_and_plan(transaction, &routing_plan)?;
+    iroha_core::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(
+        &admission_binding,
+        transaction,
+        &routing_plan,
+    )?;
     if admission_binding.request_id != request.request_id {
         return Err(
             "QueuePlanSynced binding request ID differs from its proxy envelope".to_owned(),
@@ -22981,6 +22986,28 @@ fn queue_plan_synced_acceptance_expectation(
         admission_binding,
         durability_threshold,
     }))
+}
+#[cfg(feature = "connect")]
+fn queue_plan_complete_input_capacity_error(
+    entrypoint: &TransactionEntrypoint,
+    binding: &QueuePlanAdmissionBindingV1,
+) -> Option<Response> {
+    match iroha_core::torii_proxy::maximum_lane_admitted_input_encoded_len_v1(entrypoint, binding) {
+        Ok(size) if size <= iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES => None,
+        Ok(size) => Some(torii_proxy_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "queue_plan_admission_input_too_large",
+            format!(
+                "complete QueuePlan input requires {size} bytes, exceeding the {}-byte carrier control bound",
+                iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES
+            ),
+        )),
+        Err(error) => Some(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            error,
+        )),
+    }
 }
 #[cfg(feature = "connect")]
 fn queue_plan_synced_entrypoint_hash(
@@ -24058,12 +24085,15 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         mark_torii_proxy_request_completed(app, request_id).await;
         return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
     }
-    let admission_binding = match &request.request {
+    // The aggregator consumes the request. Retain its exact original entrypoint
+    // beside the binding until a quorum certificate can become a complete control.
+    let admission_source = match &request.request {
         ToriiProxyRequestKindV1::SubmitTransaction {
+            transaction,
             admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            admission_binding,
+            admission_binding: Some(binding),
             ..
-        } => admission_binding.clone(),
+        } => Some((binding.clone(), transaction.clone())),
         _ => None,
     };
     let candidate_proxy_memory = proxy_memory.clone();
@@ -24109,12 +24139,13 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     // durable persistence and dissemination. Only the final public response owns
     // it through a Body; consuming the intermediate certificate cannot release W.
     proxy_response_finalization::complete(response, proxy_memory, |response| async move {
-        match admission_binding {
-            Some(binding) => {
+        match admission_source {
+            Some((binding, entrypoint)) => {
                 persist_queue_plan_admission_certificate(
                     app,
                     response,
                     &binding,
+                    &entrypoint,
                     persistence_deadline,
                 )
                 .await
@@ -24339,6 +24370,17 @@ where
             );
         }
     };
+    // Reject an unpublishable input before any candidate can promise a durable
+    // journal receipt. The same check protects direct incoming requests below.
+    if let (Some(expected), ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. }) =
+        (&queue_plan_synced_expectation, &request.request)
+    {
+        if let Some(response) =
+            queue_plan_complete_input_capacity_error(transaction, &expected.admission_binding)
+        {
+            return response;
+        }
+    }
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
     let strict_durable = queue_plan_synced;
     let request = match SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes) {
@@ -24888,7 +24930,7 @@ fn ingest_queue_plan_admission_publication(
         "QueuePlan admission publication receiver has no configured peer identity".to_owned()
     })?;
     // Authentication, receiver authorization and durable classification share one State-owned
-    // graph. No independently decoded binding survives while another certificate is decoded.
+    // graph. The bounded canonical complete input is decoded once by that owner.
     let outcome = app
         .state
         .persist_classified_queue_plan_admission(
@@ -24934,12 +24976,13 @@ async fn persist_queue_plan_admission_certificate(
     app: &SharedAppState,
     response: Response,
     expected_binding: &QueuePlanAdmissionBindingV1,
+    expected_entrypoint: &TransactionEntrypoint,
     deadline: queue_plan_publication_wait::PersistenceDeadline,
 ) -> Response {
     if response.status() != StatusCode::ACCEPTED {
         return response;
     }
-    let mut snapshot =
+    let snapshot =
         response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
             .await;
     let certificate = match decode_queue_plan_synced_certificate(&snapshot.body) {
@@ -24959,30 +25002,56 @@ async fn persist_queue_plan_admission_certificate(
             );
         }
     };
-    if let Err(error) = validate_queue_plan_admission_certificate_for_network_digest_v1(
+    let certificate = match validate_queue_plan_admission_certificate_for_network_digest_v1(
         expected_binding.network_id_digest,
         certificate,
         QueuePlanAdmissionCertificateStrengthV1::Quorum,
     ) {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            expected_binding.signed_transaction_hash.clone(),
-            format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
-        );
-    }
-    let outcome = match deadline.persist(&app.state, &snapshot.body).await {
+        Ok(validated) => validated.certificate,
+        Err(error) => {
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
+                format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
+            );
+        }
+    };
+    let input = iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+        entrypoint: expected_entrypoint.clone(),
+        certificate,
+    };
+    let input_bytes = match norito::encode_canonical(&input) {
+        Ok(bytes) if bytes.len() <= iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES => {
+            bytes
+        }
+        Ok(_) => {
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
+                "complete QueuePlan input exceeds the per-control carrier bound after quorum",
+            );
+        }
+        Err(error) => {
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                expected_binding.signed_transaction_hash.clone(),
+                format!("complete QueuePlan input cannot be encoded after quorum: {error}"),
+            );
+        }
+    };
+    let outcome = match deadline.persist(&app.state, &input_bytes).await {
         Ok(outcome) => outcome,
         Err(error) => {
             return queue_plan_outcome_unknown_response(
                 expected_binding.entrypoint_hash.clone(),
                 expected_binding.signed_transaction_hash.clone(),
                 format!(
-                    "failed to classify and persist the exact QueuePlan certificate before carrier wake: {error}"
+                    "failed to classify and persist the complete QueuePlan input before carrier wake: {error}"
                 ),
             );
         }
     };
-    let (certificate_hash, durable_certificate) = match outcome {
+    let (certificate_hash, durable_input) = match outcome {
         PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
             if admission.certificate.binding != *expected_binding {
                 return queue_plan_outcome_unknown_response(
@@ -25032,8 +25101,10 @@ async fn persist_queue_plan_admission_certificate(
             (certificate_hash, certificate)
         }
     };
-    snapshot.body = durable_certificate;
-    match disseminate_queue_plan_admission_publication(app, &snapshot.body, expected_binding) {
+    // State's retained bytes are the complete input, while the public HTTP body
+    // remains its original exact quorum certificate. Never replace a response
+    // certificate with a transaction-bearing publication control.
+    match disseminate_queue_plan_admission_publication(app, &durable_input, expected_binding) {
         Ok(target_count) => {
             iroha_logger::debug!(
                 %certificate_hash,
@@ -25208,16 +25279,17 @@ async fn execute_torii_transaction_via_proxy(
     let request_id =
         queue_plan_synced_proxy_request_id_for_entrypoint(app.as_ref(), entrypoint_hash.clone());
     let binding = if let Some(claim) = durable_retry_claim {
-        let binding = match QueuePlanAdmissionBindingV1::try_from_durable_admission(&claim) {
-            Ok(binding) => binding,
-            Err(error) => {
-                return torii_proxy_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "route_unavailable",
-                    format!("indexed durable-admission retry claim is malformed: {error}"),
-                );
-            }
-        };
+        let binding =
+            match iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim) {
+                Ok(binding) => binding,
+                Err(error) => {
+                    return torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        format!("indexed durable-admission retry claim is malformed: {error}"),
+                    );
+                }
+            };
         if binding.request_id != request_id {
             return torii_proxy_error_response(
                 StatusCode::CONFLICT,
@@ -25244,7 +25316,7 @@ async fn execute_torii_transaction_via_proxy(
                 );
             }
         };
-        match QueuePlanAdmissionBindingV1::new(
+        match iroha_core::torii_proxy::new_queue_plan_admission_binding(
             app.state.network_id_ref(),
             &transaction,
             &routing_plan,
@@ -25261,9 +25333,12 @@ async fn execute_torii_transaction_via_proxy(
             }
         }
     };
-    if let Err(error) =
-        binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)
-    {
+    if let Err(error) = iroha_core::torii_proxy::validate_queue_plan_binding_for_request(
+        &binding,
+        app.state.network_id_ref(),
+        &transaction,
+        &routing_plan,
+    ) {
         return torii_proxy_error_response(
             StatusCode::CONFLICT,
             "queue_plan_admission_binding_mismatch",
@@ -27586,6 +27661,15 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                     "QueuePlanSynced proxy request carries an ordinary signature-bound admission intent",
                 );
             }
+            // This receiver can be called without the ingress aggregator. Size
+            // the complete original input before queue ownership or journal I/O.
+            if let Some(binding) = admission_binding.as_ref() {
+                if let Some(response) =
+                    queue_plan_complete_input_capacity_error(&transaction, binding)
+                {
+                    return response;
+                }
+            }
             let ingress_plan = match validate_proxy_routing_plan_hint(expected_plan) {
                 Ok(plan) => plan,
                 Err(error) => {
@@ -27639,11 +27723,14 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         "QueuePlanSynced request ID is not the deterministic network/entrypoint identity",
                                     );
                                 }
-                                if let Err(error) = admission_binding.validate_for_request(
-                                    app.state.network_id_ref(),
-                                    accepted_tx.entrypoint(),
-                                    &routing_plan,
-                                ) {
+                                if let Err(error) =
+                                    iroha_core::torii_proxy::validate_queue_plan_binding_for_request(
+                                        &admission_binding,
+                                        app.state.network_id_ref(),
+                                        accepted_tx.entrypoint(),
+                                        &routing_plan,
+                                    )
+                                {
                                     return torii_proxy_error_response(
                                         StatusCode::BAD_REQUEST,
                                         "invalid_proxy_request",
@@ -27763,7 +27850,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         let expected_binding = expected_admission_binding
                                             .expect("strict admission retained its binding");
                                         let durable_binding =
-                                            QueuePlanAdmissionBindingV1::try_from_durable_admission(
+                                            iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(
                                                 &durable_claim,
                                             );
                                         if durable_binding.as_ref() != Ok(&expected_binding) {

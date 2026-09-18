@@ -101,7 +101,7 @@ impl LifecycleIngressOccurrenceVerdict {
 #[derive(Debug)]
 pub(crate) enum LifecycleIngressSelectorError {
     /// The queue could not mint an exact pre-cut witness for the target.
-    QueueCutCapture,
+    QueueCutCapture(FairIngressQueueCutError),
     /// The target queue cut belongs to another height context.
     ForeignContext,
     /// The queue changed while the executor classified its immutable carriers.
@@ -148,7 +148,7 @@ impl LifecycleIngressSelectorError {
     /// Render the exact fail-closed selector reason without discarding its payload.
     pub(crate) fn detail(&self) -> String {
         match self {
-            Self::QueueCutCapture => "queue cut capture failed".to_owned(),
+            Self::QueueCutCapture(error) => format!("queue cut capture failed: {error:?}"),
             Self::ForeignContext => "queue cut belongs to another height context".to_owned(),
             Self::QueueCutChanged => "queue cut changed during executor classification".to_owned(),
             Self::InvalidOccurrenceIdentity { ordinal } => {
@@ -479,10 +479,10 @@ impl CertifiedFetchBodyPersistencePreparationError {
         self.prepared
     }
 }
-/// Retryable failure before the LedgerV1 publication call begins.
+/// Exact failure before the LedgerV1 publication call begins.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
-enum CertifiedFetchBodyPersistenceRetryFailure {
+enum CertifiedFetchBodyPersistencePreLedgerFailure {
     FreshSelector(LifecycleIngressSelectorError),
     Selector(CertifiedFetchReadyPublicationError),
     CompletionIdentity(&'static str),
@@ -493,6 +493,7 @@ enum CertifiedFetchBodyPersistenceRetryFailure {
     Service(String),
     RefinementRejected,
     OutputClosed,
+    ProductiveIngress(CertifiedFetchPreLedgerProductiveIngressErrorV1),
 }
 fn retain_historical_body_pipeline_owner<T>(
     checked_transition: Option<
@@ -504,12 +505,12 @@ fn retain_historical_body_pipeline_owner<T>(
         CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>,
         T,
     ),
-    (CertifiedFetchBodyPersistenceRetryFailure, T),
+    (CertifiedFetchBodyPersistencePreLedgerFailure, T),
 > {
     match checked_transition {
         Some(checked_transition) => Ok((checked_transition, owner)),
         None => Err((
-            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected,
+            CertifiedFetchBodyPersistencePreLedgerFailure::RefinementRejected,
             owner,
         )),
     }
@@ -521,95 +522,137 @@ fn retain_historical_body_pipeline_owner<T>(
 /// queue coordinates, or decomposed response parts.
 #[must_use = "the persisted response still owns its exact retry authority"]
 pub(crate) struct CertifiedFetchBodyPersistenceRetryError {
-    failure: CertifiedFetchBodyPersistenceRetryFailure,
+    failure: CertifiedFetchBodyPersistencePreLedgerFailure,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
 }
-impl CertifiedFetchBodyPersistenceRetryError {
-    /// Stable diagnostic category for the retryable pre-ledger rejection.
+impl CertifiedFetchBodyPersistencePreLedgerFailure {
+    /// The only transient Phase-B dependency is a concurrently changed queue cut.
+    /// Its mutation has already occurred; the next turn captures a fresh cut.
+    /// Exact owner/identity, registry, service and refinement failures cannot be
+    /// repaired by replaying this unchanged authenticated completion.
+    fn permits_fresh_queue_retry(&self) -> bool {
+        matches!(
+            self,
+            Self::FreshSelector(LifecycleIngressSelectorError::QueueCutChanged)
+                | Self::FreshSelector(LifecycleIngressSelectorError::QueueCutCapture(
+                    FairIngressQueueCutError::QueueCutChanged
+                ))
+                | Self::Queue(FairIngressQueueCutError::QueueCutChanged)
+        )
+    }
+
+    /// Stable diagnostic category for the pre-ledger rejection.
     pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
-            CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(_) => "fresh selector",
-            CertifiedFetchBodyPersistenceRetryFailure::Selector(_) => "selector authority",
-            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(_) => {
+        match self {
+            CertifiedFetchBodyPersistencePreLedgerFailure::FreshSelector(_) => "fresh selector",
+            CertifiedFetchBodyPersistencePreLedgerFailure::Selector(_) => "selector authority",
+            CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(_) => {
                 "persistence completion identity"
             }
-            CertifiedFetchBodyPersistenceRetryFailure::Executor(_) => "executor preflight",
-            CertifiedFetchBodyPersistenceRetryFailure::Queue(_) => "queue preflight",
-            CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => "coordinator mutation",
-            CertifiedFetchBodyPersistenceRetryFailure::Registry(_) => "registry preflight",
-            CertifiedFetchBodyPersistenceRetryFailure::Service(_) => "service preflight",
-            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected => {
+            CertifiedFetchBodyPersistencePreLedgerFailure::Executor(_) => "executor preflight",
+            CertifiedFetchBodyPersistencePreLedgerFailure::Queue(_) => "queue preflight",
+            CertifiedFetchBodyPersistencePreLedgerFailure::CoordinatorStutter => {
+                "coordinator mutation"
+            }
+            CertifiedFetchBodyPersistencePreLedgerFailure::Registry(_) => "registry preflight",
+            CertifiedFetchBodyPersistencePreLedgerFailure::Service(_) => "service preflight",
+            CertifiedFetchBodyPersistencePreLedgerFailure::RefinementRejected => {
                 "historical body refinement"
             }
-            CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => "consensus output closed",
+            CertifiedFetchBodyPersistencePreLedgerFailure::OutputClosed => {
+                "consensus output closed"
+            }
+            CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(_) => {
+                "queued leader-wire ownership"
+            }
         }
-    }
-    /// Recover the whole move-only completion for a later fresh-selector retry.
-    pub(crate) fn into_completion(self) -> PreparedCertifiedFetchBodyPersistenceCompletion {
-        self.completion
     }
     /// Preserve the underlying typed error for diagnostics without exposing it.
     pub(crate) fn detail(&self) -> String {
-        match &self.failure {
-            CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(error) => {
+        match self {
+            CertifiedFetchBodyPersistencePreLedgerFailure::FreshSelector(error) => {
                 format!("{error:?}")
             }
-            CertifiedFetchBodyPersistenceRetryFailure::Selector(error) => format!("{error:?}"),
-            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(detail) => {
+            CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error) => format!("{error:?}"),
+            CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(detail) => {
                 (*detail).to_owned()
             }
-            CertifiedFetchBodyPersistenceRetryFailure::Executor(error) => error.to_string(),
-            CertifiedFetchBodyPersistenceRetryFailure::Queue(error) => format!("{error:?}"),
-            CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => {
+            CertifiedFetchBodyPersistencePreLedgerFailure::Executor(error) => error.to_string(),
+            CertifiedFetchBodyPersistencePreLedgerFailure::Queue(error) => format!("{error:?}"),
+            CertifiedFetchBodyPersistencePreLedgerFailure::CoordinatorStutter => {
                 "waiting Fetch did not stage one new Ready successor".to_owned()
             }
-            CertifiedFetchBodyPersistenceRetryFailure::Registry(error) => format!("{error:?}"),
-            CertifiedFetchBodyPersistenceRetryFailure::Service(error) => error.clone(),
-            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected => {
+            CertifiedFetchBodyPersistencePreLedgerFailure::Registry(error) => format!("{error:?}"),
+            CertifiedFetchBodyPersistencePreLedgerFailure::Service(error) => error.clone(),
+            CertifiedFetchBodyPersistencePreLedgerFailure::RefinementRejected => {
                 "durable certified Fetch completion failed its historical body-pipeline refinement"
                     .to_owned()
             }
-            CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => {
+            CertifiedFetchBodyPersistencePreLedgerFailure::OutputClosed => {
                 "consensus output admission is closed".to_owned()
+            }
+            CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error) => {
+                match error {
+                    CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership => {
+                        "selected certified-Fetch response lost its fair-ingress ownership"
+                    }
+                    CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership => {
+                        "selected certified-Fetch response changed its fair-ingress ownership"
+                    }
+                    CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken => {
+                        "selected certified-Fetch response lacks its durable Ingress token"
+                    }
+                    CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound => {
+                        "selected certified-Fetch response was already transferred to Runtime"
+                    }
+                }
+                .to_owned()
             }
         }
     }
 }
-/// Structurally invalid productive ingress discovered before LedgerV1.
+impl CertifiedFetchBodyPersistenceRetryError {
+    /// Stable diagnostic category for a changed queue snapshot.
+    pub(crate) const fn reason(&self) -> &'static str {
+        self.failure.reason()
+    }
+    /// Explain the queue change which permits the next fresh selector.
+    pub(crate) fn detail(&self) -> String {
+        self.failure.detail()
+    }
+    /// Recover the whole completion only after a changing queue dependency.
+    pub(crate) fn into_completion(self) -> PreparedCertifiedFetchBodyPersistenceCompletion {
+        debug_assert!(self.failure.permits_fresh_queue_retry());
+        self.completion
+    }
+}
+/// Permanent Phase-B rejection before LedgerV1 publication.
 ///
-/// No durable completion publication was attempted, but the unchanged
-/// physical carrier cannot become valid through an in-process retry. The
-/// complete worker outcome remains owned only for restart diagnostics.
-#[must_use = "invalid productive ingress requires process restart"]
+/// Retain the whole completion for diagnostics while closing output. There is
+/// no in-process completion extraction: unchanged invalid ownership is not a
+/// retry dependency, and restart is not counted as successful liveness.
+#[must_use = "permanent pre-ledger failure requires process restart"]
 pub(crate) struct CertifiedFetchBodyPersistencePreLedgerRestartError {
-    failure: CertifiedFetchPreLedgerProductiveIngressErrorV1,
+    failure: CertifiedFetchBodyPersistencePreLedgerFailure,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
 }
 impl CertifiedFetchBodyPersistencePreLedgerRestartError {
-    /// Exact structural invariant which forced the pre-ledger restart.
-    pub(crate) const fn failure(&self) -> CertifiedFetchPreLedgerProductiveIngressErrorV1 {
-        self.failure
-    }
-    /// Stable diagnostic category for the non-retryable pre-ledger boundary.
-    pub(crate) const fn reason(&self) -> &'static str {
-        "queued leader-wire ownership"
-    }
-    /// Explain why the same physical completion cannot become retryable.
-    pub(crate) const fn detail(&self) -> &'static str {
-        match self.failure {
-            CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership => {
-                "selected certified-Fetch response lost its fair-ingress ownership"
-            }
-            CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership => {
-                "selected certified-Fetch response changed its fair-ingress ownership"
-            }
-            CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken => {
-                "selected certified-Fetch response lacks its durable Ingress token"
-            }
-            CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound => {
-                "selected certified-Fetch response was already transferred to Runtime"
-            }
+    /// Exact productive ingress failure, when that boundary rejected the owner.
+    pub(crate) const fn productive_ingress_failure(
+        &self,
+    ) -> Option<CertifiedFetchPreLedgerProductiveIngressErrorV1> {
+        match &self.failure {
+            CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error) => Some(*error),
+            _ => None,
         }
+    }
+    /// Stable category of the permanent pre-ledger rejection.
+    pub(crate) const fn reason(&self) -> &'static str {
+        self.failure.reason()
+    }
+    /// Explain why the unchanged physical completion cannot be retried.
+    pub(crate) fn detail(&self) -> String {
+        self.failure.detail()
     }
     /// Return the still-indexed existing executor work identity.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
@@ -958,10 +1001,10 @@ impl CertifiedFetchBodyPersistenceRestartError {
 #[must_use = "retryable and restart-only failures have different ownership rules"]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
-    /// No ledger publication was invoked; the whole completion may be retried.
+    /// A queue cut changed before publication; recapture it on the next turn.
     Retry(CertifiedFetchBodyPersistenceRetryError),
-    /// The queued productive owner is structurally invalid; no publication was
-    /// invoked, but retrying the same bytes cannot repair it.
+    /// Exact ownership is permanently invalid; no publication was invoked.
+    /// Retrying the same completion cannot repair it.
     RestartRequiredBeforeLedger(CertifiedFetchBodyPersistencePreLedgerRestartError),
     /// Ledger publication was invoked; output is closed and retry is forbidden.
     RestartRequired(CertifiedFetchBodyPersistenceRestartError),
@@ -1026,6 +1069,24 @@ impl PreparedCertifiedFetchReadyMutation<'_> {
     #[cfg(test)]
     fn target_for_test(&self) -> &LifecycleCoordinator {
         self.target
+    }
+    fn cancel_excluded_decision(
+        &mut self,
+        exclusion: &crate::sumeragi::v2_effects::CertifiedFetchDecisionExclusionV1,
+        receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    ) -> Result<(), CertifiedFetchReadyPublicationError> {
+        if !exclusion.matches_durable_body(receipt) {
+            return Err(CertifiedFetchReadyPublicationError::InvalidCandidateBinding);
+        }
+        let ordinal = self.location.ordinal();
+        if self.next.records.get(&ordinal).is_none_or(|record| {
+            record.work_class != LifecycleWorkClass::Fetch || record.state != LifecycleState::Ready
+        }) {
+            return Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex);
+        }
+        self.next
+            .finish_terminal(ordinal, super::TerminalOutcome::Cancelled)
+            .map_err(|_| CertifiedFetchReadyPublicationError::CoordinatorFaulted)
     }
     fn commit(self) {
         *self.target = self.next;
@@ -1949,15 +2010,15 @@ impl PreparedLifecycleIngressSelector {
         &self,
         id: CertifiedFetchBodyPersistenceId,
         authenticated: &AuthenticatedCertifiedBodyResponse,
-    ) -> Result<&PreparedClaimedResponseFamily, CertifiedFetchBodyPersistenceRetryFailure> {
+    ) -> Result<&PreparedClaimedResponseFamily, CertifiedFetchBodyPersistencePreLedgerFailure> {
         let ready = self
             .selected_certified_fetch_ready_authority()
-            .map_err(CertifiedFetchBodyPersistenceRetryFailure::Selector)?;
+            .map_err(CertifiedFetchBodyPersistencePreLedgerFailure::Selector)?;
         if ready.ingress_identity != id.ingress_identity
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
             return Err(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "persisted queue identity or dequeue disposition differs from the fresh selector",
                 ),
             );
@@ -1966,12 +2027,12 @@ impl PreparedLifecycleIngressSelector {
             .claimed_response_families
             .get(&ready.request_hash)
             .ok_or(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "fresh selector no longer retains the persisted request family",
                 ),
             )?;
         let (response, responder) = family.authenticated_response().ok_or(
-            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+            CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                 "fresh selector no longer authenticates the persisted response",
             ),
         )?;
@@ -1987,7 +2048,7 @@ impl PreparedLifecycleIngressSelector {
                 .matches_authenticated_response(response, responder)
         {
             return Err(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "persisted family work, response, or responder differs from the fresh selector",
                 ),
             );
@@ -2084,29 +2145,30 @@ impl PreparedLifecycleIngressSelector {
         executor: &V2EffectExecutor<SerializedV2Runtime>,
         id: CertifiedFetchBodyPersistenceId,
         authenticated: &AuthenticatedCertifiedBodyResponse,
-    ) -> Result<PreparedCertifiedFetchExactDequeue, CertifiedFetchBodyPersistenceRetryFailure> {
+    ) -> Result<PreparedCertifiedFetchExactDequeue, CertifiedFetchBodyPersistencePreLedgerFailure>
+    {
         let revalidated = {
             let family = self.persisted_family(id, authenticated)?;
             let (response, responder) = family
                 .authenticated_response()
-                .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                .ok_or(CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "fresh selector no longer authenticates the persisted response during dequeue preflight",
                 ))?;
             executor
                 .revalidate_certified_response_priority_candidate(
                     family.candidate.ordinary().ok_or(
-                        CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                        CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                             "fresh selector changed the persisted response candidate family",
                         ),
                     )?,
                     response,
                     responder,
                 )
-                .map_err(CertifiedFetchBodyPersistenceRetryFailure::Executor)?
+                .map_err(CertifiedFetchBodyPersistencePreLedgerFailure::Executor)?
         };
         if !revalidated {
             return Err(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "persisted response candidate failed its final executor revalidation",
                 ),
             );
@@ -2469,44 +2531,58 @@ impl LifecycleCoordinator {
             authenticated,
             receipt,
         } = completion;
-        macro_rules! retry {
-            ($failure:expr, $receipt:expr) => {
-                return Err(CertifiedFetchBodyPersistenceCompletionError::Retry(
-                    CertifiedFetchBodyPersistenceRetryError {
-                        failure: $failure,
-                        completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
-                            CertifiedFetchBodyPersistenceCompletion {
-                                id,
-                                authenticated,
-                                receipt: $receipt,
-                            },
-                            work_ack,
-                        ),
+        let output_guard = services.lifecycle_output_guard();
+        macro_rules! reject_before_ledger {
+            ($failure:expr, $receipt:expr) => {{
+                let failure = $failure;
+                let completion = PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                    CertifiedFetchBodyPersistenceCompletion {
+                        id,
+                        authenticated,
+                        receipt: $receipt,
                     },
-                ))
-            };
+                    work_ack,
+                );
+                if failure.permits_fresh_queue_retry() {
+                    return Err(CertifiedFetchBodyPersistenceCompletionError::Retry(
+                        CertifiedFetchBodyPersistenceRetryError {
+                            failure,
+                            completion,
+                        },
+                    ));
+                }
+                output_guard.close_admission_for_restart();
+                return Err(
+                    CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+                        CertifiedFetchBodyPersistencePreLedgerRestartError {
+                            failure,
+                            completion,
+                        },
+                    ),
+                );
+            }};
         }
         let selector = match executor.prepare_lifecycle_ingress_selector(
             ingress,
             id.ingress_identity.physical_admission_ordinal(),
         ) {
             Ok(selector) => selector,
-            Err(error) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(error),
+            Err(error) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::FreshSelector(error),
                 receipt
             ),
         };
         let ready_authority = match selector.selected_certified_fetch_ready_authority() {
             Ok(authority) => authority,
-            Err(error) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+            Err(error) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error),
                 receipt
             ),
         };
         let location = match self.certified_fetch_current_location(ready_authority) {
             Ok(location) => location,
-            Err(error) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+            Err(error) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error),
                 receipt
             ),
         };
@@ -2514,33 +2590,37 @@ impl LifecycleCoordinator {
             .prepare_selected_certified_fetch_completion(registry.registry_mut(), location)
         {
             Ok(prepared) => prepared,
-            Err(CertifiedFetchCompletionPreparationError::ReadyAuthority(error)) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
-                receipt
-            ),
-            Err(CertifiedFetchCompletionPreparationError::Registry(error)) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Registry(error),
-                receipt
-            ),
+            Err(CertifiedFetchCompletionPreparationError::ReadyAuthority(error)) => {
+                reject_before_ledger!(
+                    CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error),
+                    receipt
+                )
+            }
+            Err(CertifiedFetchCompletionPreparationError::Registry(error)) => {
+                reject_before_ledger!(
+                    CertifiedFetchBodyPersistencePreLedgerFailure::Registry(error),
+                    receipt
+                )
+            }
         };
         let durable_registry = match registry_prepared.bind_durable_body_receipt(receipt) {
             Ok(prepared) => prepared,
-            Err((error, receipt)) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Registry(error),
+            Err((error, receipt)) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::Registry(error),
                 receipt
             ),
         };
-        let ready = match self.prepare_certified_fetch_ready_projection(
+        let mut ready = match self.prepare_certified_fetch_ready_projection(
             ready_authority,
             durable_registry.ready_projection(),
         ) {
             Ok(transition @ PreparedCertifiedFetchReadyTransition::Mutation(_)) => transition,
-            Ok(PreparedCertifiedFetchReadyTransition::Stutter(_)) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter,
+            Ok(PreparedCertifiedFetchReadyTransition::Stutter(_)) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CoordinatorStutter,
                 durable_registry.abort_before_dequeue()
             ),
-            Err(error) => retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+            Err(error) => reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error),
                 durable_registry.abort_before_dequeue()
             ),
         };
@@ -2548,13 +2628,13 @@ impl LifecycleCoordinator {
             Ok(family) => family,
             Err(error) => {
                 let receipt = durable_registry.abort_before_dequeue();
-                retry!(error, receipt);
+                reject_before_ledger!(error, receipt);
             }
         };
         let Some(candidate) = family.candidate.ordinary() else {
             let receipt = durable_registry.abort_before_dequeue();
-            retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+            reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "fresh selector changed the persisted response candidate family",
                 ),
                 receipt
@@ -2568,40 +2648,34 @@ impl LifecycleCoordinator {
             Ok(prepared) => prepared,
             Err(error) => {
                 let receipt = durable_registry.abort_before_dequeue();
-                retry!(
-                    CertifiedFetchBodyPersistenceRetryFailure::Executor(error),
+                reject_before_ledger!(
+                    CertifiedFetchBodyPersistencePreLedgerFailure::Executor(error),
                     receipt
                 );
             }
         };
-        let output_guard = services.lifecycle_output_guard();
-        macro_rules! restart_invalid_leader_wire {
-            ($failure:expr, $receipt:expr) => {{
-                output_guard.close_admission_for_restart();
-                return Err(
-                    CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
-                        CertifiedFetchBodyPersistencePreLedgerRestartError {
-                            failure: $failure,
-                            completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
-                                CertifiedFetchBodyPersistenceCompletion {
-                                    id,
-                                    authenticated,
-                                    receipt: $receipt,
-                                },
-                                work_ack,
-                            ),
-                        },
-                    ),
+        let decision_exclusion = executor_prepared.decision_exclusion().copied();
+        if let Some(exclusion) = decision_exclusion.as_ref() {
+            let PreparedCertifiedFetchReadyTransition::Mutation(staged) = &mut ready else {
+                unreachable!("Phase B requires one staged response replacement")
+            };
+            if let Err(error) =
+                staged.cancel_excluded_decision(exclusion, durable_registry.durable_body_receipt())
+            {
+                let receipt = durable_registry.abort_before_dequeue();
+                reject_before_ledger!(
+                    CertifiedFetchBodyPersistencePreLedgerFailure::Selector(error),
+                    receipt
                 );
-            }};
+            }
         }
         let service_prepared =
             match services.prepare_certified_body_fetch_owner_removal(executor_prepared.task()) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     let receipt = durable_registry.abort_before_dequeue();
-                    retry!(
-                        CertifiedFetchBodyPersistenceRetryFailure::Service(error),
+                    reject_before_ledger!(
+                        CertifiedFetchBodyPersistencePreLedgerFailure::Service(error),
                         receipt
                     );
                 }
@@ -2611,7 +2685,7 @@ impl LifecycleCoordinator {
                 Ok(family) => family,
                 Err(error) => {
                     let receipt = durable_registry.abort_before_dequeue();
-                    retry!(error, receipt);
+                    reject_before_ledger!(error, receipt);
                 }
             };
             let ingress_mode = match certified_fetch_preledger_ingress_mode(family.inbound.as_ref())
@@ -2619,7 +2693,10 @@ impl LifecycleCoordinator {
                 Ok(mode) => mode,
                 Err(error) => {
                     let receipt = durable_registry.abort_before_dequeue();
-                    restart_invalid_leader_wire!(error, receipt);
+                    reject_before_ledger!(
+                        CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error),
+                        receipt
+                    );
                 }
             };
             (
@@ -2633,8 +2710,8 @@ impl LifecycleCoordinator {
         };
         if !selected_response_matches {
             let receipt = durable_registry.abort_before_dequeue();
-            retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+            reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "durable registry replacement differs from the fresh selected response",
                 ),
                 receipt
@@ -2646,8 +2723,8 @@ impl LifecycleCoordinator {
             .map(HashOf::new)
         else {
             let receipt = durable_registry.abort_before_dequeue();
-            retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+            reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::CompletionIdentity(
                     "selected Fetch service task no longer owns a certified request",
                 ),
                 receipt
@@ -2758,26 +2835,34 @@ impl LifecycleCoordinator {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     let receipt = durable_registry.abort_before_dequeue();
-                    retry!(error, receipt);
+                    reject_before_ledger!(error, receipt);
                 }
             };
-        let checked_transition =
-            check_production_historical_body_pipeline_transition(historical_trace);
-        let (checked_transition, durable_registry) =
-            match retain_historical_body_pipeline_owner(checked_transition, durable_registry) {
-                Ok(retained) => retained,
-                Err((failure, durable_registry)) => {
-                    let receipt = durable_registry.abort_before_dequeue();
-                    retry!(failure, receipt);
-                }
-            };
-        let _authorized_historical_pipeline = checked_transition.into_projection();
+        let durable_registry = if decision_exclusion.is_none() {
+            let checked_transition =
+                check_production_historical_body_pipeline_transition(historical_trace);
+            let (checked_transition, durable_registry) =
+                match retain_historical_body_pipeline_owner(checked_transition, durable_registry) {
+                    Ok(retained) => retained,
+                    Err((failure, durable_registry)) => {
+                        let receipt = durable_registry.abort_before_dequeue();
+                        reject_before_ledger!(failure, receipt);
+                    }
+                };
+            let _authorized_historical_pipeline = checked_transition.into_projection();
+            durable_registry
+        } else {
+            // The exact executor-minted Decision exclusion authorizes a terminal
+            // cancellation, not the historical Ready-successor transition above.
+            // TODO: bind this distinct cancellation transition to the proof ledger.
+            durable_registry
+        };
         let exact_dequeue = match exact_dequeue.lock(ingress) {
             Ok(locked) => locked,
             Err((error, _retained)) => {
                 let receipt = durable_registry.abort_before_dequeue();
-                retry!(
-                    CertifiedFetchBodyPersistenceRetryFailure::Queue(error),
+                reject_before_ledger!(
+                    CertifiedFetchBodyPersistencePreLedgerFailure::Queue(error),
                     receipt
                 );
             }
@@ -2785,8 +2870,8 @@ impl LifecycleCoordinator {
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             drop(exact_dequeue.unlock_retaining());
             let receipt = durable_registry.abort_before_dequeue();
-            retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::OutputClosed,
+            reject_before_ledger!(
+                CertifiedFetchBodyPersistencePreLedgerFailure::OutputClosed,
                 receipt
             );
         };
@@ -2822,7 +2907,11 @@ impl LifecycleCoordinator {
                     )
                 })?;
         let durable_body = durable_registry.durable_body_receipt().clone();
-        durable_registry.commit_after_exact_dequeue(dequeued);
+        if let Some(exclusion) = decision_exclusion.as_ref() {
+            durable_registry.commit_cancelled_after_exact_dequeue(dequeued, exclusion);
+        } else {
+            durable_registry.commit_after_exact_dequeue(dequeued);
+        }
         match ready {
             PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit(),
             PreparedCertifiedFetchReadyTransition::Stutter(_) => {}
@@ -2839,7 +2928,9 @@ impl LifecycleCoordinator {
                 );
             }
         }
-        if let Err(error) = services.retry_locked_candidate_after_durable_body(subject) {
+        if decision_exclusion.is_none()
+            && let Err(error) = services.retry_locked_candidate_after_durable_body(subject)
+        {
             return Err(
                 CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(format!(
                     "failed to wake the exact locked-body acquisition after certified Fetch persistence: {error}"
@@ -3373,7 +3464,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<PreparedLifecycleIngressSelector, LifecycleIngressSelectorError> {
         let cut = ingress
             .capture_lifecycle_queue_cut(target_physical_ordinal)
-            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
+            .map_err(LifecycleIngressSelectorError::QueueCutCapture)?;
         self.capture_lifecycle_ingress_selector(cut)
     }
     /// Classify one exact response occurrence without consuming its queue cut.
@@ -3385,7 +3476,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<SelectedCertifiedResponsePriorityV1, LifecycleIngressSelectorError> {
         let cut = ingress
             .capture_lifecycle_queue_cut(target_physical_ordinal)
-            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
+            .map_err(LifecycleIngressSelectorError::QueueCutCapture)?;
         self.classify_selected_certified_response_priority(&cut)
     }
     /// Exercise recovered-response discovery through the live fair-turn boundaries.
@@ -3411,7 +3502,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                     terminal_subject,
                 )
             })
-            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?
+            .map_err(LifecycleIngressSelectorError::QueueCutCapture)?
         else {
             return Ok(None);
         };
@@ -3420,7 +3511,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         }
         let cut = match cut
             .narrow_to_lifecycle(lifecycle_context_from_wire(self.context()))
-            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?
+            .map_err(|(error, _cut)| LifecycleIngressSelectorError::QueueCutCapture(error))?
         {
             FairIngressTurnContextCut::Ordinary(_) => return Ok(None),
             FairIngressTurnContextCut::Lifecycle(cut) => cut,
@@ -4740,6 +4831,48 @@ mod tests {
         certified_fetch_completion_source_keeps_the_durable_cut_ordered
     );
     #[test]
+    fn certified_persistence_retry_requires_an_already_changed_queue_cut() {
+        use CertifiedFetchBodyPersistencePreLedgerFailure as Failure;
+        let transient = [
+            Failure::FreshSelector(LifecycleIngressSelectorError::QueueCutChanged),
+            Failure::FreshSelector(LifecycleIngressSelectorError::QueueCutCapture(
+                FairIngressQueueCutError::QueueCutChanged,
+            )),
+            Failure::Queue(FairIngressQueueCutError::QueueCutChanged),
+        ];
+        for failure in transient {
+            assert!(failure.permits_fresh_queue_retry(), "{failure:?}");
+        }
+        let permanent = [
+            Failure::FreshSelector(LifecycleIngressSelectorError::QueueCutCapture(
+                FairIngressQueueCutError::MissingTarget,
+            )),
+            Failure::FreshSelector(LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
+                ordinal: 1,
+            }),
+            Failure::FreshSelector(LifecycleIngressSelectorError::CandidateRevalidationDrift {
+                ordinal: 1,
+            }),
+            Failure::Selector(CertifiedFetchReadyPublicationError::InvalidSelectedOccurrence),
+            Failure::Selector(CertifiedFetchReadyPublicationError::WrongWaitGeneration),
+            Failure::CompletionIdentity("wrong work or response"),
+            Failure::Executor(EffectTransportError::UnknownWork(EffectWorkId::for_test(1))),
+            Failure::Queue(FairIngressQueueCutError::BlockedTarget),
+            Failure::CoordinatorStutter,
+            Failure::Registry(CertifiedFetchCompletionError::MissingIncumbent),
+            Failure::Service("exact service owner absent".to_owned()),
+            Failure::RefinementRejected,
+            Failure::OutputClosed,
+            Failure::ProductiveIngress(
+                CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership,
+            ),
+        ];
+        for failure in permanent {
+            assert!(!failure.permits_fresh_queue_retry(), "{failure:?}");
+        }
+    }
+
+    #[test]
     fn certified_response_maps_to_formal_untrusted_resource_source() {
         assert!(lifecycle_ingress_resource_is_untrusted(
             FairV2IngressSourceClass::Validator,
@@ -4765,11 +4898,11 @@ mod tests {
         let Err((failure, retained)) =
             retain_historical_body_pipeline_owner(rejected, MoveOnlyOwner(0xC3))
         else {
-            panic!("an invalid historical-body projection must remain retryable")
+            panic!("an invalid historical-body projection must preserve ownership for diagnostics")
         };
         assert!(matches!(
             failure,
-            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected
+            CertifiedFetchBodyPersistencePreLedgerFailure::RefinementRejected
         ));
         assert_eq!(retained.0, 0xC3);
     }

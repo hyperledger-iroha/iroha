@@ -153,7 +153,7 @@ fn live_autonomous_merge_requires_exact_pending_queue_plan_owner_on_consensus_st
         absent
     );
 
-    let conflict = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+    let conflict = crate::torii_proxy::new_queue_plan_admission_binding(
         state.network_id_ref(),
         &lane.entrypoints[0],
         &route,
@@ -311,6 +311,12 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
                             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
                             binding_hash: Hash::new(b"conflicting restored registry owner"),
                         },
+                        State::decode_exact_queue_plan_admission_registry_record(
+                            &key,
+                            world.smart_contract_state.get(&key).unwrap(),
+                        )
+                        .unwrap()
+                        .priority,
                     )
                     .expect("canonical conflicting registry value"),
                 );

@@ -229,6 +229,7 @@ impl Pool {
     /// Largest complete canonical frame guaranteed by this class's private P
     /// partition when its own byte/count owners are available. All three byte
     /// allocations are charged; this is never a maximum-Topic-size promise.
+    #[cfg(test)]
     pub(super) fn private_maximum(&self, class: Class) -> Option<usize> {
         if class.is_low() {
             return None;
@@ -361,7 +362,7 @@ impl BoundSource {
             scratch: Some(scratch),
             retention: GrantRetention {
                 class,
-                pool: Arc::clone(&self.pool),
+                _pool: Arc::clone(&self.pool),
                 _credits: self.credits.clone(), // strong registry owner survives all tenures
                 _partition: Arc::clone(&self.partition),
                 _credit: credit,
@@ -380,7 +381,7 @@ impl BoundSource {
 #[derive(Debug)]
 pub(super) struct GrantRetention {
     pub(super) class: Class,
-    pool: Arc<Pool>,
+    _pool: Arc<Pool>,
     _credits: AuthenticatedSourceCredits,
     _partition: Arc<SourcePartition>,
     _credit: AuthenticatedSourceCreditGuard,

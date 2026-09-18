@@ -37,6 +37,7 @@ fn modulus_v1(limb: usize) -> Result<u64, RnsNativeQpcsFieldWireErrorV1> {
 }
 
 /// Encode one pair without coefficient reduction, padding, or a second layout.
+#[cfg(test)]
 pub(super) fn encode_fq2_v1(
     limb: usize,
     value: Fq2V1,

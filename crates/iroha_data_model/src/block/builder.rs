@@ -85,7 +85,12 @@ impl BlockBuilder {
     }
     /// Push a time trigger and update the entrypoint Merkle tree.
     pub fn push_time_trigger(&mut self, trig: TimeTriggerEntrypoint) -> usize {
-        let idx = self.external_entrypoints.len() + self.time_triggers.len();
+        let native_count = self
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.native_lane_decisions.as_ref())
+            .map_or(0, |batch| batch.groups.len());
+        let idx = self.external_entrypoints.len() + native_count + self.time_triggers.len();
         let h: HashOf<TransactionEntrypoint> = trig.hash_as_entrypoint();
         self.entry_merkle.add(h);
         self.time_triggers.push(trig);
@@ -123,7 +128,41 @@ impl BlockBuilder {
     }
     fn finalize_header(&mut self) {
         self.normalize_empty_da_bundles();
-        self.header.merkle_root = self.entry_merkle.root();
+        if let Some(batch) = self
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.native_lane_decisions.as_ref())
+        {
+            let prefix = self
+                .external_entrypoints
+                .iter()
+                .map(TransactionEntrypoint::hash)
+                .chain(
+                    batch
+                        .groups
+                        .iter()
+                        .map(|group| group.payload.input.entrypoint.hash()),
+                )
+                .collect::<Vec<_>>();
+            // Native source membership is bound by execution_context_hash, not
+            // copied into the physical-external consensus root.
+            self.header.merkle_root = self
+                .external_entrypoints
+                .iter()
+                .map(TransactionEntrypoint::hash)
+                .collect::<MerkleTree<_>>()
+                .root();
+            self.entry_merkle = prefix
+                .into_iter()
+                .chain(
+                    self.time_triggers
+                        .iter()
+                        .map(TimeTriggerEntrypoint::hash_as_entrypoint),
+                )
+                .collect();
+        } else {
+            self.header.merkle_root = self.entry_merkle.root();
+        }
         self.header.result_merkle_root = self.result_merkle.root();
         self.header
             .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
@@ -152,12 +191,20 @@ impl BlockBuilder {
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.header.set_sccp_commitment_root(root);
     }
-    /// Build a `SignedBlock` with the provided signatures.
+    /// Build untrusted structural block data with the provided signatures.
+    /// Native inputs are not execution authority; callers must attach
+    /// actual full results through the checked setter and validate the carrier.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         self.finalize_header();
         self.into_block(signatures)
     }
     fn into_block(self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
+        let native_resultless = self
+            .execution_context
+            .as_ref()
+            .is_some_and(|context| context.native_lane_decisions.is_some())
+            && self.results.is_empty()
+            && self.time_triggers.is_empty();
         let payload = BlockPayload {
             header: self.header,
             external_entrypoints: self.external_entrypoints,
@@ -189,7 +236,7 @@ impl BlockBuilder {
         SignedBlock {
             signatures,
             payload,
-            result: Some(result),
+            result: (!native_resultless).then_some(result),
         }
     }
     /// Convenience: fallibly sign the built header hash with a single validator and return the block.
@@ -197,17 +244,28 @@ impl BlockBuilder {
     /// # Errors
     ///
     /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
-    /// backend rejects the private-key material or finalized header hash.
+    /// backend rejects the private-key material or finalized header hash, or native
+    /// source/output structure is malformed.
     pub fn try_build_with_signature(
         mut self,
         signatory_index: u64,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         self.finalize_header();
-        let sig = SignatureOf::try_from_hash(private_key, self.header.hash())?;
-        let mut set = BTreeSet::new();
-        set.insert(BlockSignature::new(signatory_index, sig));
-        Ok(self.into_block(set))
+        let mut block = self.into_block(BTreeSet::new());
+        block
+            .validate_native_lane_source()
+            .map_err(iroha_crypto::Error::Signing)?;
+        if block.has_results() {
+            block
+                .validate_native_lane_results()
+                .map_err(iroha_crypto::Error::Signing)?;
+        }
+        let sig = SignatureOf::try_from_hash(private_key, block.hash())?;
+        block
+            .signatures
+            .insert(BlockSignature::new(signatory_index, sig));
+        Ok(block)
     }
     /// Convenience: sign the built header hash with a single validator and return the block.
     #[must_use]

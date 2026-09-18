@@ -108,9 +108,22 @@ pub(crate) fn persist_historical_capacity_payload_fixture(
     payload_template: &LaneExecutablePayloadV1,
     signer: &KeyPair,
 ) {
+    persist_historical_capacity_payload_fixture_at_context(
+        kura,
+        payload_template,
+        signer,
+        historical_capacity_lifecycle_context(payload_template),
+    );
+}
+/// Install the same signed custody against an actual authenticated carrier context.
+fn persist_historical_capacity_payload_fixture_at_context(
+    kura: &Kura,
+    payload_template: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+    height_context_id: HeightContextId,
+) {
     let network_id = payload_template.network_id;
     let epoch = payload_template.epoch;
-    let height_context_id = historical_capacity_lifecycle_context(payload_template);
     let local_peer = PeerId::new(signer.public_key().clone());
     signed_lifecycle_attempt_fixture!(
         "historical capacity signed custody";

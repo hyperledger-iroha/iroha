@@ -27949,10 +27949,12 @@ pub(super) mod tests {
         let (round, subject) = global_lock_for_block(&adapter, &block);
         let artifact = finality_artifact_for_block(&adapter, &keys, &block);
         let verified = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let receipt = adapter
             .kura
             .store_v2_finality_artifact(&verified)
             .expect("canonical finality");
+        assert_eq!(receipt.block_hash(), block.hash());
+        assert_eq!(receipt.subject(), subject);
         let committed = ValidBlock::committed_from_replay_signed_block(block);
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
         adapter

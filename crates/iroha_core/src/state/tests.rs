@@ -7618,7 +7618,7 @@ state_test! { sync canonical_lane_frontier_lookup_ignores_unrelated_history_and_
     let dataspace_id = DataSpaceId::new(9);
     let incarnation = Hash::new(b"bounded-frontier-incarnation");
     let descriptor_hash = Hash::new(b"bounded-frontier-descriptor");
-    let_row! { marker = AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 41, lane_block_descriptor_hash: descriptor_hash, } };
+    let_row! { marker = AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 41, lane_block_descriptor_hash: descriptor_hash,  applied_global_height: 1, } };
     let_row! { (key, payload) = State::encode_merge_lane_frontier_marker(marker).expect("canonical latest-frontier cell") };
     let mut world = World::default();
     world.smart_contract_state.insert(key, payload);
@@ -7646,7 +7646,7 @@ state_test! { sync canonical_lane_frontier_lookup_ignores_unrelated_history_and_
     );
 }
 state_test! { sync canonical_lane_frontier_rejects_bare_or_trailing_norito
-    let_row! { marker = AppliedMergeLaneFrontierMarker { version: 1, lane_id: LaneId::new(7), dataspace_id: DataSpaceId::new(9), lane_incarnation: Hash::new(b"strict-frontier-incarnation"), lane_block_height: 41, lane_block_descriptor_hash: Hash::new(b"strict-frontier-descriptor"), } };
+    let_row! { marker = AppliedMergeLaneFrontierMarker { version: 1, lane_id: LaneId::new(7), dataspace_id: DataSpaceId::new(9), lane_incarnation: Hash::new(b"strict-frontier-incarnation"), lane_block_height: 41, lane_block_descriptor_hash: Hash::new(b"strict-frontier-descriptor"),  applied_global_height: 1, } };
     let_row! { (key, mut framed) = State::encode_merge_lane_frontier_marker(marker).expect("canonical framed frontier marker") };
     let bare = marker.encode();
     assert!(matches!(
@@ -8053,7 +8053,7 @@ state_test! { sync native_derived_drain_frontier_rejects_missing_durable_applica
     let descriptor_hash = Hash::new(b"drain-native-missing-evidence-descriptor");
     let_row! { marker = AppliedNativeAmxParticipantFrontierMarker { version: 2, lane_id, dataspace_id, lane_incarnation, lane_block_height: 1, participant_view: 0, previous_lane_block_height: 0, previous_lane_block_descriptor_hash: None, lane_block_descriptor_hash: descriptor_hash, participant_proposal_hash: Hash::new(b"drain-native-missing-evidence-proposal"), participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new( b"drain-native-missing-evidence-settlement", )), application_block_height: 3, application_block_hash: HashOf::from_untyped_unchecked(Hash::new( b"drain-native-missing-evidence-application", )), source_count: 1, } };
     let_row! { (native_key, native_payload) = State::encode_native_amx_participant_frontier_marker(marker) .expect("encode Native frontier marker") };
-    let_row! { (merge_key, merge_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation, lane_block_height: 1, lane_block_descriptor_hash: descriptor_hash, }) .expect("encode replicated merge frontier marker") };
+    let_row! { (merge_key, merge_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation, lane_block_height: 1, lane_block_descriptor_hash: descriptor_hash,  applied_global_height: 1, }) .expect("encode replicated merge frontier marker") };
     let mut world = World::default();
     world
         .smart_contract_state
@@ -8266,7 +8266,7 @@ state_test! { sync lane_frontier_updates_reject_regression_without_overwriting_w
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::UNIVERSAL;
     let incarnation = Hash::new(b"monotonic-frontier-incarnation");
-    let_row! { marker = |height, label: &'static [u8]| { State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: height, lane_block_descriptor_hash: Hash::new(label), }) .expect("canonical frontier marker") } };
+    let_row! { marker = |height, label: &'static [u8]| { State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: height, lane_block_descriptor_hash: Hash::new(label),  applied_global_height: 1, }) .expect("canonical frontier marker") } };
     block
         .stage_merge_lane_frontier_markers(vec![marker(2, b"frontier-two")])
         .expect("advance latest frontier");
@@ -8299,7 +8299,7 @@ state_test! { sync merge_execution_predecessor_accepts_genesis_and_exact_frontie
     .expect("height-one merge source must bind the canonical genesis frontier");
     let_row! { (successor, _) = sample_committed_lane_block_session_for_state_test( lane_id, dataspace_id, incarnation, 6, 2, ) };
     let_row! { predecessor_hash = successor .proposal .descriptor .previous_lane_block_descriptor_hash .expect("height-two fixture has an exact predecessor hash") };
-    let_row! { (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: predecessor_hash, }) .expect("encode exact merge predecessor frontier") };
+    let_row! { (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: predecessor_hash,  applied_global_height: 1, }) .expect("encode exact merge predecessor frontier") };
     let mut world = World::default();
     world.smart_contract_state.insert(key, payload);
     State::validate_merge_execution_predecessor_against_frontier(
@@ -8313,7 +8313,7 @@ state_test! { sync merge_execution_predecessor_rejects_wrong_frontier_hash
     let dataspace_id = DataSpaceId::new(9);
     let incarnation = Hash::new(b"merge-predecessor-wrong-hash-incarnation");
     let_row! { (successor, _) = sample_committed_lane_block_session_for_state_test( lane_id, dataspace_id, incarnation, 6, 2, ) };
-    let_row! { (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: Hash::new(b"conflicting-predecessor-descriptor"), }) .expect("encode conflicting merge predecessor frontier") };
+    let_row! { (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: Hash::new(b"conflicting-predecessor-descriptor"),  applied_global_height: 1, }) .expect("encode conflicting merge predecessor frontier") };
     let mut world = World::default();
     world.smart_contract_state.insert(key, payload);
     let_row! { err = State::validate_merge_execution_predecessor_against_frontier( &world.view(), &successor.proposal.descriptor, ) .expect_err("wrong predecessor descriptor hash must fail closed") };
@@ -8337,7 +8337,7 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     let_row! { votes = keypairs .iter() .map(|keypair| { crate::lane_consensus::LaneDrainVoteV1::new_signed( body.clone(), PeerId::new(keypair.public_key().clone()), keypair.private_key(), ) .expect("valid drain vote") }) .collect::<Vec<_>>() };
     let_row! { certificate = crate::lane_consensus::aggregate_lane_drain_votes(body, validator_set, &votes) .expect("self-contained drain certificate") };
     let state = blank_test_state();
-    let_row! { (frontier_key, frontier_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 2, lane_block_descriptor_hash: descriptor_hash, }) .expect("canonical retired frontier") };
+    let_row! { (frontier_key, frontier_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 2, lane_block_descriptor_hash: descriptor_hash,  applied_global_height: 1, }) .expect("canonical retired frontier") };
     {
         let mut world = state.world.block();
         world
@@ -9902,6 +9902,32 @@ fn sample_committed_lane_block_session_with_payload_for_state_test(
 }
 include!("autonomous_predecessor_application_tests.rs");
 include!("ordinary_lane_frontier_tests.rs");
+include!("applied_lane_frontier_anchor_tests.rs");
+include!("lane_consensus_state_tests.rs");
+include!("lane_consensus_verified_tests.rs");
+include!("lane_admitted_input_tests.rs");
+include!("lane_input_body_tests.rs");
+include!("lane_input_rs16_tests.rs");
+include!("lane_consensus_wal_tests.rs");
+include!("lane_body_store_tests.rs");
+include!("lane_decision_group_tests.rs");
+include!("lane_decision_economic_tests.rs");
+include!("lane_decision_fee_tests.rs");
+include!("lane_decision_batch_tests.rs");
+include!("native_lane_fastpq_tests.rs");
+include!("native_lane_scratch_witness_tests.rs");
+include!("ordinary_common_tail_tests.rs");
+include!("pipeline_outcome_ownership_tests.rs");
+include!("native_lane_batch_replay_tests.rs");
+include!("native_lane_live_carrier_tests.rs");
+include!("native_lane_consumer_stage_tests.rs");
+include!("lane_instance_tests.rs");
+include!("lane_instance_body_tests.rs");
+include!("lane_instance_persistence_tests.rs");
+include!("lane_instance_opening_tests.rs");
+include!("lane_process_tests.rs");
+include!("lane_consensus_authority_tests.rs");
+include!("queue_plan_priority_tests.rs");
 fn lane_artifact_block_and_session_for_state_test(
     previous_block: Option<&SignedBlock>,
     lane_id: LaneId,
@@ -10860,6 +10886,9 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
 }
 state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    state
+        .prepare_configured_primary_geometry_anchor(&LaneCatalog::default())
+        .expect("admit the configured primary before testing physical geometry rollback");
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
@@ -13123,7 +13152,7 @@ state_test! { sync prospective_autoscale_retirement_blocks_block_local_queue_pla
     let mut state_block = state.block(retirement.header());
     let_row! { routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new( retired_lane_id, DataSpaceId::UNIVERSAL, )) };
     let validator_set = vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())];
-    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new( &state.network_id, &queue_plan_entrypoint_for_state_test(&state, 0x5B), &routing_plan, crate::queue::QueuePlanAdmissionContextV1 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, authority_height: 0, proposal_height: 1, predecessor_block_hash: None, routing_plan_digest: routing_plan.digest(), route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 { leg: routing_plan.coordinator_leg(), lane_incarnation: retired_lane_incarnation, validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: 1, durability_threshold: 1, validator_set, }], }, 123, ) .expect("block-local QueuePlan binding") };
+    let_row! { binding = crate::torii_proxy::new_queue_plan_admission_binding( &state.network_id, &queue_plan_entrypoint_for_state_test(&state, 0x5B), &routing_plan, crate::queue::QueuePlanAdmissionContextV1 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, authority_height: 0, proposal_height: 1, predecessor_block_hash: None, routing_plan_digest: routing_plan.digest(), route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 { leg: routing_plan.coordinator_leg(), lane_incarnation: retired_lane_incarnation, validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: 1, durability_threshold: 1, validator_set, }], }, 123, ) .expect("block-local QueuePlan binding") };
     let_row! { obligation = State::queue_plan_pending_obligation_from_binding(&binding) .expect("block-local QueuePlan obligation") };
     let route = obligation.routes[0];
     let_row! { route_member = State::queue_plan_pending_route_member_from_obligation(&obligation, route) .expect("block-local route member") };
@@ -13135,7 +13164,7 @@ state_test! { sync prospective_autoscale_retirement_blocks_block_local_queue_pla
     state_block.world.smart_contract_state.insert(
         State::queue_plan_admission_registry_marker_key(&registry_key)
             .expect("block-local registry key"),
-        State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
+        State::queue_plan_admission_registry_marker_payload(&binding.registry_value(), QueuePlanAdmissionPriorityV1::new(retirement.header().height().get(), 0).unwrap())
             .expect("block-local registry payload"),
     );
     state_block.world.smart_contract_state.insert(
@@ -13314,7 +13343,7 @@ state_test! { sync certified_autoscale_scale_in_ignores_unvalidated_wrong_incarn
     );
     drop(state_block);
     let_row! { incarnation = state .lane_incarnation(retired_lane_id) .expect("retirement lane incarnation") };
-    let_row! { (frontier_key, frontier_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id: retired_lane_id, dataspace_id: DataSpaceId::UNIVERSAL, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: Hash::new(b"frontier-after-stale-commitment"), }) .expect("mismatched replicated frontier marker") };
+    let_row! { (frontier_key, frontier_payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker { version: 1, lane_id: retired_lane_id, dataspace_id: DataSpaceId::UNIVERSAL, lane_incarnation: incarnation, lane_block_height: 1, lane_block_descriptor_hash: Hash::new(b"frontier-after-stale-commitment"),  applied_global_height: 1, }) .expect("mismatched replicated frontier marker") };
     let mut world = state.world.block();
     world
         .smart_contract_state
@@ -19216,6 +19245,7 @@ fn invalid_startup_catalog_retains_authenticated_baseline_and_corrected_retry_su
             lane_catalog: configured.clone(),
             configured_lane_catalog: configured.clone(),
             dataspace_catalog: dataspace_catalog_with_extra(dataspace_id),
+            configured_dataspace_catalog: dataspace_catalog_with_extra(dataspace_id),
             ..Default::default()
         })
         .expect("corrected startup topology should publish the exact baseline");
@@ -20697,9 +20727,19 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
         Some(2)
     );
 
-    state
+    let error = state
         .set_nexus(dataspace_retirement_nexus!(retained retained))
-        .expect("remove dataspace route");
+        .expect_err("physical dataspace retirement requires an on-chain catalog transition");
+    assert!(matches!(error, LaneLifecycleError::RuntimeCatalog(_)));
+    assert!(state.world.axt_policies.view().get(&dataspace).is_some());
+    assert_eq!(
+        state.world.axt_handle_counters.view().get(&dataspace).map(AxtHandleCounterRecord::next),
+        Some(2),
+        "rejected configuration changes must preserve the permanent ratchet"
+    );
+    // Physical dataspaces remain part of the committed catalog. Revoke their
+    // authorization explicitly before testing policy recreation across restart.
+    state.remove_axt_policy(&dataspace);
     assert!(state.world.axt_policies.view().get(&dataspace).is_none());
     assert_eq!(
         state
@@ -20708,18 +20748,18 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
             .view()
             .get(&dataspace)
             .map(AxtHandleCounterRecord::next),
-        Some(2),
-        "dataspace removal must not delete the permanent high-water mark"
+        Some(3),
+        "policy removal must advance the permanent high-water mark"
     );
 
     seed_committed_height_for_state_test(&state, 1);
     seed_autoscale_sample_history_for_snapshot_test(&state);
-    let snapshot = norito::json::to_value(&state).expect("serialize removed dataspace state");
+    let snapshot = norito::json::to_value(&state).expect("serialize revoked dataspace policy state");
     let mut restarted =
         deserialize_state_snapshot_value_with_kura(snapshot, Arc::clone(&state.kura)).expect("restart from canonical snapshot");
     restarted
         .set_nexus(initial_nexus)
-        .expect("rebind the same dataspace route");
+        .expect("retain the same committed dataspace route after restart");
     restarted.set_axt_policy(
         dataspace,
         AxtPolicyEntry {
@@ -20737,7 +20777,7 @@ state_test! { sync axt_permanent_counter_rejects_old_subnonce_after_dataspace_re
             .view()
             .get(&dataspace)
             .map(|policy| policy.next_handle_counter),
-        Some(3),
+        Some(4),
         "policy recreation must project the transition-revoked permanent counter instead of resetting to one"
     );
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);

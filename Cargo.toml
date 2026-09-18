@@ -462,6 +462,12 @@ opt-level = 3
 [profile.test.package.ark-serialize]
 opt-level = 3
 
+[profile.dev.package.norito]
+opt-level = 3
+
+[profile.test.package.norito]
+opt-level = 3
+
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
 # one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
 # the shared decoder engine reduced its exact no-run reproducer to 11.466 GiB.

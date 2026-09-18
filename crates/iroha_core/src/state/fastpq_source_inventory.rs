@@ -33,12 +33,13 @@ pub use statement_reservation::{
 
 /// Complete local source projection captured by a validator's block execution.
 ///
-/// Entries are external calls in block order, then time invocations in invocation
+/// Entries are ordinary external or privately staged native calls in block order,
+/// then time invocations in invocation
 /// order, then remaining applied transcript sources in ascending hash order. The
 /// last group includes native purposes and internally derived calls. This is a
 /// canonical source projection, not the physical order of state fragments.
-/// External and time entries without transfers are retained, including rejected
-/// entries. Native work without a transcript is not a proof source.
+/// Ordinary/native input and Time entries without transfers are retained, including
+/// rejected entries. Additional protocol work without a transcript is not a proof source.
 ///
 /// Private construction prevents a supplied archive from becoming an owned
 /// inventory. The seal retains exact finalized public occurrences while excluding
@@ -176,6 +177,9 @@ impl StateBlock<'_> {
                     &mut self.fastpq_transcripts,
                     pending,
                 );
+                // Rejoin the private executed-prefix seal with the actual native
+                // rows and captures before sealing the one common inventory.
+                self.verify_native_lane_fastpq_output_join(external, routing)?;
                 let inventory =
                     self.build_fastpq_source_inventory(external, routing, time_calls, tx_set_hash)?;
                 self.fastpq_source_captures
@@ -249,22 +253,38 @@ impl StateBlock<'_> {
             entries.push(entry);
             Ok(())
         };
-        for (hash, lane, dataspace) in external
-            .iter()
-            .zip(routing)
-            .map(|(entry, route)| {
-                (
-                    Hash::from(entry.execution_call_hash()),
+        let native = self
+            .native_lane_stage_for_inventory()
+            .map_err(|error| error.to_string())?
+            .map(|(batch, _)| batch);
+        if native.is_some() && (!external.is_empty() || !routing.is_empty()) {
+            return Err("native source inventory cannot accept competing external inputs".into());
+        }
+        let ordinary = external.iter().zip(routing).map(|(entry, route)| {
+            Ok::<_, String>((
+                Hash::from(entry.execution_call_hash()),
+                Some(route.lane_id),
+                route.dataspace_id,
+            ))
+        });
+        let native = native
+            .into_iter()
+            .flat_map(|batch| &batch.groups)
+            .map(|group| {
+                let input = &group.payload.input;
+                let route = input.routing_plan()?.coordinator_route();
+                Ok((
+                    Hash::from(input.entrypoint.execution_call_hash()),
                     Some(route.lane_id),
                     route.dataspace_id,
-                )
-            })
-            .chain(
-                time_calls
-                    .iter()
-                    .map(|hash| (*hash, None, DataSpaceId::UNIVERSAL)),
-            )
-        {
+                ))
+            });
+        for source in ordinary.chain(native).chain(
+            time_calls
+                .iter()
+                .map(|hash| Ok((*hash, None, DataSpaceId::UNIVERSAL))),
+        ) {
+            let (hash, lane, dataspace) = source?;
             let expected = frozen
                 .capture_transcript(Some(hash), hash, lane, Some(dataspace), 0)
                 .map_err(|error| error.to_string())?;

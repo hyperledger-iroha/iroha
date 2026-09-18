@@ -21,6 +21,7 @@ pub(super) struct Source {
 }
 #[derive(Debug)]
 pub(super) struct Lease {
+    #[cfg(test)]
     pub(super) class: Class,
     _source: Arc<Source>,
     _class: SharedByteLease,
@@ -145,6 +146,7 @@ impl Source {
             None => return None,
         };
         Some(Lease {
+            #[cfg(test)]
             class,
             _source: Arc::clone(self),
             _class: class_lease,

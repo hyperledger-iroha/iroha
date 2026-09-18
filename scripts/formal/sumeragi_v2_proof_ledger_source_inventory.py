@@ -86,6 +86,9 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/autonomous_execution_view_capacity.rs",
     "kura/certified_bundle_capacity.rs",
     "kura/lane_artifact_budget.rs",
+    "kura/native_amx_publication_capacity.rs",
+    "kura/native_amx_publication_index.rs",
+    "kura/native_amx_publication_startup_pins.rs",
     "kura/autonomous_lifecycle_terminal_outcomes.rs",
     "kura/autonomous_release_authority.rs",
     "kura/autonomous_retired_attempt.rs",
@@ -104,8 +107,11 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/block.rs': (
+        'block/post_execution_tail.rs',
+        'block/post_execution_tail_tests.rs',
         'block/autonomous_merge_carrier_content_tests.rs',
         'block/exact_quorum_cardinality_tests.rs',
+        'block/replay_proposal_authority_tests.rs',
         'block/autonomous_anchor_network_tests.rs',
         'block/autonomous_anchor_gas_budget_tests.rs',
         'block/sccp_soracloud_validation_tests.rs',
@@ -117,6 +123,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/native_amx_receipt_regression_tests.rs',
         'block/native_amx_exact_quorum_cardinality_tests.rs',
         'block/native_amx_and_dag_tests.rs',
+        'block/parallel_account_profile_tests.rs',
         'block/sequential_rejected_pipeline_trigger_tests.rs',
         'block/tx_order_validation_revalidation_test.rs',
         'block/rejected_live_batch_fee_tests.rs',
@@ -176,6 +183,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/resident_remaining_resource_inventory.rs',
         'kura/tests/00_bounded_sidecar_read_tests.rs',
         'kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs',
+        'kura/tests/01b_startup_replay_geometry_binding.rs',
         'kura/tests/01_prune_capacity_support.rs',
         'kura/tests/01a_retained_eviction_and_rewrite_tail.rs',
         'kura/tests/01b_retained_physical_resource_tests.rs',
@@ -215,6 +223,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/09_lane_artifacts_and_fastpq.rs',
         'kura/tests/10_native_amx_and_roster.rs',
         'kura/tests/10b_native_amx_prepublication_transition.rs',
+        'kura/tests/10d_native_amx_publication_capacity.rs',
         'kura/tests/11_roster_and_progress_sidecars.rs',
         'kura/tests/12_sidecar_index_and_pruning.rs',
         'kura/tests/13_manifests_and_fsync.rs',
@@ -255,6 +264,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'lane_geometry_tests/02_geometry_moves_and_journal.rs',
         'lane_geometry_tests/03_gc_and_startup.rs',
         'lane_geometry_tests/04_physical_resource_accounting.rs',
+        'startup_replay_geometry_binding.rs',
     ),
     'crates/iroha_core/src/merge_sidecar.rs': (
         'merge_sidecar_signing_guard_tests.rs',
@@ -322,6 +332,10 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/passive_lane_diagnostic_methods.rs',
         'state/runtime_configuration.rs',
         'state/lane_lifecycle_support.rs',
+        'state/runtime_catalog.rs',
+        'state/runtime_catalog_startup.rs',
+        'state/runtime_catalog_commit.rs',
+        'state/merge_runtime_effects.rs',
         'state/diagnostic_state_generation.rs',
         'state/autonomous_predecessor_application.rs',
         'state/state_commit_lock_order_tests.rs',
@@ -352,6 +366,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'network/best_effort_admission.rs',
         'network/reliable_actor.rs',
         'network/handle_update_tests.rs',
+        'network/connection_lifecycle_tests.rs',
         'network/queue_depth_tests.rs',
     ),
     'crates/iroha_p2p/src/peer.rs': (
@@ -395,9 +410,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_recovered_decision_validate_adapter_startup.rs',
         'v2_authenticated_recovered_adapter_startup_impl.rs',
         'v2_verified_height_context_recovered_output_auth.rs',
+        'v2_cold_body_pipeline_origin.rs',
         'v2_adapter_equivocation_evidence.rs',
         'v2_ready_durable_validate_adapter_preview.rs',
         'v2_recovered_lifecycle_sign_completion.rs',
+        'v2_retained_incident_diagnostic.rs',
         'v2_wire_registry_and_authentication.rs',
         'tests/v2_adapter_leader_wire_consumer.rs',
         'tests/v2_adapter_main_00.rs',
@@ -405,6 +422,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_adapter_main_02.rs',
         'tests/v2_adapter_main_03.rs',
         'tests/v2_adapter_main_04.rs',
+        'tests/v2_adapter_complete_tip_decision_activation_cases.rs',
+        'tests/v2_adapter_complete_tip_decision_authority_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_recovery.rs': (
         'v2_recovery_tests.rs',
@@ -433,6 +452,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs': (
         'v2_lifecycle_ledger_tests_durable_recovery_01.rs',
         'v2_lifecycle_ledger_tests_durable_recovery_02.rs',
+        'v2_lifecycle_ledger_tests_timeout_body_recovery.rs',
         'tests/v2_lifecycle_complete_tip_retained_body_cases.rs',
         'v2_lifecycle_ledger_tests_frame_and_store.rs',
     ),
@@ -518,9 +538,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_worker_exact_output.rs',
         'v2_worker_services.rs',
         'v2_worker_services_impl.rs',
+        'v2_worker/lifecycle_serve_ownership.rs',
         'tests/v2_worker_main_00.rs',
         'tests/v2_worker_main_01.rs',
         'tests/v2_worker_lifecycle_capacity_cases.rs',
+        'v2_worker/lifecycle_serve_ownership_tests.rs',
         'tests/v2_worker_equivocation_fixture.rs',
         'v2_worker/applied_height_handoff_tests.rs',
         'v2_worker/queue_plan_admission_handoff_tests.rs',
@@ -570,7 +592,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
         'reducer/body_validation_completion.rs',
         'reducer/prepare_certificate_handling.rs',
+        'reducer/retained_body_pipeline_recovery.rs',
         'tests/reducer_timeout_and_projection.rs',
+        'tests/reducer_retained_body_pipeline_recovery.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
@@ -594,6 +618,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_core_terminal_transactionality.rs',
         'tests/four_reducer_network.rs',
         'tests/terminal_result_replay.rs',
+        'tests/finalized_state_anchor.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
         'v2_effects_recovered_fetch_and_pipeline_types.rs',
@@ -632,6 +657,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work_autonomous_ready_durability_tests.rs',
         'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
         'v2_lane_work/queue_plan_admission_handoff_tests.rs',
+        'tests/v2_lane_work_ordinary_dispatch.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
         'v2_lane_work_effect_queue.rs',
@@ -688,6 +714,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_effects_01_view_churn_and_runtime_steps.rs',
         'v2_effects_highest_prepare_retention.rs',
         'v2_effects_02_admission_handoffs.rs',
+        'v2_effects_proposal_fetch_store_refinement.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs': (
         'v2_adapter_canonical_decision_validate_completion_cases.rs',
@@ -695,6 +722,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/tests/v2_effects_certified_body_fence_supersession.rs': (
         'v2_effects_resolved_validate_owner_cases.rs',
         'v2_effects_terminal_sign_cold_owner_cases.rs',
+        'v2_effects_certified_body_decision_supersession.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_effects_resolved_validate_owner_cases.rs': (
         'v2_effects_active_prepare_decision_cold_cases.rs',
@@ -708,5 +736,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs': (
         'v2_lifecycle_body_pipeline_transition_static_tests.rs',
         'v2_lifecycle_body_pipeline_transition_tests.rs',
+    ),
+    'crates/iroha_core/src/state/runtime_catalog.rs': (
+        'runtime_catalog_tests.rs',
     ),
 }

@@ -461,24 +461,12 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     })
 }
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
-    let mut world = state.world.block();
-    world.smart_contract_state.insert(
-        State::queue_plan_admission_registry_marker_key(&admission.registry_key)
-            .expect("fixture registry key"),
-        State::queue_plan_admission_registry_marker_payload(&admission.registry_value)
-            .expect("fixture registry value"),
-    );
-    State::stage_queue_plan_pending_obligation_in_storage(
-        &mut world.smart_contract_state,
-        &admission,
-    )
-    .expect("fixture pending QueuePlan obligation");
-    world.commit();
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
+    state
+        .install_queue_plan_pending_binding_for_test(&admission.certificate.binding)
+        .expect("fixture exact ranked QueuePlan admission and pending obligation");
 }
 fn seed_pending_queue_plan_binding_state_for_test(
     state: &State,
@@ -517,11 +505,9 @@ fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
 ) -> QueuePlanPendingObligationV1 {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
     State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture pending QueuePlan obligation")
 }
@@ -1324,61 +1310,40 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
     let mut carrier = certified_merge_carrier_after(&parent, &entry);
-    if let Some(pulse) = requested_beacon {
-        // Derive the result envelope from genuine certified merge execution,
-        // before attaching the pulse or signing/persisting the final carrier.
-        // The merge-only helper requires this exact effect-free precursor;
-        // native composition later revalidates the final count after the pulse.
+    if requested_beacon.is_some()
+        || transfer_fixture.is_some()
+        || runtime_effect.is_some()
+        || wrap_in_sealed_reveal
+    {
+        // Count the source and actual native block-start work before attaching
+        // a pulse or signing/persisting the final carrier. The merge-only helper
+        // requires this effect-free precursor; native beacon composition later
+        // revalidates the final count. Never infer fragments from instructions.
         let staged = state
             .block_with_certified_merge_entry(
                 carrier.header().clone(),
                 &entry,
                 ConsensusMode::Permissioned,
             )
-            .expect("derive fragments from the exact certified beacon precursor");
+            .expect("derive fragments from the exact native certified carrier precursor");
         let committed_fragments = u64::try_from(staged.committed_fragment_count())
             .expect("native certified fragment count fits u64");
-        assert!(
-            committed_fragments > 0,
-            "beacon merge fixture must contain genuine committed execution"
-        );
+        if requested_beacon.is_some() || transfer_fixture.is_some() || runtime_effect.is_some() {
+            assert!(
+                committed_fragments > 0,
+                "successful source must commit a fragment"
+            );
+        }
         drop(staged);
         carrier.set_committed_fragment_count(committed_fragments);
+    }
+    if let Some(pulse) = requested_beacon {
         carrier.set_npos_consensus_effects(Some(
             iroha_data_model::consensus::NposConsensusEffects {
                 finalized_global_beacon_pulse: Some(pulse),
                 ..Default::default()
             },
         ));
-    }
-
-    if let Some(fixture) = transfer_fixture {
-        let committed_fragments = match fixture {
-            QueuePlanTransferFixture::Single => 1,
-            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 2,
-        };
-        carrier.set_committed_fragment_count(committed_fragments);
-    } else if runtime_effect.is_some() {
-        // Count the successful source and any actual native block-start work;
-        // do not assume an instruction count or invent an empty fragment.
-        let staged = state
-            .block_with_certified_merge_entry(
-                carrier.header().clone(),
-                &entry,
-                ConsensusMode::Permissioned,
-            )
-            .expect("derive fragments from the exact native runtime-effect carrier and source");
-        let committed_fragments = u64::try_from(staged.committed_fragment_count())
-            .expect("native runtime-effect fragment count fits u64");
-        assert!(
-            committed_fragments > 0,
-            "successful source must commit a fragment"
-        );
-        drop(staged);
-        carrier.set_committed_fragment_count(committed_fragments);
-    } else if wrap_in_sealed_reveal {
-        // One applied sealed reveal commits one instruction fragment.
-        carrier.set_committed_fragment_count(1);
     }
     state
         .kura

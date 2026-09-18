@@ -400,229 +400,16 @@ pub(crate) fn execution_context_for_routing_plan(
         execution_context_legs_for_routing_plan(plan),
     )
 }
-/// Version of the queue-plan lifecycle context embedded in durable admission claims.
-pub const QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1: u16 = 1;
-/// Version of a queue-plan durable admission claim returned after a strict journal sync.
-pub const QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1: u16 = 1;
-/// Version of the global admission identity embedded in a strict queue-plan journal record.
-pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1: u16 = 1;
-/// Exact-network/request identity chosen once by ingress before any authority acquires queue ownership.
-///
-/// This identity is persisted inside the exact journal record. Together with the record's
-/// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
-/// global admission binding that every authority attested.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::queue::QueuePlanGlobalAdmissionIdentityV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanGlobalAdmissionIdentityV1 {
-    /// Identity layout version.
-    pub version: u16,
-    /// Domain-separated digest of the exact network identifier.
-    pub network_id_digest: Hash,
-    /// Deterministic QueuePlanSynced proxy request identity.
-    pub request_id: Hash,
-}
-/// One routing leg paired with the exact active lane incarnation that admitted it.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::queue::QueuePlanRouteIncarnationV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanRouteIncarnationV1 {
-    /// Coordinator or participant route in canonical routing-plan order.
-    pub leg: RouteLeg,
-    /// Non-zero lane incarnation active for this route at `proposal_height`.
-    pub lane_incarnation: Hash,
-    /// Version of the canonical ordered validator-set hash.
-    pub validator_set_hash_version: u16,
-    /// Typed digest of the ordered authoritative roster at `proposal_height`.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Exact ordered authoritative roster at `proposal_height`.
-    pub validator_set: Vec<PeerId>,
-    /// Number of distinct identities in the authoritative roster.
-    pub validator_count: u16,
-    /// Minimum distinct durable attestations needed to include at least one honest copy.
-    pub durability_threshold: u16,
-}
-/// Generation-stable lifecycle context for one queue-plan admission attempt.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::queue::QueuePlanAdmissionContextV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionContextV1 {
-    /// Context layout version.
-    pub version: u16,
-    /// Canonical committed height used to resolve the routing plan.
-    pub authority_height: u64,
-    /// Contiguous next proposal height at which all route incarnations are active.
-    pub proposal_height: u64,
-    /// Exact committed tip that is the predecessor of `proposal_height`.
-    pub predecessor_block_hash: Option<HashOf<BlockHeader>>,
-    /// Digest of the complete coordinator/participant routing plan.
-    pub routing_plan_digest: Hash,
-    /// Coordinator-first route/incarnation pairs for the complete plan.
-    pub route_incarnations: Vec<QueuePlanRouteIncarnationV1>,
-}
-impl QueuePlanAdmissionContextV1 {
-    /// Reconstruct the complete canonical routing plan carried by this context.
-    ///
-    /// # Errors
-    /// Returns an error when the leg vector is empty or its roles/order cannot encode one
-    /// canonical single-route or Native AMX plan.
-    pub fn routing_plan(&self) -> Result<RoutingPlan, String> {
-        let Some(coordinator) = self.route_incarnations.first() else {
-            return Err("queue-plan admission context has no coordinator leg".to_owned());
-        };
-        if coordinator.leg.role != RouteLegRole::Coordinator {
-            return Err("queue-plan admission context first leg is not the coordinator".to_owned());
-        }
-        if self.route_incarnations.len() == 1 {
-            return Ok(RoutingPlan::single(coordinator.leg.route));
-        }
-        let participants = self
-            .route_incarnations
-            .iter()
-            .skip(1)
-            .map(|bound| {
-                if bound.leg.role != RouteLegRole::Participant {
-                    return Err(
-                        "queue-plan admission context contains a non-participant trailing leg"
-                            .to_owned(),
-                    );
-                }
-                Ok(bound.leg)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(RoutingPlan::native_amx(coordinator.leg.route, participants))
-    }
-    /// Validate this context against an exact canonical routing plan.
-    ///
-    /// # Errors
-    /// Returns the first structural, lifecycle, roster, or redundant-field mismatch.
-    pub fn validate_for_routing_plan(&self, routing_plan: &RoutingPlan) -> Result<(), String> {
-        let canonical_plan = match routing_plan {
-            RoutingPlan::Single(leg) => RoutingPlan::single(leg.route),
-            RoutingPlan::NativeAmx(plan) => {
-                if plan.participants.is_empty()
-                    || plan.participants.len() > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS
-                {
-                    return Err(format!(
-                        "queue-plan Native AMX participant count {} is outside 1..={}",
-                        plan.participants.len(),
-                        crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS
-                    ));
-                }
-                RoutingPlan::native_amx(plan.coordinator.route, plan.participants.clone())
-            }
-        };
-        if &canonical_plan != routing_plan {
-            return Err(
-                "queue-plan admission context is paired with a noncanonical routing plan"
-                    .to_owned(),
-            );
-        }
-        if self.version != QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1 {
-            return Err(format!(
-                "unsupported queue-plan admission context version {}; expected {}",
-                self.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1
-            ));
-        }
-        let Some(expected_proposal_height) = self.authority_height.checked_add(1) else {
-            return Err(
-                "queue-plan admission authority height overflows proposal height".to_owned(),
-            );
-        };
-        if self.proposal_height != expected_proposal_height {
-            return Err(
-                "queue-plan admission proposal height is not contiguous with authority height"
-                    .to_owned(),
-            );
-        }
-        if (self.authority_height == 0) != self.predecessor_block_hash.is_none() {
-            return Err(
-                "queue-plan admission predecessor hash presence does not match authority height"
-                    .to_owned(),
-            );
-        }
-        if self
-            .predecessor_block_hash
-            .is_some_and(|hash| hash_is_zero(Hash::from(hash)))
-        {
-            return Err(
-                "queue-plan admission context contains a zero predecessor block hash".to_owned(),
-            );
-        }
-        if self.routing_plan_digest != routing_plan.digest() {
-            return Err(
-                "queue-plan admission context digest does not match the exact routing plan"
-                    .to_owned(),
-            );
-        }
-        let legs = routing_plan.legs();
-        if self.route_incarnations.len() != legs.len() {
-            return Err(
-                "queue-plan admission context does not bind every routing leg exactly once"
-                    .to_owned(),
-            );
-        }
-        for (bound, expected_leg) in self.route_incarnations.iter().zip(legs) {
-            if bound.leg != expected_leg {
-                return Err(
-                    "queue-plan admission context legs are missing, reordered, or role-mismatched"
-                        .to_owned(),
-                );
-            }
-            if hash_is_zero(bound.lane_incarnation) {
-                return Err(
-                    "queue-plan admission context contains a zero lane incarnation".to_owned(),
-                );
-            }
-            if bound.validator_set_hash_version
-                != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
-            {
-                return Err(format!(
-                    "queue-plan admission validator-set hash version {} is unsupported",
-                    bound.validator_set_hash_version
-                ));
-            }
-            if hash_is_zero(Hash::from(bound.validator_set_hash)) {
-                return Err(
-                    "queue-plan admission context contains a zero validator-set hash".to_owned(),
-                );
-            }
-            let validator_count = bound.validator_set.len();
-            if validator_count == 0 || validator_count > MAX_LANE_CONSENSUS_VALIDATORS {
-                return Err(format!(
-                    "queue-plan admission validator count {} is outside 1..={MAX_LANE_CONSENSUS_VALIDATORS}",
-                    validator_count
-                ));
-            }
-            if usize::from(bound.validator_count) != validator_count {
-                return Err(format!(
-                    "queue-plan admission validator count {} does not equal exact roster length {validator_count}",
-                    bound.validator_count
-                ));
-            }
-            if bound.validator_set.iter().collect::<BTreeSet<_>>().len() != validator_count {
-                return Err(
-                    "queue-plan admission validator roster contains duplicate identities"
-                        .to_owned(),
-                );
-            }
-            if bound.validator_set_hash != HashOf::new(&bound.validator_set) {
-                return Err(
-                    "queue-plan admission validator-set hash does not match the exact ordered roster"
-                        .to_owned(),
-                );
-            }
-            let expected_threshold = validator_count.div_ceil(3);
-            if usize::from(bound.durability_threshold) != expected_threshold {
-                return Err(format!(
-                    "queue-plan admission durability threshold {} does not equal ceil({validator_count}/3)",
-                    bound.durability_threshold
-                ));
-            }
-        }
-        Ok(())
-    }
-}
+pub use iroha_data_model::block::lane_admission::{
+    QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
+    QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1, QueuePlanAdmissionContextV1,
+    QueuePlanGlobalAdmissionIdentityV1, QueuePlanRouteIncarnationV1,
+};
+const _: [(); QUEUE_PLAN_JOURNAL_VERSION as usize] =
+    [(); iroha_data_model::block::lane_admission::QUEUE_PLAN_JOURNAL_CLAIM_VERSION_V1 as usize];
+const _: [(); crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS] =
+    [(); iroha_data_model::block::lane_admission::MAX_QUEUE_PLAN_NATIVE_AMX_PARTICIPANTS_V1];
+
 /// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::queue::QueuePlanDurableAdmissionV1")]
@@ -2859,7 +2646,7 @@ pub(crate) fn strictly_absent_lane_reservation_snapshot_recovery_state(
             .validate_for_routing_plan(&durable.routing_plan)
             .map_err(LaneQueueReservationError::InvalidIdentity)?;
         let admission_binding =
-            crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(durable)
+            crate::torii_proxy::queue_plan_binding_from_durable_admission(durable)
                 .map_err(LaneQueueReservationError::InvalidIdentity)?;
         let coordinator = durable.context.route_incarnations.first().ok_or_else(|| {
             LaneQueueReservationError::InvalidIdentity(
@@ -4693,9 +4480,7 @@ impl QueuePlanDurableClaimIndexEntry {
     fn global_admission_binding(
         &self,
     ) -> Result<crate::torii_proxy::QueuePlanAdmissionBindingV1, String> {
-        crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-            &self.durable_admission(),
-        )
+        crate::torii_proxy::queue_plan_binding_from_durable_admission(&self.durable_admission())
     }
 }
 /// Exact balance resource held by one queued fee component.
@@ -7062,11 +6847,13 @@ impl Queue {
             let binding = claim.global_admission_binding().map_err(|reason| {
                 LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
             })?;
-            binding
-                .validate_for_lane_reservation_commit(&record.key)
-                .map_err(|reason| {
-                    LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
-                })?;
+            crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                &binding,
+                &record.key,
+            )
+            .map_err(|reason| {
+                LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
+            })?;
             let _authenticated =
                 Self::reconciliation_record_from_durable_claim(record, claim.value())?;
         }
@@ -8777,7 +8564,11 @@ impl Queue {
             .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
         claim
             .global_admission_binding()
-            .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+            .and_then(|binding| {
+                crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                    &binding, key,
+                )
+            })
             .map_err(
                 |reason| LaneQueueReservationError::ReconciliationDurableClaimMismatch {
                     hash,
@@ -9783,7 +9574,11 @@ impl Queue {
         if let Some(key) = commit {
             claim
                 .global_admission_binding()
-                .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                .and_then(|binding| {
+                    crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                        &binding, key,
+                    )
+                })
                 .map_err(|reason| {
                     LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
                 })?;
@@ -9793,7 +9588,11 @@ impl Queue {
             let key = &record.key;
             claim
                 .global_admission_binding()
-                .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                .and_then(|binding| {
+                    crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                        &binding, key,
+                    )
+                })
                 .map_err(|reason| {
                     LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
                 })?;
@@ -9875,7 +9674,11 @@ impl Queue {
             let queue_plan_phase = if let Some(claim) = durable_plan_claims.get(&hash) {
                 claim
                     .global_admission_binding()
-                    .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                    .and_then(|binding| {
+                        crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                            &binding, key,
+                        )
+                    })
                     .map_err(|reason| {
                         LaneQueueReservationError::ReconciliationDurableClaimMismatch {
                             hash,
@@ -12979,7 +12782,12 @@ impl Queue {
                     return Err(error);
                 }
             };
-            if let Err(reason) = indexed_binding.validate_for_lane_reservation_commit(key) {
+            if let Err(reason) =
+                crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                    &indexed_binding,
+                    key,
+                )
+            {
                 let error = std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
@@ -16353,8 +16161,12 @@ impl Queue {
             });
         }
         if let Some(binding) = expected_admission_binding
-            && let Err(reason) =
-                binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)
+            && let Err(reason) = crate::torii_proxy::validate_queue_plan_binding_for_request(
+                &binding,
+                state.network_id_ref(),
+                tx.entrypoint(),
+                &routing_plan,
+            )
         {
             return Err(Failure {
                 tx: tx.into(),
@@ -19642,7 +19454,11 @@ impl Queue {
                 || &claim.routing_plan != plan
                 || claim
                     .global_admission_binding()
-                    .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                    .and_then(|binding| {
+                        crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                            &binding, key,
+                        )
+                    })
                     .is_err()
             {
                 return false;
@@ -19796,7 +19612,11 @@ impl Queue {
             }
             claim
                 .global_admission_binding()
-                .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                .and_then(|binding| {
+                    crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+                        &binding, key,
+                    )
+                })
                 .map_err(|reason| {
                     LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
                 })?;
@@ -20102,13 +19922,14 @@ impl Queue {
         let binding = claim.global_admission_binding().map_err(|reason| {
             format!("globally admitted guard has a malformed durable claim: {reason}")
         })?;
-        binding
-            .validate_for_transaction_and_plan(tx.as_accepted().entrypoint(), routing_plan)
-            .map_err(|reason| {
-                format!(
-                    "globally admitted guard does not match its canonical durable claim: {reason}"
-                )
-            })?;
+        crate::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(
+            &binding,
+            tx.as_accepted().entrypoint(),
+            routing_plan,
+        )
+        .map_err(|reason| {
+            format!("globally admitted guard does not match its canonical durable claim: {reason}")
+        })?;
         let Some(tracked) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
             return Err(
                 "globally admitted guard has no live tracked transaction to restore".to_owned(),
@@ -21267,8 +21088,7 @@ impl Queue {
                     !reservation_owned_hashes.contains(&hash)
                         && self.durable_plan_claims.get(&hash).is_some_and(|claim| {
                             claim.global_admission_binding().is_ok_and(|binding| {
-                                binding
-                                    .validate_for_lane_reservation_commit(reservation_key)
+                                crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(&binding, reservation_key)
                                     .is_ok()
                             })
                         })
@@ -22687,7 +22507,7 @@ pub mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(&state, &routing_plan)
             .expect("capture global guard fixture context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -22788,7 +22608,7 @@ pub mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture globally certified reservation context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -27061,7 +26881,7 @@ pub mod tests {
                 "fixture must exercise both exact retry and rollover promotion paths"
             );
             let binding_timestamp_ms = unbound_claim.enqueue_timestamp_ms.saturating_add(17);
-            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            let binding = crate::torii_proxy::new_queue_plan_admission_binding(
                 state.network_id_ref(),
                 tx.entrypoint(),
                 &plan,
@@ -27078,9 +26898,7 @@ pub mod tests {
                 )
                 .unwrap_or_else(|error| panic!("promote {label} unbound claim: {error:?}"));
             assert_eq!(
-                crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-                    &promoted
-                ),
+                crate::torii_proxy::queue_plan_binding_from_durable_admission(&promoted),
                 Ok(binding.clone()),
                 "promoted claim must reproduce every ingress-authored binding field"
             );
@@ -27179,7 +26997,7 @@ pub mod tests {
         let original_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture original strict-global retry context");
-        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let original_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -27198,7 +27016,7 @@ pub mod tests {
         let original_journal_len = fs::metadata(&journal_path)
             .expect("strict-global retry journal metadata")
             .len();
-        let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let later_same_context_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -27231,7 +27049,7 @@ pub mod tests {
         let current_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture height-advanced strict-global retry context");
-        let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let later_height_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -27251,9 +27069,7 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
         assert_eq!(
-            crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-                &height_advanced_retry
-            ),
+            crate::torii_proxy::queue_plan_binding_from_durable_admission(&height_advanced_retry),
             Ok(original_binding),
             "the first durable timestamp and digest must remain canonical"
         );
@@ -28613,7 +28429,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
-        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let original_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             &entrypoint,
             &plan,
@@ -28629,7 +28445,7 @@ pub mod tests {
                 &original_binding,
             )
             .expect("admit original binding");
-        let successor_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let successor_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             &entrypoint,
             &plan,
@@ -28750,7 +28566,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &routing_plan)
             .expect("capture strict admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
-        let mut forged = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let mut forged = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -29953,7 +29769,7 @@ pub mod tests {
             .binding
             .routing_plan()
             .expect("fixture binding routing plan");
-        let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let conflicting_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             fixture.state.network_id_ref(),
             fixture.transaction.entrypoint(),
             &routing_plan,
@@ -30067,7 +29883,7 @@ pub mod tests {
         let direct_context = queue
             .plan_admission_context_with_state(&state, &direct_plan)
             .expect("capture direct carrier admission context");
-        let direct_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        let direct_binding = crate::torii_proxy::new_queue_plan_admission_binding(
             state.network_id_ref(),
             direct.entrypoint(),
             &direct_plan,
