@@ -127,6 +127,10 @@ enum PublicResetCommand {
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
     Authorize(inputs::Authorize),
+    /// Produce the complete public supervisor plan from typed reset inputs and explicit owner intent.
+    PrepareEpochSupervisorPlan(host::epoch_reset_inputs::PrepareEpochSupervisorPlan),
+    /// Produce a complete public updater generation preparation from explicit typed intent.
+    PrepareEpochUpdate(host::epoch_update_inputs::PrepareEpochUpdate),
     /// Native single-service generation admission/materialization and read-only observation.
     EpochSupervisorHost(host::epoch_generation::EpochSupervisorHost),
     /// Verify signed inputs and read-only readiness of all four validators and the edge host.
@@ -333,6 +337,13 @@ impl PublicReset {
     /// Run before client configuration or any ledger signing identity is loaded.
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
+            PublicResetCommand::PrepareEpochSupervisorPlan(args) => {
+                host::epoch_reset_inputs::prepare(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::PrepareEpochUpdate(args) => {
+                return args.run(&mut output);
+            }
             PublicResetCommand::EpochSupervisorHost(args) => {
                 return args.run(&mut output);
             }
@@ -853,6 +864,7 @@ struct MaintenanceAdminIdentityV1 {
 }
 
 fn validate_maintenance_admin_identity(inventory: &InventoryV1) -> Result<()> {
+    let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
     let identity = &inventory.maintenance_admin_identity;
     let account = AccountId::parse_encoded(&identity.account_id)?;
     let key: PublicKey = identity.public_key.parse()?;
@@ -1715,11 +1727,19 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
 }
 
 fn execution_lifetime_for_inputs(timeouts: &TimeoutsV1, validators: &[ValidatorV1]) -> Result<u64> {
-    let physical_validator_hosts = validators
-        .iter()
-        .map(|validator| validator.endpoint.host_identity_sha256.as_str())
-        .collect::<BTreeSet<_>>()
-        .len();
+    execution_lifetime_for_host_identities(
+        timeouts,
+        validators
+            .iter()
+            .map(|validator| validator.endpoint.host_identity_sha256.as_str()),
+    )
+}
+
+fn execution_lifetime_for_host_identities<'a>(
+    timeouts: &TimeoutsV1,
+    identities: impl IntoIterator<Item = &'a str>,
+) -> Result<u64> {
+    let physical_validator_hosts = identities.into_iter().collect::<BTreeSet<_>>().len();
     let physical_validator_hosts = u64::try_from(physical_validator_hosts)
         .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
     // This conservative maximum covers both explicit qualification scopes. Core
@@ -3078,6 +3098,15 @@ fn validate_pinned_validator_genesis_configs(
 }
 
 fn validate_known_hosts(inventory: &InventoryV1, path: &Path) -> Result<PinnedInput> {
+    let endpoints = inventory
+        .validators
+        .iter()
+        .map(|v| &v.endpoint)
+        .chain(std::iter::once(&inventory.edge.endpoint))
+        .collect::<Vec<_>>();
+    validate_known_host_endpoints(&endpoints, path)
+}
+fn validate_known_host_endpoints(endpoints: &[&EndpointV1], path: &Path) -> Result<PinnedInput> {
     let (file, snapshot) = open_pinned_regular(path, "OpenSSH known-hosts")?;
     require_owner_private_snapshot(&snapshot, "OpenSSH known-hosts")?;
     let bytes = read_pinned_bytes(
@@ -3095,12 +3124,6 @@ fn validate_known_hosts(inventory: &InventoryV1, path: &Path) -> Result<PinnedIn
         ));
     }
     let lines: Vec<&str> = text.lines().collect();
-    let endpoints: Vec<&EndpointV1> = inventory
-        .validators
-        .iter()
-        .map(|validator| &validator.endpoint)
-        .chain(std::iter::once(&inventory.edge.endpoint))
-        .collect();
     if lines.len() != endpoints.len() {
         return Err(eyre!(
             "known-hosts must contain exactly one line for each admitted host"
@@ -6955,9 +6978,15 @@ mod executor_model {
         fn shared_artifact_descriptor_clone_rejects_path_identity_drift() {
             let mut inventory = sample_inventory();
             let _directory = materialize_artifact_sources(&mut inventory);
-            let drifted = PathBuf::from(&inventory.validators[0].artifacts[0].local_path);
-            let trigger = PathBuf::from(&inventory.validators[0].artifacts[5].local_path);
-            let expected_mode = inventory.validators[0].artifacts[0].mode;
+            let artifacts = &inventory.validators[0].artifacts;
+            let daemon = artifact(artifacts, "iroha3d").expect("fixture daemon");
+            let drifted = PathBuf::from(&daemon.local_path);
+            let trigger = PathBuf::from(
+                &artifact(artifacts, "genesis_hash")
+                    .expect("fixture genesis hash")
+                    .local_path,
+            );
+            let expected_mode = daemon.mode;
             let mut replaced = false;
 
             let error = validate_artifact_files_with(&inventory, |file, path| {
@@ -9593,6 +9622,7 @@ mod executor_model {
         #[test]
         fn old_inventory_shape_and_seven_artifact_closure_are_rejected() {
             let inventory = sample_inventory();
+            validate_inventory_structure(&inventory).expect("complete current role fixture");
             let mut value = json::to_value(&inventory).unwrap();
             value.as_object_mut().unwrap().remove("epoch_supervisor");
             assert!(json::from_value::<InventoryV1>(value).is_err());
@@ -9677,8 +9707,7 @@ mod executor_model {
                                 ],
                                 artifacts: VALIDATOR_ARTIFACT_ROLES
                                     .iter()
-                                    .enumerate()
-                                    .map(|(index, role)| {
+                                    .map(|role| {
                                         let name = match *role {
                                             "iroha3d" => "bin/iroha3d_taira".to_owned(),
                                             "iroha_cli" => "bin/iroha".to_owned(),
@@ -9702,7 +9731,9 @@ mod executor_model {
                                                     "4".repeat(40)
                                                 )
                                             },
-                                            sha256: format!("{:x}", 9 + index).repeat(64),
+                                            sha256: sha256_hex(
+                                                format!("occupied-{role}").as_bytes(),
+                                            ),
                                             size: 1,
                                             mode: artifact_role_policy(role).unwrap().0,
                                             source_commit: "4".repeat(40),

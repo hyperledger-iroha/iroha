@@ -175,6 +175,71 @@ mod tests {
         journal.commit();
     }
     #[tokio::test]
+    async fn status_source_busy_is_distinct_from_changed_or_invalid_journal() {
+        use crate::telemetry::StatusSnapshotError;
+
+        let state = state();
+        append(&state, [hash(1)]);
+        let target = state.telemetry_status_target().expect("first target");
+        let publication = state.begin_state_view_write();
+        assert!(matches!(
+            state
+                .telemetry_status_target()
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateBusy)
+        ));
+        assert!(matches!(
+            state
+                .telemetry_journal_chunk(&target, 0)
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateBusy)
+        ));
+        drop(publication);
+        let recovered = state
+            .telemetry_status_target()
+            .expect("publication released");
+        assert_eq!(
+            (recovered.height, recovered.tip),
+            (target.height, target.tip)
+        );
+        assert!(state.telemetry_journal_chunk(&target, 0).is_ok());
+        let journal_write = state.block_hashes.inner.write();
+        assert!(matches!(
+            state
+                .telemetry_status_target()
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateBusy)
+        ));
+        assert!(matches!(
+            state
+                .telemetry_journal_chunk(&target, 0)
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateBusy)
+        ));
+        drop(journal_write);
+        assert!(state.telemetry_journal_chunk(&target, 0).is_ok());
+        assert!(matches!(
+            state
+                .telemetry_journal_chunk(&target, target.height + 1)
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateUnavailable)
+        ));
+        let mut journal = state.block_hashes.block_and_revert();
+        journal.push(hash(2));
+        journal.commit();
+        assert!(matches!(
+            state
+                .telemetry_journal_chunk(&target, 0)
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateUnavailable)
+        ));
+        assert!(matches!(
+            StatusSnapshotError::from(TelemetryStatusSourceError::Encoding),
+            StatusSnapshotError::StateUnavailable
+        ));
+    }
+
+    #[tokio::test]
     async fn target_binds_one_even_publication_and_releases_all_source_guards() {
         let state = state();
         append(&state, [hash(1)]);

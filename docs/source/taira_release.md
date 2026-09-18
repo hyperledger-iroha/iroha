@@ -275,11 +275,12 @@ Derive the complete public identity bundle using the maintained CLI:
 
     iroha taira public-reset prepare-public-inputs \
       --localnet-dir /absolute/private/generated-network \
-      --inventory-draft /absolute/private/inventory-draft.json \
+      --intent /absolute/private/topology-intent.json \
       --output-dir /absolute/private/public-inputs
 
-The unsigned draft must omit the generated `beacon_bootstrap` field, including
-when it is derived from a predecessor inventory. Native validation extracts the
+The closed `iroha.taira.public-reset.topology-intent.v1` contains topology, paths
+and explicit authority only. Computed release/config/artifact pins and generated
+beacon or supervisor plans are not fields. Native validation extracts the
 canary public identity from its exact onboarding request and validates the signed
 genesis against the generated raw manifest. The command atomically writes five
 public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
@@ -289,13 +290,13 @@ the native consensus genesis hash from the signed wire's SHA256. An incomplete
 four-file bundle is rejected; prepare a fresh complete output. Repeating an
 identical complete request verifies the retained bundle without replacing it.
 The explicit `--canary-public-key PATH` alternative is mutually exclusive with
-`--inventory-draft` and reads only that public key.
+`--intent` and reads only that public key.
 
 Derive the fresh beacon request and exact per-validator credential paths from the
-same draft and public bundle:
+same topology intent and public bundle:
 
     iroha taira public-reset prepare-beacon-inputs \
-      --inventory-draft /absolute/private/inventory-draft.json \
+      --intent /absolute/private/topology-intent.json \
       --public-inputs /absolute/private/public-inputs \
       --output /absolute/private/beacon-inputs.json
 
@@ -306,13 +307,34 @@ the exact native `credential_path` with `--global-beacon-credential` and
 the pinned renderer and initial units before rendering these four final mode0644
 units. The native request is not hand-authored JSON.
 
-Both `public-reset assemble` and `authorize` require the same `--public-inputs DIR`,
-`--beacon-inputs PATH` and four ordered `--beacon-validator-unit` paths, in addition
-to their original local inputs. Native assembly independently rederives the
-request, seat map and required signed `beacon_bootstrap` plan; the original seven
-artifacts and initial units remain unchanged. See the complete
-[assembly example](../../configs/soranexus/taira/README.md#public-reset).
-The existing execution, source, config and authorization checks remain required.
+Next run `iroha taira public-reset prepare-epoch-supervisor-plan --intent
+/absolute/private/topology-intent.json` with the same public bundle and actual
+`--runtime-client-config`, `--maintenance-admin-config`, four
+`--validator-client-config`, `--validator-operator-key`, `--onboarding-token`,
+four `--validator-unit`, `--edge-unit` and `--known-hosts` paths; full scope also
+supplies `--inrou-stage-dir`. Supply explicit `--host-slug`,
+`--authorization until-stopped`, `--payment-asset`, `--transaction-fee-maximum`,
+`--first-epoch`, `--batch-epochs`, `--operation-timeout-ms`,
+`--provision-timeout-ms`, `--timeout-ms`, and four original paths through singular
+`--epoch-seed-source`. Choose `--prior-state absent` only for admitted absence;
+`running` or `stopped` also requires the exact `--prior-plan PATH`. Publish to a
+fresh `--output-dir`. The native producer derives trust and the entire supervisor
+plan from held actual inputs; it accepts no computed credential hashes or manual
+observation-trust file. The output is the public `supervisor-plan.json`,
+`supervisor-binding.json` and `observation-trust.json` bundle.
+
+`public-reset assemble --intent PATH` and `authorize` require the same
+`--public-inputs DIR`, `--maintenance-admin-config PATH`,
+`--epoch-supervisor-plan PATH`, plural `--epoch-seed-sources` with four original
+paths, `--beacon-inputs PATH` and four ordered `--beacon-validator-unit` paths,
+along with their other local inputs. Native assembly independently rederives the
+context, credential joins, request, seat map and required signed plans. Apply
+uses the runtime administrator path and singular `--epoch-seed-source` flag.
+The same-release artifact closure includes Kagami. The existing execution,
+source, config and authorization checks remain required; the reset's finite
+lease does not imply ongoing maintenance authorization. See the
+[maintained retry caller](taira_retry.md) for the exact current path records and
+preparation order.
 The signed genesis must leave room for onboarding, funding, the canary's real
 QueuePlan admission and execution carriers, and certificate installation before
 the first mandatory pulse. Finalization uses the authenticated observed height.
@@ -330,7 +352,8 @@ This representation requires a single-signatory account and rejects multisig
 controllers. No private configuration parsing is needed to construct these
 public fields and file references; native loading validates the key pair.
 
-Each candidate validator includes a seventh `validator_unit` artifact at
+Each candidate validator includes eight exact artifact roles, including same-release
+Kagami and the `validator_unit` artifact at
 `systemd/<systemd_unit>` with exact mode 0644. Assembly requires its bytes to
 match the explicit validator unit input and digest. Reset execution durably
 retains the prior unit, records publication intent, atomically installs the
@@ -360,9 +383,22 @@ provisioned trusted host dispatcher and reset guard remain prerequisites for
 
 ## Updating an initialized testnet
 
-For a routine update of the existing four-validator Taira installation, use the
-completed basic preparation in three explicit phases. First prepare the exact
-same-release binaries at the operation's immutable release path:
+For a routine update of the existing four-validator Taira installation, first use
+`iroha taira public-reset prepare-epoch-update` to produce the typed preparation.
+Supply the actual `--deployment`, `--prepared-result`, `--trust`, an explicit
+fresh `--operation`, `--authorization until-stopped`, `--administrator`,
+`--payment-asset`, `--transaction-fee-maximum`, `--first-epoch`, `--batch-epochs`,
+`--operation-timeout-ms`, `--provision-timeout-ms`, `--worker-timeout-ms`, and four
+original sorted seed paths through `--original-seed-sources`. Select the actual
+`--original-service-state`, desired `--successor-service-state` and separate
+`--installed-state`. An occupied original requires its exact `--before-binding`;
+a present installed state requires its exact `--installed-binding`. Explicit
+absence forbids the corresponding binding. The native command reads public inputs
+only and writes `preparation.json`, `after-binding.json` and `inputs.json` into a
+fresh `--output` directory. It neither fabricates prior state nor materializes
+credentials. Use the same operation in every following phase.
+
+Prepare the exact same-release binaries at that operation's immutable release path:
 
     python3 scripts/taira_update.py \
       --prepare-artifacts \
@@ -383,12 +419,15 @@ Python does not read or hash any credential or seed contents:
 
     /absolute/runtime/release-COMMIT-update-0123456789abcdef0123456789abcdef/bin/iroha \
       taira public-reset epoch-supervisor-host materialize \
-      --wrapper /absolute/owner-private/taira/epoch-generation-preparation.json \
+      --wrapper /absolute/owner-private/taira/epoch-update-inputs/preparation.json \
       --administrator-config-fd ADMIN_FD --http-operator-key-fd HTTP_FD \
       --timeout-ms 90000
 
-Bind the returned exact public provisioning receipt reference into the final
-supervisor wrapper. Apply the reviewed transition using the same operation:
+After durable receipt publication, native materialization emits the complete
+`taira.epoch-supervisor-update.v1` wrapper on stdout. Preserve those exact public
+bytes as `epoch-supervisor-update.json` using a fresh owner-private output file;
+no JSON merge or hand-authored receipt reference is required. Apply the reviewed
+transition using the same operation:
 
     python3 scripts/taira_update.py \
       --deployment /absolute/owner-private/taira/deployment.json \

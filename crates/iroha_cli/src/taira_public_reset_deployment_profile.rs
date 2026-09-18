@@ -25,30 +25,48 @@ fn derive_profile(
     wire: &[u8],
 ) -> Result<DeploymentTrustV1> {
     validate_inventory(inventory)?;
-    derive_admitted_profile(inventory, public, wire)
+    derive_admitted_profile(
+        &inventory.next_genesis_hash,
+        &inventory.canary_onboarding_request,
+        &inventory.validators,
+        &inventory.validator_clients,
+        public,
+        wire,
+    )
 }
 
-// The caller owns exact inventory admission. Keep the binding computation shared
-// with unit tests without replacing the production release identity check.
-fn derive_admitted_profile(
-    inventory: &InventoryV1,
+// The caller admits either the complete inventory or the native-derived public
+// context. Profile derivation does not require its own yet-unbuilt supervisor
+// plan, and confers no deployment or owner authorization.
+pub(super) fn derive_admitted_profile(
+    next_genesis_hash: &str,
+    canary_onboarding_request: &AccountOnboardingPlanRequestV1,
+    validators: &[ValidatorV1],
+    validator_clients: &[ValidatorClientV1],
     public: &public_inputs::PublicInputsV1,
     wire: &[u8],
 ) -> Result<DeploymentTrustV1> {
-    if inventory.next_genesis_hash != public.genesis_hash
-        || inventory.canary_onboarding_request != public.canary_onboarding_request
+    if next_genesis_hash != public.genesis_hash
+        || canary_onboarding_request != &public.canary_onboarding_request
         || sha256_hex(wire) != public.signed_genesis_sha256
     {
         return Err(eyre!(
             "inventory differs from the selected native public input bundle"
         ));
     }
+    // Full inventory admission already enforces this. The standalone public
+    // context path must also reject extra/missing rows before zip truncation.
+    if validators.len() != VALIDATOR_SLUGS.len() || validator_clients.len() != VALIDATOR_SLUGS.len()
+    {
+        return Err(eyre!(
+            "deployment profile requires exactly four validator and client slots"
+        ));
+    }
     let hash_file = format!("{}\n", public.genesis_hash);
     let mut peers = Vec::new();
-    for ((validator, client), expected_slug) in inventory
-        .validators
+    for ((validator, client), expected_slug) in validators
         .iter()
-        .zip(&inventory.validator_clients)
+        .zip(validator_clients)
         .zip(VALIDATOR_SLUGS)
     {
         if validator.slug != expected_slug || client.slug != expected_slug {
@@ -146,6 +164,21 @@ mod tests {
     use super::*;
     use norito::codec::Encode as _;
 
+    fn admitted_inventory_profile(
+        inventory: &InventoryV1,
+        public: &public_inputs::PublicInputsV1,
+        wire: &[u8],
+    ) -> Result<DeploymentTrustV1> {
+        derive_admitted_profile(
+            &inventory.next_genesis_hash,
+            &inventory.canary_onboarding_request,
+            &inventory.validators,
+            &inventory.validator_clients,
+            public,
+            wire,
+        )
+    }
+
     fn fixture() -> (InventoryV1, public_inputs::PublicInputsV1, Vec<u8>) {
         let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let mut inventory = sample_inventory_fixture();
@@ -196,6 +229,16 @@ mod tests {
         inventory.beacon_bootstrap =
             host::beacon::fixture_plan(&inventory.validators, &inventory.validator_clients);
         inventory.beacon_bootstrap.request.dkg_session.network_id = public.network_id;
+        // Rebind the complete structural fixture after selecting another native
+        // genesis and consensus roster; no prior supervisor closure can survive it.
+        inventory.maintenance_admin_identity.network_id = public.network_id.to_string();
+        inventory.maintenance_admin_identity.genesis_hash = public.genesis_hash.clone();
+        inventory.epoch_supervisor = host::epoch_supervisor::fixture_plan(
+            &inventory.validators,
+            &inventory.validator_clients,
+            &inventory.revision,
+            &inventory.maintenance_admin_identity,
+        );
         inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
         validate_inventory_structure(&inventory).expect("complete profile binding fixture");
         (inventory, public, wire)
@@ -203,8 +246,9 @@ mod tests {
 
     #[test]
     fn deployment_profile_binds_native_genesis_and_ordered_inventory_peers() {
+        let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let (inventory, public, wire) = fixture();
-        let profile = derive_admitted_profile(&inventory, &public, &wire).unwrap();
+        let profile = admitted_inventory_profile(&inventory, &public, &wire).unwrap();
         let admitted = derive_profile(&inventory, &public, &wire);
         if test_compiled_release_commit().is_some() {
             assert_eq!(
@@ -226,12 +270,13 @@ mod tests {
 
     #[test]
     fn deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution() {
+        let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let (inventory, public, wire) = fixture();
         let mut wrong = inventory.clone();
         wrong.next_genesis_hash = Hash::new(b"other genesis").to_string();
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
         assert!(
-            derive_admitted_profile(&wrong, &public, &wire)
+            admitted_inventory_profile(&wrong, &public, &wire)
                 .unwrap_err()
                 .to_string()
                 .contains("inventory differs from the selected native public input bundle"),
@@ -245,7 +290,7 @@ mod tests {
             .sha256 = "a".repeat(64);
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
         assert!(
-            derive_admitted_profile(&wrong, &public, &wire)
+            admitted_inventory_profile(&wrong, &public, &wire)
                 .unwrap_err()
                 .to_string()
                 .contains("inventory genesis artifact differs from public bundle"),
@@ -254,7 +299,7 @@ mod tests {
         wrong.validators.swap(0, 1);
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
         assert!(
-            derive_admitted_profile(&wrong, &public, &wire)
+            admitted_inventory_profile(&wrong, &public, &wire)
                 .unwrap_err()
                 .to_string()
                 .contains("deployment profile validator slots differ"),
@@ -267,11 +312,59 @@ mod tests {
         wrong.validators[0].node_fingerprint = Hash::new(peer.encode()).to_string();
         wrong.artifact_closure_sha256 = artifact_closure_sha256(&wrong);
         assert!(
-            derive_admitted_profile(&wrong, &public, &wire)
+            admitted_inventory_profile(&wrong, &public, &wire)
                 .unwrap_err()
                 .to_string()
                 .contains("validator profile must bind four distinct genesis peers and endpoints"),
         );
+    }
+
+    #[test]
+    fn deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export() {
+        let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let (mut inventory, public, wire) = fixture();
+        let expected = admitted_inventory_profile(&inventory, &public, &wire).unwrap();
+        inventory.epoch_supervisor.schema = "not-yet-assembled".into();
+        let profile = derive_admitted_profile(
+            &inventory.next_genesis_hash,
+            &inventory.canary_onboarding_request,
+            &inventory.validators,
+            &inventory.validator_clients,
+            &public,
+            &wire,
+        )
+        .unwrap();
+        assert_eq!(
+            json::to_vec(&profile).unwrap(),
+            json::to_vec(&expected).unwrap()
+        );
+        assert!(derive_profile(&inventory, &public, &wire).is_err());
+    }
+
+    #[test]
+    fn deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors() {
+        let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let (inventory, public, wire) = fixture();
+        for (validator_count, client_count) in [(3, 4), (4, 3), (5, 4), (4, 5)] {
+            let mut validators = inventory.validators.clone();
+            let mut clients = inventory.validator_clients.clone();
+            validators.resize(validator_count, validators[0].clone());
+            clients.resize(client_count, clients[0].clone());
+            let error = derive_admitted_profile(
+                &inventory.next_genesis_hash,
+                &inventory.canary_onboarding_request,
+                &validators,
+                &clients,
+                &public,
+                &wire,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("exactly four validator and client slots")
+            );
+        }
     }
 
     #[test]

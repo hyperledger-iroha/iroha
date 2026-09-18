@@ -3058,6 +3058,7 @@ fn smoke_inventory_transient_status_v1(error: &iroha::Error) -> bool {
         iroha::Error::StatusUnavailable {
             reason: Some(
                 iroha::StatusFailureReason::DeadlineElapsed
+                    | iroha::StatusFailureReason::StateBusy
                     | iroha::StatusFailureReason::MailboxUnavailable
                     | iroha::StatusFailureReason::CheckpointChanged
             ),
@@ -3148,68 +3149,83 @@ fn smoke_inventory_health_v1(
 
 #[test]
 fn smoke_inventory_startup_retries_transient_status_until_ready() {
-    let mut polls = 0;
-    smoke_inventory_health_v1(
-        7,
-        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
-        |remaining| {
-            assert!(remaining.is_some_and(|value| !value.is_zero()));
-            polls += 1;
-            Ok(if polls == 1 {
-                Err(iroha::Error::StatusUnavailable {
-                    reason: Some(iroha::StatusFailureReason::DeadlineElapsed),
-                    retry_after: None,
+    for reason in [
+        iroha::StatusFailureReason::DeadlineElapsed,
+        iroha::StatusFailureReason::StateBusy,
+    ] {
+        let mut polls = 0;
+        smoke_inventory_health_v1(
+            7,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+            |remaining| {
+                assert!(remaining.is_some_and(|value| !value.is_zero()));
+                polls += 1;
+                Ok(if polls == 1 {
+                    Err(iroha::Error::StatusUnavailable {
+                        reason: Some(reason),
+                        retry_after: None,
+                    })
+                } else {
+                    Ok(())
                 })
-            } else {
-                Ok(())
-            })
-        },
-    )
-    .unwrap();
-    assert_eq!(polls, 2);
+            },
+        )
+        .unwrap();
+        assert_eq!(polls, 2);
+    }
 }
 
 #[test]
 fn smoke_inventory_startup_deadline_retains_status_error() {
-    let mut polls = 0;
-    let error = smoke_inventory_health_v1(
-        7,
-        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(1)),
-        |remaining| {
-            polls += 1;
-            thread::sleep(remaining.unwrap() + Duration::from_millis(1));
-            Ok(Err(iroha::Error::StatusUnavailable {
-                reason: Some(iroha::StatusFailureReason::DeadlineElapsed),
-                retry_after: None,
-            }))
-        },
-    )
-    .unwrap_err();
-    assert_eq!(polls, 1);
-    let error = format!("{error:?}");
-    assert!(error.contains("smoke peer 7 exceeded the original startup deadline"));
-    assert!(error.contains("status_deadline_elapsed"));
+    for reason in [
+        iroha::StatusFailureReason::DeadlineElapsed,
+        iroha::StatusFailureReason::StateBusy,
+    ] {
+        let mut polls = 0;
+        let error = smoke_inventory_health_v1(
+            7,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(1)),
+            |remaining| {
+                polls += 1;
+                thread::sleep(remaining.unwrap() + Duration::from_millis(1));
+                Ok(Err(iroha::Error::StatusUnavailable {
+                    reason: Some(reason),
+                    retry_after: None,
+                }))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        let error = format!("{error:?}");
+        assert!(error.contains("smoke peer 7 exceeded the original startup deadline"));
+        assert!(error.contains(reason.code()));
+    }
 }
 
 #[test]
 fn smoke_inventory_startup_rejects_permanent_status_error() {
-    let mut polls = 0;
-    let error = smoke_inventory_health_v1(
-        3,
-        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
-        |_| {
-            polls += 1;
-            Ok(Err(iroha::Error::StatusUnavailable {
-                reason: Some(iroha::StatusFailureReason::JournalMismatch),
-                retry_after: None,
-            }))
-        },
-    )
-    .unwrap_err();
-    assert_eq!(polls, 1);
-    let error = format!("{error:?}");
-    assert!(error.contains("smoke peer 3 startup status failed permanently"));
-    assert!(error.contains("status_journal_mismatch"));
+    for reason in [
+        iroha::StatusFailureReason::JournalMismatch,
+        iroha::StatusFailureReason::StateUnavailable,
+    ] {
+        let mut polls = 0;
+        let error = smoke_inventory_health_v1(
+            3,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+            |_| {
+                polls += 1;
+                Ok(Err(iroha::Error::StatusUnavailable {
+                    reason: Some(reason),
+                    retry_after: None,
+                }))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        let error = format!("{error:?}");
+        assert!(error.contains("smoke peer 3 startup status failed permanently"));
+        assert!(error.contains(reason.code()));
+    }
 }
 
 #[test]
@@ -3291,17 +3307,26 @@ fn smoke_inventory_identity_rejects_image_change_during_retry() {
 
 #[test]
 fn smoke_inventory_final_health_check_remains_single_poll() {
-    let mut polls = 0;
-    let error = smoke_inventory_health_v1(8, SmokeInventoryReadinessV1::Immediate, |remaining| {
-        assert!(remaining.is_none());
-        polls += 1;
-        Ok(Err(iroha::Error::Timeout {
+    for status_error in [
+        iroha::Error::Timeout {
             operation: "diagnostic.status",
-        }))
-    })
-    .unwrap_err();
-    assert_eq!(polls, 1);
-    assert!(format!("{error:?}").contains("smoke peer 8 final inventory health check failed"));
+        },
+        iroha::Error::StatusUnavailable {
+            reason: Some(iroha::StatusFailureReason::StateBusy),
+            retry_after: None,
+        },
+    ] {
+        let mut polls = 0;
+        let mut status_error = Some(status_error);
+        let error = smoke_inventory_health_v1(8, SmokeInventoryReadinessV1::Immediate, |remaining| {
+            assert!(remaining.is_none());
+            polls += 1;
+            Ok(Err(status_error.take().expect("final health must not retry")))
+        })
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        assert!(format!("{error:?}").contains("smoke peer 8 final inventory health check failed"));
+    }
 }
 
 #[test]
@@ -3309,6 +3334,7 @@ fn smoke_inventory_transient_status_classifier_is_exact() {
     use iroha::StatusFailureReason as Reason;
     for reason in [
         Reason::DeadlineElapsed,
+        Reason::StateBusy,
         Reason::MailboxUnavailable,
         Reason::CheckpointChanged,
     ] {

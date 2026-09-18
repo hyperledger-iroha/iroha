@@ -6952,7 +6952,7 @@ impl Actor {
         let target = self
             .state
             .telemetry_status_target()
-            .map_err(|_| StatusSnapshotError::StateUnavailable)?;
+            .map_err(StatusSnapshotError::from)?;
         self.classify_status_target(&target).await?;
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {

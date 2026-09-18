@@ -39,8 +39,8 @@ mod runtime_catalog_transition;
 const FUNCTIONAL_FINALITY_TIMEOUT: Duration = Duration::from_secs(180);
 
 // A classified status read has a 500ms server deadline independent of this
-// fixture's absolute phase deadline. Retry only that exact typed read failure;
-// every other producer failure remains evidence, never a finality verdict.
+// fixture's absolute phase deadline. Retry only that deadline or exact State
+// publication contention; invariant failures remain immediate error evidence.
 async fn validator_status_until(
     client: &iroha::client::Client,
     deadline: Instant,
@@ -59,16 +59,18 @@ async fn validator_status_until(
             match builder.build()?.status().get().await {
                 Ok(status) => return Ok(status),
                 Err(iroha::Error::StatusUnavailable {
-                    reason: Some(iroha::StatusFailureReason::DeadlineElapsed),
+                    reason: Some(reason @ (iroha::StatusFailureReason::DeadlineElapsed
+                        | iroha::StatusFailureReason::StateBusy)),
                     retry_after,
                 }) => {
                     if last_retryable.is_none() {
                         eprintln!(
-                            "validator status read retry: reason=status_deadline_elapsed remaining={:.3}s",
+                            "validator status read retry: reason={} remaining={:.3}s",
+                            reason.code(),
                             deadline.saturating_duration_since(Instant::now()).as_secs_f64()
                         );
                     }
-                    last_retryable = Some(iroha::StatusFailureReason::DeadlineElapsed);
+                    last_retryable = Some(reason);
                     sleep(
                         retry_after
                             .unwrap_or_default()
@@ -388,61 +390,71 @@ mod status_observation_tests {
 
     #[tokio::test]
     async fn status_observation_retries_typed_busy_json_and_norito_with_remaining_budget() {
-        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_deadline_elapsed", "busy");
-        let status = iroha_torii_shared::status::Status {
-            blocks: 4,
-            ..Default::default()
-        };
-        let transport = transport([
-            (
-                503,
-                json::to_vec(&envelope).unwrap(),
-                None,
-                Some("status_deadline_elapsed"),
-            ),
-            (
-                503,
-                norito::to_bytes(&envelope).unwrap(),
-                None,
-                Some("status_deadline_elapsed"),
-            ),
-            (200, json::to_vec(&status).unwrap(), None, None),
-        ]);
-        let client = client(transport.clone());
-        let budget = Duration::from_secs(5);
-        let observed = validator_status_until(&client, Instant::now() + budget)
-            .await
-            .unwrap();
-        assert_eq!(observed.blocks, 4);
-        let budgets = transport.request_budgets.lock().unwrap();
-        assert_eq!(budgets.len(), 3);
-        assert!(budgets[0] <= budget);
-        assert!(
-            budgets.windows(2).all(|pair| pair[1] < pair[0]),
-            "retries must not renew the caller's deadline"
-        );
+        for reason in [
+            iroha::StatusFailureReason::DeadlineElapsed,
+            iroha::StatusFailureReason::StateBusy,
+        ] {
+            let envelope = iroha_torii_shared::ErrorEnvelope::new(reason.code(), "busy");
+            let status = iroha_torii_shared::status::Status {
+                blocks: 4,
+                ..Default::default()
+            };
+            let transport = transport([
+                (
+                    503,
+                    json::to_vec(&envelope).unwrap(),
+                    None,
+                    Some(reason.code()),
+                ),
+                (
+                    503,
+                    norito::to_bytes(&envelope).unwrap(),
+                    None,
+                    Some(reason.code()),
+                ),
+                (200, json::to_vec(&status).unwrap(), None, None),
+            ]);
+            let client = client(transport.clone());
+            let budget = Duration::from_secs(5);
+            let observed = validator_status_until(&client, Instant::now() + budget)
+                .await
+                .unwrap();
+            assert_eq!(observed.blocks, 4);
+            let budgets = transport.request_budgets.lock().unwrap();
+            assert_eq!(budgets.len(), 3);
+            assert!(budgets[0] <= budget);
+            assert!(
+                budgets.windows(2).all(|pair| pair[1] < pair[0]),
+                "retries must not renew the caller's deadline"
+            );
+        }
     }
 
     #[tokio::test]
     async fn status_observation_stops_at_original_deadline_during_retry_after() {
-        let envelope = iroha_torii_shared::ErrorEnvelope::new("status_deadline_elapsed", "busy");
-        let transport = transport([(
-            503,
-            json::to_vec(&envelope).unwrap(),
-            Some("60"),
-            Some("status_deadline_elapsed"),
-        )]);
-        let client = client(transport.clone());
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            validator_status_until(&client, Instant::now() + Duration::from_millis(80)),
-        )
-        .await
-        .expect("Retry-After must remain bounded by the existing deadline");
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("exceeded its deadline"));
-        assert!(error.contains("last retryable reason=status_deadline_elapsed"));
-        assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
+        for reason in [
+            iroha::StatusFailureReason::DeadlineElapsed,
+            iroha::StatusFailureReason::StateBusy,
+        ] {
+            let envelope = iroha_torii_shared::ErrorEnvelope::new(reason.code(), "busy");
+            let transport = transport([(
+                503,
+                json::to_vec(&envelope).unwrap(),
+                Some("60"),
+                Some(reason.code()),
+            )]);
+            let client = client(transport.clone());
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                validator_status_until(&client, Instant::now() + Duration::from_millis(80)),
+            )
+            .await
+            .expect("Retry-After must remain bounded by the existing deadline");
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("exceeded its deadline"));
+            assert!(error.contains(&format!("last retryable reason={}", reason.code())));
+            assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
+        }
     }
 
     #[tokio::test]
@@ -476,12 +488,18 @@ mod status_observation_tests {
             (401, b"unauthorized".to_vec(), None),
             // A recognized code at another HTTP status is not retry authority.
             (429, Vec::new(), Some("status_deadline_elapsed")),
+            (429, Vec::new(), Some("status_state_busy")),
             (503, Vec::new(), Some("another_service_unavailable")),
             (503, Vec::new(), Some("status_metrics_unavailable")),
             // Only the SDK's typed header classification is authoritative.
             (
                 503,
                 br#"{"code":"status_deadline_elapsed","message":"busy"}"#.to_vec(),
+                None,
+            ),
+            (
+                503,
+                br#"{"code":"status_state_busy","message":"busy"}"#.to_vec(),
                 None,
             ),
             (503, b"malformed service error".to_vec(), None),

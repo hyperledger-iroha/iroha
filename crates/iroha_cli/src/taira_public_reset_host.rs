@@ -4,10 +4,14 @@
 pub(super) mod beacon;
 #[path = "taira_public_reset_epoch_generation.rs"]
 pub(super) mod epoch_generation;
+#[path = "taira_public_reset_epoch_reset_inputs.rs"]
+pub(super) mod epoch_reset_inputs;
 #[path = "taira_public_reset_epoch_seed_custody.rs"]
 pub(super) mod epoch_seed_custody;
 #[path = "taira_public_reset_epoch_supervisor.rs"]
 pub(super) mod epoch_supervisor;
+#[path = "taira_public_reset_epoch_update_inputs.rs"]
+pub(super) mod epoch_update_inputs;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
@@ -12855,13 +12859,26 @@ pub(super) fn validate_validator_client_inputs(
 
 /// Bind a runtime signer to the exact signed public testnet generation before use.
 fn validate_client_network_identity(config: &ClientConfig, inventory: &InventoryV1) -> Result<()> {
-    super::validate_canonical_iroha_hash("client network genesis", &inventory.next_genesis_hash)?;
-    let genesis = hex::decode(&inventory.next_genesis_hash)
+    validate_client_network_fields(
+        config,
+        &inventory.chain_id,
+        inventory.chain_discriminant,
+        &inventory.next_genesis_hash,
+    )
+}
+fn validate_client_network_fields(
+    config: &ClientConfig,
+    chain_id: &str,
+    chain_discriminant: u16,
+    next_genesis_hash: &str,
+) -> Result<()> {
+    super::validate_canonical_iroha_hash("client network genesis", next_genesis_hash)?;
+    let genesis = hex::decode(next_genesis_hash)
         .map_err(|_| eyre!("signed inventory client network identity is invalid"))?;
-    if inventory.chain_id != super::CHAIN_ID
-        || inventory.chain_discriminant != super::CHAIN_DISCRIMINANT
-        || config.chain.to_string() != inventory.chain_id
-        || config.account_chain_discriminant != inventory.chain_discriminant
+    if chain_id != super::CHAIN_ID
+        || chain_discriminant != super::CHAIN_DISCRIMINANT
+        || config.chain.to_string() != chain_id
+        || config.account_chain_discriminant != chain_discriminant
         || config.network_id.as_bytes().as_slice() != genesis.as_slice()
     {
         return Err(eyre!(
@@ -12869,6 +12886,22 @@ fn validate_client_network_identity(config: &ClientConfig, inventory: &Inventory
         ));
     }
     Ok(())
+}
+
+/// Shared native loader before a complete inventory/plan exists; fixed Taira identity only.
+pub(super) fn load_client_config_for_reset_genesis(
+    input: &super::PinnedInput,
+    label: &str,
+    next_genesis_hash: &str,
+) -> Result<ClientConfig> {
+    let config = load_client_config_from_pinned(input, label)?;
+    validate_client_network_fields(
+        &config,
+        super::CHAIN_ID,
+        super::CHAIN_DISCRIMINANT,
+        next_genesis_hash,
+    )?;
+    Ok(config)
 }
 
 pub(super) fn load_client_config_for_inventory(
@@ -24582,8 +24615,8 @@ time.sleep(30)
             .filter(|mutation| mutation.kind != "host_restart")
             .count();
         assert_eq!(
-            envelopes, 14,
-            "initial beacon install and four providers, single postrestart, and public-edge workflows retain immutable recovery evidence"
+            envelopes, 15,
+            "initial beacon install, journaled epoch supervisor start, four providers, single postrestart, and public-edge workflows retain immutable recovery evidence"
         );
         admitted.request.mutation_kind = "write_canary".to_owned();
         for phase in ["pre_edge", "restart-wave-1", "post_edge"] {

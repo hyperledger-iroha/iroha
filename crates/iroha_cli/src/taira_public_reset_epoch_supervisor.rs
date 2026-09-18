@@ -150,6 +150,15 @@ fn public_bytes(bytes: &[u8], expected: &str) -> Result<()> {
     Ok(())
 }
 pub(super) fn validate_generation(plan: &EpochSupervisorPlanV1) -> Result<NativePolicyV1> {
+    // Only the native credential consumer or fully pinned reset plan can pass this gate.
+    digest(&plan.admin_config_sha256)?;
+    digest(&plan.http_operator_key_sha256)?;
+    validate_public_generation(plan)
+}
+
+/// Validate only the complete public closure. This confers no credential or runtime authority.
+pub(super) fn validate_public_generation(plan: &EpochSupervisorPlanV1) -> Result<NativePolicyV1> {
+    let _chain_guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
     if plan.schema != PLAN_SCHEMA
         || plan.unit_name != UNIT_NAME
         || plan.state_root != STATE_ROOT
@@ -160,12 +169,7 @@ pub(super) fn validate_generation(plan: &EpochSupervisorPlanV1) -> Result<Native
             "epoch supervisor fixed service or finite invocation differs"
         ));
     }
-    for hash in [
-        &plan.iroha_sha256,
-        &plan.kagami_sha256,
-        &plan.admin_config_sha256,
-        &plan.http_operator_key_sha256,
-    ] {
+    for hash in [&plan.iroha_sha256, &plan.kagami_sha256] {
         digest(hash)?;
     }
     for (bytes, hash) in [
@@ -256,23 +260,42 @@ pub(super) fn validate_generation(plan: &EpochSupervisorPlanV1) -> Result<Native
 
 /// Validate public policy/source bindings without opening any credential or seed.
 pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
-    let plan = &inventory.epoch_supervisor;
+    let _chain_guard = super::super::enter_inventory_chain_discriminant(inventory)?;
+    validate_plan_context(
+        &inventory.epoch_supervisor,
+        &inventory.revision,
+        &inventory.validators,
+        &inventory.validator_clients,
+        &inventory.maintenance_admin_identity,
+        &inventory.maintenance_admin_config_sha256,
+        &inventory.beacon_bootstrap.genesis_public_key,
+    )
+}
+
+/// Same public admission for a generated plan before beacon/inventory assembly.
+pub(super) fn validate_plan_context(
+    plan: &EpochSupervisorPlanV1,
+    revision: &super::super::RevisionV1,
+    validators: &[ValidatorV1],
+    clients: &[super::super::ValidatorClientV1],
+    admin: &super::super::MaintenanceAdminIdentityV1,
+    admin_config_sha256: &str,
+    genesis_public_key: &iroha_crypto::PublicKey,
+) -> Result<()> {
+    let _chain_guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
     let policy = validate_generation(plan)?;
-    let nominated = inventory
-        .validators
+    let nominated = validators
         .iter()
         .find(|v| v.slug == plan.host_slug)
         .ok_or_else(|| eyre!("epoch supervisor host is not in the current cohort"))?;
-    if inventory.validators.len() != 4
-        || inventory
-            .validators
+    if validators.len() != 4
+        || validators
             .iter()
             .any(|v| v.endpoint.host_identity_sha256 != nominated.endpoint.host_identity_sha256)
-        || plan.release_source_commit != inventory.revision.commit
-        || plan.admin_config_sha256 != inventory.maintenance_admin_config_sha256
-        || policy.intent.administrator.to_string()
-            != inventory.maintenance_admin_identity.account_id
-        || policy.intent.network_id.to_string() != inventory.maintenance_admin_identity.network_id
+        || plan.release_source_commit != revision.commit
+        || plan.admin_config_sha256 != admin_config_sha256
+        || policy.intent.administrator.to_string() != admin.account_id
+        || policy.intent.network_id.to_string() != admin.network_id
     {
         return Err(eyre!(
             "epoch supervisor requires the admitted four-member host and separate administrator"
@@ -284,18 +307,17 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
         || !trust
             .peers
             .iter()
-            .any(|p| p.torii_origin == inventory.maintenance_admin_identity.torii_origin)
-        || trust.genesis_public_key != inventory.beacon_bootstrap.genesis_public_key
+            .any(|p| p.torii_origin == admin.torii_origin)
+        || trust.genesis_public_key != *genesis_public_key
     {
         return Err(eyre!(
             "maintenance administrator submission origin is not in the selected signed observation trust"
         ));
     }
     let mut selected = BTreeSet::new();
-    for client in &inventory.validator_clients {
+    for client in clients {
         let peer = client.peer_id.parse::<PeerId>()?;
-        let validator = inventory
-            .validators
+        let validator = validators
             .iter()
             .find(|v| v.slug == client.slug)
             .ok_or_else(|| eyre!("trust validator role missing"))?;
@@ -318,7 +340,7 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
     }
     let release = Path::new(&nominated.service_root)
         .join("releases")
-        .join(&inventory.revision.commit);
+        .join(&revision.commit);
     let expected_kagami = release.join("bin/kagami");
     if Path::new(&policy.kagami.path) != expected_kagami {
         return Err(eyre!(
@@ -349,8 +371,7 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
             return Err(eyre!("original seed source paths are not distinct"));
         }
     }
-    let roster = inventory
-        .validator_clients
+    let roster = clients
         .iter()
         .map(|v| v.peer_id.parse::<PeerId>())
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -384,7 +405,7 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
             "epoch supervisor executables differ from the same-release closure"
         ));
     }
-    for validator in &inventory.validators {
+    for validator in validators {
         for protected in [&validator.state_root, &validator.reset_guard] {
             let path = Path::new(protected);
             if Path::new(STATE_ROOT).starts_with(path) || path.starts_with(STATE_ROOT) {
@@ -1701,6 +1722,81 @@ mod tests {
         }
         assert!(validate_absent_unit_evidence(format!("{exact}Job=\n").as_bytes()).is_err());
     }
+    #[test]
+    fn epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile() {
+        use iroha::data_model::account::address::chain_discriminant;
+
+        let caller_profile = chain_discriminant();
+        {
+            let _foreign = ChainDiscriminantGuard::enter(753);
+            let inventory = super::super::super::sample_inventory_fixture();
+            assert_eq!(chain_discriminant(), 753);
+            super::super::super::validate_maintenance_admin_identity(&inventory)
+                .expect("administrator admission owns the fixed Taira profile");
+            assert_eq!(chain_discriminant(), 753);
+            let policy = validate_generation(&inventory.epoch_supervisor)
+                .expect("direct generation decoding owns the fixed Taira profile");
+            assert_eq!(chain_discriminant(), 753);
+            validate_plan(&inventory)
+                .expect("plan formatting retains Taira after nested generation admission");
+            assert_eq!(chain_discriminant(), 753);
+            validate_public_generation(&inventory.epoch_supervisor)
+                .expect("public generation decoding owns the fixed Taira profile");
+            assert_eq!(chain_discriminant(), 753);
+            validate_plan_context(
+                &inventory.epoch_supervisor,
+                &inventory.revision,
+                &inventory.validators,
+                &inventory.validator_clients,
+                &inventory.maintenance_admin_identity,
+                &inventory.maintenance_admin_config_sha256,
+                &inventory.beacon_bootstrap.genesis_public_key,
+            )
+            .expect("direct context admission retains Taira through canonical account formatting");
+            assert_eq!(chain_discriminant(), 753);
+
+            let mut wrong = inventory.clone();
+            wrong.chain_discriminant = 753;
+            assert!(super::super::super::validate_maintenance_admin_identity(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+            assert!(validate_plan(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+            let mut wrong = inventory.clone();
+            wrong.chain_id = "foreign-chain".into();
+            assert!(super::super::super::validate_maintenance_admin_identity(&wrong).is_err());
+            assert!(validate_plan(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+
+            let mut wrong = inventory.clone();
+            wrong.maintenance_admin_identity.account_id = policy.intent.administrator.to_string();
+            assert_ne!(
+                wrong.maintenance_admin_identity.account_id,
+                inventory.maintenance_admin_identity.account_id
+            );
+            assert!(super::super::super::validate_maintenance_admin_identity(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+
+            // Rebind every public digest/path/unit to a policy serialized under
+            // the foreign profile. Structural admission must reach and reject
+            // its foreign I105 administrator, even when the caller uses that profile.
+            let mut wrong = inventory.epoch_supervisor.clone();
+            wrong.policy_bytes = json::to_vec(&policy).unwrap();
+            wrong.policy_sha256 = sha256_hex(&wrong.policy_bytes);
+            let generation = format!("{STATE_ROOT}/generations/{}", wrong.policy_sha256);
+            wrong.admin_config_path = format!("{generation}/administrator.toml");
+            wrong.http_operator_key_path = format!("{generation}/http-operator.key");
+            wrong.policy_path = format!("{generation}/policy.json");
+            wrong.trust_path = format!("{generation}/trust.json");
+            wrong.custody_path = format!("{generation}/custody.json");
+            let cli = Path::new(&policy.kagami.path).with_file_name("iroha");
+            wrong.unit_bytes = render_unit(&wrong, cli.to_str().unwrap()).unwrap();
+            wrong.unit_sha256 = sha256_hex(&wrong.unit_bytes);
+            assert!(validate_generation(&wrong).is_err());
+            assert_eq!(chain_discriminant(), 753);
+        }
+        assert_eq!(chain_discriminant(), caller_profile);
+    }
+
     #[test]
     fn plan_rejects_wrong_administrator_origin_and_seed_role_mapping() {
         let inventory = super::super::super::sample_inventory_fixture();

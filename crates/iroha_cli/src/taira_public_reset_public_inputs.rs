@@ -28,13 +28,13 @@ pub(super) struct PreparePublicInputs {
     #[arg(
         long,
         value_name = "PATH",
-        required_unless_present = "inventory_draft",
-        conflicts_with = "inventory_draft"
+        required_unless_present = "intent",
+        conflicts_with = "intent"
     )]
     canary_public_key: Option<PathBuf>,
-    /// Explicit unsigned draft; native account parsing derives its public canary key.
+    /// Explicit topology intent; native account parsing derives its public canary key.
     #[arg(long, value_name = "PATH", conflicts_with = "canary_public_key")]
-    inventory_draft: Option<PathBuf>,
+    intent: Option<PathBuf>,
     /// Atomic public bundle under an existing owner-only parent directory.
     /// Repeating the same request verifies and reuses an identical completed bundle.
     #[arg(long, value_name = "DIR")]
@@ -272,7 +272,7 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
     ] {
         retained.push(public_file(&path, maximum)?);
     }
-    let (canary_bytes, draft_request) = match (&args.canary_public_key, &args.inventory_draft) {
+    let (canary_bytes, draft_request) = match (&args.canary_public_key, &args.intent) {
         (Some(path), None) => {
             let input = public_file(path, MAX_IDENTITY_BYTES)?;
             let bytes = input.1.clone();
@@ -280,15 +280,15 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
             (bytes, None)
         }
         (None, Some(path)) => {
-            let pin = pin_owner_private_file(path, "unsigned inventory draft")?;
+            let pin = pin_owner_private_file(path, "reset topology intent")?;
             let bytes = read_pinned_bytes(
                 path,
-                "unsigned inventory draft",
+                "reset topology intent",
                 pin.file.try_clone()?,
                 &pin.snapshot,
                 MAX_JSON_BYTES,
             )?;
-            let request = inputs::draft_canary_request(&bytes)?;
+            let request = inputs::topology_canary_request(&bytes)?;
             let account = AccountId::parse_encoded(&request.account_id)?;
             if account.to_string() != request.account_id {
                 return Err(eyre!("draft canary account is not canonical"));
@@ -302,7 +302,7 @@ pub(super) fn prepare(args: &PreparePublicInputs, output: &mut impl Write) -> Re
         }
         _ => {
             return Err(eyre!(
-                "select exactly one canary public key file or unsigned inventory draft"
+                "select exactly one canary public key file or reset topology intent"
             ));
         }
     };

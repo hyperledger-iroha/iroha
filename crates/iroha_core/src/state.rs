@@ -67681,5 +67681,6 @@ pub(crate) use tests::{
 
 mod telemetry_status;
 pub(crate) use telemetry_status::{
-    TelemetryStatusTarget, write_telemetry_journal_prefix, write_telemetry_journal_row,
+    TelemetryStatusSourceError, TelemetryStatusTarget, write_telemetry_journal_prefix,
+    write_telemetry_journal_row,
 };

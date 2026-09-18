@@ -23,6 +23,26 @@ pub(super) enum Driver {
     Supervised,
 }
 
+impl Driver {
+    // Pure admission runs before fixture paths, credentials, genesis or children
+    // exist. Do not substitute the development label into a supervisor policy.
+    pub(super) fn admit_build_identity(
+        &self,
+        identity: iroha_core::release_identity::BuildIdentity,
+    ) -> Result<iroha_core::release_identity::BuildIdentity> {
+        match self {
+            Self::Finite => Ok(identity),
+            #[cfg(target_os = "linux")]
+            Self::Supervised => {
+                identity.release_source_commit().wrap_err(
+                    "supervised beacon fixture requires an exact compiled Git source commit before setup; use maintained Taira checks, not --stable-local-metadata",
+                )?;
+                Ok(identity)
+            }
+        }
+    }
+}
+
 const EPOCH_LENGTH: u64 = 11;
 const SCHEDULE_EPOCHS: u64 = 8;
 // The existing fifteen application operations, at most eight real maintenance
@@ -601,6 +621,54 @@ async fn verify_boundary_chain(
     ensure!(
         tips.len() == 4 && tips.iter().all(|tip| *tip == tips[0]),
         "epoch proof tips differ across validators"
+    );
+    Ok(())
+}
+
+#[test]
+fn production_epoch_driver_admits_required_build_identity_before_setup() -> Result<()> {
+    use iroha_core::release_identity::{BuildIdentity, BuildIdentityError};
+
+    let development = BuildIdentity::from_compiled_parts(
+        "fixture-test",
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    )?;
+    assert_eq!(
+        Driver::Finite.admit_build_identity(development)?,
+        development
+    );
+
+    // This known public source revision tests admission syntax only. It is never
+    // selected as executable metadata or claimed as authenticated provenance.
+    let source = BuildIdentity::from_compiled_parts(
+        "fixture-test",
+        Some("592c6e0e5adcd2ff5e0492d971bfbb179f591b53"),
+        None,
+        None,
+        None,
+        None,
+    )?;
+    assert_eq!(Driver::Finite.admit_build_identity(source)?, source);
+    #[cfg(target_os = "linux")]
+    {
+        let error = Driver::Supervised
+            .admit_build_identity(development)
+            .expect_err("supervised custody must reject a development identity before setup");
+        assert_eq!(
+            error.downcast_ref::<BuildIdentityError>(),
+            Some(&BuildIdentityError::DevelopmentSource)
+        );
+        assert!(error.to_string().contains("before setup"));
+        assert_eq!(Driver::Supervised.admit_build_identity(source)?, source);
+    }
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(
+        development.release_source_commit(),
+        Err(BuildIdentityError::DevelopmentSource)
     );
     Ok(())
 }
