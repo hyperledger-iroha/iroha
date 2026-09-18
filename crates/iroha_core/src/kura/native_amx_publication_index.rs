@@ -281,9 +281,11 @@ struct NativeAmxPublicationIndexInventory {
 struct NativeAmxPublicationIndexSelection {
     pins: BTreeMap<u64, HashOf<BlockHeader>>,
     /// Header-selected candidates still require complete wire/association checks.
+    #[cfg(test)]
     selected_candidates: BTreeSet<NativeAmxPublicationCarrier>,
     /// Omitted pins are NOT retireable: only a separately proven old marker,
     /// exact replacement or completed prune may authorize their removal.
+    #[cfg(test)]
     unresolved: BTreeSet<NativeAmxPublicationCarrier>,
 }
 
@@ -292,6 +294,7 @@ impl NativeAmxPublicationIndexInventory {
         self.files.len() + self.orphan_temporaries.len()
     }
 
+    #[cfg(test)]
     fn carriers(&self) -> BTreeSet<NativeAmxPublicationCarrier> {
         self.records.keys().copied().collect()
     }
@@ -345,11 +348,14 @@ impl NativeAmxPublicationIndexInventory {
             ));
         }
         let mut pins = BTreeMap::new();
+        #[cfg(test)]
         let mut selected_candidates = BTreeSet::new();
+        #[cfg(test)]
         let mut unresolved = BTreeSet::new();
         for record in self.records.values() {
             let carrier = record.carrier;
             if carrier.height > marker.count {
+                #[cfg(test)]
                 unresolved.insert(carrier);
                 continue;
             }
@@ -361,14 +367,18 @@ impl NativeAmxPublicationIndexInventory {
             })?;
             if carrier.block_hash == hash {
                 pins.insert(carrier.height, hash);
+                #[cfg(test)]
                 selected_candidates.insert(carrier);
             } else {
+                #[cfg(test)]
                 unresolved.insert(carrier);
             }
         }
         Ok(NativeAmxPublicationIndexSelection {
             pins,
+            #[cfg(test)]
             selected_candidates,
+            #[cfg(test)]
             unresolved,
         })
     }
@@ -547,14 +557,26 @@ impl Kura {
             ));
         }
         let carrier = Self::native_amx_publication_carrier(block)?;
-        if Self::read_native_amx_publication_index_for_store(&self.store_root)?
-            .records
-            .get(&carrier)
-            .is_some_and(|record| {
-                record.origin == NativeAmxPublicationIndexOriginV1::CanonicalWrite
-            })
-        {
+        let retained_index = Self::read_native_amx_publication_index_for_store(&self.store_root)?;
+        let retained_record = retained_index.records.get(&carrier);
+        if retained_record.is_some_and(|record| {
+            record.origin == NativeAmxPublicationIndexOriginV1::CanonicalWrite
+        }) {
             return self.prepare_native_amx_publication_index(block, merge_entry, None);
+        }
+        if let Some(record) = retained_record {
+            record
+                .validate()
+                .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+            if record.carrier != carrier
+                || record.merge_entry_hash != merge_entry.map(MergeLedgerEntry::canonical_hash)
+                || record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native completed repair differs from its retained publication index"
+                        .to_owned(),
+                ));
+            }
         }
         let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {
             Error::PruneIntentConflict("Native completed repair has zero height".to_owned())
@@ -616,7 +638,9 @@ impl Kura {
                     // the later pair, finalized WSV join and completed cleanup.
                     None => {}
                     Some((_, capacity)) => {
-                        self.require_native_amx_completed_repair_receipt_at_target_locked(&target, receipt)?;
+                        self.require_native_amx_completed_repair_receipt_at_target_locked(
+                            &target, receipt, retained_record.map(|record| (record, manifest)),
+                        )?;
                         if !targets.contains(&index)
                             && (!capacity.outstanding_components.is_empty()
                                 || capacity.prune_journal_bytes != 0
@@ -642,10 +666,16 @@ impl Kura {
     /// Callers hold prune, canonical, geometry and sidecar in order. WSV alone
     /// cannot replace an unfinished index; an exact stable receipt and latest
     /// pointer are retained proof of the prior completed route publication.
+    /// Only an existing, independently authenticated repair locator can own
+    /// exact publication temporaries; pristine admission remains temp-free.
     fn require_native_amx_completed_repair_receipt_at_target_locked(
         &self,
         entry: &impl LaneArtifactStorageView,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        recovery: Option<(
+            &NativeAmxPublicationIndexRecord,
+            &NativeAmxParticipantApplicationManifestArtifactV1,
+        )>,
     ) -> Result<()> {
         let descriptor = &receipt.participant_proposal.descriptor;
         self.require_active_lane_artifact(entry, descriptor)?;
@@ -654,12 +684,53 @@ impl Kura {
         let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
         let file = inventory.receipts.get(&descriptor.lane_block_height)
             .ok_or_else(|| Error::PruneIntentConflict("Native unfinished publication lacks its exact pending index and retained receipt".to_owned()))?;
-        if !inventory.temporaries.is_empty()
-            || self.decode_native_amx_receipt_file_locked(entry, &namespace, file)? != *receipt
-        {
+        if self.decode_native_amx_receipt_file_locked(entry, &namespace, file)? != *receipt {
             return Err(Error::PruneIntentConflict(
                 "Native completed repair lacks exact stable receipt custody".to_owned(),
             ));
+        }
+        if !inventory.temporaries.is_empty() {
+            let Some((record, manifest)) = recovery else {
+                return Err(Error::PruneIntentConflict(
+                    "Native new completed repair cannot adopt unowned publication temporaries"
+                        .to_owned(),
+                ));
+            };
+            record
+                .validate()
+                .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+            if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair
+                || record.carrier.height != manifest.leaf.application_block_height
+                || record.carrier.block_hash != manifest.leaf.application_block_hash
+                || record.carrier.executed_wire_hash != manifest.leaf.executed_block_wire_hash
+                || HashOf::new(manifest) != receipt.manifest_artifact_hash
+                || manifest.finality_artifact_hash != receipt.finality_artifact_hash
+                || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                    receipt,
+                    &manifest.leaf,
+                )
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native repair temporary lacks its exact retained index and artifact join"
+                        .to_owned(),
+                ));
+            }
+            for temporary in inventory.temporaries.values() {
+                let expected = match temporary.kind {
+                    NativeAmxEvidenceKind::Manifest => manifest.encode_framed()?,
+                    NativeAmxEvidenceKind::Receipt => receipt.encode_framed()?,
+                };
+                // Inventory binds canonical filename, route and physical identity;
+                // this read rechecks that same object, not a path-only replacement.
+                if temporary.participant_height != descriptor.lane_block_height
+                    || self.read_native_amx_evidence_file_bytes_locked(&namespace, temporary)?
+                        != expected
+                {
+                    return Err(Error::PruneIntentConflict(
+                        "Native repair temporary differs from its exact authenticated canonical artifact".to_owned(),
+                    ));
+                }
+            }
         }
         let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
             entry,
@@ -690,8 +761,20 @@ impl Kura {
         &self,
         block: &SignedBlock,
         merge: Option<&MergeLedgerEntry>,
+        record: &NativeAmxPublicationIndexRecord,
     ) -> Result<()> {
         let carrier = Self::native_amx_publication_carrier(block)?;
+        record
+            .validate()
+            .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+        if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair
+            || record.carrier != carrier
+            || record.merge_entry_hash != merge.map(MergeLedgerEntry::canonical_hash)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native completed repair startup differs from its retained index".to_owned(),
+            ));
+        }
         let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {
             Error::PruneIntentConflict("Native completed repair has zero startup height".to_owned())
         })?;
@@ -743,7 +826,9 @@ impl Kura {
                 .is_some()
             {
                 self.require_native_amx_completed_repair_receipt_at_target_locked(
-                    &target, &receipt,
+                    &target,
+                    &receipt,
+                    Some((record, &manifest)),
                 )?;
             }
             self.require_native_amx_reservation_physical_target(&target)?;
@@ -1404,6 +1489,77 @@ mod native_amx_publication_index_tests {
         assert!(record.validate().is_ok());
         record.replaced = Some(record.carrier);
         assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn completed_repair_roundtrip_preserves_earlier_carrier_below_ordinary_tip() {
+        let native = carrier(1, 11, 12);
+        let later = carrier(2, 31, 32);
+        let marker = BlockStoreCommitMarker::new(2, Some(later.block_hash));
+        let record = NativeAmxPublicationIndexRecord {
+            selection_marker: marker.clone(),
+            origin: NativeAmxPublicationIndexOriginV1::CompletedRepair,
+            ..initial()
+        };
+        let bytes = record
+            .encoded()
+            .expect("committed repair has an exact bounded frame");
+        assert_eq!(
+            NativeAmxPublicationIndexRecord::decode(&bytes).unwrap(),
+            record
+        );
+        let selected = inventory(vec![record.clone()])
+            .selection_for_resolved_marker(&marker, |height| {
+                Ok(match height {
+                    1 => Some(native.block_hash),
+                    2 => Some(later.block_hash),
+                    _ => None,
+                })
+            })
+            .expect("ordinary successor preserves committed repair ownership");
+        assert_eq!(selected.pins, BTreeMap::from([(1, native.block_hash)]));
+        assert_eq!(selected.selected_candidates, BTreeSet::from([native]));
+        assert_eq!(
+            record
+                .classify_resolved_carrier(&marker, Some(native))
+                .unwrap(),
+            NativeAmxPublicationIndexResolution::Committed
+        );
+        for selected in [None, Some(carrier(1, 11, 99)), Some(carrier(1, 71, 72))] {
+            assert_eq!(
+                record.classify_resolved_carrier(&marker, selected).unwrap(),
+                NativeAmxPublicationIndexResolution::RequiresRetirementProof,
+                "a repair's pre-admission frontier cannot prove it uncommitted"
+            );
+        }
+        assert_eq!(
+            record
+                .classify_resolved_carrier(&BlockStoreCommitMarker::new(0, None), None)
+                .unwrap(),
+            NativeAmxPublicationIndexResolution::RequiresRetirementProof
+        );
+    }
+
+    #[test]
+    fn completed_repair_rejects_future_height_tip_mismatch_and_replacement() {
+        let mut record = NativeAmxPublicationIndexRecord {
+            origin: NativeAmxPublicationIndexOriginV1::CompletedRepair,
+            ..initial()
+        };
+        assert!(
+            record.validate().is_err(),
+            "an uncommitted carrier is not a repair"
+        );
+        record.selection_marker = BlockStoreCommitMarker::new(1, Some(record.carrier.block_hash));
+        assert!(record.validate().is_ok());
+        record.selection_marker.tip_hash = Some(carrier(1, 71, 72).block_hash);
+        assert!(record.validate().is_err(), "tip identity must be exact");
+        record.selection_marker.tip_hash = Some(record.carrier.block_hash);
+        record.replaced = Some(carrier(1, 11, 99));
+        assert!(
+            record.validate().is_err(),
+            "repair never grants replacement authority"
+        );
     }
 
     #[test]

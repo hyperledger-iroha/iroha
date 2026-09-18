@@ -5,10 +5,16 @@
 //! role separation and witnesses. TODO: integrate indexed polynomial access and the complete
 //! stored prover before replacing the dense production loaders; never fabricate a normal PK.
 //! The retained VK/domain/CS and scanner permutation bitmap still need memory accounting.
+//! The indexed loader is test-only until that integration; the bounded canonical digest writer
+//! remains available to the production artifact loader.
 
-use std::{io, path::Path};
+use std::io;
+#[cfg(test)]
+use std::path::Path;
 
+#[cfg(test)]
 use ff::FromUniformBytes;
+#[cfg(test)]
 use halo2_proofs::{
     SerdeCurveAffine, SerdePrimeField,
     halo2curves::pasta::{EpAffine, EqAffine},
@@ -16,13 +22,16 @@ use halo2_proofs::{
 };
 use sha2::{Digest as _, Sha256};
 
+use super::KagemushaArtifactBindingV1;
+#[cfg(test)]
 use super::{
-    KagemushaArtifactBindingV1, KagemushaArtifactByteResolverV1, KagemushaArtifactDescriptorV1,
-    KagemushaArtifactErrorV1, KagemushaArtifactKindV1, KagemushaArtifactRoleV1,
-    KagemushaAuthenticatedArtifactSetV1, KagemushaPastaParityV1,
+    KagemushaArtifactByteResolverV1, KagemushaArtifactDescriptorV1, KagemushaArtifactErrorV1,
+    KagemushaArtifactKindV1, KagemushaArtifactRoleV1, KagemushaAuthenticatedArtifactSetV1,
+    KagemushaPastaParityV1,
     stored_capture::{CapturedProvingKeyArtifactV1, CapturedProvingKeyReaderV1},
 };
 
+#[cfg(test)]
 mod sealed {
     pub trait PastaCurve {}
     impl PastaCurve for super::EqAffine {}
@@ -30,6 +39,7 @@ mod sealed {
 }
 
 /// Closed mapping from the original Pasta curve to its release role parity.
+#[cfg(test)]
 pub(in crate::zk::kagemusha_v1_recursion) trait KagemushaIndexedKeyCurveV1:
     SerdeCurveAffine + sealed::PastaCurve
 {
@@ -37,10 +47,12 @@ pub(in crate::zk::kagemusha_v1_recursion) trait KagemushaIndexedKeyCurveV1:
     const PARITY: KagemushaPastaParityV1;
 }
 
+#[cfg(test)]
 impl KagemushaIndexedKeyCurveV1 for EqAffine {
     const PARITY: KagemushaPastaParityV1 = KagemushaPastaParityV1::Eq;
 }
 
+#[cfg(test)]
 impl KagemushaIndexedKeyCurveV1 for EpAffine {
     const PARITY: KagemushaPastaParityV1 = KagemushaPastaParityV1::Ep;
 }
@@ -49,6 +61,7 @@ impl KagemushaIndexedKeyCurveV1 for EpAffine {
 ///
 /// Fields and construction are private. This has no clone, replacement-source constructor or
 /// mutable index/VK accessor. A checked embedded VK is not standalone release verification.
+#[cfg(test)]
 pub(in crate::zk::kagemusha_v1_recursion) struct AuthenticatedIndexedProvingKeyV1<
     C: SerdeCurveAffine,
 > {
@@ -56,6 +69,7 @@ pub(in crate::zk::kagemusha_v1_recursion) struct AuthenticatedIndexedProvingKeyV
     index: IndexedStructuredProvingKeyV1<C>,
 }
 
+#[cfg(test)]
 impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> {
     /// Capture and index exactly this set's original proving-key source under trusted shape inputs.
     ///
@@ -120,6 +134,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     }
 }
 
+#[cfg(test)]
 impl<C: SerdeCurveAffine> AuthenticatedIndexedProvingKeyV1<C>
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
@@ -164,6 +179,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn indexed_key_error(role: KagemushaArtifactRoleV1, reason: &str) -> KagemushaArtifactErrorV1 {
     KagemushaArtifactErrorV1::Read {
         role,

@@ -89,6 +89,7 @@ fn snapshot_owner_policy_fixture() -> (
         },
     ])
     .expect("nondefault dataspace policy");
+    configured.configured_dataspace_catalog = configured.dataspace_catalog.clone();
     configured.staking.max_validators = nonzero!(7_u32);
     configured.autoscale.enabled = false;
     // Reserve a valid range above the static lanes; disabled autoscaling still validates its bounds.

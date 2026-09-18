@@ -388,6 +388,11 @@ pub use fastpq_source_inventory::{
 };
 mod lane_admitted_input;
 mod lane_decision_batch;
+mod native_lane_batch_replay;
+mod native_lane_fastpq;
+pub(crate) use native_lane_batch_replay::{
+    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+};
 mod lane_decision_execution;
 mod lane_decision_group;
 mod lane_input_body;
@@ -13415,6 +13420,9 @@ pub struct StateBlock<'state> {
     merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
     staged_merge_entry: Option<MergeLedgerEntry>,
+    /// Private native source seal; roots bind the shared start+native prefix.
+    /// Publication remains forbidden until the sole consumer owns the final seal.
+    native_lane_stage: Option<Box<lane_decision_batch::NativeLaneStageSealV1>>,
     /// Exact proposal-native QueuePlan certificates staged before ordinary
     /// carrier-block effects. These controls are ordered by the Sumeragi QC,
     /// independently from the Nexus merge ledger.
@@ -30351,12 +30359,26 @@ impl State {
             .block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
             .expect("infallible pristine block stage"))
     }
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn block_with_pristine_stage<E>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
     ) -> Result<StateBlock<'_>, E> {
+        self.block_with_owned_start_stages(curr_block, stage, |_, ()| Ok(()))
+            .map(|(block, ())| *block)
+    }
+
+    /// Own one overlay across pre-State authentication, all shared start effects,
+    /// and a one-use after-start continuation. The continuation's value can only
+    /// come from the before-start closure on this SAME overlay. Native callers
+    /// retain the heap owner; old callers keep their existing return convention.
+    #[allow(clippy::too_many_lines)]
+    fn block_with_owned_start_stages<'state, E, T, R>(
+        &'state self,
+        curr_block: BlockHeader,
+        before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
+        after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
+    ) -> Result<(Box<StateBlock<'state>>, R), E> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         let nexus_snapshot = self.nexus_snapshot();
@@ -30394,7 +30416,7 @@ impl State {
             world.privacy_consensus_policy.get().current_limits,
         )
         .expect("persisted privacy consensus policy was validated before block construction");
-        let mut sb = StateBlock {
+        let mut sb = Box::new(StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
             world,
@@ -30457,6 +30479,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -30492,10 +30515,10 @@ impl State {
             committed_fragments: 0,
             authenticated_replay_commit: false,
             replay_prevalidation: false,
-        };
+        });
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
-        stage(&mut sb)?;
+        let continuation = before_start(&mut sb)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
                 .unwrap_or_else(|error| {
@@ -30639,7 +30662,8 @@ impl State {
         Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
         Self::apply_block_start_confidential_policies(&mut sb, now_h);
         sb.start_of_block_effects_applied = true;
-        Ok(sb)
+        let result = after_start(&mut sb, continuation)?;
+        Ok((sb, result))
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]
@@ -31167,6 +31191,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -31310,6 +31335,7 @@ impl State {
             autoscale_evaluated_committed_fragment_count: None,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
+            native_lane_stage: None,
             staged_queue_plan_admissions: Vec::new(),
             canonical_wsv_merge_commit_authorization: None,
             canonical_carrier_commit_metadata_authorization: None,
@@ -53107,6 +53133,9 @@ impl<'state> StateBlock<'state> {
         declared
     }
     fn validate_merge_carrier_entrypoint_binding(&self) -> Result<(), MergeLedgerCommitError> {
+        if self.native_lane_stage.is_some() {
+            return self.validate_native_lane_stage_membership();
+        }
         let expected = self.expected_merge_carrier_entrypoints();
         if self.merge_carrier_entrypoints == expected
             && self.declared_merge_carrier_entrypoints() == expected
@@ -53198,6 +53227,7 @@ impl<'state> StateBlock<'state> {
     fn ensure_pristine_execution_control_stage(&self) -> Result<(), MergeLedgerCommitError> {
         if self.start_of_block_effects_applied
             || self.staged_merge_entry.is_some()
+            || self.native_lane_stage.is_some()
             || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
@@ -54256,10 +54286,12 @@ impl<'state> StateBlock<'state> {
         }
         Ok(())
     }
-    fn take_merge_lane_fastpq_transcripts(
-        &mut self,
+    /// Shared exact outer/call selection for old export and retained native output.
+    /// It validates every binding before either caller mutates transcript custody.
+    fn lane_fastpq_transcript_selection(
+        &self,
         entrypoints: &[TransactionEntrypoint],
-    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+    ) -> Result<(BTreeMap<Hash, Hash>, BTreeSet<Hash>), MergeLedgerCommitError> {
         if self.fastpq_source_inventory.is_some() {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
                 "lane execution cannot extract FASTPQ evidence after source inventory finalization"
@@ -54297,6 +54329,14 @@ impl<'state> StateBlock<'state> {
             }
             selected_call_hashes.insert(call_hash);
         }
+        Ok((entrypoint_bindings, selected_call_hashes))
+    }
+    fn take_merge_lane_fastpq_transcripts(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+        let (entrypoint_bindings, selected_call_hashes) =
+            self.lane_fastpq_transcript_selection(entrypoints)?;
         // Certified lane execution exports these transcripts in the lane bundle. Their
         // local captures must leave with them before the carrier seals its own inventory.
         // Preflight both maps completely so a rejected extraction changes neither one.
@@ -54704,6 +54744,7 @@ impl<'state> StateBlock<'state> {
             || self.pending_autoscale_lifecycle.is_some()
             || self.autoscale_sample_history_dirty
             || self.staged_merge_entry.is_some()
+            || self.native_lane_stage.is_some()
             || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
@@ -54800,6 +54841,14 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
+        // TODO: replace this refusal only with the sole ValidBlock final witness,
+        // exact native carrier publication authorization and durable Apply gate.
+        // An empty old-merge authorization or authenticated replay flag cannot
+        // grant publication to a native execution prefix.
+        if self.native_lane_stage.is_some() {
+            error!("native stage has no canonical publication authorization yet");
+            return Err(TransactionsBlockError::MergeAdmission);
+        }
         if let Err(error) = self.verify_lane_consensus_contexts_publication() {
             error!(
                 ?error,
@@ -56050,7 +56099,7 @@ impl<'state> StateBlock<'state> {
         // rolling State cache is intentionally published only after this
         // StateBlock commits successfully. Refreshing from the old cache here
         // would overwrite the certified staged values.
-        if self.staged_merge_entry.is_none() {
+        if self.staged_merge_entry.is_none() && self.native_lane_stage.is_none() {
             self.refresh_merge_metadata_from_latest_entry();
         }
         let prev_topology = self.commit_topology.take_vec();

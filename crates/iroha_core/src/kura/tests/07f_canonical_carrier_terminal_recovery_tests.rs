@@ -343,7 +343,7 @@ fn canonical_terminal_merge_carrier_for_test(
 ) -> (Arc<SignedBlock>, Arc<SignedBlock>, MergeLedgerEntry) {
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
+    let raw_carrier = blocks.next_empty_with_results();
     let entrypoint_count =
         u64::try_from(execution.entrypoints.len()).expect("terminal entrypoint count fits u64");
     let executions = vec![execution];
@@ -1048,7 +1048,7 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     }
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
+    let raw_carrier = blocks.next_empty_with_results();
     let entrypoint_count = executions
         .iter()
         .try_fold(0_u64, |count, execution| {

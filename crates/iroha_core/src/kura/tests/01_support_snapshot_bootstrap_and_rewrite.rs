@@ -665,13 +665,7 @@ fn store_indexed_reservation_carrier(
     let genesis = blocks.next_with_results();
     // Certified merge execution owns the complete economic input. Its global
     // carrier must not repeat DummyBlocks' unrelated ordinary transaction.
-    let mut raw_carrier: SignedBlock = BlockBuilder::new(Vec::new())
-        .chain(0, Some(genesis.as_ref()))
-        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-        .unpack(|_| {})
-        .into();
-    attach_ok_results_to_block(&mut raw_carrier);
-    let raw_carrier = Arc::new(raw_carrier);
+    let raw_carrier = blocks.next_empty_with_results();
     assert_eq!(raw_carrier.external_entrypoints_cloned().count(), 0);
     assert!(
         raw_carrier
@@ -701,18 +695,17 @@ fn store_indexed_reservation_carrier(
         &RuntimeLaneConfig::default(),
         &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
     );
-    let mut executed_carrier = raw_carrier.as_ref().clone();
-    attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut entry);
+    let carrier = bind_merge_entry_to_carrier(raw_carrier, &mut entry);
     assert!(
         carrier.has_results(),
         "a canonical reservation carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
         carrier.external_entrypoints_cloned().count(),
-        "the reservation carrier must contain one result per ordinary entrypoint"
+        0,
+        "the reservation carrier must keep certified external execution in its sidecar"
     );
+    assert_eq!(carrier.results().count(), 0);
     assert_eq!(
         entry
             .execution_batch

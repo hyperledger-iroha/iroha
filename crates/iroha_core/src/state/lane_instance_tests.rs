@@ -1,5 +1,45 @@
 // Process-lived owner controls using actual finalized State, Kura, RS16 and WAL.
 
+// Tests explicitly run the real move-owned disk job on a worker thread. This
+// convenience is fixture-only; production service_one never appends or fsyncs.
+trait LaneInstanceWorkerTestExt {
+    fn service_with_worker(
+        &mut self,
+        state: &State,
+        observed: &VerifiedLaneContexts,
+        now: std::time::Instant,
+    ) -> std::result::Result<
+        crate::sumeragi::v2_lane_instance::LaneService,
+        crate::sumeragi::v2_lane_instance::LaneInstanceError,
+    >;
+}
+impl LaneInstanceWorkerTestExt for crate::sumeragi::v2_lane_instance::LaneInstance {
+    fn service_with_worker(
+        &mut self,
+        state: &State,
+        observed: &VerifiedLaneContexts,
+        now: std::time::Instant,
+    ) -> std::result::Result<
+        crate::sumeragi::v2_lane_instance::LaneService,
+        crate::sumeragi::v2_lane_instance::LaneInstanceError,
+    > {
+        use crate::sumeragi::v2_lane_instance::{LanePersistenceLaunch, LaneService};
+        let service = self.service_one(state, observed, now)?;
+        if !matches!(service, LaneService::NeedsPersistenceWorker) {
+            return Ok(service);
+        }
+        let LanePersistenceLaunch::Job(job) = self.take_persistence_job()? else {
+            panic!("fixture reserved a physical worker slot for the exact issued effect");
+        };
+        let completed = std::thread::scope(|scope| scope.spawn(move || job.run()).join().unwrap());
+        self.finish_persistence_job(completed)
+            .map_err(|(error, completed)| {
+                drop(completed);
+                error
+            })
+    }
+}
+
 fn open_lane_instance_for_test(
     fixture: &LaneContextVerifiedFixture,
     observed: &VerifiedLaneContexts,
@@ -16,7 +56,7 @@ fn open_lane_instance_for_test(
         .find(|key| key.public_key() == lane.frozen().committee[signer].public_key())
         .unwrap()
         .clone();
-    LaneInstance::open(
+    LaneInstance::open_with_worker_for_test(
         &fixture.state,
         observed,
         lane,
@@ -82,7 +122,7 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
         assert_eq!(owner.timeout_deadline(), Some(due), "the same owner starts before any payload exists");
         assert!(matches!(owner.poll_clock(state, &observed, due).unwrap(), LaneInputOutcome::Stepped(receipt) if receipt.disposition == core::StepDisposition::Applied));
         assert!(matches!(owner.held_effects().collect::<Vec<_>>().as_slice(), [core::Effect::Persist { .. }]));
-        assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
+        assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
         assert_eq!(owner.native_records().len(), 1);
         let exact = owner.native_records()[0].clone();
         assert!(matches!(&exact.record, LaneWalRecordV1::TimeoutIntent { body, .. } if body.highest_prepare.is_none()));
@@ -91,11 +131,11 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
             owner = open_lane_instance_for_test(&fixture, &observed, lane, signer, due);
             assert_eq!(owner.native_records(), std::slice::from_ref(&exact));
         } else {
-            assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Completion(receipt) if receipt.disposition == core::StepDisposition::Applied));
+            assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Completion(receipt) if receipt.disposition == core::StepDisposition::Applied));
         }
         assert!(matches!(owner.held_effects().collect::<Vec<_>>().as_slice(), [core::Effect::Sign { message: core::SignableMessage::TimeoutVote(_), .. }]));
-        assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::SignedAwaitingAck));
-        assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Completion(receipt) if receipt.disposition == core::StepDisposition::Applied));
+        assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::SignedAwaitingAck));
+        assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Completion(receipt) if receipt.disposition == core::StepDisposition::Applied));
         let (sender, receiver) = mpsc::sync_channel(1);
         assert!(matches!(owner.flush_one(state, &observed, &sender).unwrap(), LaneService::Sent));
         let packet = receiver.recv().unwrap();
@@ -142,13 +182,13 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
             }
         }
         assert!(owner.held_effects().any(|effect| matches!(effect, core::Effect::Persist { .. })));
-        assert!(matches!(owner.service_one(state, &observed, installed).unwrap(), LaneService::PersistedAwaitingAck),
+        assert!(matches!(owner.service_with_worker(state, &observed, installed).unwrap(), LaneService::PersistedAwaitingAck),
             "a retained Broadcast cannot hide the issued fsync");
         assert_eq!(owner.tag().view(), 0);
         let overflow = maximal_lane_clock_instant_for_test(start);
-        assert!(owner.service_one(state, &observed, overflow).is_err());
+        assert!(owner.service_with_worker(state, &observed, overflow).is_err());
         assert_eq!(owner.tag().view(), 0, "deadline preflight cannot consume the held fsync acknowledgement");
-        let LaneService::Completion(receipt) = owner.service_one(state, &observed, installed).unwrap() else { panic!("durable TC ack") };
+        let LaneService::Completion(receipt) = owner.service_with_worker(state, &observed, installed).unwrap() else { panic!("durable TC ack") };
         assert_eq!(owner.tag().view(), 1);
         assert_eq!(receipt.retired.len(), 1);
         assert!(matches!(&receipt.retired[0].effect, core::Effect::Broadcast(core::ConsensusMessageV2::TimeoutVote(_))),
@@ -156,9 +196,9 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
         let retired_packet = receipt.retired[0].packet.as_ref().expect("full channel retained the exact native bytes");
         assert_eq!(retired_packet.canonical_bytes, norito::encode_canonical(&retired_packet.envelope).unwrap());
         let exact_enter = owner.held_effects().find(|effect| matches!(effect, core::Effect::EnterView { .. })).unwrap().clone();
-        assert!(owner.service_one(state, &observed, overflow).is_err());
+        assert!(owner.service_with_worker(state, &observed, overflow).is_err());
         assert!(owner.held_effects().any(|effect| effect == &exact_enter), "clock overflow cannot consume EnterView");
-        assert!(matches!(owner.service_one(state, &observed, installed).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
+        assert!(matches!(owner.service_with_worker(state, &observed, installed).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
         let durable_records = owner.native_records().to_vec();
         let held_after_install = owner.held_effects().cloned().collect::<Vec<_>>();
         for message in retained_inputs {
@@ -193,9 +233,9 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
     let late_signer = context.roster().iter().position(|validator| validator.id() == silent).unwrap();
     let mut late = open_lane_instance_for_test(&fixture, &observed, lane, late_signer, start);
     assert!(matches!(late.offer(state, &observed, &recovered_tc.unwrap()).unwrap(), LaneInputOutcome::Stepped(_)));
-    assert!(matches!(late.service_one(state, &observed, installed).unwrap(), LaneService::PersistedAwaitingAck));
-    assert!(matches!(late.service_one(state, &observed, installed).unwrap(), LaneService::Completion(_)));
-    assert!(matches!(late.service_one(state, &observed, installed).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
+    assert!(matches!(late.service_with_worker(state, &observed, installed).unwrap(), LaneService::PersistedAwaitingAck));
+    assert!(matches!(late.service_with_worker(state, &observed, installed).unwrap(), LaneService::Completion(_)));
+    assert!(matches!(late.service_with_worker(state, &observed, installed).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
     assert!(late.held_effects().next().is_none());
     assert_eq!(late.native_records().len(), 1, "the initially silent fourth validator needs only the authenticated recovered TC");
 }
@@ -212,7 +252,7 @@ state_test! { sync native_lane_instance_retains_clock_and_durable_completion_acr
     let due = start + Duration::from_secs(1);
     let mut owner = open_lane_instance_for_test(&fixture, &observed, lane, 0, start);
     owner.poll_clock(state, &observed, due).unwrap();
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
     let tag = owner.tag();
     let records = owner.native_records().to_vec();
     let parent = state.kura.v2_finality_artifact(fixture.block.header().height().get()).unwrap().unwrap();
@@ -229,8 +269,8 @@ state_test! { sync native_lane_instance_retains_clock_and_durable_completion_acr
     let (artifact, receipt) = stage_lane_context_fixture_finality(state, &later, opening, witness);
     state.kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
     assert!(!observed.is_current(state));
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Completion(_)), "already-fsynced custody completes despite a stale global observation");
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Gate(LaneCurrentGate::ObservationChanged)), "signing must use a fresh State lease");
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Completion(_)), "already-fsynced custody completes despite a stale global observation");
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Gate(LaneCurrentGate::ObservationChanged)), "signing must use a fresh State lease");
     assert!(matches!(owner.held_effects().collect::<Vec<_>>().as_slice(), [core::Effect::Sign { .. }]));
     assert_eq!(owner.tag(), tag);
     assert_eq!(owner.native_records(), records);
@@ -238,8 +278,8 @@ state_test! { sync native_lane_instance_retains_clock_and_durable_completion_acr
     let current = state.verified_lane_consensus_contexts().unwrap().unwrap();
     assert_eq!(current.contexts()[0].instance_id(), lane.instance_id());
     assert!(matches!(owner.poll_clock(state, &observed, due).unwrap(), LaneInputOutcome::Gate(LaneCurrentGate::ObservationChanged)));
-    assert!(matches!(owner.service_one(state, &current, due).unwrap(), LaneService::SignedAwaitingAck));
-    assert!(matches!(owner.service_one(state, &current, due).unwrap(), LaneService::Completion(_)));
+    assert!(matches!(owner.service_with_worker(state, &current, due).unwrap(), LaneService::SignedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state, &current, due).unwrap(), LaneService::Completion(_)));
     assert_eq!(owner.tag(), tag);
 }
 
@@ -284,7 +324,7 @@ state_test! { sync native_lane_instance_replayed_body_sign_keeps_exact_effect_wi
     let exact = owner.held_effects().cloned().collect::<Vec<_>>();
     assert!(matches!(exact.as_slice(), [core::Effect::Sign { message: core::SignableMessage::Proposal(_), .. }]));
     for _ in 0..3 {
-        assert!(matches!(owner.service_one(state, &observed, now).unwrap(), LaneService::NeedsBodyAdapter));
+        assert!(matches!(owner.service_with_worker(state, &observed, now).unwrap(), LaneService::NeedsBodyAdapter));
         assert_eq!(owner.held_effects().cloned().collect::<Vec<_>>(), exact);
     }
     let recovered = owner.body_store().read_for_manifest(&manifest).unwrap().unwrap();
@@ -342,9 +382,9 @@ state_test! { sync native_lane_instance_timeout_preserves_high_prepare_while_bod
             assert!(owner.take_diagnostic().is_none());
         }
     }
-    assert!(matches!(owner.service_one(state, &observed, now).unwrap(), LaneService::PersistedAwaitingAck));
-    assert!(matches!(owner.service_one(state, &observed, now).unwrap(), LaneService::Completion(_)));
-    assert!(matches!(owner.service_one(state, &observed, now).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
+    assert!(matches!(owner.service_with_worker(state, &observed, now).unwrap(), LaneService::PersistedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state, &observed, now).unwrap(), LaneService::Completion(_)));
+    assert!(matches!(owner.service_with_worker(state, &observed, now).unwrap(), LaneService::EnteredView(tag) if tag.view() == 1));
     assert!(owner.held_effects().any(|effect| matches!(effect, core::Effect::FetchBody { .. })));
     let due = owner.timeout_deadline().unwrap();
     assert_eq!(due, now + Duration::from_secs(2));
@@ -355,13 +395,13 @@ state_test! { sync native_lane_instance_timeout_preserves_high_prepare_while_bod
         assert_eq!(fetches, vec![exact_fetch.clone()], "one unlaunched exact Fetch owns repeated shared requests without exhausting control capacity");
     }
     owner.poll_clock(state, &observed, due).unwrap();
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::PersistedAwaitingAck));
     let LaneWalRecordV1::TimeoutIntent { body: retained, .. } = &owner.native_records().last().unwrap().record else { panic!("actual new timeout intent") };
     assert_eq!(retained.highest_prepare, Some(prepare.clone()));
     assert_eq!(retained.round.voting_view, 1);
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Completion(_)));
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::SignedAwaitingAck));
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::Completion(_)));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Completion(_)));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::SignedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::Completion(_)));
     let (sender, receiver) = mpsc::sync_channel(1);
     let mut exact_timeout = None;
     while matches!(owner.flush_one(state, &observed, &sender).unwrap(), LaneService::Sent) {
@@ -372,7 +412,7 @@ state_test! { sync native_lane_instance_timeout_preserves_high_prepare_while_bod
     assert_eq!(signed.body.highest_prepare, Some(prepare));
     assert!(owner.held_effects().any(|effect| matches!(effect, core::Effect::FetchBody { .. })));
     assert!(!owner.held_effects().any(|effect| matches!(effect, core::Effect::ValidateBody { .. } | core::Effect::Apply { .. })));
-    assert!(matches!(owner.service_one(state, &observed, due).unwrap(), LaneService::NeedsBodyAdapter));
+    assert!(matches!(owner.service_with_worker(state, &observed, due).unwrap(), LaneService::NeedsBodyAdapter));
     assert!(owner.body_store().read_for_manifest(&manifest).unwrap().is_none());
 }
 
@@ -386,19 +426,19 @@ state_test! { sync native_lane_instance_frozen_key_and_process_output_gate_are_f
     let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
     let lane = &observed.contexts()[0];
     let now = Instant::now();
-    assert!(LaneInstance::open(state, &observed, lane, KeyPair::random(), ConsensusOutputGuard::isolated(), now,
+    assert!(LaneInstance::open_with_worker_for_test(state, &observed, lane, KeyPair::random(), ConsensusOutputGuard::isolated(), now,
         Duration::from_secs(1), Duration::from_millis(100), 3 * core::MAX_EFFECTS_PER_STEP).is_err());
     let key = fixture.validators.iter().find(|key| key.public_key() == lane.frozen().committee[0].public_key()).unwrap().clone();
-    assert!(LaneInstance::open(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
+    assert!(LaneInstance::open_with_worker_for_test(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
         Duration::ZERO, Duration::from_millis(100), 3 * core::MAX_EFFECTS_PER_STEP).is_err());
-    assert!(LaneInstance::open(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
+    assert!(LaneInstance::open_with_worker_for_test(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
         Duration::from_secs(1), Duration::from_millis(100), 3 * core::MAX_EFFECTS_PER_STEP - 1).is_err());
-    assert!(LaneInstance::open(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
+    assert!(LaneInstance::open_with_worker_for_test(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
         Duration::MAX, Duration::from_millis(100), 3 * core::MAX_EFFECTS_PER_STEP).is_err(), "configured timeout overflow fails before physical open");
-    assert!(LaneInstance::open(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
+    assert!(LaneInstance::open_with_worker_for_test(state, &observed, lane, key.clone(), ConsensusOutputGuard::isolated(), now,
         Duration::from_secs(1), Duration::MAX, 3 * core::MAX_EFFECTS_PER_STEP).is_err(), "configured retransmit overflow fails before physical open");
     let guard = ConsensusOutputGuard::isolated();
-    let mut owner = LaneInstance::open(state, &observed, lane, key, Arc::clone(&guard), now,
+    let mut owner = LaneInstance::open_with_worker_for_test(state, &observed, lane, key, Arc::clone(&guard), now,
         Duration::from_secs(1), Duration::from_millis(100), 3 * core::MAX_EFFECTS_PER_STEP).unwrap();
     assert!(matches!(owner.poll_clock(state, &observed, now).unwrap(), LaneInputOutcome::NotDue));
     let deadline = owner.timeout_deadline().unwrap();

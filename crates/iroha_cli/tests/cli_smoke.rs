@@ -4154,22 +4154,29 @@ fn tx_status_command_against_torii_mock() {
     assert_eq!(payload["scope"].as_str(), Some("local"));
     assert_eq!(payload["resolved_from"].as_str(), Some("state"));
     let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    let missing = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args(["tx", "status", "--hash", missing_hash])
-        .output()
-        .expect("failed to run iroha tx status for missing hash");
-    assert!(
-        !missing.status.success(),
-        "expected missing tx status to fail, stdout: {}",
-        String::from_utf8_lossy(&missing.stdout)
-    );
-    assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("Transaction status not found"),
-        "missing tx status stderr mismatch: {}",
-        String::from_utf8_lossy(&missing.stderr)
-    );
+    for scope in [None, Some("global"), Some("local")] {
+        let mut invocation = command();
+        invocation
+            .arg("--config")
+            .arg(&config_path)
+            .args(["tx", "status", "--hash", missing_hash]);
+        if let Some(scope) = scope {
+            invocation.args(["--scope", scope]);
+        }
+        let missing = invocation
+            .output()
+            .expect("failed to run iroha tx status for missing hash");
+        assert!(
+            !missing.status.success(),
+            "expected missing tx status to fail for scope {scope:?}, stdout: {}",
+            String::from_utf8_lossy(&missing.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&missing.stderr).contains("Transaction status not found"),
+            "missing tx status stderr mismatch for scope {scope:?}: {}",
+            String::from_utf8_lossy(&missing.stderr)
+        );
+    }
 }
 #[test]
 fn account_get_command_against_torii_mock() {

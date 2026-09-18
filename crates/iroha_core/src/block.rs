@@ -50,6 +50,8 @@
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
+mod native_lane_carrier;
+pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -6500,6 +6502,8 @@ pub(crate) mod valid {
         axt_snapshot_mismatch: bool,
         has_native_participant_frontiers: bool,
     }
+    include!("block/post_execution_tail.rs");
+
     impl ValidBlock {
         fn autonomous_merge_carrier_has_da_effect(block: &SignedBlock) -> bool {
             // Every valid block carries the exact active proof-policy bundle.
@@ -8812,6 +8816,18 @@ pub(crate) mod valid {
                             bundle.version
                         )));
                     }
+                    bundle
+                        .validate_native_lane_decisions_shape()
+                        .map_err(Self::execution_context_error)?;
+                    // TODO: enable only with the sole native carrier replay/Apply
+                    // consumer and atomic retirement of old economic signers.
+                    // Private historical inclusion reads below this live boundary
+                    // do not grant admission, voting or publication permission.
+                    if bundle.native_lane_decisions.is_some() {
+                        return Err(Self::execution_context_error(
+                            "native lane economic carrier is not active",
+                        ));
+                    }
                     let actual = HashOf::new(bundle);
                     if actual != expected {
                         return Err(Self::execution_context_error(
@@ -8821,6 +8837,13 @@ pub(crate) mod valid {
                     Ok(Some(bundle))
                 }
             }
+        }
+        /// Exercise the unchanged production admission gate on an inactive native carrier.
+        #[cfg(test)]
+        pub(crate) fn validate_inactive_native_carrier_for_test(
+            block: &SignedBlock,
+        ) -> Result<(), BlockValidationError> {
+            Self::validate_execution_context_header(block).map(|_| ())
         }
         fn validate_execution_context_alignment(
             block: &SignedBlock,
@@ -11847,107 +11870,21 @@ pub(crate) mod valid {
                     routed_transactions.push((tx.hash(), *decision));
                 }
             }
-            Self::execute_deterministic_pipeline_triggers(
+            Self::finalize_ordinary_execution_tail(
                 block,
                 state_block,
+                ordered_hashes,
+                ordered_results
+                    .into_iter()
+                    .map(iroha_data_model::transaction::signed::TransactionResult::from)
+                    .collect(),
                 &transaction_event_hashes,
-                &ordered_results,
                 &routing_decisions,
-            )?;
-            let (time_trgs, mut time_hashes, mut time_results, time_execution_hashes) =
-                state_block.execute_time_triggers(&block.header());
-            let pruned_sealed_commitments =
-                crate::tx::prune_expired_sealed_commitments(state_block);
-            if pruned_sealed_commitments > 0 {
-                iroha_logger::debug!(
-                    count = pruned_sealed_commitments,
-                    "pruned expired sealed transaction commitments"
-                );
-            }
-            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
-            ordered_hashes.append(&mut time_hashes);
-            ordered_results.append(&mut time_results);
-            let time_entrypoints = time_trgs
-                .iter()
-                .cloned()
-                .map(TransactionEntrypoint::Time)
-                .collect::<Vec<_>>();
-            let tx_set_hash = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                entrypoints.iter().chain(time_entrypoints.iter()),
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "FASTPQ canonical transaction-wire commitment failed: {error}"
-                ))
-            })?
-            .into();
-            state_block.set_fastpq_tx_set_hash(tx_set_hash);
-            state_block
-                .finalize_fastpq_source_inventory_with_pending(
-                    &entrypoints,
-                    &routing_decisions,
-                    &time_execution_hashes,
-                    fastpq_digest_batch,
-                )
-                .map_err(Self::execution_context_error)?;
-            let fastpq_transcripts = state_block.drain_transfer_transcripts_with_pending(None);
-            let axt_envelopes = state_block.drain_axt_envelopes();
-            let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
-            let committed_fragment_count = Self::validated_committed_fragment_count(
-                state_block,
                 advertised_committed_fragments,
-            )?;
-            state_block
-                .finalize_axt_asset_incarnations()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to finalize AXT asset incarnations: {error}"
-                    ))
-                })?;
-            state_block
-                .evaluate_nexus_autoscale(block, committed_fragment_count)
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to evaluate Nexus autoscale: {error}"
-                    ))
-                })?;
-            state_block
-                .finalize_axt_policy_transition_ratchets()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to finalize the AXT policy counter ratchet: {error}"
-                    ))
-                })?;
-            let axt_policy_snapshot = state_block.axt_policy_snapshot();
-            Self::validate_advertised_axt_post_state(
                 advertised_axt_policy_snapshot.as_ref(),
-                &axt_policy_snapshot,
-            )?;
-            let axt_transitioned_dataspaces = state_block.axt_authorization_transitioned().clone();
-            Self::validate_advertised_axt_transitions(
                 advertised_axt_transitioned_dataspaces.as_ref(),
-                &axt_transitioned_dataspaces,
-                axt_policy_snapshot.version,
+                None,
             )?;
-            let trigger_completions = state_block.world.trigger_completions();
-            block
-                .set_transaction_results_with_transcripts(
-                    time_trgs,
-                    ordered_hashes.as_slice(),
-                    ordered_results,
-                    fastpq_transcripts,
-                    axt_envelopes,
-                    axt_policy_snapshot,
-                )
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block
-                .set_axt_transitioned_dataspaces(axt_transitioned_dataspaces)
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block.set_trigger_completions(trigger_completions);
-            block
-                .set_batch_transfer_outcomes(batch_transfer_outcomes)
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -11995,7 +11932,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state_block: &mut StateBlock<'_>,
             transaction_event_hashes: &[Option<HashOf<SignedTransaction>>],
-            ordered_results: &[TransactionResultInner],
+            ordered_results: &[iroha_data_model::transaction::signed::TransactionResult],
             routing_decisions: &[crate::queue::RoutingDecision],
         ) -> Result<(), BlockValidationError> {
             debug_assert_eq!(transaction_event_hashes.len(), ordered_results.len());
@@ -12006,7 +11943,7 @@ pub(crate) mod valid {
                 let Some(hash) = maybe_hash else {
                     continue;
                 };
-                let status = match &ordered_results[idx] {
+                let status = match ordered_results[idx].as_ref() {
                     Ok(_) => TransactionStatus::Approved,
                     Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
                 };
@@ -15726,136 +15663,21 @@ pub(crate) mod valid {
                 .iter()
                 .map(|prepared| Some(prepared.metadata.signed_hash))
                 .collect();
-            Self::execute_deterministic_pipeline_triggers(
+            let (finalize_start, set_results_start) = Self::finalize_ordinary_execution_tail(
                 block,
                 state_block,
+                hashes,
+                ordered_results
+                    .into_iter()
+                    .map(iroha_data_model::transaction::signed::TransactionResult::from)
+                    .collect(),
                 &transaction_event_hashes,
-                &ordered_results,
                 &routing_decisions,
-            )?;
-            let time_triggers_start = timings.as_ref().map(|_| Instant::now());
-            let (time_trgs, mut time_trg_hashes, mut time_trg_results, time_execution_hashes) =
-                state_block.execute_time_triggers(&block.header());
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
-                timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
-            }
-            let pruned_sealed_commitments =
-                crate::tx::prune_expired_sealed_commitments(state_block);
-            if pruned_sealed_commitments > 0 {
-                iroha_logger::debug!(
-                    count = pruned_sealed_commitments,
-                    "pruned expired sealed transaction commitments"
-                );
-            }
-            let finalize_start = timings.as_ref().map(|_| Instant::now());
-            let digest_submit_start = timings.as_ref().map(|_| Instant::now());
-            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), digest_submit_start) {
-                timings.execution_tx_finalize_digest_submit_ms = to_ms(start.elapsed());
-            }
-            hashes.append(&mut time_trg_hashes);
-            ordered_results.append(&mut time_trg_results);
-            let tx_set_start = timings.as_ref().map(|_| Instant::now());
-            let time_entrypoints = time_trgs
-                .iter()
-                .cloned()
-                .map(TransactionEntrypoint::Time)
-                .collect::<Vec<_>>();
-            let tx_set_hash = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                block
-                    .external_entrypoints_slice()
-                    .iter()
-                    .chain(time_entrypoints.iter()),
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "FASTPQ canonical transaction-wire commitment failed: {error}"
-                ))
-            })?
-            .into();
-            state_block.set_fastpq_tx_set_hash(tx_set_hash);
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), tx_set_start) {
-                timings.execution_tx_finalize_tx_set_ms = to_ms(start.elapsed());
-            }
-            let source_inventory_start = timings.as_ref().map(|_| Instant::now());
-            state_block
-                .finalize_fastpq_source_inventory_with_pending(
-                    block.external_entrypoints_slice(),
-                    &routing_decisions,
-                    &time_execution_hashes,
-                    fastpq_digest_batch,
-                )
-                .map_err(Self::execution_context_error)?;
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), source_inventory_start) {
-                timings.execution_tx_finalize_dataspaces_ms = to_ms(start.elapsed());
-            }
-            let transcripts_start = timings.as_ref().map(|_| Instant::now());
-            let fastpq_transcripts = state_block.drain_transfer_transcripts_with_pending(None);
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), transcripts_start) {
-                timings.execution_tx_finalize_transcripts_ms = to_ms(start.elapsed());
-            }
-            let axt_start = timings.as_ref().map(|_| Instant::now());
-            let axt_envelopes = state_block.drain_axt_envelopes();
-            let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
-            let committed_fragment_count = Self::validated_committed_fragment_count(
-                state_block,
                 advertised_committed_fragments,
-            )?;
-            state_block
-                .finalize_axt_asset_incarnations()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to finalize AXT asset incarnations: {error}"
-                    ))
-                })?;
-            state_block
-                .evaluate_nexus_autoscale(block, committed_fragment_count)
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to evaluate Nexus autoscale: {error}"
-                    ))
-                })?;
-            state_block
-                .finalize_axt_policy_transition_ratchets()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "failed to finalize the AXT policy counter ratchet: {error}"
-                    ))
-                })?;
-            let axt_policy_snapshot = state_block.axt_policy_snapshot();
-            Self::validate_advertised_axt_post_state(
                 advertised_axt_policy_snapshot.as_ref(),
-                &axt_policy_snapshot,
-            )?;
-            let axt_transitioned_dataspaces = state_block.axt_authorization_transitioned().clone();
-            Self::validate_advertised_axt_transitions(
                 advertised_axt_transitioned_dataspaces.as_ref(),
-                &axt_transitioned_dataspaces,
-                axt_policy_snapshot.version,
+                timings.as_deref_mut(),
             )?;
-            let trigger_completions = state_block.world.trigger_completions();
-            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
-                timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
-            }
-            let set_results_start = timings.as_ref().map(|_| Instant::now());
-            block
-                .set_transaction_results_with_transcripts(
-                    time_trgs,
-                    hashes.as_slice(),
-                    ordered_results,
-                    fastpq_transcripts,
-                    axt_envelopes,
-                    axt_policy_snapshot,
-                )
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block
-                .set_axt_transitioned_dataspaces(axt_transitioned_dataspaces)
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block.set_trigger_completions(trigger_completions);
-            block
-                .set_batch_transfer_outcomes(batch_transfer_outcomes)
-                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
-            block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -16751,6 +16573,7 @@ pub(crate) mod valid {
                 let $signed_block: SignedBlock = SignedBlock::from(new_block);
             };
         }
+        include!("block/post_execution_tail_tests.rs");
         include!("block/autonomous_merge_carrier_content_tests.rs");
         fn checked_block_signature(
             private_key: &PrivateKey,
@@ -24017,11 +23840,11 @@ pub(crate) mod valid {
                 result.expect("rejection-only block should not be treated as empty");
             assert_eq!(valid_block.as_ref().external_transactions().count(), 1);
             assert!(valid_block.as_ref().error(0).is_some());
-            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(1));
+            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(0));
             assert_eq!(
                 state_block.committed_fragment_count(),
-                1,
-                "accepted blocks still commit the deterministic pipeline-event fragment"
+                0,
+                "rejected transactions and unmatched pipeline events commit no fragments"
             );
         }
         #[test]
@@ -24078,16 +23901,26 @@ pub(crate) mod valid {
             assert!(matches!(
                 err.as_ref(),
                 BlockValidationError::CommittedFragmentCountMismatch {
-                    expected: 1,
+                    expected: 0,
                     actual: 99,
                 }
             ));
         }
         #[test]
         fn advertised_zero_committed_fragment_count_is_rejected() {
+            use iroha_data_model::IntoKeyValue;
+
             setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             let prev_committed = state.view().latest_block().expect("fixture parent");
             let (authority, signer) = gen_account_in("wonderland");
+            // This transaction must succeed so an advertised zero contradicts
+            // a real applied fragment, rather than an unmatched pipeline event.
+            let (account_id, account_value) = Account::new(authority.clone())
+                .build(&authority)
+                .into_key_value();
+            let mut accounts = state.world.accounts.block();
+            accounts.insert(account_id, account_value);
+            accounts.commit();
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let tx = TransactionBuilder::new_with_time_source(
                 state.network_id,

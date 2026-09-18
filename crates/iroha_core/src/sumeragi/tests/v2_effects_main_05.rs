@@ -5219,6 +5219,66 @@ fn published_store_marker_carries_stronger_authority_through_validate_handoff() 
 }
 
 #[test]
+fn store_completion_rejects_lost_or_conflicting_pipeline_owner() {
+    for published_marker in [false, true] {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let key = (fixture.manifest.round, fixture.manifest.subject);
+        let store_id = install_inflight_remote_proposal_store(
+            &mut executor,
+            &mut services,
+            &fixture,
+            tag(0),
+            9_050,
+        );
+        let completion = services.execute_store(store_id);
+        if published_marker {
+            let durable = completion.receipt().clone();
+            executor.recovered_bodies.insert(key, (fixture.manifest.clone(), durable.clone()));
+            executor.durable_bodies.insert(key, durable.clone());
+            let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+            let fetch = AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: prepare.proposal_round,
+                subject: prepare.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare),
+            };
+            let store = AdapterEffect::StoreBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            };
+            let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_051)
+                .rebind_as_inherited_adapter_effect(&store)
+                .expect("project published Store owner");
+            let pending = ownership.exact_pending_adapter_effect_binding(&store)
+                .expect("bind published Store");
+            let marker = executor.prepare_published_lifecycle_store_retry_marker(&durable)
+                .expect("prepare exact Store marker")
+                .bind_store_successor(&store, &pending)
+                .expect("bind exact Store successor");
+            executor.commit_published_lifecycle_store_retry_marker(marker);
+            executor.body_pipeline_owners.insert(key, BodyPipelineOwner {
+                tag: tag(1),
+                manifest_hash: Some(HashOf::new(&fixture.manifest)),
+            });
+        } else {
+            executor.body_pipeline_owners.remove(&key);
+        }
+        let completions = executor.runtime.completions.clone();
+        let error = executor.complete_body_store(completion, &mut services)
+            .expect_err("a marker cannot excuse conflicting ownership or replace a missing authority");
+        assert!(matches!(error, EffectExecutorError::Contract(reason)
+            if reason.contains("immutable pipeline owner")));
+        assert_eq!(executor.runtime.completions, completions);
+        assert!(executor.status().fail_closed);
+    }
+}
+
+#[test]
 fn active_published_store_marker_absorbs_stale_inflight_store_completion() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());

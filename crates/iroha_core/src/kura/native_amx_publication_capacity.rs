@@ -1264,9 +1264,10 @@ impl Kura {
                 NativeAmxPublicationCarrier,
                 NativeAmxPublicationCapacityReservation,
             >::new();
-            // Every unfinished publication has an index persisted before its canonical
-            // carrier. A completed tip has no remaining publication obligation; deriving
-            // one from its body would resurrect retired routes during geometry replay.
+            // Initial publication persists its index before the canonical carrier;
+            // authenticated later repairs persist a new index before any repair write.
+            // A completed tip has no remaining publication obligation; deriving one
+            // from its body would resurrect retired routes during geometry replay.
             // Durable locators include unfinished carriers below an ordinary tip.
             // Classify every record against the independently resolved canonical marker;
             // an omitted body pin or a different hash never authorizes retirement.
@@ -1613,12 +1614,13 @@ impl Kura {
                         "Native recovery compact association changed its recorded hash".to_owned(),
                     ));
                 }
-                if pending_index.records.get(&expected).is_some_and(|record| {
-                    record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair
-                }) {
+                if let Some(record) = pending_index.records.get(&expected)
+                    && record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair
+                {
                     self.authenticate_native_amx_completed_repair_on_startup(
                         &block,
                         merge.as_ref(),
+                        record,
                     )?;
                 }
                 let (carrier, plan) = match self

@@ -1,8 +1,8 @@
-//! Pre-carrier authority checks for the shared-reducer economic input path.
+//! Authority checks and disposable execution for native decided inputs.
 //!
 //! The whole group batch is checked before execution mutates its overlay. Native
 //! votes certify immutable inputs; this carrier alone supplies the economic base.
-//! TODO: consume this preflight in the replacement economic executor and retire
+//! TODO: activate this executor with the replacement global consumer and retire
 //! the old MergeLaneExecution source and independent frontier writers together.
 
 use std::collections::BTreeSet;
@@ -173,7 +173,8 @@ pub(crate) struct PreexecutedLaneDecisionGroupV1 {
     pub(crate) settlement_commitment: super::LaneBlockCommitment,
     /// Canonical digest of the exact economic settlement.
     pub(crate) settlement_hash: iroha_crypto::HashOf<super::LaneBlockCommitment>,
-    /// FASTPQ evidence extracted through the existing executor-owned capture boundary.
+    /// Snapshot of actual native outputs; map and captures remain owned by the same
+    /// StateBlock until common inventory sealing and canonical result extraction.
     pub(crate) fastpq_transcripts: Vec<super::TransferTranscriptBundle>,
 }
 
@@ -181,8 +182,8 @@ impl State {
     /// Execute a complete native group batch in a disposable global candidate overlay.
     ///
     /// Every rejection drops the whole owned overlay. On success the caller must
-    /// still bind exact results/base/roots into the global carrier, replay and
-    /// verify them, then use the normal publication gate. No local lane Apply is
+    /// still project the actual outputs through the global result/witness and
+    /// execution commitment, then use the normal publication gate. No local lane Apply is
     /// acknowledged here, including for a successful economic result.
     /// TODO: replace the old merge source DTO and consumer with this actual
     /// transition before activating the process-lived lane instances.
@@ -191,16 +192,85 @@ impl State {
         application_block_header: super::BlockHeader,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<
-        (StateBlock<'state>, Vec<PreexecutedLaneDecisionGroupV1>),
+        (Box<StateBlock<'state>>, Vec<PreexecutedLaneDecisionGroupV1>),
         super::MergeLedgerCommitError,
     > {
-        let mut overlay = self.merge_preexecution_block(application_block_header);
-        overlay
-            .preflight_lane_decision_execution_inputs(groups)
-            .map_err(super::MergeLedgerCommitError::ExecutionBatchInvalid)?;
-        let executions = overlay.execute_preflighted_lane_decision_groups(groups)?;
-        Ok((overlay, executions))
+        // This standalone scratch owner must isolate the entire constructor:
+        // start hooks run before native economics and may record real transfers.
+        // Never acquire/reset a recorder here; the caller may already own one.
+        let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+        self.with_native_lane_execution(application_block_header, groups, |_, executions| {
+            Ok(executions)
+        })
     }
+
+    /// Constructor-owned transition: preflight on exact applying pre-State,
+    /// shared start effects once, then economics under H-effective policies.
+    /// The private continuation is never minted from a post-hook overlay.
+    /// This kernel neither acquires/resets nor suppresses a witness recorder.
+    /// Standalone scratch wrappers isolate their whole lifetime; a future sole
+    /// canonical consumer must supply its own complete witness lifecycle.
+    /// TODO: qualify that lifecycle and rollback before enabling native publication.
+    pub(super) fn with_native_lane_execution<'state, R>(
+        &'state self,
+        header: super::BlockHeader,
+        groups: &[VerifiedLaneDecisionGroupV1],
+        finish: impl FnOnce(
+            &mut StateBlock<'state>,
+            Vec<PreexecutedLaneDecisionGroupV1>,
+        ) -> Result<R, super::MergeLedgerCommitError>,
+    ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
+        let generation = self.state_view_generation();
+        self.block_with_owned_start_stages(
+            header,
+            |overlay| {
+                let invalid = super::MergeLedgerCommitError::ExecutionBatchInvalid;
+                if !super::is_stable_state_view_generation(generation, self.state_view_generation())
+                    || overlay.start_of_block_effects_applied
+                    || overlay.native_lane_stage.is_some()
+                    || overlay.staged_merge_entry.is_some()
+                    || !overlay.staged_queue_plan_admissions.is_empty()
+                    || !overlay.world.merge_execution_write_set_bytes().is_empty()
+                {
+                    return Err(invalid(
+                        "native pre-State constructor authority changed".into(),
+                    ));
+                }
+                overlay
+                    .preflight_lane_decision_execution_inputs(groups)
+                    .map_err(invalid)?;
+                Ok(NativeLaneAfterStartV1 { groups })
+            },
+            |overlay, preflight| {
+                // A due hook owns real global effects, not native input receipts.
+                // Preserve its accumulator for the eventual sole global consumer;
+                // the native per-input drain must not attribute it to the first input.
+                let start_settlement = std::mem::take(&mut overlay.settlement_accumulator);
+                let executions =
+                    overlay.execute_preflighted_lane_decision_groups(preflight.groups)?;
+                if !overlay.settlement_accumulator.is_empty() {
+                    return Err(super::MergeLedgerCommitError::ExecutionDivergence(
+                        "native execution retained unbound settlement receipts".into(),
+                    ));
+                }
+                overlay.settlement_accumulator = start_settlement;
+                let result = finish(overlay, executions)?;
+                if !super::is_stable_state_view_generation(generation, self.state_view_generation())
+                {
+                    return Err(super::MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "native applying publication changed during ordered execution".into(),
+                    ));
+                }
+                Ok(result)
+            },
+        )
+    }
+}
+
+/// Only the constructor's pristine callback creates this value. Its consumer
+/// executes on that constructor's same overlay after the shared hooks finish.
+struct NativeLaneAfterStartV1<'groups> {
+    groups: &'groups [VerifiedLaneDecisionGroupV1],
 }
 
 impl StateBlock<'_> {
@@ -299,9 +369,6 @@ impl StateBlock<'_> {
             execution_order[position] = source;
         }
         let mut accepted = accepted.into_iter().map(Some).collect::<Vec<_>>();
-        // As in canonical merge execution, the complete economic delta is sealed
-        // by the owning carrier instead of emitting duplicate transaction witness leaves.
-        let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut executions = (0..groups.len()).map(|_| None).collect::<Vec<_>>();
         let mut required = Vec::with_capacity(groups.len());
@@ -354,7 +421,7 @@ impl StateBlock<'_> {
                 std::slice::from_mut(&mut result),
             )?;
             let fastpq_transcripts =
-                self.take_merge_lane_fastpq_transcripts(std::slice::from_ref(entrypoint))?;
+                self.retain_native_lane_fastpq_outputs(std::slice::from_ref(entrypoint))?;
             match entrypoint {
                 TransactionEntrypoint::External(transaction) => {
                     if authenticated_signed_replay_alias.is_some() {

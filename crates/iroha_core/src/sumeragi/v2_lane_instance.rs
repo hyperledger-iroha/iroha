@@ -1,7 +1,7 @@
 //! Process-lived native instance control custody around the sole shared reducer.
 //!
-//! This bounded slice owns pre-payload clocks, physical persistence, frozen-key
-//! signing, move-owned physical body jobs and move-only output handoff. It intentionally has no runner
+//! This bounded slice owns pre-payload clocks, move-owned persistence/body jobs,
+//! frozen-key signing and move-only output handoff. It intentionally has no runner
 //! construction site yet: atomic retirement of the old lane signer, native P2P
 //! routing, worker admission and group application must precede production activation.
 
@@ -33,8 +33,26 @@ use crate::state::{State, VerifiedLaneContext, VerifiedLaneContexts};
 
 #[path = "v2_lane_instance_body.rs"]
 mod body;
+#[path = "v2_lane_instance_opening.rs"]
+mod opening;
+#[path = "v2_lane_instance_persistence.rs"]
+mod persistence;
+#[path = "v2_lane_process.rs"]
+mod process;
 pub(crate) use body::{
     LaneBodyCompletion, LaneBodyJob, LaneBodyLaunch, LaneBodyProgress, LaneBodyWait,
+};
+pub(crate) use opening::{
+    LaneOpening, LaneOpeningAdoption, LaneOpeningCompletion, LaneOpeningDrain, LaneOpeningDrained,
+    LaneOpeningJob,
+};
+pub(crate) use persistence::{
+    LanePersistenceCompletion, LanePersistenceJob, LanePersistenceLaunch, LanePersistenceWait,
+};
+pub(crate) use process::{
+    LaneClosedInstance, LanePhysicalCompletion, LanePhysicalPool, LanePhysicalShutdown,
+    LaneProcessLimits, LaneProcessOccupancy, LaneProcessOwner, LaneProcessProgress,
+    LaneWorkerClass,
 };
 
 /// A control-boundary contradiction or permanent physical failure.
@@ -99,7 +117,12 @@ pub(crate) struct LaneOutbound {
 pub(crate) enum LaneService {
     Idle,
     Gate(LaneCurrentGate),
+    /// Returned only after a real persistence worker returns its private receipt.
     PersistedAwaitingAck,
+    /// Exact unlaunched Persist needs bounded worker admission.
+    NeedsPersistenceWorker,
+    /// One worker/completion owns the physical WAL; other instances remain runnable.
+    PersistenceInFlight,
     SignedAwaitingAck,
     Completion(LaneStepReceipt),
     EnteredView(reducer::EventTag),
@@ -132,7 +155,8 @@ struct LaneClock {
 pub(crate) struct LaneInstance {
     verified: VerifiedLaneContext,
     reducer: reducer::Reducer,
-    wal: LaneSafetyWal,
+    wal: Option<LaneSafetyWal>,
+    persistence: Option<Arc<persistence::IssuedPersistence>>,
     /// Own the sole physical body entry from opening, without granting Ready.
     body_store: Option<LaneBodyStore>,
     body: body::BodyCustody,
@@ -152,88 +176,6 @@ pub(crate) struct LaneInstance {
 }
 
 impl LaneInstance {
-    /// Open physical owners without holding State/MV/publication guards during I/O.
-    /// The final lease gates replay resumption and the first pre-payload deadline.
-    pub(crate) fn open(
-        state: &State,
-        observed: &VerifiedLaneContexts,
-        verified: &VerifiedLaneContext,
-        key: KeyPair,
-        output_guard: Arc<ConsensusOutputGuard>,
-        now: Instant,
-        base_timeout: Duration,
-        retransmit_interval: Duration,
-        effect_limit: usize,
-    ) -> Result<Self> {
-        if base_timeout.is_zero()
-            || retransmit_interval.is_zero()
-            || effect_limit < 3 * reducer::MAX_EFFECTS_PER_STEP
-        {
-            return Err(bad("invalid clock or complete effect reservation capacity"));
-        }
-        // Reject invalid configured ranges before opening any physical owner.
-        // The capped largest view interval covers every replayed generation.
-        Self::preflight_clock(now, base_timeout, retransmit_interval)?;
-        {
-            let _lease = state.consensus_publication_lease();
-            if Self::gate_for(verified, state, observed) != LaneCurrentGate::Current {
-                return Err(bad("opening observation is no longer current"));
-            }
-        }
-        let signer = verified
-            .frozen()
-            .committee
-            .iter()
-            .position(|peer| peer.public_key() == key.public_key())
-            .and_then(|index| u32::try_from(index).ok())
-            .ok_or_else(|| bad("key is outside frozen committee"))?;
-        let wal = LaneSafetyWal::open(state.kura(), verified, signer).map_err(bad)?;
-        let body_store = wal.open_body_store().map_err(bad)?;
-        let (reducer, native_records) = wal
-            .recover_with_native(reducer::Generation::new(0))
-            .map_err(bad)?
-            .into_parts();
-        let tag = reducer.current_tag();
-        let mut owner = Self {
-            verified: verified.clone(),
-            reducer,
-            wal,
-            body_store: Some(body_store),
-            body: body::BodyCustody::default(),
-            native_records,
-            timeout_witnesses: BTreeMap::new(),
-            key,
-            output_guard,
-            clock: LaneClock {
-                tag,
-                timeout: Some(Self::deadline(
-                    now,
-                    round_timeout_for_view(base_timeout, tag.view()),
-                )?),
-                retransmit: Self::deadline(now, retransmit_interval)?,
-            },
-            base_timeout,
-            retransmit_interval,
-            held: Vec::new(),
-            completion: None,
-            effect_limit,
-            failed: false,
-        };
-        {
-            let _lease = state.consensus_publication_lease();
-            if owner.current_gate(state, observed) != LaneCurrentGate::Current {
-                return Err(bad("State changed while opening native physical owners"));
-            }
-            let guard = Arc::clone(&owner.output_guard);
-            let operation = guard
-                .begin_fail_stop_operation()
-                .ok_or_else(|| bad("consensus output is closed"))?;
-            owner.step(reducer::Event::ResumeAfterReplay { tag }, None)?;
-            operation.complete();
-        }
-        Ok(owner)
-    }
-
     fn deadline(now: Instant, interval: Duration) -> Result<Instant> {
         now.checked_add(interval)
             .ok_or_else(|| bad("native lane clock exceeds Instant range"))
@@ -274,6 +216,7 @@ impl LaneInstance {
         self.held
             .len()
             .checked_add(self.body.retained_job_count())
+            .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
             .and_then(|count| count.checked_add(reducer::MAX_EFFECTS_PER_STEP))
             .is_some_and(|count| count <= self.effect_limit)
     }
@@ -282,6 +225,7 @@ impl LaneInstance {
         self.held
             .len()
             .checked_add(self.body.retained_job_count())
+            .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
             .and_then(|count| count.checked_add(2 * reducer::MAX_EFFECTS_PER_STEP))
             .is_some_and(|count| count <= self.effect_limit)
     }
@@ -592,35 +536,17 @@ impl LaneInstance {
             self.clock = clock;
             return Ok(LaneService::EnteredView(tag));
         }
-        if let Some(index) = self
+        // The scheduler must reserve a bounded worker slot before taking the
+        // move-owned job. No append/fsync occurs on this control service path.
+        if self.persistence.is_some() {
+            return Ok(LaneService::PersistenceInFlight);
+        }
+        if self
             .held
             .iter()
-            .position(|held| matches!(held.effect, reducer::Effect::Persist { .. }))
+            .any(|held| matches!(held.effect, reducer::Effect::Persist { .. }))
         {
-            if !self.reserve_step() {
-                return Ok(LaneService::NeedsBodyAdapter);
-            }
-            let Some(native) = self.held[index].native.as_ref() else {
-                self.failed = true;
-                self.output_guard.close_admission_for_restart();
-                return Err(bad("issued persistence lost its exact native envelope"));
-            };
-            // No State or publication guard is held across disk I/O. Already
-            // admitted physical work completes even when the observation changes.
-            let result = self.wal.append_issued(&self.held[index].effect, native);
-            match result {
-                Ok(completion) => {
-                    self.native_records.push(native.clone());
-                    self.completion = Some(completion);
-                    self.held.remove(index);
-                    return Ok(LaneService::PersistedAwaitingAck);
-                }
-                Err(error) => {
-                    self.failed = true;
-                    self.output_guard.close_admission_for_restart();
-                    return Err(bad(error));
-                }
-            }
+            return Ok(LaneService::NeedsPersistenceWorker);
         }
         if let Some(index) = self.held.iter().position(|held| {
             matches!(
@@ -792,6 +718,9 @@ impl LaneInstance {
     fn witnesses(&self, input: Option<&LaneMessageV1>) -> Result<Witnesses> {
         let mut witnesses = Witnesses::default();
         self.body.add_witnesses(&mut witnesses)?;
+        if let Some(issued) = &self.persistence {
+            witnesses.record(&issued.native.record)?;
+        }
         for native in &self.native_records {
             witnesses.record(&native.record)?;
         }

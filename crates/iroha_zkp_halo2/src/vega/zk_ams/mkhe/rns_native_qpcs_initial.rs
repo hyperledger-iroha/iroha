@@ -6,9 +6,9 @@
 //! equations remain unavailable.  A successful return therefore never mints
 //! a receipt and cannot grant proof, readiness, or release authority.
 
-use super::rns_native_qpcs_leaf::{
-    RnsNativeLeafCacheV1, RnsNativeLeafPayloadV1, RnsNativeOracleV1, oracle_node_hash_v1,
-};
+#[cfg(test)]
+use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
 use super::{
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1,
@@ -577,6 +577,7 @@ fn hash_context_v1(
     Ok(context)
 }
 
+#[cfg(test)]
 fn leaf_hash_v1(
     parameter_digest: [u8; 32],
     index: u32,

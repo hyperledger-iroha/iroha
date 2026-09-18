@@ -76,7 +76,9 @@ The replacement must include these inseparable boundaries:
    the signed execution commitment. Preserve it through snapshots/compaction;
    an application-height locator alone cannot reconstruct historical policy.
    Ordinary, autonomous and Native participant frontier projections all enter
-   this rule. Do not put a block's own hash into its WSV or witness commitment.
+   this rule. Instructions may persist the actual source-bound proposal hash.
+   Output roots, executed-wire hashes and current finality must never feed back
+   into proposal-bound inputs or the State projection they certify.
 2. **One safety owner.** The shared reducer owns proposal intent, Prepare and
    Commit intent, lock, Timeout intent, installed TC and Decision. Persist its
    complete transition before signing or announcing the successor. Remove the
@@ -810,17 +812,547 @@ and its own frozen layout, permits independent voting views, and retains named
 missing/earlier dependencies. All nine new controls and 46 prior selected Core
 checks pass. Neither component activates a second production signer.
 
-Move-owned body jobs now pass all eight real threaded State/Kura controls,
-including silent-leader replacement through native Decision with Apply still
-held. The same reducer services Timeout/TC and CommitQC while body work waits;
-actual fsync/readback and all-route validation are required for body-dependent
-signing. The exact first-carrier recovery obligation survives missing local
-body, and foreign/closed completions return physical custody. The earlier
-timeout control now retains/retries explicit Busy backpressure and passes with
-its original saturation/restart assertions. Candidate 33 passes 82 Core and 29
-model checks, including the single-body portable economic transcript; all 22
-scoped formal bindings pass. Exact source import and pre-carrier batch preflight
-pass. Next are actual deterministic economic
-execution/results, one canonical transcript and historical replay boundary,
-then the sole production owner/transport cutover with old signers removed.
-These boundary passes do not close the four-validator counterexample or L1–L6.
+Move-owned body, WAL and opening jobs now have actual threaded State/Kura
+controls. A process-lived bounded table reserves one exact instance/key before
+opening, owns queued/transferred/completed jobs, preserves clocks through global
+advancement and drains physical handles after authenticated closure without
+acknowledging held Decision/Apply or transport obligations. Production does not
+yet construct this table.
+
+Candidate 48 passes 408/413 selected Core controls, all 332 block-model tests
+and 122 scoped formal checks, including all 21 repair/capacity controls and
+previous admission/gossip, physical-owner and economic regressions. Five new
+ordered-stage controls pass; two stop at an invalid policy fixture, and three
+older fragment-count fixtures fail identically on captured candidate 47.
+Candidate 49 changes only those two fixture files; all five affected tests pass.
+The model binary is byte-identical to 48. The fresh full structural gate on 48
+still reports 148 binding errors. Each checkpoint retains its unchanged inputs
+and binaries; results are not pooled into an unexecuted full 49 suite.
+
+The integrated constructor authenticates native groups against exact applying
+pre-State, runs mandatory start hooks once, then executes native economics under
+height-H policy on the same owned overlay. Its private native seal binds actual
+carrier identity, complete source membership and the start+native prefix roots;
+those roots are not final block write roots. Actual execution outputs remain
+privately owned. Later metadata cannot erase the stage; arbitrary native commit,
+including through the old empty-merge authorization, is explicitly rejected.
+The staged main merge and its independently corrected fragment-count fixtures
+are preserved; main composition remains uncompiled.
+
+The retained-source/shared-tail candidate builds and passes 594/594 selected Core
+controls on 20,548 unchanged local inputs, including 16 new custody/suffix/scratch
+controls and all 21 publication/repair/capacity controls. Its model executable is
+byte-identical to the prior 345/345 passing artifact; model tests are not rerun.
+The include inventory correction passes 34 source-loader controls in a complete
+source mirror; full structural output equals the prior 148 errors. The 19-path
+change is integrated into main, preserving its staged merge; main composition,
+full workspace and network acceptance remain unqualified. Earlier failures and
+exact artifact scopes remain recorded, not pooled into an invented suite pass.
+
+LaneDecisionBatchV1 carries exact applying pre-State and ordered authenticated
+input Decisions. Actual aliases and prefix roots remain private. Native FASTPQ
+rows and real captures remain in the original overlay and rejoin the privately
+sealed prefix before common inventory. The ordinary sequential/DAG tail retains
+full results and uses actual Time call identities for receipts. Do not restore
+proposal output/write claims or assign callback receipts to display identities.
+
+Next: replace process-global witness authority with StateBlock/StateTransaction
+capture ownership, including constructor hooks and applied-fragment rollback.
+Distinguish canonical rejected-result observations from abandoned trial reads.
+Factor deterministic candidate metadata from finality-only publication and seal
+one complete bounded State projection. Sparse instrumented keys are insufficient.
+Resolve pipeline callback results through one typed canonical output sequence for
+network, pipeline and Time invocations, with full receipts once and explicit
+input/output proof mapping; migrate model, Core, queries and SDKs together.
+Two actual-execution counterexamples now reproduce the open pipeline owner gap:
+direct callbacks lack a root call; nested callback results are discarded and
+finalization refuses repeatedly after rollback. These test-only changes are
+integrated into main. The separate 124 pending-membership formal controls pass
+on the unchanged source mirror; the 148 full structural diagnostics remain.
+
+The isolated model removes the generic header result root and has one complete
+typed Network/Pipeline/Time output collection, with independent network-input/output
+proofs and finite pre-reserved terminal arithmetic. Candidate 70 builds the model
+with `http,ids_projection,fault_injection` on 20,556 unchanged local inputs:
+3881 tests pass, one existing privacy-activation capture test fails, and
+9 are ignored. All 391 block-model controls pass. The privacy failure also
+reproduces on the retained pre-migration candidate-63 binary; the full suite is
+not green. Both proof anchor constructors require an independently trusted target
+height context; actual alternate-roster BLS controls reject circular self-asserted
+roster authority. Existing CLI/JS callers already pin their chain and now pass the
+verified target context; their current composition is uncompiled. Rejected Network
+outputs forbid callback completions, while rejected internal outputs retain only
+one matching root Failure for the whole invocation. The three new controls pass.
+Generated format fixtures and all preceding assertions remain in force. The prior
+eight actual-Set controls remain separate candidate-63 evidence. No current Core,
+main composition, SDK, formal or network qualification follows.
+
+The isolated applying policy now has one genesis-installed finite output envelope,
+separate active Time invocation count, and total Pipeline/Time registration caps.
+Post-genesis envelope replacement is rejected; active Time may change within it.
+Constructors capture once after their actual start lifecycle, including an invalid
+restored-policy refusal. Actual disabled/depleted registrations occupy capacity;
+new/replaced actions remain deferred by their existing incarnation-height guard.
+The ordinary candidate count uses the worst permitted future registry/Time growth.
+State reserves one terminal plan from the exact proposal/input projection before
+execution; a native multi-route group contributes one Network row. An unfinished
+plan refuses publication. Its private continuation now transfers the same budget
+while retaining Reserved/Running/Retained/Poisoned ownership on State. Completed
+rows still cannot authorize publication. This is not complete source, framing,
+trace, capture or resident-memory admission.
+The nine State controls and candidate/native extensions remain uncompiled/unrun.
+TriggerUse retains bounded ID, registration height and action hash, with actual
+authority authenticated inside that hash; the actual-Set rekey control is unrun.
+Model candidate 90 passes all nineteen new policy/parameter/terminal controls and
+all 400 block controls. Full model candidate 135 passes 3917 tests with 10 opt-in generators ignored.
+Nine additional internal-rejection controls cover both phases, exact row/shared
+boundaries, preowned terminal strings, descriptor extremes, binary/JSON roundtrip
+and rejection of malformed roots, origins, completions and business receipts. The earlier single failure was a stale privacy fixture
+with a retired activation-height field; actual codec recapture changes only its
+four frames and preserves strict refusal of the removed layout. Both manual-frame feature
+configurations pass 21 regular tests each, with three ignored generators, after
+actual feature-matched capture (93/99). Schema 94 passes all nine tests.
+The private successful-Network kernel preallocates row storage, preserves input
+positions under reordered execution, joins exact-call transaction-owned receipts
+and fits the full row before State apply. Oversized healthy work rolls back;
+local refusal or pre-apply unwind poisons the carrier, restores ZK deduplication
+and drops its witness overlay. Actual callback capture now lives on each State
+transaction: a non-copyable pre-body ordinal binds the original execution call,
+including nested by-call work whose old returned trace was discarded. The actual
+wrapper captures early errors and successful empty NoOp steps; a DFS failure
+before another dispatch also latches refusal. Successful trace/completions move
+once into the complete Network row before fitting and apply. Completion events
+are emitted once only after fit, under the same call and actual ordinal. Missing,
+foreign, failed or undrained journals block both ordinary and consensus-effects
+application and poison parent publication. Child-payload lower bounds derive
+from the frozen row ceiling; exact complete-row sizing remains authoritative.
+Host allocation refusal is distinct from actual output overflow. Failed callback
+errors remain typed and cannot be converted into a healthy OutputLimit rollback.
+Thirteen exact-source journal tests pass in the fresh harness against retained
+125 model/codec/crypto artifacts. Actual rejection can consume and discard completed
+capture even after healthy overflow; pending/foreign/refused journals remain fatal.
+Discarded business capture never authorizes apply. This is not State qualification.
+Five actual-State callback controls and the earlier producer controls remain
+unexecuted because Core has no test executable. The private success kernel now
+retains completed actual gas/confidential work after either applying a healthy
+row or dropping its oversized business overlay. A focused budget API control
+checks that the next overlay still sees the completed block work; this is not
+cryptographic-verifier qualification or the full rejection/fee corridor.
+The same borrowing producer now runs actual Pipeline and Time invocations under
+one internal rollback/retention owner. Pipeline takes signed-input events from
+retained Network dispositions and frozen routes, then BlockApproved. It preserves
+original Network and matched-ID positions, skips stale/depleted/disabled/current-
+block actions and exhausted gas, and rebinds the persistent use-time action before
+executing. Event route data never grants callback write-routing authority. Time
+uses the constructor-frozen count and actual event/schedule with fresh eligibility.
+Both seed the descriptor-derived call before work, retain actual nested callback
+capture and exact-call receipts, and fit the full row before applying State.
+Pipeline debits its root repeat before DFS; Time clears retry/debits repeats after
+complete success. Same-generation guards preserve replacement actions. Healthy
+output overflow drops business writes, repeats/retry clearing, witness and capture,
+retains completed work and emits only the reserved root failure completion.
+Real errors discard the failed business journal before separate failure policy.
+Pipeline disables the exact reauthenticated action; Time schedules its next retry
+or removes the exhausted action with its associated permissions. Earlier successful
+siblings remain applied. No-policy Time failures retain the action and repeat.
+A root failure retains its declared projection; root success followed by DFS
+failure retains ReturnedBeforeRollback. Excessive diagnostics use the distinct
+OmittedAfterRejection root and fixed short reason, never healthy OutputLimit.
+Core checks borrowed program payload sizes before diagnostic copies and bounds
+UTF-8 formatting; local journal/allocation/codec refusals still poison the carrier.
+Actual controls cover event order/calls, stale candidate gaps, phase/gas skips,
+full-row exact fit/one-byte-below, sibling preservation, root-success/DFS-failure,
+oversized real rejection/quarantine and real retry advancement/exhaustion. These
+State tests remain unrun. One exact-source formatter test passes independently;
+it does not execute State. Legacy direct internal callers, complete source/capture
+admission and canonical Block integration remain unfinished. The State-only
+consuming seal below does not grant final publication authority.
+Replay parity now validates both complete output caches and compares headers,
+signatures, ordered Network sources, full typed output rows/root and all retained
+side metadata. Diagnostics use explicit signed-source joins and separate internal
+failures. The existing exact-wire QC/manifest, recomputed execution commitment
+and WSV checkpoint gates remain independent in the replay caller. Six exact-source
+structural comparison tests pass in an isolated harness against retained 108
+dependencies; these do not execute State replay or qualify its authority/resources.
+All old replay-validation entrypoints/assertions remain represented; strict
+actual producer/Apply fixtures were not replaced with fabricated valid rows.
+The private Network owner now freezes original source positions, routes,
+authenticated QueuePlan validation instants and reveal execution order before any
+source runs. Borrowed admission uses the same explicit-time envelope/signature
+validator; stateful admission and the actual executor run in a disposable overlay.
+The real callback journal, exact-call receipts and full row fit precede successful
+apply. Healthy overflow rolls back business, repeat/events, witness and ZK state
+while accounting completed work. Actual error discards business capture, retains
+confidential work, applies prevalidated ballot penalties before eligible fees,
+and preserves an applied penalty if fee settlement subsequently fails. Final
+block-gas rejection retains its distinct no-fee/no-transaction-gas disposition.
+Actual gas/fee eligibility comes from the typed rejection before row projection.
+Oversized real error text uses a distinct preowned diagnostic string and cannot
+become healthy OutputLimit or manufacture misconduct. No business receipts or
+callback completions survive the rejected Network row. Actual fragment counts
+come from the separate applied overlays. Signed execution, exact-fit/one-byte-below
+callback rollback, real error after overflow, stateless rejection, block-gas admission,
+Nexus-fee and actual two-ballot penalty controls are authored but unrun. The gas
+control rejects before body execution; post-success final gas rollback remains
+unexercised. A real
+fee-failure-after-penalty runtime control is still required; ordinary insufficient
+funds would reject at admission, so it is not fabricated as ordering evidence.
+Genesis and legacy merge/native sources are excluded from this private ordinary
+execution owner. Complete proposal/finality, duplicate/replay, QueuePlan controls,
+route/DA/AMX authority, source/host-memory and common-wire admission remain
+obligations of the canonical driver. The
+producer now retains a privately constructed capsule in actual output order,
+including rejected and zero-transcript calls, exact frozen Network routes and
+originating network/height. FASTPQ compares proposal and frozen context, admits
+only actual execution calls and typed applied ProtocolPurpose extras, and
+preserves transcript-content sealing, digest validation and the invalidation
+latch. Independently applied fees/penalties remain legitimate transcript owners
+for rejected Network calls. One State-only driver reserves, executes all three
+phases and consumes its actual rows through a seal. Complete proposal commitments
+are checked before the finalizer. The caller cannot supply replacement rows,
+sources or applying policy. Finalizer effects precede fragment reconciliation,
+transcript inventory and one checked output attachment; exact wire hash/length
+remain bound. Typed finalizer errors survive. Partial/mock/foreign sources,
+unowned receipts, repeated takes, errors and unwind retain Poisoned; successful
+attachment retains Sealed. Ordinary and consensus-only transaction application
+after sealing is refused. The commit gate stays closed. Five source and ten seal
+controls are authored and unrun; all fourteen existing inventory child files and
+91 tests remain byte-exact.
+
+The private Network owner now consumes an execution-owned rejection fee record for
+every signed source class. Admission freezes exact
+source/proposal/network/route/index, Gas/Nexus policy and payload length. The
+actual body supplies authored or verified-replay instruction count and direct
+VM/ISI gas; mixed Batch contract work accumulates in the same record. The root
+closes before Data DFS, and triggered contract work cannot become another direct
+root charge. Business rollback discards its effects, while independently committed
+penalties precede a fresh authenticated fee overlay. Fee pricing uses the admitted
+snapshot and actual retained work, never a reconstructed claimed overlay or a
+Batch-only eligibility predicate. Settlement consumes the record once and does not
+add gas or test completed work against the block ceiling again. Zero charges add
+no synthetic applied fee fragment. Typed internal/resource and block-gas
+exclusions remain; healthy output overflow drops staged business and fees.
+Successful and rejected roots use the same direct-body pricing basis; callback
+work still counts against block execution resources.
+
+Both generic and self-describing raw-IVM branches now retain consumed gas before
+runtime, artifact-validation or artifact-application errors can return. The old
+post-application root assignment is removed so nested work is not overwritten.
+Deployed contract calls also record their actual direct VM work in the fee owner.
+Seven actual State fee controls and five actual raw-runtime controls are authored,
+including exact block-gas boundaries, admission failure, Data callback rollback,
+healthy output overflow, a consumed and context-bound fee record, admitted price
+retention, non-genesis raw rejection fees, generic/bound runtime exhaustion,
+artifact validation, artifact apply rollback and successful artifact application.
+None has executed. Two existing executor tests now use fresh overlays for all
+signed attempts, preserve every original assertion and warm cache, apply
+successful setup/work, and drop failed attempts.
+
+One private signed-root instruction budget now freezes the exact source, proposal,
+network, route/index and agreed overlay instruction/byte policy. Authored
+Instructions and Batch sets, verified-replay queues and consumed actual
+HostExecutionArtifacts all admit a whole group before its first effect. Mixed
+Batch calls debit that same cumulative owner; the late returned-instruction
+recheck is removed. Individual fixed V1 bare InstructionBox encodings are measured
+with a bounded counting writer instead of an allocated encoding vector, and the
+byte diagnostic reports only that the measured ceiling was exceeded. Zero retains
+the existing no-additional-limit meaning. This is an instruction count/encoding
+budget, not a complete host/decode/durable-state memory bound.
+
+The actual Executor wrapper closes effect and fee roots on every normal result
+before Data callbacks. The actual synchronous trigger depth excludes both generic
+and bound callback bodies from the direct-root instruction budget. Healthy opaque-
+deferred NoOp is decided before artifact admission. Completed VM/replay work
+survives later cap refusal, while refused authored work and never-started queued
+confidential instructions are not recorded as executed work. Private Network fee
+exclusion now uses the retained typed cap failure instead of parsing diagnostic
+strings. Missing, repeated, foreign, unclosed and failed owners cannot publish
+staged effects; ordinary and consensus-effects apply guards poison incomplete
+State publication.
+
+Sixteen new controls are authored: exact/unlimited/one-below authored and actual
+generic/bound/mixed VM groups; bare V1 encoding under ambient flags, atomic group
+counting and arithmetic failures; missing-root actual artifact refusal; actual
+Network fees and plain/generic-IVM callbacks; owner reuse/context substitution
+through both apply paths and a post-stage unwind; supplied post-verification
+replay count/byte refusal with retained gas. None has executed. Three existing
+Host artifact tests and three existing supplied-replay tests retain all original
+assertions with explicit signed-root ownership; one mixed byte diagnostic
+assertion now reflects bounded measurement. The supplied replay fixtures do not
+claim actual proof verification.
+
+Private Network admission now freezes exact signed Boolean quarantine
+classification once. Only stateless-admitted signed sources consume quota, ranked
+deterministically by outer entrypoint hash and original index; selection never
+changes the original effect order or separately frozen reveal order. Zero quota
+rejects all classified sources before business execution, gas, fees or penalties.
+A later selected-source business or output failure does not refill its slot. Batch
+and ballot shapes have no exception. Policy drift after freezing is a local
+ownership error. This policy remains in the private replacement owner; the old
+canonical Block/DAG is unchanged.
+
+A finite non-cloneable completed-cycle owner belongs to the actual signed root and
+spans direct generic or bound VMs, mixed Batch segments, actual proved replay and
+recursive CoreHost calls. Each dispatch reserves its architectural cost before
+effects, holds parent syscall reservations through children and retains completed
+work through traps, reuse and unwind. HALT commits before trace flushing. Exact
+fit succeeds; a refused reservation is sticky even when a host swallows a child
+error. Local foreign/closed owners remain distinct from deterministic cycle
+exhaustion. Zero cycle limit means no additional bound. Actual trigger callbacks
+have their own scope. This is completed architectural-cycle accounting, not total
+host, proof, decode or allocation work.
+
+Actual replay work now transfers to State and the root fee meter immediately after
+verification returns, including rejection after real execution. Successful replay
+records its actual instruction basis once before later SCCP, AXT, payer, block-cap
+or effect admission can fail; metered replay requires the retained gas and does
+not add it again. Supplied post-verification fixtures now state their supplied
+work handoff explicitly; they do not claim measured execution or cryptographic
+proof. Typed instruction/byte preflight exemptions remain separate from chargeable
+cycle exhaustion.
+
+Twenty-four new regressions are authored: nine actual VM cycle tests, two real
+nested CoreHost tests, nine actual Network quota/fee/reveal tests, generic signed
+and mixed-Batch root cycle limits, authorized actual replay work and an actual
+generic callback under a finite quarantined root. Existing proof fixtures
+additionally cover cryptographic replay rejection and a successful actual
+proof/replay followed by block-gas refusal, preserving all prior assertions.
+Existing supplied-replay fixtures preserve their assertions with explicit work
+custody. Only the nine new VM cases have executed; the fifteen new Core cases and
+expanded Core fixtures have no runtime result.
+
+A private persistent World baseline now complements the actual World net delta.
+The shared visitor uses the same 278-field constructor registry, expanding
+TriggerSet into ten semantic stores for 287 field sections. Cold capture includes
+untouched values, snapshot-skipped authoritative stores and derived indexes.
+Incremental versions encode only actual touched before/after pairs and check every
+touched preimage, including no-ops. Cold predecessor capture reverses the actual
+first-preimage journal after MV replacement undo. Field names/order/kinds are
+bound; this does not introduce independent Norito type-schema identifiers.
+
+The lower-level MerkleMap uses immutable shared nodes and a canonical compressed
+binary radix tree of domain-separated key/value hashes. Its shape/root depend on
+current values, not insertion, deletion or undo history. Branches bind their split
+bit, raw shared prefix and ordered children; absence, empty values and count
+remain distinct. Each update checks its preimage/count before replacing the root
+and copies only its bounded key path. Existing Hash supplies the hashing
+implementation. The map has no wire format, external node/proof input or disk
+durability claim. Initial capture, retained versions, final snapshot destruction
+and aggregate allocation still require resource admission.
+
+The existing private output seal continues to bind the actual World net delta. The
+new complete World value baseline is a private component exercised by tests, not
+installed in the production State lifecycle, a full State root, or publication
+permission. It requires the same actual predecessor: touched-key comparison cannot
+authenticate unrelated untouched-state drift. Executor and trigger semantic
+encoders are shared by both projections; merge, snapshot and consensus commitment
+formats are unchanged.
+
+The source-bound lifecycle audit identifies late World writes after output
+sealing: AXT incarnations/ratchets, replay expiry, DA quota/pin changes and lane
+cleanup, including live World pruning after World commit. Transaction replay
+membership and agreed runtime/context publication are separate owners. Replacement
+reverts MV owners but currently clones some live
+Nexus/incarnation/lineage/manifest metadata. The complete baseline therefore needs
+one State-owned commit-preparation capsule, exact custom replay-membership
+projection, authenticated runtime predecessor restoration and publication in the
+same State generation. Root/attestation dependency order must avoid self-
+reference; existing checkpoint hashes and merge hint roots retain their narrower
+meanings.
+
+Twelve new regressions are authored. All six persistent-map tests pass: 120
+insertion/removal orders, all 255 variable hash-bit splits and byte boundaries,
+700 mixed updates against an independent sorted rebuild, stale-preimage/count
+failure, immutable subtree sharing and independently calculated hash vectors. Six
+actual World baseline tests cover untouched/skipped values, cold/incremental
+equivalence, commit/replacement/rollback, stale-preimage refusal, touched-only
+encoding, schema/presence and actual trigger stores. These six Core tests pass in the thirteen-control World projection selection254. Independent source reviews found no concrete defect; they are not runtime
+qualification.
+
+The complete-publication design was refined on 2026-09-18: retain the existing
+execution-prefix commitment and canonical recovery snapshot hash. A new full-State
+Merkle field is not required to close publication ownership. The private persistent
+World baseline remains a proof/read component; it cannot authorize publication or
+replace the actual retained MV predecessor. This supersedes the earlier requirement
+to integrate that baseline as a prerequisite for every State publication.
+
+Canonical Block/DAG cutover requires one consuming preparation capsule containing
+the actual World, membership, runtime/context/topology/hash journals, source/witness
+and frozen execution policy, together with admitted events, geometry, archive and
+resource plans. Complete deterministic mutations and semantic admission before
+voting. After exact QC and Kura/Native evidence authorization, consume those same
+components once; do not rerun the World tail, re-admit membership or consult a local
+Queue veto. A node learning a decision through catch-up must reconstruct this same
+prepared transition; reconstruction failure is a local recovery condition and must
+not become a second canonical rejection. Retain actual writer ownership instead
+of introducing a diagnostic-generation counter as predecessor authority.
+
+The current isolated archive preparation owns exact projections, admitted byte/count limits and original archive writers. Its publish step authenticates the exact Kura receipt and retries retained bytes without recomputing State; both archive unit suites pass in471. Carrier journal decomposition and exact captured geometry pass their scoped484/485 controls: capture read-only projections first, then retain the original World/runtime/hash/topology/context journals and consuming membership reservation. The Kura phase owner retains one encoding, bounded verified phase differences and exact operations. Neither exposes a complete publication operation yet. The positive archive-composition and five startup-anchor fixtures pass in493/500; all remaining configured-startup fixtures pass in510. Explicit retirement maintenance and pure Native evidence observation with consuming durability attestation pass their505/506 and509/510 checks; the combined657-case regression passes on unchanged508 in511. The Native/historical geometry formal contracts pass31/32 checks and audited source inventory526 passes20; its full structural gate still reports168 diagnostics. Historical observation/attestation compiles in524 and passes all six controls in525 after correcting the fixture's canonical root;173 existing controls pass in521. The selected527/529 design replaces alias-based moves with stable canonical storage, immutable incarnation directories and authenticated reference publication, with physical retirement deferred to GC. Do not add a consensus-spanning evidence freeze to preserve mutable paths. Exact historical completion authority, cross-route pending-work closure, capacity admission, predecessor/successor recovery pins and an instance-local GC deletion fence remain required. The storage cutover and consuming publisher are not implemented; retain current guards until the complete path exists. Archive failures remain local admission/recovery conditions, not evidence that a consensus-valid block is invalid. Formal531/532 subsequently passes66 membership/delegated-State controls; the structural gate remains failing with140 diagnostics. Prototype530 was withdrawn after review found route-dependent retained descriptors acquired only after finality. The actual validator currently drops PreparedCarrier and returns only an execution hash; cached/reproposal markers can bypass preparation. Complete the exact worker-local resource handoff, typed local deferral, cached/recovered authority and consuming Apply together. Do not treat a reservation field in a discarded object, a lower local route cap, or a reopened inode comparison as that fix. Canonical terminal/compaction fixtures now preserve certified source bytes once and finalize outputs after attachments. Core/MV546 compiles545; all176 targeted Native/receipt/capacity/compaction/restart controls pass in547 without source/executable drift. Design549 selects one immutable authenticated Native proof bundle per canonical carrier plus bounded complete route/incarnation history references. Preserve exact compact-merge source, finality and WSV joins before source release; charge entire shared bundles until their last route/snapshot/recovery pin releases. Replace derived per-route application repair vetoes only through the complete representation cutover. See the dated530–549 evidence; full publication and network qualification remain open.
+
+State-owned proof/read capture, whole-source admission/finality and allocation
+bounds, canonical metadata and genesis/native/merge integration, and the SCCP
+applied outbox remain required. Native and unfinished ordinary State publication
+remain rejected. All L1–L6, the silent-initial-author counterexample and
+four/seven-validator qualification remain open.
+Local resource refusal must not become a canonical rejection. Future-invariant complete-source and allocation admission,
+the parallel apply corridor and the 32-MiB proof/256-MiB consensus ceiling remain
+open. A positive input count or terminal-only byte calculation is insufficient.
+Compose the canonical producer and every Core,
+query, proof and SDK consumer atomically. The isolated Rust SDK/shared/SCCP
+consumer suite passes 850/301/197 tests again after the descriptor change
+(candidate 87, no ignored tests or build warnings). All 20,563 captured inputs stay
+unchanged. Earlier standalone shared/SCCP results (78/79) remain separate evidence. Details
+have one full Network output owner; real BLS tests bind exact executed wire and
+reject changed source/output/cache/context claims. Earlier failed candidates,
+including the SCCP fixture's missing proposal input root, remain retained.
+The actual ordinary Block driver now consumes the private complete-callback
+producer, including the actual Network/Pipeline/Time policies and full replay
+comparison. Native execution still needs the same complete source owner. Isolated Kura now
+indexes only complete validated Network sources/outputs; Kaigi cursors use the
+Network input index. Queries and status readers bind exact finalized wire and
+charge metadata-authenticated body bytes before reading, then project one row
+from an immutable carrier after complete validation. Old merge/bodyless index
+promotion and the unbounded FindTransactions iterator owner are removed.
+Committed Network proofs now use the same exact finalized-body authority and
+explicit input-index/output joins with independently sized trees. State captures
+and rechecks only the requested journal hash; no World view spans body I/O.
+The raw endpoint returns original authenticated storage bytes, and complete
+proof response sizing precedes large output/transcript clones. Wire and work
+ceilings remain finite; complete decoded-memory reservations are still required.
+Genesis validation and ValidBlock event projection now consume validated full
+typed output caches and explicit original Network indices. Internal rows do not
+invent Network transaction events or route authority; reveals use their actual
+inner signed identity while routing by the committed outer source. Seven old
+consumer controls are retained and four new controls are authored, not run.
+Core library249 and full unit-test target264 now compile;264 reports zero errors
+and 168 warnings on 20,613 unchanged tracked/unignored local inputs. Its unchanged
+executable passes 95 output/Time/constructor controls in265 and125 query controls
+in266. Six of nine additional trigger scenarios in266 stop at old event-order
+snapshots. Eight explicit runtime JSON corrections then pass all nine scenarios
+and their economic assertions in272 with the unchanged264 executable; the
+compiled source and fixture epochs are recorded separately. Torii library275 passes after migrating 68 stale output/Time API callers. Core's
+full unit-test target282 passes with zero errors/168 warnings; runtime278 passes
+all 137 selected actual query, finalized-reader and trigger regressions on the
+same 20,615 unchanged inputs and exact private executable. Three new reader tests
+cover exact wire/work admission, budget refusal before body I/O and corrupt durable
+wire despite a warm cache. State captures/rechecks its canonical hash without a
+World guard across I/O; request-local visibility propagates failures on finish.
+Torii's full test target277 initially fails 165 stale fixture diagnostics. Complete
+typed-output/proof migrations and genuine parent-linked finality fixtures produce
+a passing full unit-test target297 (zero errors/424 warnings). Selected runtime298
+and299 pass all 46 history, status/details, proof, native custody and push recovery
+controls on its exact executable and unchanged 20,616 standard captured inputs.
+Two stale refusal-message assertions and two dropped broadcast-sender fixture
+lifetimes found in292's selected runtime are corrected without weakening assertions.
+The signer fixture is test-only and included in the normal source capture.
+Cold whole-chain caches need anchored request pagination or a separately owned,
+finite durable index: chunking alone cannot bound retained full-history rows.
+Complete decoder/retained allocation budgets remain unestablished. No full Torii
+runtime, production publication, current MAIN or network pass is claimed.
+The actual ordinary driver authenticates genesis explicitly, retains strict signed
+transaction time, and reads ABI/gas policy from the acquired World overlay. The
+replacement test checks actual reverted gas policy and error-path guard release.
+Earlier253 passes 44 World-preparation/DA/membership/genesis/fraud/time controls;
+254 passes 13 World projection controls on its earlier source. These are separate
+scopes, not a full Core or release pass. The exact images, manifests, failures and
+runtime receipts are retained under ignored
+`dist/sumeragi-liveness-redesign-20260916/canonical-owner-checkpoint-267/`.
+Full State/runtime publication, witness capture, resource admission and SCCP
+applied outbox remain unfinished. The native common execution owner is implemented
+and has selected runtime evidence below; publication still requires its complete
+authenticated State owner. Production
+publication guards remain closed. MAIN source integration, full formal/workspace/
+SDK and real four/seven-validator qualification remain open.
+Typed telemetry validates complete output/cache shape and counts only explicit
+Network joins; it does not yet authenticate exact finalized body bytes or admit
+complete body/decode/work cost. Apply diagnostics count rejected typed outputs
+without changing validation or finality. Their five new tests remain unrun.
+Bridge now validates full output/cache structure and joins Network sources by
+input index. Its 73 migrated controls and four new corruption/finality controls
+are unrun. Successful internal/chained outbound records explicitly refuse until
+the actual SCCP applied-outbox owner exists; replay ordering/custody remains open.
+Failed intermediate candidates 104–106 remain retained. Mechanical migration removes 1039 unique obsolete None header
+arguments; the direct-identity test now attaches a checked full Network output.
+Stripped-header guards retain real context fields; output authority cannot live
+in the proposal-only Header. Ordinary AMX projection validates the complete typed
+output cache and follows explicit Network joins; its certified-merge branch is
+preserved and native-group receipt integration remains open. New cache-tamper and
+original-commitment controls are authored, not executed. The State capacity,
+authority-rekey, admission, history/proof and Torii controls also remain unrun.
+Finish actual State output production and remaining consumers/fixtures before
+claiming their qualification. Bound positive index selection/continuation without cloning
+historical height sets; integrate decode-graph and resident-memory reservations
+before claiming end-to-end query/proof bounds or enabling canonical fanout. Internal invocations require their own output-history/proof owner. Source audit
+finds that the production runner leaves the SCCP header root unset; execution-then-
+fill is test-only. Replace this outcome-dependent proposal field with one bounded,
+rollback-safe applied outbox manifest and QC execution root/count, migrating State,
+replay, archives, proofs/circuits, SDKs and formal bindings atomically. No speculative
+header rewrite or native SCCP activation is qualified. Three identical OpenAPI source copies
+now describe the changed header/details and finalized Network proof contracts,
+including byte/work refusals and storage failures. Static document validation and
+two mirror/parser checks pass; Torii runtime checks and clean-source release
+metadata regeneration remain unqualified.
+
+Native accepting/commit paths remain closed until the sole consumer, durable
+Apply and atomic old-signer/Ordinary economic bypass retirement are qualified.
+Native query/proof/fee observability and fair runner/transport/refresh remain
+required. All L1–L6 and the real four-validator counterexample remain OPEN.
+Four-/seven-validator acceptance must use one unchanged completed candidate.
+
+#### Native execution and snapshot predecessor checkpoint360
+
+Core/MV full test compilation337 passes on20,625 unchanged inputs; all56MV tests338
+and192 selected native/runtime tests341 pass. These cover actual native/common
+Network/Pipeline/Time execution, retained runtime/context undo, exact special-store
+snapshots and prior native fixture regressions. Snapshot module341 aborts after
+nine passes at can_read_multiple_blocks; the other85 are unqualified. LLDB345
+identifies a defaultWorld construction inside schema discovery on the restore
+stack. Static derive-provided JSON field order347 removes that construction.
+
+The frozen successor includes finite coherent capture321, derived UAID bindings331,
+native observation fence335, fourteen mandatory service-state envelopes342/346,
+recipient/confidential indexes343, trigger indexes344 and unified account identity
+indexes352. Compilation359 passes on20,634 unchanged inputs after the355 missing
+import is corrected in358. Runtime362 passes301/319 selected tests, including all
+new predecessor controls; fourteen snapshot cases abort and four fail SCCP fixture
+commitments. LLDB363 locates large by-value State frames across nested restore.
+Heap-owned restoration365 and corrected SCCP proposal fixtures364 compile in370.
+Runtime372 passes345/346 selected tests, including all94 snapshots on normal stacks.
+Its one remaining SCCP fixture predecessor defect is corrected subsequently in374.
+Daemon373 reports35 retired output/header API diagnostics; migrations375/376 and
+account-scope predecessor371 compile in381. Runtime383 passes355/356 selected
+checks on20,636 unchanged inputs, including all94 snapshots, all192 native/runtime
+controls and all five new account-scope cases. Its remaining stale configuration
+fixture is migrated in388. Daemon382 builds only the zero-test launcher; actual
+library compilation392 exposes one corrected structural Time-output fixture error.
+Core395 reports the anonymous-lifetime edit387;398 restores a stable named input
+lifetime. Frozen399 builds Core/MV400 and actual daemon library401 on20,638 unchanged
+inputs. Core403 passes all389 selected tests in194 processes, including ownership386,
+retained physical dataspace guard391, sole World fee markers389, replacement
+membership397 and all94 snapshots. Daemon407 passes23/32: nine Musubi cases fail
+initial-genesis admission before their finality assertions. Additional daemon412
+passes11/11 startup and authoritative-execution controls. Authenticated genesis
+setup408 reaches the unfinished complete-State publication refusal; do not bypass
+it or claim the stateful Musubi cases pass. Core/MV410 compiles20,642 unchanged
+inputs, and recovery414 passes143/143: all ten new fee completeness405 and alias
+predecessor406 controls, all94 snapshots, five Kura consumers and existing affected
+alias/fee cases. Read-only exact execution-commitment test support408 and the
+whole-batch fee helper417 remain subsequent unqualified work. Complete State
+publication is the next required dependency. No full suite or runtime cutover is
+inferred. Norito361
+passes191 grouped codec and60 derive unit tests after357
+registers the missing test harness. The original membership-ledger agreement case
+and codec guard356 pass on354.
+
+Audit340 additionally requires account scope, asset/domain/NFT/RWA/custody/game/VPN,
+contract/asset alias and remaining reverse indexes to retain their actual prior
+projections. Current-only reconstruction cannot satisfy replacement semantics.
+Trigger consumer clarification limits the observed active-index defect to query
+visibility and projection roots; Time/Pipeline matchers read action stores directly.
+The source-bound receipts and failures are preserved in ignored
+`dist/sumeragi-liveness-redesign-20260916/canonical-snapshot-checkpoint-360/`.
+Complete-State publication, bounded capture allocation, State-owned witness, cold
+history pagination, SCCP outbox, live runner integration and one-candidate
+formal/SDK/workspace/four/seven-validator qualification remain required.
+
+Canonical storage552/556 separates chain files from lane alias moves; bounded preflight563 avoids unrelated full-tree rescans while retaining exact namespace identities. Compilation570 passes. Kura559 exposed15 stale fixture failures after1,322 passes; repaired focused572 passes31 of32, with the remaining old combined-path assertion corrected576 but not yet rerun. Preserve current drain/publication guards until immutable incarnation references and the consuming owner replace them. Formal542/550/560 preserves delegated obligations with43 preparation,187 affected fixture and52 merge-validation controls passing in their respective scoped runs. Structural575 remains failing with82 diagnostics, zero new from the storage split. Kagami562 exposes51 current-API migration compile errors;568 and574 migrate actual typed Native evidence without restoring retired proofs. This does not close an L1–L6 outcome.

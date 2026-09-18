@@ -107,6 +107,8 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/block.rs': (
+        'block/post_execution_tail.rs',
+        'block/post_execution_tail_tests.rs',
         'block/autonomous_merge_carrier_content_tests.rs',
         'block/exact_quorum_cardinality_tests.rs',
         'block/replay_proposal_authority_tests.rs',

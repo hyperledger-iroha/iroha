@@ -82,6 +82,10 @@ marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and KAGEMUSHA operation-status transaction hashes.
 
+The shared Torii mock returns missing pipeline status as an HTTP 404 JSON
+`ErrorEnvelope` bound to the requested hash and scope. Omitted scope means
+`global`; explicit `local` and `global` lookups retain their exact scope.
+
 `get_kagemusha_readiness()` validates the closed four-field KAGEMUSHA
 wire-version-1 response from `GET /v1/kagemusha/readiness`. Peer-payment,
 mint-credit, and redemption-voucher codecs live in the sole `Kagemusha` Python

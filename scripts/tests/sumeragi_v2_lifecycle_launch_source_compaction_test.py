@@ -49,7 +49,7 @@ GUARD_END = (
     "#[test]\n"
     "fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
 )
-EXPECTED_FINGERPRINT = "62e93216c5fc1a36f21cb18abf0e0101af5ad32d4356eb5c2ce428443019dc2b"
+EXPECTED_FINGERPRINT = "616120fed09704fee63be477d9a4d96b271360631dfa8d508590c408af48d523"
 
 
 def guarded_source(source: str = SOURCE) -> str:
@@ -340,9 +340,49 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
             ("self.matches_current_terminal_parent(coordinator)", 2),
             ("metadata.continuation == super::schema::DurableContinuation::None", 2),
             ("operation.complete()", 4),
-            ("output.abort_before_publication()", 2),
         }
         self.assertTrue(expected <= actual)
+
+    def test_recovered_proposal_settlement_forbids_early_output_abort(self) -> None:
+        forbidden = [
+            string_literals(body)
+            for body in call_bodies("assert_forbidden_source_tokens")
+            if "output.abort_before_publication()" in string_literals(body)
+        ]
+        self.assertCountEqual(
+            forbidden,
+            [
+                ("output.abort_before_publication()",),
+                ("output.abort_before_publication()", "retry!()"),
+            ],
+        )
+
+    def test_terminal_authentication_uses_the_terminal_shutdown_branch(self) -> None:
+        regions = {compact_rust(body) for body in call_bodies("source_region")}
+        self.assertIn(
+            'terminal,"if context.height == u64::MAX",'
+            '"return Ok(HeightRunOutcome::Terminal);",',
+            regions,
+        )
+        ordered = {string_literals(body) for body in call_bodies("assert_source_tokens_in_order")}
+        self.assertIn(
+            (
+                "close_runner_ingress_for_finalized_drain",
+                "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
+                "drain_finalized_lane_relay_prefix(",
+                "ensure_closed_drained_cut()",
+                "if context.height == u64::MAX",
+            ),
+            ordered,
+        )
+        self.assertIn(
+            (
+                "executor.durable_finality()",
+                "authenticate_terminal_complete_tip(",
+                "activated.into_clean_shutdown(&mut active_runner)?",
+            ),
+            ordered,
+        )
 
     def test_shared_helper_provider_is_exact_and_cannot_be_omitted(self) -> None:
         helper_include = PROVIDER_INCLUDES[0]

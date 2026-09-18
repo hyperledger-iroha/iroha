@@ -2273,3 +2273,305 @@ fn native_amx_partial_completed_repair_rejects_unproved_non_target_completion() 
         );
     }
 }
+
+struct NativeAmxCompletedRepairTempFixture {
+    source: NativeAmxPublicationCapacityFixture,
+    manifest_path: PathBuf,
+    manifest_bytes: Vec<u8>,
+    receipt_path: PathBuf,
+    receipt_bytes: Vec<u8>,
+    latest_path: PathBuf,
+    latest_bytes: Vec<u8>,
+    reserved_before_write: u64,
+    index: NativeAmxPublicationIndexRecord,
+}
+
+// This cut uses the real repair writer: its exact index is already durable,
+// and the actual descriptor-bound temporary is written and fsynced, but not renamed.
+fn native_amx_completed_repair_after_actual_temp_sync() -> NativeAmxCompletedRepairTempFixture {
+    let source = native_amx_publication_capacity_fixture();
+    let kura = &source.kura;
+    native_amx_complete_exact_fixture_carrier(kura, &source.block, &source.finality, 3);
+    let leaf = &source.manifest.entries().last().unwrap().leaf;
+    let entry = kura.lane_storage_entry(leaf.lane_id).unwrap();
+    let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+        &entry,
+        &kura.store_root,
+        leaf.participant_height,
+    );
+    let receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        leaf.participant_height,
+    );
+    let latest_path =
+        Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
+    let manifest_bytes = fs::read(&manifest_path).unwrap();
+    let receipt_bytes = fs::read(&receipt_path).unwrap();
+    let latest_bytes = fs::read(&latest_path).unwrap();
+    fs::remove_file(&manifest_path).unwrap();
+    let carrier = Kura::native_amx_publication_carrier(&source.block).unwrap();
+    {
+        let _publication = kura.prune_lock.lock();
+        let plan = kura
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                &source.block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
+            )
+            .unwrap();
+        let targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
+        assert!(
+            kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                &source.block,
+                &plan,
+                &targets,
+            )
+            .unwrap()
+        );
+    }
+    let index = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+        .unwrap()
+        .records[&carrier]
+        .clone();
+    assert_eq!(
+        index.origin,
+        NativeAmxPublicationIndexOriginV1::CompletedRepair
+    );
+    let reserved_before_write = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .unwrap();
+    assert!(reserved_before_write >= u64::try_from(manifest_bytes.len()).unwrap());
+    fail_after_next_native_amx_evidence_temp_sync_for_tests();
+    let error = kura
+        .repair_native_amx_participant_application_evidence(&source.block)
+        .expect_err("actual repair stops after fsync, before rename");
+    assert!(
+        error
+            .to_string()
+            .contains("injected Native evidence interruption after temporary fsync"),
+        "{error}"
+    );
+    assert!(
+        !FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.get()),
+        "the real physical writer consumed the crash cut"
+    );
+    assert!(!manifest_path.exists());
+    assert_eq!(
+        fs::read(manifest_path.with_extension("norito.tmp")).unwrap(),
+        manifest_bytes
+    );
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt_bytes);
+    assert_eq!(fs::read(&latest_path).unwrap(), latest_bytes);
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records[&carrier],
+        index
+    );
+    NativeAmxCompletedRepairTempFixture {
+        source,
+        manifest_path,
+        manifest_bytes,
+        receipt_path,
+        receipt_bytes,
+        latest_path,
+        latest_bytes,
+        reserved_before_write,
+        index,
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_recovers_actual_synced_temporary_on_restart() {
+    let NativeAmxCompletedRepairTempFixture {
+        source:
+            NativeAmxPublicationCapacityFixture {
+                _temp_dir,
+                kura,
+                block,
+                manifest: _,
+                finality: _,
+                lane_config,
+            },
+        manifest_path,
+        manifest_bytes,
+        receipt_path,
+        receipt_bytes,
+        latest_path,
+        latest_bytes,
+        reserved_before_write,
+        index,
+    } = native_amx_completed_repair_after_actual_temp_sync();
+    let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+    let temp_path = manifest_path.with_extension("norito.tmp");
+    let before_reopen = snapshot_regular_files_recursively(&kura.store_root);
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("an exact retained repair index owns the canonical temporary on Strict restart");
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records[&index.carrier],
+        index,
+        "restart retains the original locator"
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        reserved_before_write - u64::try_from(manifest_bytes.len()).unwrap(),
+        "physical temp bytes consume exactly their allocation, never a second reservation"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        before_reopen,
+        "initial capacity authentication is read-only and precedes geometry-dependent promotion"
+    );
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .unwrap();
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .expect("existing authenticated temporary recovery completes the exact publication");
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .unwrap(),
+        3
+    );
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_bytes);
+    assert!(!temp_path.exists());
+    assert_eq!(
+        fs::read(&receipt_path).unwrap(),
+        receipt_bytes,
+        "original completed receipt is untouched"
+    );
+    assert_eq!(
+        fs::read(&latest_path).unwrap(),
+        latest_bytes,
+        "original completed latest pointer is untouched"
+    );
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+    let completed = snapshot_regular_files_recursively(&reopened.store_root);
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        completed,
+        "completed retry neither grows storage nor recreates the retired locator"
+    );
+}
+
+#[test]
+fn native_amx_completed_repair_retries_actual_synced_temporary_with_original_index() {
+    let cut = native_amx_completed_repair_after_actual_temp_sync();
+    let kura = &cut.source.kura;
+    assert_eq!(
+        kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+            .unwrap(),
+        3,
+        "same-process retry uses the same admitted repair, not pristine admission"
+    );
+    assert_eq!(fs::read(&cut.manifest_path).unwrap(), cut.manifest_bytes);
+    assert!(!cut.manifest_path.with_extension("norito.tmp").exists());
+    assert_eq!(fs::read(&cut.receipt_path).unwrap(), cut.receipt_bytes);
+    assert_eq!(fs::read(&cut.latest_path).unwrap(), cut.latest_bytes);
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn native_amx_completed_repair_rejects_foreign_tampered_and_unowned_temporaries() {
+    for fault in 0..4 {
+        let cut = native_amx_completed_repair_after_actual_temp_sync();
+        let kura = &cut.source.kura;
+        let temp_path = cut.manifest_path.with_extension("norito.tmp");
+        match fault {
+            0 => {
+                let mut tampered = cut.manifest_bytes.clone();
+                tampered.push(0); // Complete canonical content plus unowned trailing bytes.
+                write_synced_native_amx_test_file(&temp_path, &tampered);
+            }
+            1 => {
+                let other = &cut.source.manifest.entries()[0].leaf;
+                let entry = kura.lane_storage_entry(other.lane_id).unwrap();
+                let foreign = Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &kura.store_root,
+                    other.participant_height,
+                );
+                write_synced_native_amx_test_file(&temp_path, &fs::read(foreign).unwrap());
+            }
+            2 => {
+                let inventory =
+                    Kura::read_native_amx_publication_index_for_store(&kura.store_root).unwrap();
+                assert_eq!(inventory.files.len(), 1);
+                fs::remove_file(&inventory.files[0].path).unwrap();
+                // Losing the locator cannot turn an interrupted repair into a
+                // fresh repair admission, even with exact finality/receipt bytes.
+                let before = snapshot_regular_files_recursively(&kura.store_root);
+                assert!(
+                    kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+                        .is_err()
+                );
+                assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+            }
+            _ => {
+                let wrong_height = temp_path
+                    .parent()
+                    .unwrap()
+                    .join(Kura::native_amx_evidence_file_name(
+                        NativeAmxEvidenceKind::Manifest,
+                        2,
+                    ))
+                    .with_extension("norito.tmp");
+                fs::rename(&temp_path, wrong_height).unwrap();
+            }
+        }
+        let store_root = kura.store_root.clone();
+        let files = snapshot_regular_files_recursively(&store_root);
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            lane_config,
+            ..
+        } = cut.source;
+        drop(kura);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        assert!(
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+            "foreign, noncanonical, wrong-height or unindexed temp cannot acquire recovery authority; fault={fault}"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&store_root),
+            files,
+            "failed restart preserves all authoritative and forensic bytes; fault={fault}"
+        );
+    }
+}

@@ -124,6 +124,11 @@ def test_inventory_matches_live_reviewed_rust_closure(
     )
     assert errors == []
     assert closure is not None
+    if owner == "crates/iroha_core/src/block.rs":
+        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:2] == (
+            "block/post_execution_tail.rs",
+            "block/post_execution_tail_tests.rs",
+        )
     parent = Path(owner)
     assert tuple(
         edge.provider.relative_to(parent.parent).as_posix()
@@ -159,13 +164,32 @@ def test_ast_reader_has_no_former_owner_fallback(tmp_path: Path) -> None:
     assert any("regular non-symlink file" in error for error in errors)
 
 
-@pytest.mark.parametrize("mutation", ["omitted_child", "duplicate_assignment", "executable_payload"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "omitted_child",
+        "omitted_common_tail",
+        "omitted_common_tail_tests",
+        "duplicate_assignment",
+        "executable_payload",
+    ],
+)
 def test_ast_reader_rejects_inventory_substitution(tmp_path: Path, mutation: str) -> None:
     """Path migration retains digest, unique-assignment and data-only checks."""
     module = reader()
     source = OWNER.read_text(encoding="utf-8")
     if mutation == "omitted_child":
         source = source.replace("        'consensus_v2_context_tests.rs',\n", "")
+        expected = "manifest digest must equal"
+    elif mutation in ("omitted_common_tail", "omitted_common_tail_tests"):
+        component = (
+            "block/post_execution_tail.rs"
+            if mutation == "omitted_common_tail"
+            else "block/post_execution_tail_tests.rs"
+        )
+        declaration = f"        '{component}',\n"
+        assert source.count(declaration) == 1
+        source = source.replace(declaration, "")
         expected = "manifest digest must equal"
     elif mutation == "duplicate_assignment":
         source += "\n_KURA_PRODUCTION_COMPONENT_FILES = ()\n"

@@ -10024,9 +10024,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     *tag
                 }
             };
-            let transferred_to_published =
+            let transferred_to_published_marker =
                 coalesces_published_store_terminal && !self.body_pipeline_owners.contains_key(&key);
-            if !transferred_to_published
+            if !transferred_to_published_marker
                 && !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest))
             {
                 return Err(self.close(

@@ -212,6 +212,20 @@ fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
         .expect("open test Kura")
         .0
 }
+fn open_anchored_geometry_kura(
+    root: &Path,
+    lane_config: &RuntimeLaneConfig,
+    primary_incarnation: Hash,
+) -> Arc<Kura> {
+    let kura = open_kura(root, lane_config);
+    let baseline = kura.configured_lane_catalog_baseline()
+        .expect("read configured fixture catalog")
+        .expect("configured fixture catalog is authenticated");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(), primary_incarnation, baseline,
+    ).expect("admit the State-owned primary geometry before fixture transitions");
+    kura
+}
 fn wait_for_total_usage_scan_pause(kura: &Kura) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !kura.total_disk_usage_scan_paused_for_tests() {

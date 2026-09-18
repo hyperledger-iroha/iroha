@@ -305,6 +305,9 @@ impl LaneBodyJob {
 }
 
 impl BodyCustody {
+    pub(super) fn worker_in_flight(&self) -> bool {
+        self.ticket.is_some()
+    }
     pub(super) fn retained_job_count(&self) -> usize {
         usize::from(self.ticket.is_some()) + usize::from(self.completed.is_some())
     }

@@ -8,7 +8,7 @@ fn service_native_lane_control_for_body_test(
 ) {
     use crate::sumeragi::v2_lane_instance::LaneService;
     for _ in 0..32 {
-        match owner.service_one(state, observed, now).unwrap() {
+        match owner.service_with_worker(state, observed, now).unwrap() {
             LaneService::PersistedAwaitingAck
             | LaneService::SignedAwaitingAck
             | LaneService::Completion(_)
@@ -239,7 +239,7 @@ state_test! { sync native_lane_instance_commit_qc_progresses_while_actual_body_j
     let completed = run_native_lane_body_worker_for_test(job,state); // Actual fsync/readback done, result deliberately held.
     assert!(owner.native_records().is_empty());
     assert!(matches!(owner.offer(state,&observed,&LaneMessageV1::QuorumCertificate(qc.clone())).unwrap(),LaneInputOutcome::Stepped(_)));
-    assert!(matches!(owner.service_one(state,&observed,now).unwrap(),LaneService::PersistedAwaitingAck));
+    assert!(matches!(owner.service_with_worker(state,&observed,now).unwrap(),LaneService::PersistedAwaitingAck));
     assert_eq!(owner.durable_decision_certificate(),Some(&qc),"native Decision custody is visible before the worker completion");
     assert!(owner.native_decision().unwrap().is_none(),"a QC alone cannot manufacture the missing manifest");
     assert!(!owner.held_effects().any(|effect| matches!(effect,core::Effect::Apply {..})),"no body Ready was inferred from CommitQC");

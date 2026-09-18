@@ -21053,6 +21053,17 @@ impl Kura {
             let _ = Self::sync_bound_progress_intent_directories(namespace);
             return Err(Error::IO(error, temp_path.to_path_buf()));
         }
+        #[cfg(test)]
+        if FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.replace(false)) {
+            // Retain the actual synced temporary exactly as a crash between
+            // write/fsync and promotion would; no synthetic artifact is installed.
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected Native evidence interruption after temporary fsync",
+                ),
+                temp_path.to_path_buf(),
+            ));
+        }
         if let Err(error) =
             Self::promote_bound_progress_temp_noreplace(namespace, temp_path, path, &temporary)
         {
@@ -43119,6 +43130,11 @@ include!("kura/indexed_sidecar_io.rs");
 include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
+#[path = "kura/native_lane_batch_source.rs"]
+mod native_lane_batch_source;
+pub(crate) use native_lane_batch_source::{
+    FinalizedNativeLaneBatchV1, NativeLaneBatchCarrierReadV1, NativeLaneBatchRecoveryV1,
+};
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
 impl BlockStore {
