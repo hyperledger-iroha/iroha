@@ -60,7 +60,8 @@ impl Fixture {
         npos.epoch_length_blocks = NonZeroU64::new(20).unwrap();
         npos.evidence_horizon_blocks = 20;
         npos.slashing_delay_blocks = 1;
-        npos.validate().expect("valid signed short-epoch fixture parameters");
+        npos.validate()
+            .expect("valid signed short-epoch fixture parameters");
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
             "authenticated-height-fixture".into(),
             ".",
@@ -241,13 +242,79 @@ impl Fixture {
         }
     }
 
+    fn resign_certificate(&self, certificate: &mut QuorumCertificate, view: u64, omitted: usize) {
+        certificate.round.view = view;
+        certificate.proposal_round = certificate.round;
+        certificate.signers = (0..4)
+            .filter(|index| *index != omitted)
+            .map(|index| index as u32)
+            .collect();
+        let preimage = Vote {
+            round: certificate.round,
+            proposal_round: certificate.proposal_round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            execution_commitment: certificate.execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(self.keys[*index as usize].private_key(), &preimage)
+                    .unwrap()
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    }
+
+    fn witness_variant(
+        &self,
+        proof: &BridgeFinalityProof,
+        view: u64,
+        omitted: usize,
+    ) -> BridgeFinalityProof {
+        let mut proof = proof.clone();
+        if let Some(parent) = proof
+            .finality_artifact
+            .height_context
+            .parent_commit_qc
+            .as_mut()
+        {
+            self.resign_certificate(parent, view + 1, (omitted + 1) % 4);
+        }
+        self.resign_certificate(&mut proof.finality_artifact.commit_qc, view, omitted);
+        proof
+    }
+
     fn attest(
         &self,
         index: usize,
         height: NonZeroU64,
         challenge: [u8; 32],
     ) -> BridgeFinalityAttestationV1 {
-        let proof = self.proofs[usize::try_from(height.get() - 1).unwrap()].clone();
+        self.attest_proofs(
+            index,
+            self.proofs[0].clone(),
+            self.proofs[usize::try_from(height.get() - 1).unwrap()].clone(),
+            challenge,
+        )
+    }
+
+    fn attest_proofs(
+        &self,
+        index: usize,
+        genesis: BridgeFinalityProof,
+        proof: BridgeFinalityProof,
+        challenge: [u8; 32],
+    ) -> BridgeFinalityAttestationV1 {
         let artifact = &proof.finality_artifact;
         let context = &artifact.height_context;
         let peer = &self.peers[index];
@@ -259,9 +326,9 @@ impl Fixture {
             restart_required: false,
             height_context_id: context.id(),
             height: artifact.height,
-            view: 0,
+            view: artifact.commit_qc.round.view,
             phase: SumeragiV2StatusPhase::PendingApply,
-            leader: context.leader(0),
+            leader: context.leader(artifact.commit_qc.round.view),
             locked_prepare_qc: None,
             highest_prepare_qc: None,
             last_timeout_certificate: None,
@@ -294,7 +361,7 @@ impl Fixture {
             node_fingerprint: peer.node_fingerprint,
             node_id: peer.peer_id.clone(),
             genesis_block_hash: self.genesis.expected_hash(),
-            genesis_finality_proof: self.proofs[0].clone(),
+            genesis_finality_proof: genesis,
             status,
             finality_proof: proof,
         };
@@ -325,6 +392,7 @@ struct Reads<'a> {
     proof_calls: Mutex<Vec<u64>>,
     calls: AtomicUsize,
     fault: Fault,
+    distinct_witnesses: bool,
 }
 
 impl<'a> Reads<'a> {
@@ -337,6 +405,7 @@ impl<'a> Reads<'a> {
             proof_calls: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
             fault: Fault::None,
+            distinct_witnesses: false,
         }
     }
 }
@@ -357,7 +426,7 @@ impl HeightReads for Reads<'_> {
         challenge: [u8; 32],
         _: &PeerId,
     ) -> Result<BridgeFinalityAttestationV1> {
-        self.attest_calls[peer].fetch_add(1, Ordering::Relaxed);
+        let round = self.attest_calls[peer].fetch_add(1, Ordering::Relaxed);
         if peer == 0
             && matches!(
                 self.fault,
@@ -392,7 +461,20 @@ impl HeightReads for Reads<'_> {
         if matches!(self.fault, Fault::Late) {
             std::thread::sleep(Duration::from_millis(30));
         }
-        let mut value = self.fixture.attest(peer, height, challenge);
+        let mut value = if self.distinct_witnesses {
+            let view = 2 + peer as u64 + 4 * round as u64;
+            let genesis = self
+                .fixture
+                .witness_variant(&self.fixture.proofs[0], view, peer);
+            let proof = self.fixture.witness_variant(
+                &self.fixture.proofs[usize::try_from(height.get() - 1).unwrap()],
+                view,
+                peer,
+            );
+            self.fixture.attest_proofs(peer, genesis, proof, challenge)
+        } else {
+            self.fixture.attest(peer, height, challenge)
+        };
         if peer == 3
             && matches!(
                 self.fault,
@@ -727,5 +809,174 @@ fn authenticated_height_restart_transport_never_masks_fixed_peer_identity() {
             HeightObservationV1::Verified(_)
         ),
         "reconnect resumes the authenticated prefix without a write"
+    );
+}
+
+#[test]
+fn authenticated_height_accepts_independent_certificate_witnesses() {
+    let fixture = Fixture::new();
+    let mut observer = fixture.observer();
+    let mut reads = Reads::new(&fixture, 3);
+    reads.distinct_witnesses = true;
+    let HeightObservationV1::Verified(evidence) = poll(&mut observer, &reads).unwrap() else {
+        panic!("independent valid quorum witnesses must certify one checkpoint")
+    };
+    assert_eq!(evidence.committed_height().get(), 3);
+    assert_eq!(evidence.block_hash(), fixture.proofs[2].block_header.hash());
+    assert_eq!(*reads.proof_calls.lock().unwrap(), vec![2, 3]);
+    assert_ne!(evidence.proofs[0], fixture.proofs[0]);
+    for peer in evidence.peers {
+        assert_ne!(
+            peer.before.body.genesis_finality_proof,
+            peer.after.body.genesis_finality_proof
+        );
+        assert_ne!(
+            peer.before.body.finality_proof,
+            peer.after.body.finality_proof
+        );
+        assert_ne!(peer.before.body.finality_proof, fixture.proofs[2]);
+        peer.before.verify().unwrap();
+        peer.after.verify().unwrap();
+    }
+}
+
+#[test]
+fn authenticated_height_rejects_invalid_current_and_parent_witnesses() {
+    let fixture = Fixture::new();
+    let observer = fixture.observer();
+    let retained = &fixture.proofs[1];
+    let predecessor = &fixture.proofs[0];
+    let valid = fixture.witness_variant(retained, 2, 0);
+    for parent in [false, true] {
+        let mut invalid = valid.clone();
+        let certificate = if parent {
+            invalid
+                .finality_artifact
+                .height_context
+                .parent_commit_qc
+                .as_mut()
+                .unwrap()
+        } else {
+            &mut invalid.finality_artifact.commit_qc
+        };
+        let mut different_round = certificate.clone();
+        fixture.resign_certificate(&mut different_round, certificate.round.view + 1, 0);
+        certificate.aggregate_signature = different_round.aggregate_signature;
+        if parent {
+            // The current certificate remains valid: context identity deliberately excludes
+            // parent witness bytes. The contiguous verifier must verify this parent itself.
+            iroha_data_model::bridge::verify_bridge_finality_proof(
+                &invalid,
+                &observer.authority.network,
+            )
+            .unwrap();
+        }
+        assert!(
+            observer
+                .authority
+                .verify_same_decision(retained, Some(predecessor), &invalid)
+                .is_err(),
+            "parent={parent}"
+        );
+    }
+}
+
+#[test]
+fn authenticated_height_rejects_signed_conflicting_decisions() {
+    let fixture = Fixture::new();
+    let observer = fixture.observer();
+    for index in 0_usize..2 {
+        let retained = &fixture.proofs[index];
+        let predecessor = index.checked_sub(1).map(|index| &fixture.proofs[index]);
+        for conflict in 0..3 {
+            let mut candidate = fixture.witness_variant(retained, 2, 0);
+            let artifact = &mut candidate.finality_artifact;
+            match conflict {
+                0 => {
+                    artifact.commit_qc.execution_commitment =
+                        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                            Hash::new(b"different parent state"),
+                            Hash::new(b"different post state"),
+                            Hash::new(b"different writes"),
+                            1,
+                            Hash::new(b"different executed wire"),
+                        );
+                }
+                1 => {
+                    artifact.subject.payload_hash = Hash::new(b"different payload");
+                    artifact.commit_qc.subject = artifact.subject;
+                }
+                2 => {
+                    artifact.height_context.nexus_amx_context_hash =
+                        Hash::new(b"different context");
+                    artifact.commit_qc.round.context_id = artifact.height_context.id();
+                }
+                _ => unreachable!(),
+            }
+            fixture.resign_certificate(&mut artifact.commit_qc, 2, 0);
+            if let Some(predecessor) = predecessor {
+                let mut independent = observer.authority.anchor(predecessor).unwrap();
+                independent
+                    .verify(&candidate)
+                    .expect("conflicting decision has valid current and parent certificates");
+            } else {
+                observer
+                    .authority
+                    .anchor(&candidate)
+                    .expect("conflicting genesis decision has a valid certificate");
+            }
+            assert_eq!(
+                candidate.block_header.hash(),
+                retained.block_header.hash(),
+                "block hash alone cannot identify the finality decision"
+            );
+            assert!(
+                observer
+                    .authority
+                    .verify_same_decision(retained, predecessor, &candidate)
+                    .is_err(),
+                "conflict={conflict}"
+            );
+        }
+    }
+}
+
+#[test]
+fn authenticated_height_requires_authenticated_predecessor_for_alternate_witnesses() {
+    let fixture = Fixture::new();
+    let observer = fixture.observer();
+    let retained = &fixture.proofs[2];
+    let alternate = fixture.witness_variant(retained, 2, 0);
+    assert!(
+        observer
+            .authority
+            .verify_same_decision(retained, None, &alternate)
+            .is_err()
+    );
+    assert!(
+        observer
+            .authority
+            .verify_same_decision(retained, Some(&fixture.proofs[0]), &alternate)
+            .is_err()
+    );
+    observer
+        .authority
+        .verify_same_decision(retained, Some(&fixture.proofs[1]), &alternate)
+        .unwrap();
+    observer
+        .authority
+        .verify_same_decision(
+            &fixture.proofs[0],
+            None,
+            &fixture.witness_variant(&fixture.proofs[0], 2, 0),
+        )
+        .unwrap();
+    let mut wrong_pops = alternate;
+    wrong_pops.finality_artifact.validator_set_pops.swap(0, 1);
+    assert!(
+        observer
+            .authority
+            .verify_same_decision(retained, Some(&fixture.proofs[1]), &wrong_pops)
+            .is_err()
     );
 }

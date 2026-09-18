@@ -1988,6 +1988,124 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
     );
 }
 #[test]
+fn block_store_read_only_finality_verifies_without_mutation() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let path = kura.block_store.lock().path_to_blockchain.clone();
+    let before = snapshot_regular_files_recursively(&path);
+    let mut reader = BlockStore::open_read_only(&path).expect("read-only store");
+    assert_eq!(
+        reader
+            .read_verified_v2_finality(1)
+            .expect("verified finality"),
+        (block.header(), artifact)
+    );
+    assert!(reader.read_verified_v2_finality(0).is_err());
+    assert!(reader.read_verified_v2_finality(2).is_err());
+    assert!(BlockStore::new(&path).read_verified_v2_finality(1).is_err());
+    drop(reader);
+    assert_eq!(snapshot_regular_files_recursively(&path), before);
+}
+#[test]
+fn block_store_read_only_finality_rejects_invalid_signature_and_binding() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let finality = kura.v2_finality_artifact_path(1);
+    let original = fs::read(&finality).expect("read finality");
+    let mut forged = artifact.clone();
+    forged.commit_qc.aggregate_signature[0] ^= 0x80;
+    replace_v2_finality_record_artifact(&finality, forged);
+    let before = snapshot_regular_files_recursively(&directory);
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::V2FinalityCryptography(_))
+    ));
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+    fs::write(&finality, &original).expect("restore finality");
+    let mut record =
+        KuraV2FinalityRecord::decode_all(&mut original.as_slice()).expect("decode finality");
+    record
+        .block_header
+        .set_view_change_index(record.block_header.view_change_index().saturating_add(1));
+    fs::write(&finality, record.encode()).expect("substitute header");
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::BlockHeightConflict { .. })
+    ));
+    fs::write(&finality, &original).expect("restore finality");
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained record");
+    let mut retained =
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("decode retained record");
+    retained.proposal_wire_hash = Hash::new(b"substituted proposal wire");
+    fs::write(&retained_path, retained.encode()).expect("substitute retained proposal");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+}
+#[test]
+fn block_store_read_only_finality_rejects_noncanonical_and_missing_records() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let finality = kura.v2_finality_artifact_path(1);
+    let original = fs::read(&finality).expect("read finality");
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    let mut trailing = original.clone();
+    trailing.push(0);
+    fs::write(&finality, trailing).expect("append invalid trailing bytes");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    fs::write(&finality, artifact.encode()).expect("replace envelope with artifact");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    fs::remove_file(&finality).expect("remove finality");
+    let before = snapshot_regular_files_recursively(&directory);
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::MissingV2FinalityArtifact { height: 1 })
+    ));
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+}
+#[test]
+fn block_store_read_only_finality_rejects_unpublished_journal_boundary() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let marker = kura.block_store.lock().commit_marker_path();
+    let temporary = marker.with_extension("norito.tmp");
+    fs::copy(&marker, &temporary).expect("stage unpublished marker");
+    let before = snapshot_regular_files_recursively(&directory);
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+    fs::remove_file(&temporary).expect("remove test temporary");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(directory.join(INDEX_FILE_NAME))
+        .expect("open index")
+        .write_all(&[0])
+        .expect("partial index entry");
+    let before = snapshot_regular_files_recursively(&directory);
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+}
+#[test]
 fn v2_finality_summary_maps_to_public_status_without_regression() {
     let mut generator = DummyBlocks::new();
     let blocks = vec![generator.next(), generator.next()];

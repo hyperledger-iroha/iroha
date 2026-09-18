@@ -460,14 +460,26 @@ impl AuthenticatedHeightObserverV1 {
 
     fn require_chain_tip(&self, attestation: &BridgeFinalityAttestationV1) -> Result<()> {
         let tip = &attestation.body.finality_proof;
-        require(
-            self.proofs.first() == Some(&attestation.body.genesis_finality_proof)
-                && self
-                    .proofs
-                    .get(usize::try_from(tip.block_header.height().get() - 1)?)
-                    == Some(tip),
-            "validator proof conflicts with the authenticated contiguous chain",
-        )
+        let genesis = self
+            .proofs
+            .first()
+            .ok_or_else(|| eyre!("missing authenticated genesis proof"))?;
+        self.authority
+            .verify_same_decision(genesis, None, &attestation.body.genesis_finality_proof)
+            .wrap_err(
+                "validator genesis proof conflicts with the authenticated contiguous chain",
+            )?;
+        let index = usize::try_from(tip.block_header.height().get() - 1)?;
+        let retained = self
+            .proofs
+            .get(index)
+            .ok_or_else(|| eyre!("missing authenticated chain tip"))?;
+        let predecessor = index
+            .checked_sub(1)
+            .and_then(|index| self.proofs.get(index));
+        self.authority
+            .verify_same_decision(retained, predecessor, tip)
+            .wrap_err("validator proof conflicts with the authenticated contiguous chain")
     }
 }
 

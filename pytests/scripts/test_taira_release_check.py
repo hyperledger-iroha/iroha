@@ -22,7 +22,8 @@ from unittest.mock import MagicMock, patch
 # seven generation-admission, nineteen reset integration, two PendingKura and one
 # public-admission boundary control, 22 producer controls after two renames, and one
 # early supervisor build-identity control, six typed status contention controls,
-# and three generated ledger/HTTP operator custody controls.
+# three generated ledger/HTTP operator custody controls, and eleven finality witness
+# and native inspection controls.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -31,8 +32,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -70,6 +71,45 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_finality_witness_and_native_inspection_controls_are_required_in_both_scopes(self):
+        required = {
+            'cli': (
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_accepts_independent_certificate_witnesses',
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_rejects_invalid_current_and_parent_witnesses',
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_rejects_signed_conflicting_decisions',
+                'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_requires_authenticated_predecessor_for_alternate_witnesses',
+            ),
+            'core': (
+                'kura::tests::block_store_read_only_finality_verifies_without_mutation',
+                'kura::tests::block_store_read_only_finality_rejects_invalid_signature_and_binding',
+                'kura::tests::block_store_read_only_finality_rejects_noncanonical_and_missing_records',
+                'kura::tests::block_store_read_only_finality_rejects_unpublished_journal_boundary',
+            ),
+            'kagami': (
+                'kura::tests::finality_inspection_rejects_invalid_height_before_store_access',
+                'kura::tests::finality_inspection_failure_preserves_output_and_store',
+                'kura::tests::finality_command_rejects_output_inside_store',
+            ),
+        }
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("finality_platform_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                selected = selected_gate.qualification_stages(scope)
+                for harness, regressions in required.items():
+                    names = [name for _, tests in selected[harness] for name in tests]
+                    for regression in regressions:
+                        with self.subTest(platform=platform, scope=scope, harness=harness, regression=regression):
+                            self.assertEqual(names.count(regression), 1)
+                            focused = selected_gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                            self.assertEqual(tuple(focused), (harness,))
+                            self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+                            listing = "\n".join(name + ": test" for name in names if name != regression)
+                            with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                                selected_gate.require_tests(listing, selected[harness])
+
     def test_status_contention_controls_are_exact_required_and_focused_on_both_platforms(self):
         required = {
             'core': (
@@ -741,7 +781,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (935, 1113)), ("linux", (940, 1118))):
+        for platform, counts in (("darwin", (946, 1124)), ("linux", (951, 1129))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)

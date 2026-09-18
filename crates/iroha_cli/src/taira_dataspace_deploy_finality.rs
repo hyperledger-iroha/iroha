@@ -213,6 +213,65 @@ impl Authority {
         )
     }
 
+    /// Admit another certificate for an already authenticated contiguous-chain decision.
+    /// `retained` and `predecessor` must come from the independently verified chain, never
+    /// from the candidate attestation. Certificate witnesses may vary across validators.
+    fn verify_same_decision(
+        &self,
+        retained: &BridgeFinalityProof,
+        predecessor: Option<&BridgeFinalityProof>,
+        candidate: &BridgeFinalityProof,
+    ) -> Result<()> {
+        if candidate == retained {
+            // These exact bytes already passed contiguous-chain verification.
+            return Ok(());
+        }
+        self.roster(candidate)?;
+        let mut normalized = candidate.clone();
+        let artifact = &mut normalized.finality_artifact;
+        let expected = &retained.finality_artifact;
+        require(
+            artifact
+                .commit_qc
+                .as_ref()
+                .same_commit_decision(expected.commit_qc.as_ref()),
+            "validator proof certifies a different committed decision",
+        )?;
+        artifact.commit_qc = expected.commit_qc.clone();
+        if let (Some(actual), Some(expected)) = (
+            artifact.height_context.parent_commit_qc.as_ref(),
+            expected.height_context.parent_commit_qc.as_ref(),
+        ) {
+            require(
+                actual.as_ref().same_commit_decision(expected.as_ref()),
+                "validator proof certifies a different parent decision",
+            )?;
+            artifact.height_context.parent_commit_qc = Some(expected.clone());
+        }
+        // Compare every header, artifact, context, execution, roster and PoP field.
+        // Only current/parent certificate round, signer and signature witnesses differ.
+        require(
+            &normalized == retained,
+            "validator proof differs from the authenticated decision context",
+        )?;
+        if retained.block_header.height().get() == 1 {
+            self.anchor(candidate)?;
+        } else {
+            let predecessor =
+                predecessor.ok_or_else(|| eyre!("missing authenticated finality predecessor"))?;
+            let mut verifier = BridgeFinalityVerifier::with_context(
+                self.network,
+                predecessor.finality_artifact.context_id(),
+            );
+            verifier.verify(predecessor)?;
+            // Verifying the candidate as a successor authenticates BOTH its CommitQC
+            // and its embedded parent CommitQC against the retained predecessor.
+            // Standalone artifact verification does not verify the parent signature.
+            verifier.verify(candidate)?;
+        }
+        Ok(())
+    }
+
     fn anchor(&self, proof: &BridgeFinalityProof) -> Result<BridgeFinalityVerifier> {
         require(
             proof.block_header.height().get() == 1
@@ -483,11 +542,20 @@ fn verify_peer_state(
         deadline,
     } = verification;
     require_operation_budget(deadline, "verifying validator state")?;
+    let genesis = proofs
+        .get(&1)
+        .ok_or_else(|| eyre!("missing authenticated deployment genesis proof"))?;
+    authority
+        .verify_same_decision(genesis, None, &before.body.genesis_finality_proof)
+        .wrap_err("peer genesis differs from the independently verified successor chain")?;
     let height = before.body.finality_proof.block_header.height();
-    require(
-        proofs.get(&height.get()) == Some(&before.body.finality_proof),
-        "peer durable tip differs from the independently verified successor chain",
-    )?;
+    let retained = proofs
+        .get(&height.get())
+        .ok_or_else(|| eyre!("peer durable tip is absent from the verified successor chain"))?;
+    let predecessor = proofs.get(&(height.get() - 1));
+    authority
+        .verify_same_decision(retained, predecessor, &before.body.finality_proof)
+        .wrap_err("peer durable tip differs from the independently verified successor chain")?;
     let mut transactions = Vec::new();
     let mut carriers = Vec::new();
     let mut wires = BTreeMap::new();
@@ -558,10 +626,12 @@ fn verify_peer_state(
         }
     };
     validate_attestation(authority, peer, challenge, &after)?;
-    require(
-        after.body.finality_proof == before.body.finality_proof,
-        "validator tip changed while reading deployment state; rerun status",
-    )?;
+    authority
+        .verify_same_decision(genesis, None, &after.body.genesis_finality_proof)
+        .wrap_err("validator genesis changed while reading deployment state")?;
+    authority
+        .verify_same_decision(retained, predecessor, &after.body.finality_proof)
+        .wrap_err("validator tip changed while reading deployment state; rerun status")?;
     require_operation_budget(deadline, "verified validator state")?;
     Ok(PeerRead::Verified(Box::new(VerifiedPeer {
         receipt: PeerReceipt {

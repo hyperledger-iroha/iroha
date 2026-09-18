@@ -43610,6 +43610,15 @@ impl BlockStore {
         canonical_hash: HashOf<BlockHeader>,
         expected_wire_len: u64,
     ) -> Result<Hash> {
+        self.verified_v2_finality_record(height, canonical_hash, expected_wire_len)
+            .map(|(_, wire_hash)| wire_hash)
+    }
+    fn verified_v2_finality_record(
+        &self,
+        height: u64,
+        canonical_hash: HashOf<BlockHeader>,
+        expected_wire_len: u64,
+    ) -> Result<(KuraV2FinalityRecord, Hash)> {
         let directory = Kura::v2_finality_artifact_dir_for(&self.path_to_blockchain);
         let path = Kura::v2_finality_artifact_path_for(&self.path_to_blockchain, height);
         let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
@@ -43646,7 +43655,7 @@ impl BlockStore {
             executed_block_wire_hash,
         )?;
         record.artifact.verify()?;
-        Ok(executed_block_wire_hash)
+        Ok((record, executed_block_wire_hash))
     }
     fn verified_evicted_block_header(
         &self,
@@ -46207,6 +46216,52 @@ impl BlockStore {
     #[allow(clippy::integer_division)]
     pub fn read_index_count(&mut self) -> Result<u64> {
         self.read_index_count_from_len()
+    }
+    /// Read one exact, cryptographically verified finality record without modifying the store.
+    ///
+    /// This inspector requires [`Self::open_read_only`] and a quiescent, fully published
+    /// canonical journal boundary. It validates the private envelope, canonical header,
+    /// retained proposal and execution wire commitments, current CommitQC and roster PoPs.
+    /// The returned context is local evidence, not an external trust anchor. Callers must
+    /// verify predecessor links separately to authenticate embedded parent certificates.
+    ///
+    /// # Errors
+    /// Returns an error for a writable handle, an unpublished or malformed journal boundary,
+    /// an absent height or finality record, invalid wire bindings, or invalid cryptography.
+    pub fn read_verified_v2_finality(
+        &mut self,
+        height: u64,
+    ) -> Result<(BlockHeader, V2FinalityArtifact)> {
+        if !self.read_only {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "finality inspection requires a read-only block store",
+                ),
+                self.path_to_blockchain.clone(),
+            ));
+        }
+        // This existing opener checks exact journals and the published marker without
+        // recovery, repair, temporary-marker promotion, or any persistent write.
+        let count = self.initialize_provisional_snapshot_bootstrap_read_only(0)?;
+        if height == 0 || height > count {
+            return Err(Error::OutOfBoundsBlockRead {
+                start_block_height: height.saturating_sub(1),
+                block_count: 1,
+            });
+        }
+        let position = height - 1;
+        let index = self.read_block_index(position)?;
+        let canonical_hash = self
+            .read_block_hashes(position, 1)?
+            .into_iter()
+            .next()
+            .ok_or(Error::OutOfBoundsBlockRead {
+                start_block_height: position,
+                block_count: 1,
+            })?;
+        let (record, _) = self.verified_v2_finality_record(height, canonical_hash, index.length)?;
+        Ok((record.block_header, record.artifact))
     }
     /// Read pipeline recovery metadata for a canonical persisted block.
     ///
