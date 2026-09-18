@@ -73,7 +73,8 @@ fn assert_completed_secondary_accounting(kura: &Kura) {
     }
     if !before.enforced_initialized || !before.total_initialized {
         assert_eq!(
-            kura.refresh_disk_usage_bytes().expect("normal lazy accounting refresh"),
+            kura.refresh_disk_usage_bytes()
+                .expect("normal lazy accounting refresh"),
             before.exact_enforced_bytes,
         );
     }
@@ -88,7 +89,7 @@ fn assert_completed_secondary_accounting(kura: &Kura) {
 }
 
 v2_apply_test!(
-    completed_secondary_autonomous_application_archives_and_reopens_without_replay,
+    completed_secondary_autonomous_application_retains_original_instance_and_reopens_without_replay,
     {
         use crate::state::WorldReadOnly as _;
         use iroha_data_model::isi::SetKeyValue;
@@ -113,12 +114,10 @@ v2_apply_test!(
         let old_activation = fixture.state.view().lane_incarnation_activation_heights[&lane_id];
         let old_lane = fixture
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
-            .expect("secondary segment")
-            .clone();
-        let blocks = old_lane.blocks_dir(root.path());
+            .lane_storage_identity(lane_id)
+            .expect("exact original secondary identity");
+        let old_blocks = old_lane.blocks_dir(root.path());
+        let blocks = old_blocks.clone();
         let domains = (0..2)
             .map(|index| {
                 DomainId::try_new(format!("nativeparticipant{index}"), "independent-dataspace")
@@ -559,11 +558,13 @@ v2_apply_test!(
         // Removing the real Complete file cannot be replaced by the receipt alone.
         std::fs::remove_file(&terminal_path).expect("temporarily remove exact Complete owner");
         let without_terminal = completed_secondary_tree(root.path());
-        let old_state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        let old_state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
         assert!(fixture.state.apply_lane_lifecycle(&replacement).is_err());
         assert_eq!(completed_secondary_tree(root.path()), without_terminal);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             old_state_hash
         );
         std::fs::write(&terminal_path, &terminal_bytes).expect("restore exact real Complete bytes");
@@ -604,12 +605,14 @@ v2_apply_test!(
                 u64::try_from(view.block_hashes.len()).expect("captured height fits u64"),
             )
         };
-        assert_eq!(
-            runtime_lanes
-                .entry(lane_id)
-                .expect("fresh secondary segment")
-                .blocks_dir(root.path()),
-            blocks
+        let new_lane = fixture
+            .state
+            .lane_storage_identity(lane_id)
+            .expect("exact replacement identity");
+        let blocks = new_lane.blocks_dir(root.path());
+        assert_ne!(
+            blocks, old_blocks,
+            "new incarnation has a distinct immutable address"
         );
         for name in ["blocks.index", "blocks.data", "blocks.hashes"] {
             assert!(blocks.join(name).is_file());
@@ -624,8 +627,8 @@ v2_apply_test!(
             0
         );
         assert_eq!(
-            std::fs::metadata(old_lane.merge_log_path(root.path()))
-                .expect("new merge log")
+            std::fs::metadata(new_lane.merge_log_path(root.path()))
+                .expect("new empty merge log")
                 .len(),
             0
         );
@@ -636,94 +639,61 @@ v2_apply_test!(
                 .expect("fresh namespace inventory")
                 .is_empty()
         );
-        let archive = completed_secondary_tree(root.path())
-            .into_iter()
-            .find_map(|(relative, bytes)| {
-                if bytes.as_deref() != Some(record_bytes.as_slice()) {
-                    return None;
-                }
-                let full = root.path().join(relative);
-                full.ancestors()
-                    .find(|ancestor| {
-                        ancestor
-                            .file_name()
-                            .is_some_and(|name| name == "previous_blocks")
-                    })
-                    .map(std::path::Path::to_path_buf)
-            })
-            .expect("real geometry journal retained the exact old namespace");
-        let archive = std::fs::canonicalize(archive).expect("canonical retained archive path");
-        // Immutable archives retain a production pair-move seal. The marker
-        // changes to bind this exact destination and content; every other byte
-        // remains identical to the live namespace immediately before retirement.
-        let archived_merge = archive
-            .parent()
-            .expect("archive root")
-            .join("previous_merge.log");
+        let archive = std::fs::canonicalize(&old_blocks).expect("retained original instance");
+        let archived_merge = std::fs::canonicalize(old_lane.merge_log_path(root.path()))
+            .expect("retained original merge object");
         assert_eq!(std::fs::read(&archived_merge).unwrap(), old_merge_bytes);
         fixture
             .kura
-            .validate_archived_lane_pair_for_test(
-                &old_lane,
-                old_incarnation,
-                old_activation,
-                &archive,
-                &archived_merge,
-            )
-            .expect("exact completed journal binding, archive paths and content digests");
+            .validate_retained_lane_pair_for_test(old_lane, &archive, &archived_merge)
+            .expect("completed journal reference and exact original pair");
         assert!(
             fixture
                 .kura
-                .validate_archived_lane_pair_for_test(
-                    &old_lane,
-                    new_incarnation,
-                    old_activation,
+                .validate_retained_lane_pair_for_test(
+                    crate::kura::LaneStorageIdentity {
+                        incarnation: new_incarnation,
+                        ..old_lane
+                    },
                     &archive,
-                    &archived_merge,
+                    &archived_merge
                 )
                 .is_err(),
-            "new incarnation cannot authenticate the old archive"
+            "new incarnation cannot authenticate the old object"
         );
         assert!(
             fixture
                 .kura
-                .validate_archived_lane_pair_for_test(
-                    &old_lane,
-                    old_incarnation,
-                    old_activation.checked_add(1).unwrap(),
+                .validate_retained_lane_pair_for_test(
+                    crate::kura::LaneStorageIdentity {
+                        activation_height: old_activation.checked_add(1).unwrap(),
+                        ..old_lane
+                    },
                     &archive,
-                    &archived_merge,
+                    &archived_merge
                 )
                 .is_err(),
-            "activation height is part of the exact archived identity"
+            "activation height is part of the exact retained identity"
         );
         assert!(
             fixture
                 .kura
-                .validate_archived_lane_pair_for_test(
-                    &old_lane,
-                    old_incarnation,
-                    old_activation,
+                .validate_retained_lane_pair_for_test(
+                    old_lane,
                     &archive,
-                    &std::fs::canonicalize(old_lane.merge_log_path(root.path())).unwrap(),
+                    &std::fs::canonicalize(new_lane.merge_log_path(root.path())).unwrap()
                 )
                 .is_err(),
-            "fresh live merge log cannot be substituted for its archived pair"
+            "new instance merge log cannot substitute for the original pair"
         );
         let archived_segment = completed_secondary_tree(&archive);
-        let marker = std::path::PathBuf::from(".lane-incarnation.norito");
-        let old_marker = old_segment.get(&marker).expect("prior live marker");
-        let sealed_marker = archived_segment.get(&marker).expect("archive seal");
-        assert!(old_marker.is_some() && sealed_marker.is_some());
-        assert_ne!(
-            old_marker, sealed_marker,
-            "retained pair has an explicit move seal"
-        );
-        let mut expected_archive = old_segment.clone();
-        expected_archive.insert(marker, sealed_marker.clone());
         assert_eq!(
-            archived_segment, expected_archive,
-            "only the independently authenticated marker changes during archival"
+            archived_segment, old_segment,
+            "reference publication changes no byte of the retained original instance"
+        );
+        assert!(
+            !root.path().join("retired/lane_geometry").exists(),
+            "retirement does not relocate physical objects before authenticated GC"
         );
         let fresh_tree = completed_secondary_tree(&blocks);
         assert!(
@@ -793,6 +763,9 @@ v2_apply_test!(
                 .expect("cold open actual canonical storage");
         assert_eq!(count.0, 4);
         reopened
+            .bind_lane_storage_network(payload.network_id)
+            .expect("bind the original authenticated chain network");
+        reopened
             .restore_lane_segments_with_geometry_at_height_and_lineage_root(
                 &runtime_lanes,
                 &runtime_incarnations,
@@ -804,16 +777,8 @@ v2_apply_test!(
                 "authenticate exact captured geometry and retained journal after strict startup",
             );
         reopened
-            .validate_archived_lane_pair_for_test(
-                &old_lane,
-                old_incarnation,
-                old_activation,
-                &archive,
-                &archived_merge,
-            )
-            .expect(
-                "cold reopen reauthenticates the retained journal, path seal and content digests",
-            );
+            .validate_retained_lane_pair_for_test(old_lane, &archive, &archived_merge)
+            .expect("cold reopen reauthenticates the retained journal and exact original pair");
         assert!(
             reopened
                 .historical_autonomous_lane_recovery_records_bounded(1)

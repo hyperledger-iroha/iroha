@@ -2782,7 +2782,6 @@ mod tests {
             height.try_into().expect("nonzero height"),
             state.view().latest_block_hash(),
             None,
-            None,
             timestamp_ms,
             0,
         );
@@ -2826,7 +2825,6 @@ mod tests {
                 .try_into()
                 .expect("nonzero next fixture height"),
             state.view().latest_block_hash(),
-            None,
             None,
             cursor.finalized_at_unix_ms,
             0,
@@ -3618,7 +3616,6 @@ mod tests {
             1_u64.try_into().expect("nonzero height"),
             None,
             None,
-            None,
             TEST_NOW_MS,
             0,
         );
@@ -3649,7 +3646,6 @@ mod tests {
         let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
         let header = BlockHeader::new(
             1_u64.try_into().expect("nonzero height"),
-            None,
             None,
             None,
             TEST_NOW_MS
@@ -3705,7 +3701,6 @@ mod tests {
         let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
         let header = BlockHeader::new(
             1_u64.try_into().expect("nonzero height"),
-            None,
             None,
             None,
             TEST_NOW_MS,
@@ -4106,7 +4101,6 @@ mod tests {
         }
         let header = BlockHeader::new(
             3_u64.try_into().expect("nonzero height"),
-            None,
             None,
             None,
             TEST_NOW_MS + 2_000,

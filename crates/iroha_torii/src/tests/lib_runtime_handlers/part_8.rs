@@ -556,7 +556,6 @@ async fn autoscale_proxy_authority_uses_pinned_committee_not_disjoint_manifest_b
             NonZeroU64::new(1).expect("non-zero authority height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -793,7 +792,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     }
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         0,

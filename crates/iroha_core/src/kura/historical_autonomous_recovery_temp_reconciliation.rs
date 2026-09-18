@@ -15,7 +15,7 @@ enum HistoricalAutonomousRecoveryPublicationKind {
     Temporary,
 }
 struct HistoricalAutonomousRecoveryPublicationSnapshot {
-    entry: LaneConfigEntry,
+    entry: LaneStorageEntry,
     directory: PathBuf,
     path: PathBuf,
     stable_path: PathBuf,
@@ -481,7 +481,7 @@ impl Kura {
     }
     fn historical_autonomous_recovery_publication_inventory_locked(
         &self,
-        entries: &[LaneConfigEntry],
+        entries: &[LaneStorageEntry],
     ) -> Result<HistoricalAutonomousRecoveryPublicationInventory> {
         let mut artifacts = Vec::new();
         let mut directories = Vec::new();
@@ -863,11 +863,7 @@ impl Kura {
         let _historical_recovery_guard = self.historical_autonomous_recovery_mutation_lock.lock();
         let entries = {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            self.lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
+            self.retained_lane_storage_entries_under_geometry_guard()?
         };
         let inventory = {
             let _geometry_guard = self.lane_geometry_lock.lock();

@@ -1454,7 +1454,6 @@ impl Fixture {
             NonZeroU64::new(1).expect("height"),
             None,
             None,
-            None,
             1_000,
             0,
         );
@@ -1630,7 +1629,6 @@ impl ProductionTransportFixture {
         let round = round(&context, body_view);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
-            None,
             None,
             None,
             3_000,

@@ -85,9 +85,6 @@ impl LaneDecisionBatchV1 {
                 TransactionEntrypoint::SealedCommitment(commitment) => {
                     (None, Some(commitment.payload().commitment))
                 }
-                TransactionEntrypoint::Time(_) => {
-                    return Err("native input is not a network entrypoint".into());
-                }
             };
             if signed_hash.is_some_and(|hash| !signed.insert(hash))
                 || commitment.is_some_and(|hash| !commitments.insert(hash))

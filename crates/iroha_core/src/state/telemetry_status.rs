@@ -300,11 +300,17 @@ mod tests {
             state.telemetry_journal_chunk(&wrong, 64),
             Err(TelemetryStatusSourceError::TargetChanged)
         ));
+        let next_publication = std::sync::Arc::new(super::super::BlockHashPublication);
         let mut journal = state.block_hashes.inner.write();
-        let super::super::BlockHashStorage::Owned(hashes) = &mut *journal else {
+        let super::super::BlockHashStorage::Owned {
+            hashes,
+            publication,
+        } = &mut *journal
+        else {
             panic!("owned fixture journal")
         };
         hashes[63] = hash(73);
+        *publication = next_publication;
         drop(journal);
         let changed = state.telemetry_journal_chunk(&target, 64).unwrap();
         assert_ne!(changed.checkpoint, second.checkpoint);

@@ -435,7 +435,7 @@ fn store_complete_snapshot_commit_evidence(
     block: &SignedBlock,
     authority: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
 ) {
-    let state_hash = canonical_state_snapshot_hash(state);
+    let state_hash = canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     store_snapshot_checkpoint_and_manifest(state, kura, block, state_hash, authority);
     let _ = kura
         .store_v2_finality_artifact(authority)
@@ -641,7 +641,7 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
 #[tokio::test]
 async fn snapshot_publication_defers_bound_manifest_without_finality() {
     let (state, kura, block, artifact) = snapshot_gate_fixture();
-    let state_hash = canonical_state_snapshot_hash(&state);
+    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
@@ -689,7 +689,7 @@ async fn snapshot_publication_rejects_foreign_manifest_authority() {
     .into_iter()
     .next()
     .expect("foreign authority artifact");
-    let state_hash = canonical_state_snapshot_hash(&state);
+    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &foreign);
     let _ = kura
         .store_v2_finality_artifact(&artifact)
@@ -713,7 +713,7 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         std::num::NonZeroU16::new(48).expect("non-zero scale-out window");
     state.nexus.get_mut().autoscale.scale_in_window_blocks =
         std::num::NonZeroU16::new(192).expect("non-zero scale-in window");
-    let state_hash = canonical_state_snapshot_hash(&state);
+    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
     let _ = kura
         .store_v2_finality_artifact(&artifact)
@@ -890,8 +890,7 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     let mut provisional_header = iroha_data_model::block::BlockHeader::new(
         template_header.height(),
         template_header.prev_block_hash(),
-        None,
-        None,
+        iroha_crypto::MerkleTree::root_from_typed_leaves([entry_hash]),
         u64::try_from(template_header.creation_time().as_millis())
             .expect("fixture creation time fits u64"),
         template_header.view_change_index(),
@@ -907,14 +906,36 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     );
     let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
     block
-        .set_transaction_results(
-            Vec::new(),
+        .validate_proposal_commitments()
+        .expect("exact SCCP proposal commits to its authenticated transaction before outputs");
+    let signed_proposal_hash = block.hash();
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
             &[entry_hash],
             vec![iroha_data_model::transaction::TransactionResultInner::Ok(
                 iroha_data_model::transaction::DataTriggerSequence::default(),
             )],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
-        .expect("exact retained SCCP block results");
+    }
+    .expect("exact retained SCCP block results");
+    assert_eq!(
+        block.hash(),
+        signed_proposal_hash,
+        "installing SCCP outputs must preserve the signed proposal header"
+    );
     assert!(
         provisional_finality
             .finality_artifact
@@ -1144,13 +1165,17 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
         canonical_snapshot_wsv_hash(&payload).expect("borrowed canonical WSV hash"),
         tree_reference,
     );
-    assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
+    assert_eq!(
+        canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"),
+        tree_reference
+    );
 }
 #[test]
 fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
     let state = state_factory();
-    let committed_without_evidence = canonical_state_snapshot_hash(&state);
-    let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let committed_without_evidence =
+        canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
+    let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     assert_eq!(
         canonical_staged_state_snapshot_hash(&staged),
         committed_without_evidence,
@@ -1160,7 +1185,7 @@ fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
 
     let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
     let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
-    let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     staged.world.consensus_evidence.insert(
         evidence_key,
         EvidenceRecord {
@@ -1181,7 +1206,7 @@ fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
         .expect("commit the consensus evidence overlay");
     assert_eq!(
         staged_with_evidence,
-        canonical_state_snapshot_hash(&state),
+        canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"),
         "consensus evidence must have identical staged and committed WSV hashes"
     );
 }
@@ -1268,7 +1293,6 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             1_000,
             0,
         );
@@ -1292,7 +1316,7 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
             .expect("commit consensus-evidence world overlay");
         assert_eq!(
             staged_hash,
-            canonical_state_snapshot_hash(&state),
+            canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"),
             "empty and populated consensus evidence must have identical staged and committed WSV projections",
         );
     }
@@ -1512,8 +1536,9 @@ fn snapshot_mutation_preserves_schema_order_and_changes_only_requested_fields() 
     );
 }
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
-    let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload);
+    let payload = CapturedStateSnapshot::capture(state)
+        .expect("stable valid fixture snapshot")
+        .json;
     payload.into_bytes()
 }
 fn snapshot_payload_without_space_directory_manifest_section(state: &State) -> Vec<u8> {

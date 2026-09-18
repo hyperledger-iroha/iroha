@@ -120,7 +120,8 @@ impl State {
             return *result;
         }
         let _state_write_guard = self.state_write_lock.lock();
-        let result = self.build_da_indexes_from_kura(None).map(|hydrated| {
+        let result = self.build_da_indexes_from_kura(None).map(|mut hydrated| {
+            hydrated.pin_intents = self.da_pin_cache_from_world();
             self.publish_hydrated_da_indexes(hydrated);
             if persist_journal {
                 self.persist_da_shard_cursor_journal();

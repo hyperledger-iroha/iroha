@@ -2745,6 +2745,8 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
             Fields::Named(named) => {
                 let mut r#gen = generics.clone();
                 let mut writers = Vec::new();
+                let mut fixed_keys = Vec::new();
+                let mut has_dynamic_fields = false;
                 for f in named.named.iter() {
                     let attrs = FieldAttr::parse_validated(&f.attrs);
                     if attrs.skip {
@@ -2754,6 +2756,8 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     let fname = f.ident.as_ref().unwrap();
                     let key = container_attrs.rename_field(fname, &attrs);
                     let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
+                    has_dynamic_fields |= attrs.flatten || attrs.skip_serializing_if.is_some();
+                    fixed_keys.push(key_lit.clone());
                     let serialize_call =
                         attrs.bounded_serializer_call(quote!(&self.#fname), quote!(out));
                     let bounded_flatten = if let Some(path) = &attrs.bounded_with {
@@ -2822,9 +2826,18 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     };
                     writers.push(render);
                 }
+                let field_order = if has_dynamic_fields {
+                    quote! { ::core::option::Option::None }
+                } else {
+                    quote! { ::core::option::Option::Some(&[#(#fixed_keys),*]) }
+                };
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
+                            fn json_object_field_order() -> ::core::option::Option<&'static [&'static str]> {
+                                #field_order
+                            }
+
                             fn write_json(&self, out: &mut ::std::string::String) {
                                 norito::json::write_json_unbounded(self, out);
                             }

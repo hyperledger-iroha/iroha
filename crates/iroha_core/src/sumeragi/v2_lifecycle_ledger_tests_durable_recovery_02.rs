@@ -55,7 +55,6 @@ fn standalone_validate_record(
         NonZeroU64::new(context.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         4_000 + u64::from(marker),
         view,
     );

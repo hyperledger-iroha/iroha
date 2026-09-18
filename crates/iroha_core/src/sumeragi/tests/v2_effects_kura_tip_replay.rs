@@ -2738,7 +2738,6 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         NonZeroU64::new(1).expect("height"),
         None,
         None,
-        None,
         3_000,
         0,
     );

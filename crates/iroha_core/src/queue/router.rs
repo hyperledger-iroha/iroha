@@ -142,8 +142,7 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
                 Some(reveal.signed_transaction().instructions())
             }
-            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
     fn any_matching_instruction(
@@ -160,8 +159,7 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
                     predicate,
                 )
             }
-            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => false,
         }
     }
     fn routing_hash(&self) -> Hash {

@@ -16,7 +16,7 @@ fn transaction_height_expiry_is_exclusive_when_height_expiry_is_optional() {
         let chain: ChainId = "ttl-check-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain);
         let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(

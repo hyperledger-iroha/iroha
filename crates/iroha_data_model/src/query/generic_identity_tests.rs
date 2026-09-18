@@ -99,56 +99,40 @@ fn account_query_payload() -> Vec<u8> {
     ))
 }
 
-fn committed_transaction(merged: bool) -> CommittedTransaction {
+fn committed_transaction(input_index: usize) -> CommittedTransaction {
     use crate::{
         account::AccountId,
-        prelude::{DataTriggerSequence, ExecutionStep, TimeTriggerEntrypoint},
-        transaction::{TransactionEntrypoint, TransactionResult},
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionEntrypoint},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree};
-
-    let authority = AccountId::new(
-        KeyPair::try_from_seed(vec![0x19; 32], Algorithm::Ed25519)
-            .expect("query identity account seed")
-            .public_key()
-            .clone(),
-    );
-    let entrypoint = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
-        id: "identity_fixture".parse().unwrap(),
-        instructions: ExecutionStep(
-            vec![
-                crate::isi::Log {
-                    level: crate::Level::INFO,
-                    msg: "query identity fixture".into(),
-                }
-                .into(),
-            ]
-            .into(),
-        ),
-        authority,
+    let key = KeyPair::try_from_seed(vec![0x19; 32], Algorithm::Ed25519).unwrap();
+    let entrypoints = [1_u64, 2].map(|creation_time| {
+        let mut builder = TransactionBuilder::new_genesis(
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(vec![], None),
+        );
+        builder.set_creation_time(std::time::Duration::from_millis(creation_time));
+        TransactionEntrypoint::External(builder.sign(key.private_key()))
     });
-    let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-    let entrypoint_hash = entrypoint.hash();
-    let result_hash = result.hash();
-    let entrypoints: MerkleTree<TransactionEntrypoint> = [entrypoint_hash].into_iter().collect();
-    let results: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
+    let inputs: MerkleTree<TransactionEntrypoint> = entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect();
+    let output_rows = [0, 1]
+        .map(|index| crate::block::output_test_support::network(index, Ok(Default::default())));
+    let outputs: MerkleTree<crate::block::execution_output::ExecutionOutputV1> =
+        output_rows.iter().map(HashOf::new).collect();
+    let entrypoint = entrypoints[input_index].clone();
+    let output = output_rows[input_index].clone();
+    let proof_index = u32::try_from(input_index).expect("two fixture network inputs");
     CommittedTransaction {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"query identity carrier")),
-        entrypoint_hash,
-        entrypoint_proof: entrypoints.get_proof(0).unwrap(),
+        entrypoint_hash: entrypoint.hash(),
+        entrypoint_proof: inputs.get_proof(proof_index).unwrap(),
         entrypoint,
-        result_hash,
-        result_proof: results.get_proof(0).unwrap(),
-        result,
-        merge_inclusion: merged.then(|| super::CertifiedMergeTransactionInclusion {
-            version: 1,
-            merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"query identity merge")),
-            merge_epoch_id: 7,
-            execution_batch_hash: Hash::new(b"query identity execution"),
-            entrypoint_count: 1,
-            entrypoint_merkle_root: entrypoints.root().unwrap(),
-            result_merkle_root: results.root().unwrap(),
-        }),
+        output_hash: HashOf::new(&output),
+        output_proof: outputs.get_proof(proof_index).unwrap(),
+        output,
     }
 }
 
@@ -192,10 +176,28 @@ fn current_families() -> Vec<Value> {
             )
         }),
         family("transaction-tree", transaction_tree),
-        family("committed-ordinary", || committed_transaction(false)),
-        family("committed-merged", || committed_transaction(true)),
+        family("committed-first-network", || committed_transaction(0)),
+        family("committed-second-network", || committed_transaction(1)),
         family("merge-inclusion", || {
-            committed_transaction(true).merge_inclusion.unwrap()
+            super::CertifiedMergeTransactionInclusion {
+                version: 1,
+                merge_entry_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"query identity merge"),
+                ),
+                merge_epoch_id: 7,
+                execution_batch_hash: iroha_crypto::Hash::new(b"query identity execution"),
+                entrypoint_count: 1,
+                // This separate DTO has not changed. Preserve its original opaque
+                // fixture roots without recreating a retired Time input/query path.
+                entrypoint_merkle_root:
+                    "f07dc468cd4cc526f91b7630496585f1b7540bdb44548edf1c3750adee7bae3f"
+                        .parse()
+                        .expect("original merge fixture input root"),
+                result_merkle_root:
+                    "392e8b8ddd97cc0a0a89ffa0a712bfed5a5b46a90149b80575a4958aa173ced1"
+                        .parse()
+                        .expect("original merge fixture result root"),
+            }
         }),
     ];
     rows.extend(super::tx_predicate::generic_membership_identity_records());
@@ -219,19 +221,28 @@ fn current_families() -> Vec<Value> {
 }
 
 #[test]
+#[ignore = "explicit first-release query wire fixture capture"]
+fn capture_query_identity_frames_for_first_release_migration() {
+    eprintln!(
+        "QUERY_CANONICAL_IDENTITY_CAPTURE={}",
+        json::to_string(&current_families()).expect("encode actual query identity capture")
+    );
+}
+
+#[test]
 fn complete_query_frames_match_pre_declaration_fixtures() {
     use sha2::{Digest as _, Sha256};
 
     #[cfg(not(feature = "ids_projection"))]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_full_identity_frames.json"),
-        "bf9729bee6ebcf73579659cd0d088a5f3d630385d69ec7e75188432f8b1b32ab",
+        "54f30ee0263b129455359acd930d9f3e62eeb802f8e64d880e630cf9b9845c1f",
         24,
     );
     #[cfg(feature = "ids_projection")]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_ids_identity_frames.json"),
-        "78ecf99df5eff1eecba94498266d0b925ed01c88a076b40c77700535db9a7115",
+        "0fe9a59a7ca8b1049ae9468878bcca80baf0f2442b03d938696ae1d066f2a6f5",
         29,
     );
     assert_eq!(hex::encode(Sha256::digest(source.as_bytes())), digest);

@@ -1,0 +1,659 @@
+//! Actual prepared World, deferred DA cache and undo controls.
+//! These component fixtures do not authorize a consensus carrier or a lifecycle plan.
+
+use super::*;
+use crate::query::store::LiveQueryStore;
+use iroha_data_model::{
+    account::{AccountDetails, AccountValue},
+    da::pin_intent::DaPinIntent,
+};
+
+fn fixture() -> (State, iroha_crypto::KeyPair) {
+    let key =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x93; 32], iroha_crypto::Algorithm::Ed25519)
+            .unwrap();
+    let mut world = World::new();
+    world.accounts.insert(
+        AccountId::new(key.public_key().clone()),
+        AccountValue::new(AccountDetails::default()),
+    );
+    (
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ),
+        key,
+    )
+}
+
+fn intent(
+    state: &State,
+    key: &iroha_crypto::KeyPair,
+    sequence: u64,
+    alias: Option<&str>,
+) -> DaPinIntent {
+    crate::da::signed_test_pin_intent(
+        crate::da::signed_test_ingest_authorization(
+            *state.network_id_ref(),
+            key,
+            LaneId::SINGLE,
+            1,
+            sequence,
+            1,
+        ),
+        key,
+        StorageTicketId::new([sequence as u8 + 1; 32]),
+        ManifestDigest::new([sequence as u8 + 65; 32]),
+        alias.map(str::to_owned),
+    )
+}
+
+fn pending(intents: Vec<DaPinIntent>) -> PendingDaPinIntentBundle {
+    PendingDaPinIntentBundle {
+        block_height: 1,
+        intents,
+        quota_writes: BTreeMap::from([("da/prepared-quota".parse().unwrap(), vec![7])]),
+    }
+}
+
+#[test]
+fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
+    let mut roots = Vec::new();
+    for ahead in [false, true] {
+        let (state, key) = fixture();
+        let pin = intent(&state, &key, 0, Some("owner/alias"));
+        if ahead {
+            assert!(state.da_pin_intents.write().insert(
+                pin.clone(),
+                DaCommitmentLocation {
+                    block_height: 99,
+                    index_in_bundle: 7
+                }
+            ));
+        }
+        let nexus = state.nexus_snapshot();
+        let world = state.world.block();
+        let parent = WorldStateBaseline::capture_current(&world).unwrap();
+        let prepared = PreparedWorldCommit::prepare(
+            &state,
+            world,
+            1,
+            &nexus,
+            &state.lane_incarnation_activation_heights_snapshot(),
+            Some(&pending(vec![pin.clone()])),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.effects.da_pins.len(),
+            1,
+            "cache content cannot veto an authoritative write"
+        );
+        assert_eq!(
+            state.da_pin_intents.read().len(),
+            usize::from(ahead),
+            "preparation never publishes cache effects"
+        );
+        assert!(state.world.da_pin_intents_by_ticket.view().is_empty());
+        let next = prepared.baseline_after(&parent).unwrap();
+        assert_eq!(
+            next.root(),
+            WorldStateBaseline::capture_current(prepared.world())
+                .unwrap()
+                .root()
+        );
+        let diff = prepared.world().tiered_snapshot_diff();
+        assert!(diff.entries().iter().any(|key| matches!(key, TieredKeyHandle::SmartContractState(path) if path.as_ref() == "da/prepared-quota")));
+        let payload = prepared.world().tiered_snapshot_payload();
+        assert!(TieredSnapshotDiff::from(&payload).entries().iter().any(|key| matches!(key, TieredKeyHandle::SmartContractState(path) if path.as_ref() == "da/prepared-quota")));
+        roots.push(next.root());
+        prepared.commit();
+        assert_eq!(
+            next.root(),
+            WorldStateBaseline::capture_current(&state.world.block())
+                .unwrap()
+                .root()
+        );
+        let cache = state.da_pin_intents.read();
+        let record = cache.get_by_ticket(&pin.storage_ticket).unwrap();
+        assert_eq!(
+            record.location,
+            DaCommitmentLocation {
+                block_height: 1,
+                index_in_bundle: 0
+            }
+        );
+        assert_eq!(record.intent, pin);
+        assert_eq!(
+            cache.get_by_alias("owner/alias").unwrap().0,
+            &pin.storage_ticket
+        );
+    }
+    assert_eq!(roots[0], roots[1]);
+}
+
+#[test]
+fn dropped_and_wrong_height_preparations_leave_world_and_cache_unpublished() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, None);
+    let before = WorldStateBaseline::capture_current(&state.world.block())
+        .unwrap()
+        .root();
+    let nexus = state.nexus_snapshot();
+    let pending = pending(vec![pin]);
+    {
+        let prepared = PreparedWorldCommit::prepare(
+            &state,
+            state.world.block(),
+            1,
+            &nexus,
+            &state.lane_incarnation_activation_heights_snapshot(),
+            Some(&pending),
+            None,
+        )
+        .unwrap();
+        assert!(!prepared.world().da_pin_intents_by_ticket.is_empty());
+    }
+    assert_eq!(
+        before,
+        WorldStateBaseline::capture_current(&state.world.block())
+            .unwrap()
+            .root()
+    );
+    assert_eq!(state.da_pin_intents.read().len(), 0);
+    assert!(
+        PreparedWorldCommit::prepare(
+            &state,
+            state.world.block(),
+            2,
+            &nexus,
+            &state.lane_incarnation_activation_heights_snapshot(),
+            Some(&pending),
+            None,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        before,
+        WorldStateBaseline::capture_current(&state.world.block())
+            .unwrap()
+            .root()
+    );
+    assert_eq!(state.da_pin_intents.read().len(), 0);
+}
+
+#[test]
+fn world_identity_indexes_reject_duplicates_even_with_an_empty_cache() {
+    let (state, key) = fixture();
+    let first = intent(&state, &key, 0, None);
+    let next = intent(&state, &key, 1, Some("next"));
+    let nexus = state.nexus_snapshot();
+    PreparedWorldCommit::prepare(
+        &state,
+        state.world.block(),
+        1,
+        &nexus,
+        &state.lane_incarnation_activation_heights_snapshot(),
+        Some(&pending(vec![first.clone()])),
+        None,
+    )
+    .unwrap()
+    .commit();
+    *state.da_pin_intents.write() = DaPinStore::default();
+    let mut next_pending = pending(vec![first.clone(), next.clone()]);
+    next_pending.block_height = 2;
+    let prepared = PreparedWorldCommit::prepare(
+        &state,
+        state.world.block(),
+        2,
+        &nexus,
+        &state.lane_incarnation_activation_heights_snapshot(),
+        Some(&next_pending),
+        None,
+    )
+    .unwrap();
+    assert_eq!(prepared.effects.da_pins.len(), 1);
+    assert_eq!(
+        prepared.effects.da_pins[0].intent.storage_ticket,
+        next.storage_ticket
+    );
+    assert_eq!(
+        prepared
+            .world()
+            .da_pin_intents_by_ticket
+            .get(&first.storage_ticket)
+            .unwrap()
+            .location
+            .block_height,
+        1
+    );
+    assert_eq!(
+        prepared.effects.da_pins[0].location.index_in_bundle, 1,
+        "filtered duplicate keeps canonical source positions"
+    );
+}
+
+fn cleanup_fixture(state: &State, reset: LaneId) -> PendingAutoscaleLaneLifecycle {
+    let nexus = state.nexus_snapshot();
+    PendingAutoscaleLaneLifecycle {
+        catalog_update: LaneLifecycleCatalogUpdate {
+            previous_catalog: nexus.lane_catalog.clone(),
+            updated_catalog: nexus.lane_catalog.clone(),
+            previous_dataspace_catalog: nexus.dataspace_catalog.clone(),
+            updated_dataspace_catalog: nexus.dataspace_catalog.clone(),
+            previous_routing_policy: nexus.routing_policy.clone(),
+            previous_autoscale: nexus.autoscale,
+            previous_lane_config: nexus.lane_config.clone(),
+            updated_lane_config: nexus.lane_config,
+            previous_lane_incarnations: BTreeMap::new(),
+            updated_lane_incarnations: BTreeMap::new(),
+            previous_lane_incarnation_lineage: BTreeMap::new(),
+            updated_lane_incarnation_lineage: BTreeMap::new(),
+            previous_lane_incarnation_activation_heights: BTreeMap::new(),
+            updated_lane_incarnation_activation_heights: BTreeMap::new(),
+            lanes_to_reset: BTreeSet::from([reset]),
+            replaced_lane_ids: BTreeSet::new(),
+        },
+        updated_lane_manifests: state.lane_manifests.read().clone(),
+        plan: iroha_data_model::nexus::LaneLifecyclePlan::default(),
+        transition: PendingAutoscaleTransition::Manual,
+        transition_height: 1,
+        expected_incarnation_root: Hash::new(b"component cleanup fixture"),
+        runtime_catalog: None,
+    }
+}
+
+#[test]
+fn lifecycle_cleanup_is_in_the_single_overlay_and_its_replacement_undo() {
+    let (state, key) = fixture();
+    let retired = LaneId::new(7);
+    let inactive = LaneId::new(8);
+    let active = LaneId::SINGLE;
+    let validators = LaneRelayEmergencyValidatorSet {
+        peers: vec![PeerId::new(key.public_key().clone())],
+        expires_at_height: 100,
+        metadata: iroha_model_base::metadata::Metadata::default(),
+    };
+    {
+        let mut setup = state.world.block();
+        for lane in [retired, inactive, active] {
+            setup
+                .lane_relay_emergency_validators
+                .insert(lane, validators.clone());
+        }
+        setup.commit();
+    }
+    let world = state.world.block();
+    let parent = WorldStateBaseline::capture_current(&world).unwrap();
+    let pending = cleanup_fixture(&state, retired);
+    let prepared = PreparedWorldCommit::prepare(
+        &state,
+        world,
+        1,
+        &state.nexus_snapshot(),
+        &state.lane_incarnation_activation_heights_snapshot(),
+        None,
+        Some(&pending),
+    )
+    .unwrap();
+    assert!(
+        prepared
+            .world()
+            .lane_relay_emergency_validators
+            .get(&retired)
+            .is_none()
+    );
+    assert!(
+        prepared
+            .world()
+            .lane_relay_emergency_validators
+            .get(&inactive)
+            .is_none()
+    );
+    assert!(
+        prepared
+            .world()
+            .lane_relay_emergency_validators
+            .get(&active)
+            .is_some()
+    );
+    let next = prepared.baseline_after(&parent).unwrap();
+    prepared.commit();
+    assert_eq!(
+        next.root(),
+        WorldStateBaseline::capture_current(&state.world.block())
+            .unwrap()
+            .root()
+    );
+    let reverted = state.world.block_and_revert();
+    assert_eq!(
+        parent.root(),
+        WorldStateBaseline::capture_current(&reverted)
+            .unwrap()
+            .root()
+    );
+}
+
+#[test]
+fn canonical_lane_reset_filters_pins_before_world_or_cache_publication() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, None);
+    let lifecycle = cleanup_fixture(&state, LaneId::SINGLE);
+    let prepared = PreparedWorldCommit::prepare(
+        &state,
+        state.world.block(),
+        1,
+        &state.nexus_snapshot(),
+        &state.lane_incarnation_activation_heights_snapshot(),
+        Some(&pending(vec![pin])),
+        Some(&lifecycle),
+    )
+    .unwrap();
+    assert!(prepared.effects.da_pins.is_empty());
+    assert!(prepared.world().da_pin_intents_by_ticket.is_empty());
+    prepared.commit();
+    assert_eq!(state.da_pin_intents.read().len(), 0);
+}
+
+#[test]
+fn actual_state_commit_publishes_prepared_da_despite_ahead_cache() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, None);
+    state.da_pin_intents.write().insert(
+        pin.clone(),
+        DaCommitmentLocation {
+            block_height: 77,
+            index_in_bundle: 9,
+        },
+    );
+    let mut block = state.block(BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        1,
+        0,
+    ));
+    block
+        .stage_da_pin_intent_bundle(1, vec![pin.clone()])
+        .unwrap();
+    block.commit_empty_block_for_testing().unwrap();
+    let world = state.world.da_pin_intents_by_ticket.view();
+    let record = world.get(&pin.storage_ticket).unwrap();
+    assert_eq!(record.location.block_height, 1);
+    assert_eq!(
+        state
+            .da_pin_intents
+            .read()
+            .get_by_ticket(&pin.storage_ticket),
+        Some(record)
+    );
+}
+
+#[test]
+fn corrupt_da_quota_refuses_preparation_without_replacing_the_pending_bundle() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, None);
+    let mut block = state.block(BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        1,
+        0,
+    ));
+    block
+        .stage_da_pin_intent_bundle(1, vec![pin.clone()])
+        .unwrap();
+    let pending = block.pending_da_pin_intents.as_ref().unwrap();
+    let before_intents = pending.intents.clone();
+    let before_quota = pending.quota_writes.clone();
+    let quota_key = before_quota.keys().next().unwrap().clone();
+    block
+        .world
+        .smart_contract_state
+        .insert(quota_key.clone(), vec![0xFF; 129]);
+    let error = block.stage_da_pin_intent_bundle(1, vec![pin]).unwrap_err();
+    assert!(error.to_string().contains("DA ingest quota preparation"));
+    let pending = block.pending_da_pin_intents.as_ref().unwrap();
+    assert_eq!(pending.intents, before_intents);
+    assert_eq!(pending.quota_writes, before_quota);
+    assert_eq!(
+        block.world.smart_contract_state.get(&quota_key),
+        Some(&vec![0xFF; 129])
+    );
+    drop(block);
+    assert!(
+        state
+            .world
+            .smart_contract_state
+            .view()
+            .get(&quota_key)
+            .is_none()
+    );
+    assert_eq!(state.committed_height(), 0);
+}
+
+#[test]
+fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_records() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, Some("prepared/owner"));
+    let pins = pending(vec![pin]);
+    let nexus = state.nexus_snapshot();
+    let activations = state.lane_incarnation_activation_heights_snapshot();
+    let before = WorldStateBaseline::capture_current(&state.world.block())
+        .unwrap()
+        .root();
+    let (expected_root, expected_records) = {
+        let prepared = PreparedWorldCommit::prepare(
+            &state,
+            state.world.block(),
+            1,
+            &nexus,
+            &activations,
+            Some(&pins),
+            None,
+        )
+        .unwrap();
+        (
+            WorldStateBaseline::capture_current(prepared.world())
+                .unwrap()
+                .root(),
+            prepared.effects.da_pins.clone(),
+        )
+    };
+    assert_eq!(
+        WorldStateBaseline::capture_current(&state.world.block())
+            .unwrap()
+            .root(),
+        before
+    );
+    {
+        let mut world = state.world.block();
+        let effects = PreparedWorldCommit::prepare_overlay(
+            &mut world,
+            1,
+            &nexus,
+            &activations,
+            Some(&pins),
+            None,
+        )
+        .unwrap();
+        assert_eq!(effects.da_pins, expected_records);
+        assert_eq!(effects.da_pins.len(), 1);
+        assert_eq!(
+            WorldStateBaseline::capture_current(&world).unwrap().root(),
+            expected_root
+        );
+        assert_eq!(state.da_pin_intents.read().len(), 0);
+    }
+    assert_eq!(
+        WorldStateBaseline::capture_current(&state.world.block())
+            .unwrap()
+            .root(),
+        before
+    );
+    assert_eq!(state.da_pin_intents.read().len(), 0);
+}
+
+#[test]
+fn world_carrier_tail_rejects_a_scope_without_owned_execution() {
+    let (state, _) = fixture();
+    let mut block = state.block(BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        1,
+        0,
+    ));
+    let before = WorldStateBaseline::capture_current(&block.world)
+        .unwrap()
+        .root();
+    assert!(block.prepare_carrier_world_effects().is_err());
+    assert_eq!(
+        WorldStateBaseline::capture_current(&block.world)
+            .unwrap()
+            .root(),
+        before
+    );
+    assert_eq!(state.committed_height(), 0);
+}
+
+#[test]
+fn staged_snapshot_projects_pin_indexes_and_matches_actual_commit() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, Some("snapshot/alias"));
+    let mut block = state.block(BlockHeader::new(
+        std::num::NonZeroU64::MIN,
+        None,
+        None,
+        1,
+        0,
+    ));
+    block
+        .stage_da_pin_intent_bundle(1, vec![pin.clone()])
+        .unwrap();
+    // Compare the same complete metadata cut: commit must not add this fixture's
+    // carrier hash and membership only after the expected snapshot is captured.
+    block.finalize_axt_asset_incarnations().unwrap();
+    block
+        .stage_canonical_carrier_membership(core::iter::empty(), NonZeroUsize::MIN)
+        .unwrap();
+    block.block_hashes.push(block._curr_block.hash());
+    let expected = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
+    let bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
+    assert!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .contains("da_pin_intents_by_ticket")
+    );
+    assert!(state.world.da_pin_intents_by_ticket.view().is_empty());
+    block.commit().unwrap();
+    assert_eq!(
+        expected,
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot")
+    );
+    assert!(
+        state
+            .world
+            .da_pin_intents_by_ticket
+            .view()
+            .get(&pin.storage_ticket)
+            .is_some()
+    );
+}
+
+#[test]
+fn cold_pin_cache_restores_world_records_without_resurrecting_unbound_aliases() {
+    let (state, key) = fixture();
+    let pin = intent(&state, &key, 0, Some("formerly/bound"));
+    PreparedWorldCommit::prepare(
+        &state,
+        state.world.block(),
+        1,
+        &state.nexus_snapshot(),
+        &state.lane_incarnation_activation_heights_snapshot(),
+        Some(&pending(vec![pin.clone()])),
+        None,
+    )
+    .unwrap()
+    .commit();
+    {
+        let mut world = state.world.block();
+        world
+            .da_pin_intents_by_alias
+            .remove("formerly/bound".to_owned());
+        world.commit();
+    }
+    *state.da_pin_intents.write() = DaPinStore::default();
+    *state.da_indexes_hydrated.write() = None;
+    state.ensure_da_indexes_hydrated().unwrap();
+    let cache = state.da_pin_intents.read();
+    assert_eq!(
+        cache.get_by_ticket(&pin.storage_ticket).unwrap().intent,
+        pin
+    );
+    assert!(cache.get_by_alias("formerly/bound").is_none());
+}
+
+#[test]
+fn local_cursor_reset_watermark_cannot_veto_captured_world_admission() {
+    let mut roots = Vec::new();
+    for local_reset in [0, 99] {
+        let (state, key) = fixture();
+        let pin = intent(&state, &key, 0, None);
+        if local_reset != 0 {
+            state
+                .da_shard_cursors
+                .write()
+                .mark_lanes_canonically_reset(&BTreeSet::from([LaneId::SINGLE]), local_reset);
+        }
+        let captured = state.lane_incarnation_activation_heights_snapshot();
+        let prepared = PreparedWorldCommit::prepare(
+            &state,
+            state.world.block(),
+            1,
+            &state.nexus_snapshot(),
+            &captured,
+            Some(&pending(vec![pin.clone()])),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.effects.da_pins.len(),
+            1,
+            "operational watermark cannot change admission"
+        );
+        assert_eq!(
+            prepared
+                .world()
+                .da_pin_intents_by_ticket
+                .get(&pin.storage_ticket)
+                .unwrap()
+                .intent,
+            pin
+        );
+        roots.push(
+            WorldStateBaseline::capture_current(prepared.world())
+                .unwrap()
+                .root(),
+        );
+        drop(prepared);
+        let reset_cut = BTreeMap::from([(LaneId::SINGLE, 1)]);
+        let rejected = PreparedWorldCommit::prepare(
+            &state,
+            state.world.block(),
+            1,
+            &state.nexus_snapshot(),
+            &reset_cut,
+            Some(&pending(vec![pin])),
+            None,
+        )
+        .unwrap();
+        assert!(
+            rejected.effects.da_pins.is_empty(),
+            "captured canonical activation does retire old pins"
+        );
+    }
+    assert_eq!(roots[0], roots[1]);
+}

@@ -270,7 +270,16 @@ fn dummy_block_with_time(
     });
     valid
         .as_mut()
-        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
         .expect("attach required empty block result metadata");
     valid.commit_unchecked().unpack(|_| {})
 }
@@ -289,7 +298,6 @@ fn autonomous_lane_carrier_block_for_recovery(
     let header = BlockHeader::new(
         NonZeroU64::new(context.height).expect("non-zero carrier height"),
         parent,
-        None,
         None,
         context.height,
         0,
@@ -382,7 +390,6 @@ fn lane_owned_block_for_recovery(
         NonZeroU64::new(context.height).expect("non-zero fixture height"),
         None,
         None,
-        None,
         context.height,
         0,
     );
@@ -401,13 +408,26 @@ fn lane_owned_block_for_recovery(
         u64::try_from(leader).expect("leader index fits u64"),
         keys[leader].private_key(),
     );
-    block
-        .set_transaction_results(
-            Vec::new(),
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
             &[entrypoint_hash],
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
-        .expect("attach canonical transaction result");
+    }
+    .expect("attach canonical transaction result");
     block
 }
 fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::HeightContext) {
@@ -496,7 +516,8 @@ fn persist_checkpoint_and_manifest(
     artifact: &wire::finality::V2FinalityArtifact,
 ) {
     artifact.verify().expect("authenticated fixture artifact");
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(state);
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(state)
+        .expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)
         .expect("persist WSV checkpoint");
     kura.store_commit_manifest(
@@ -655,7 +676,8 @@ fn snapshot_record_for_state(
             .latest_block_hash_fast()
             .expect("non-empty snapshot has a tip"),
         snapshot_block_creation_time_ms: anchor_height,
-        snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
+        snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
     });
     context.nexus_amx_context_hash =
         committed_nexus_amx_context_hash(&state).expect("valid committed catalog");
@@ -716,7 +738,8 @@ fn snapshot_bootstrap_authentication_rejects_future_kaigi_feedback_and_rolls_bac
         .snapshot_bootstrap
         .as_mut()
         .expect("snapshot bootstrap anchor")
-        .snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+        .snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     state.set_snapshot_v2_bootstrap_candidate_for_testing(record);
     state.clear_latest_block_header_cache_for_testing();
     assert!(state.latest_block_creation_time_ms_fast().is_none());
@@ -799,9 +822,7 @@ fn storage_tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     entries
 }
 fn primary_lane_blocks_dir(kura: &Kura) -> PathBuf {
-    LaneConfig::default()
-        .primary()
-        .blocks_dir(kura.store_root())
+    Kura::canonical_storage_paths(&kura.store_root()).0
 }
 #[test]
 fn empty_chain_retry_binds_current_lane_auxiliary_storage() {
@@ -855,7 +876,8 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     .into_state_from_json_str(&snapshot)
     .expect("production snapshot decoder restores owner projection");
     assert_ne!(restored.nexus_snapshot().fees.base_fee, nexus.fees.base_fee);
-    let state_hash = crate::snapshot::canonical_state_snapshot_hash(&restored);
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(&restored)
+        .expect("stable valid fixture snapshot");
     assert_eq!(
         state_hash,
         record
@@ -902,7 +924,8 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     restored.content = state.content.clone();
     restored.set_settlement(state.settlement().clone());
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        crate::snapshot::canonical_state_snapshot_hash(&restored)
+            .expect("stable valid fixture snapshot"),
         state_hash,
         "runtime policy installation cannot change authenticated canonical state"
     );
@@ -1011,7 +1034,8 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        crate::snapshot::canonical_state_snapshot_hash(&restored)
+            .expect("stable valid fixture snapshot"),
         state_hash
     );
     assert_ne!(restored.nexus_snapshot().fees.base_fee, nexus.fees.base_fee);
@@ -1171,7 +1195,8 @@ fn all_hash_only_snapshot_without_authenticated_record_fails_closed() {
 fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutation() {
     let (kura, state, record, _keys) = hash_only_snapshot_boundary(2, true);
     let before_height = state.committed_height();
-    let before_wsv = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before_wsv = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     let anchor = record
         .context
         .snapshot_bootstrap
@@ -1234,7 +1259,8 @@ fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutati
     ));
     assert_eq!(state.committed_height(), before_height);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         before_wsv
     );
     assert_eq!(
@@ -1423,7 +1449,8 @@ fn later_snapshot_before_first_full_finality_is_rejected_without_mutation() {
     commit_to_state(&state, &block, &record.context);
     let artifact = authenticated_artifact_for(record.context.clone(), block.as_ref(), &keys);
     persist_checkpoint_and_manifest(kura.as_ref(), &state, &artifact);
-    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     let hashes_before = state.committed_block_hashes_snapshot();
     let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     let context_before = store
@@ -1437,7 +1464,8 @@ fn later_snapshot_before_first_full_finality_is_rejected_without_mutation() {
         ))
     ));
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         state_hash_before,
         "rejected lineage must not mutate WSV"
     );
@@ -1565,7 +1593,8 @@ fn finalized_later_snapshot_rejects_a_missing_immutable_first_height_context() {
     std::fs::remove_file(&context_path)
         .expect("remove the immutable context to model post-finalization loss");
     let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
-    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     let hashes_before = state.committed_block_hashes_snapshot();
     let storage_root = kura.store_root();
     let storage_before = storage_tree(&storage_root);
@@ -1580,7 +1609,8 @@ fn finalized_later_snapshot_rejects_a_missing_immutable_first_height_context() {
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         state_hash_before,
         "missing immutable context rejection must not mutate WSV"
     );
@@ -1668,7 +1698,8 @@ fn later_snapshot_uses_historical_lineage_not_current_topology_or_anchor_wsv() {
             .collect::<Vec<_>>()
     );
     assert_ne!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         record
             .context
             .snapshot_bootstrap
@@ -1918,7 +1949,8 @@ fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partia
         state.block_hashes.block_and_revert().commit_for_tests();
     }
     let state_hashes_before = state.committed_block_hashes_snapshot();
-    let state_wsv_before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let state_wsv_before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     assert_eq!(state.committed_height(), 1);
     assert!(
         crate::state::preflight_v2_replay_body_availability(
@@ -1935,7 +1967,8 @@ fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partia
         "whole-range preflight must fail before replaying any earlier body"
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         state_wsv_before
     );
 }
@@ -2119,7 +2152,8 @@ fn checkpoint_before_finality_reopens_same_height_without_reapplying() {
     kura.store_block(block.clone())
         .expect("persist canonical block");
     commit_to_state(&state, &block, &context);
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist interrupted post-WSV checkpoint");
     let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
@@ -2549,7 +2583,8 @@ fn startup_plan_accepts_each_post_checkpoint_crash_window_as_one_tip() {
         .expect("persist canonical block");
     commit_to_state(&state, &block, verified.context());
     let artifact = authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist checkpoint-only crash image");
     let checkpoint_only =
@@ -2640,7 +2675,8 @@ fn startup_plan_rejects_finality_bound_to_an_unauthenticated_manifest() {
         .expect("persist canonical block");
     commit_to_state(&state, &block, verified.context());
     let artifact = authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist WSV checkpoint");
     kura.store_commit_manifest(CommitManifest::new(

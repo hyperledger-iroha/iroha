@@ -63,7 +63,6 @@ fn run_ordinary_tail_independent_batches(
     leftover_call: bool,
 ) {
     use iroha_data_model::events::data::prelude::AssetBatchTransferLegStatus;
-    use iroha_data_model::transaction::signed::TransactionResult;
     let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], false);
     let state = &fixture.native.state;
     let cadence = state
@@ -81,7 +80,6 @@ fn run_ordinary_tail_independent_batches(
         NonZeroU64::new(fixture.native.block.header().height().get() + 1).unwrap(),
         Some(fixture.native.block.hash()),
         None,
-        None,
         fixture.native.block.header().creation_time_ms + 2 * cadence,
         0,
     );
@@ -90,7 +88,7 @@ fn run_ordinary_tail_independent_batches(
         fixture.source.account().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-    transaction.set_creation_time(header.creation_time());
+    transaction.set_creation_time(header.creation_time() - Duration::from_millis(1));
     let signed = transaction
         .with_instructions([ordinary_tail_batch(&fixture)])
         .sign(key.private_key());
@@ -104,43 +102,21 @@ fn run_ordinary_tail_independent_batches(
     let unexecuted = carrier.clone();
     let proposal_hash = carrier.hash();
     let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let _witness_guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
-    let mut overlay = Box::new(state.block(carrier.header()));
-    let accepted = crate::tx::AcceptedTransaction::accept_entrypoint_at_time(
-        entry.clone(),
-        &state.network_id,
-        overlay.world.parameters().sumeragi().max_clock_drift(),
-        overlay.world.parameters().transaction(),
-        overlay.crypto.as_ref(),
-        header.creation_time(),
-    )
-    .unwrap();
-    let (hash, inner) = overlay.validate_transaction_with_entrypoint_index_and_routing_context(
-        accepted,
-        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
-        0,
-        route,
-    );
-    assert_eq!(hash, entry.hash());
-    assert!(
-        inner.is_ok(),
-        "real independent prefix execution: {inner:?}"
-    );
-    let actual_prefix_receipts = overlay.batch_transfer_outcomes.clone();
-    assert_eq!(actual_prefix_receipts.len(), 1);
-    let mut full = TransactionResult::new(inner.clone());
     if prejoin_prefix {
-        let rows = overlay.drain_batch_transfer_outcomes();
-        full.set_batch_transfer_outcomes(rows[&entry.execution_call_hash()].clone());
+        let mut trial = state.block(carrier.header());
+        crate::block::ValidBlock::execute_block_outputs_for_test(&mut carrier, &mut trial, None)
+            .unwrap();
+        drop(trial);
     }
+    let advertised_wire = prejoin_prefix.then(|| carrier.encode_wire().unwrap());
+    let mut overlay = Box::new(state.block(carrier.header()));
     if leftover_call {
         let mut extra = TransactionBuilder::new(
             state.network_id,
             fixture.source.account().clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        extra.set_creation_time(header.creation_time() - Duration::from_millis(1));
+        extra.set_creation_time(header.creation_time() - Duration::from_millis(2));
         let extra = TransactionEntrypoint::External(
             extra
                 .with_instructions([ordinary_tail_batch(&fixture)])
@@ -165,11 +141,10 @@ fn run_ordinary_tail_independent_batches(
         assert!(result.is_ok());
         let before = carrier.encode_wire().unwrap();
         assert!(
-            crate::block::valid::finish_ordinary_tail_for_test(
+            crate::block::ValidBlock::execute_block_outputs_for_test(
                 &mut carrier,
                 &mut overlay,
-                vec![full],
-                &[route]
+                None
             )
             .is_err()
         );
@@ -195,20 +170,18 @@ fn run_ordinary_tail_independent_batches(
         );
         return;
     }
-    crate::block::valid::finish_ordinary_tail_for_test(
-        &mut carrier,
-        &mut overlay,
-        vec![full],
-        &[route],
-    )
-    .unwrap();
+    crate::block::ValidBlock::execute_block_outputs_for_test(&mut carrier, &mut overlay, None)
+        .unwrap();
+    if let Some(expected) = advertised_wire {
+        assert_eq!(carrier.encode_wire().unwrap(), expected);
+    }
     assert_eq!(carrier.hash(), proposal_hash);
     assert_eq!(
         carrier.header().merkle_root(),
         unexecuted.header().merkle_root()
     );
     let expected_count = if repeated_time { 3 } else { 1 };
-    let results = carrier.results().cloned().collect::<Vec<_>>();
+    let results = carrier.output_results().cloned().collect::<Vec<_>>();
     assert_eq!(results.len(), expected_count);
     for result in &results {
         assert!(result.as_ref().is_ok());
@@ -225,10 +198,6 @@ fn run_ordinary_tail_independent_batches(
             AssetBatchTransferLegStatus::Rejected(_)
         ));
     }
-    assert_eq!(
-        results[0].batch_transfer_outcomes(),
-        actual_prefix_receipts[&entry.execution_call_hash()]
-    );
     let amount = u32::try_from(expected_count).unwrap() * 3;
     assert_eq!(
         overlay.world.assets.get(&fixture.source).unwrap().as_ref(),
@@ -271,59 +240,72 @@ fn run_ordinary_tail_independent_batches(
         );
     }
     if repeated_time {
-        let time = carrier.time_triggers().collect::<Vec<_>>();
+        use iroha_data_model::block::execution_output::ExecutionOutputV1;
+        let time = carrier
+            .execution_outputs()
+            .iter()
+            .filter_map(|output| match output {
+                ExecutionOutputV1::Time(row) => Some(row),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(time.len(), 2);
         assert_eq!(
-            time[0], time[1],
-            "two real invocations have equal display entries"
+            time[0].invocation.trigger.trigger_id,
+            time[1].invocation.trigger.trigger_id
         );
-        let display = Hash::from(time[0].hash_as_entrypoint());
+        assert_eq!(
+            time[0].invocation.trigger.registered_at_height,
+            time[1].invocation.trigger.registered_at_height
+        );
+        assert_ne!(
+            time[0].invocation.trigger.action_hash, time[1].invocation.trigger.action_hash,
+            "each invocation binds its actual remaining repeat count"
+        );
+        assert_ne!(
+            time[0].invocation.schedule_index,
+            time[1].invocation.schedule_index
+        );
         assert_ne!(calls[1], calls[2]);
-        assert_ne!(calls[1], display);
-        assert_ne!(calls[2], display);
-        // Positional proofs retain both equal-display result leaves.
-        for index in [1, 2] {
-            assert!(carrier.entrypoint_proof(index).unwrap().verify(
-                &time[0].hash_as_entrypoint(),
-                &carrier.full_entry_merkle_commitment().unwrap()
-            ));
-            assert!(carrier.result_proof(index).unwrap().verify(
-                &results[index as usize].hash(),
-                &carrier.result_merkle_commitment().unwrap()
+        for index in [1_u32, 2] {
+            let output = &carrier.execution_outputs()[index as usize];
+            assert_eq!(
+                output
+                    .execution_call_hash(carrier.hash(), &carrier)
+                    .unwrap(),
+                calls[index as usize]
+            );
+            assert!(carrier.output_proof(index).unwrap().verify(
+                &HashOf::new(output),
+                &carrier.output_merkle_commitment().unwrap()
             ));
         }
     } else {
-        // Construct the old no-Time output from the same actual execution facts,
-        // without rerunning economics. This proves byte stability of the shared
-        // full-output setter versus the old inner-results + receipt setter path.
-        let mut previous_output = unexecuted;
-        previous_output
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
-                &[entry.hash()],
-                vec![inner],
+        let mut reconstructed = unexecuted;
+        reconstructed
+            .set_execution_outputs(
+                carrier.execution_outputs().to_vec(),
+                carrier.committed_fragment_count().unwrap(),
                 carrier.fastpq_transcripts().clone(),
                 carrier.axt_envelopes().unwrap().to_vec(),
                 carrier.axt_policy_snapshot().unwrap().clone(),
+                carrier.axt_transitioned_dataspaces().unwrap().clone(),
+                carrier.lane_finality_statements().to_vec(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();
-        previous_output
-            .set_axt_transitioned_dataspaces(carrier.axt_transitioned_dataspaces().unwrap().clone())
-            .unwrap();
-        previous_output.set_trigger_completions(carrier.trigger_completions().unwrap().to_vec());
-        previous_output
-            .set_batch_transfer_outcomes(actual_prefix_receipts)
-            .unwrap();
-        previous_output.set_committed_fragment_count(carrier.committed_fragment_count().unwrap());
         assert_eq!(
-            previous_output.encode_wire().unwrap(),
+            reconstructed.encode_wire().unwrap(),
             carrier.encode_wire().unwrap()
         );
     }
     let encoded = carrier.encode_wire().unwrap();
     let decoded = iroha_data_model::block::decode_framed_signed_block(&encoded).unwrap();
     assert_eq!(decoded.encode_wire().unwrap(), encoded);
-    assert_eq!(decoded.results().cloned().collect::<Vec<_>>(), results);
+    assert_eq!(
+        decoded.output_results().cloned().collect::<Vec<_>>(),
+        results
+    );
     drop(overlay);
     assert_eq!(
         state
@@ -351,12 +333,12 @@ fn common_ordinary_tail_records_repeated_time_independent_batch_receipts() {
 }
 
 #[test]
-fn common_ordinary_tail_preserves_actual_prejoined_prefix_receipts() {
+fn common_ordinary_driver_reexecution_preserves_complete_typed_receipts() {
     run_ordinary_tail_independent_batches(true, true, false);
 }
 
 #[test]
-fn common_ordinary_tail_without_time_preserves_prior_canonical_output_bytes() {
+fn common_ordinary_driver_without_time_has_one_canonical_attachment() {
     run_ordinary_tail_independent_batches(false, false, false);
 }
 

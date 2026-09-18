@@ -139,7 +139,7 @@ fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId)
 fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance() {
     let (state, custody, definition_id, source_id) = fee_sponsor_custody_state();
     assert_ne!(custody, *ALICE_ID, "submitting authority is not custody");
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xC5);
@@ -180,7 +180,7 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
 #[test]
 fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     let (state, _custody, definition_id, source_id) = fee_sponsor_custody_state();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world
@@ -255,7 +255,7 @@ fn build_asset_transfer_control_test_state(
 fn user_transfer_rejects_third_party_source_before_mutation() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA1);
@@ -292,7 +292,7 @@ fn user_transfer_rejects_third_party_source_before_mutation() {
 fn user_transfer_accepts_exact_direct_asset_permission() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA2);
@@ -325,7 +325,7 @@ fn user_transfer_accepts_exact_direct_asset_permission() {
 fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA3);
@@ -363,7 +363,7 @@ fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
 fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA4);
@@ -428,7 +428,7 @@ fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let destination_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
@@ -927,7 +927,7 @@ fn transfer_removes_metadata_when_balance_zero() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB1);
@@ -960,7 +960,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB2);
@@ -1021,7 +1021,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
 #[test]
 fn asset_transfer_controls_require_asset_owner_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let alice_alias = AccountAlias::new(
@@ -1062,7 +1062,7 @@ fn asset_transfer_controls_require_asset_owner_authority() {
 #[test]
 fn generic_account_metadata_instructions_cannot_replace_or_remove_transfer_controls() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     SetAssetTransferAvailability::new(
@@ -1111,7 +1111,7 @@ fn generic_account_metadata_instructions_cannot_replace_or_remove_transfer_contr
 #[test]
 fn genesis_has_inherent_transfer_control_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     SetAssetTransferAvailability::new(
@@ -1236,7 +1236,7 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
         },
     ])
     .expect("transfer-control dataspace catalog");
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 86_400_000, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
     block.nexus.dataspace_catalog = dataspace_catalog.clone();
     let mut stx = block.transaction();
@@ -1368,7 +1368,7 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
 #[test]
 fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xCB);
@@ -1476,7 +1476,7 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
 #[test]
 fn availability_reason_over_limit_is_rejected_without_persistence() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let reason =
@@ -1510,7 +1510,7 @@ fn availability_reason_over_limit_is_rejected_without_persistence() {
 #[test]
 fn transfer_rejects_when_account_is_blacklisted_for_asset() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id.clone(), true)
@@ -1549,7 +1549,7 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
 fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xCA);
@@ -1621,7 +1621,7 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
 fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     SetAssetHoldingLimit::new(
@@ -1689,7 +1689,7 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
 #[test]
 fn duplicate_transfer_limit_windows_are_rejected() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let error = SetAssetTransferControl::new(
@@ -1731,7 +1731,7 @@ fn duplicate_transfer_limit_windows_are_rejected() {
 fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let error = super::super::isi::apply_prepared_numeric_transfer_after_source_credit_for_test(
@@ -1758,7 +1758,7 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
 fn direct_typed_movement_identity_is_stable_and_purpose_bound() {
     let (state, asset_definition_id, source_id) = build_asset_transfer_control_test_state(10);
     let destination_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let stx = block.transaction();
     assert!(stx.tx_call_hash.is_none());
@@ -1791,7 +1791,7 @@ fn direct_typed_movement_identity_is_stable_and_purpose_bound() {
 fn typed_movement_rejects_empty_purpose_binding_even_with_call_hash() {
     let (state, asset_definition_id, source_id) = build_asset_transfer_control_test_state(10);
     let destination_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xD5);
@@ -1808,7 +1808,7 @@ fn typed_movement_rejects_empty_purpose_binding_even_with_call_hash() {
 fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xD4);
@@ -1871,7 +1871,7 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
 #[test]
 fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB2);
@@ -1963,7 +1963,7 @@ fn transfer_rejects_materialized_kagemusha_reserve_source() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xD6);
@@ -2064,7 +2064,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
         .kagemusha
         .reserve_accounts
         .insert(asset_def_id.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xD7);
@@ -2133,7 +2133,7 @@ fn burn_rejects_kagemusha_reserve_for_owner_and_delegated_authority() {
         .kagemusha
         .reserve_accounts
         .insert(asset_definition_id, reserve_account);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
 
@@ -2482,7 +2482,7 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
 #[test]
 fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0x91);
@@ -2538,7 +2538,7 @@ fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
@@ -2594,7 +2594,7 @@ fn mint_restricted_asset_uses_current_dataspace_bucket() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let dsid = DataSpaceId::new(7);
@@ -2642,7 +2642,7 @@ fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route()
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -2693,7 +2693,7 @@ fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::new(8));
@@ -2737,7 +2737,7 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let private_dataspace = DataSpaceId::new(7);
@@ -2763,7 +2763,7 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash = iroha_crypto::Hash::new(b"identity at movement apply");
     {
@@ -2827,7 +2827,7 @@ fn prepared_movement_preserves_direct_typed_purpose_identity() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
@@ -2865,7 +2865,7 @@ fn stale_prepared_movement_discards_its_prepared_occurrence() {
     crate::sumeragi::witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     seed_test_call_hash(&mut tx, 0x72);
@@ -2904,7 +2904,7 @@ fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
     crate::sumeragi::witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     super::super::isi::apply_prepared_numeric_movement_for_test(

@@ -21,6 +21,33 @@ fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
     let mut context = block.execution_context().cloned().unwrap_or_default();
     context.queue_plan_admissions = vec![control.clone()];
     block.set_execution_context(Some(context));
+    // Final admission controls change the proposal commitment and invalidate the
+    // earlier result attachment. This carrier only admits inputs; retain an
+    // explicit zero-work result and a real signature over the final proposal.
+    assert_eq!(block.network_entrypoint_count(), 0);
+    block
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            BTreeMap::new(),
+            Vec::new(),
+            AxtPolicySnapshot::default(),
+            BTreeSet::new(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .unwrap();
+    let carrier_key = merge_carrier_finality_fixture_keypair();
+    block
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(carrier_key.private_key(), block.hash()),
+            ),
+        ]))
+        .unwrap();
+    block.validate_proposal_commitments().unwrap();
+    block.validate_execution_result_structure().unwrap();
     let opening = lane_opening_context_for_state_test(&state);
     let mut overlay = state
         .block_with_queue_plan_admissions(block.header(), &[control.clone()])
@@ -32,6 +59,9 @@ fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
     overlay
         .capture_lane_consensus_contexts(&mut witness)
         .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .expect("admission fixture retains its actual runtime predecessor");
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();

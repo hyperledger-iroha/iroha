@@ -21,7 +21,6 @@ fn seed_sccp_ingress_auth_account(app: &SharedAppState) {
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );

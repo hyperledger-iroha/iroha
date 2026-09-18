@@ -142,7 +142,7 @@ fn axt_replay_ledger_survives_state_restart() {
     );
     assert_eq!(reject.dataspace, Some(dsid));
     assert_eq!(reject.lane, Some(lane));
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 2, 0);
     let mut block = restarted.block(header);
     let counter_before = block.world.axt_handle_counters.get(&dsid).cloned();
     let mut transaction = block.transaction();
@@ -214,7 +214,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
     let_row! { ivm_proof = ivm::axt::ProofBlob { payload: proof_fragment.proof.payload.clone(), expiry_slot: proof_fragment.proof.expiry_slot, } };
     let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), asset_definition_id: handle_fragment.handle.asset_definition_id.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
     let_row! { ivm_intent = ivm::axt::RemoteSpendIntent { asset_dsid: handle_fragment.intent.asset_dsid, op: ivm::axt::SpendOp { asset_definition_id: handle_fragment.intent.op.asset_definition_id.clone(), kind: handle_fragment.intent.op.kind.clone(), from: handle_fragment.intent.op.from.clone(), to: handle_fragment.intent.op.to.clone(), amount: handle_fragment.intent.op.amount.clone(), }, } };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let mut block = state.block(header);
     {
         let mut stx = block.transaction();
@@ -289,7 +289,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         Some(&budget_before_prune),
         "replay pruning must not reset the permanent family budget"
     );
-    let authenticated_tip = BlockHeader::new(nonzero!(1_u64), None, None, None, prune_at, 0);
+    let authenticated_tip = BlockHeader::new(nonzero!(1_u64), None, None, prune_at, 0);
     state.push_block_hash_for_testing(authenticated_tip.hash());
     state.update_latest_block_header_cache_for_tests(authenticated_tip);
     let projected = state.axt_policy_snapshot();
@@ -339,7 +339,7 @@ fn axt_replay_ledger_prunes_after_retention_window() {
         state.world.axt_handle_budget_ledger.view().get(&budget_key),
         Some(&budget_before_prune)
     );
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, prune_at, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, prune_at, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.current_lane_id = Some(lane);
@@ -391,7 +391,7 @@ state_test! { sync state_block_axt_policy_snapshot_reads_block_scope
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let dsid = DataSpaceId::new(13);
     let_row! { entry = AxtPolicyEntry { manifest_root: [0x66; 32], target_lane: LaneId::new(2), active_handle_era: 5, next_handle_counter: 4, current_slot: 99, } };
     {
@@ -423,7 +423,7 @@ state_test! { sync axt_replay_ledger_overlay_applies
     nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_with_nexus_for_testing(World::new(), nexus, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
@@ -499,7 +499,7 @@ state_test! { sync ordinary_block_apply_defers_axt_replay_pruning_until_commit
         "ordinary block commit should prune expired AXT replay entries"
     );
     let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
-    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     assert_eq!(
         committed_hash,
         iroha_crypto::Hash::new(&committed_bytes),
@@ -521,10 +521,10 @@ state_test! { sync committed_storage_projections_omit_absent_and_empty_changes
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
     assert!(block.json_serialize_committed_axt_replay_ledger().is_none());
     assert!(block.json_serialize_committed_smart_contract_state().is_none());
-    block.stage_da_pin_intent_bundle(1, Vec::new());
+    block.stage_da_pin_intent_bundle(1, Vec::new()).unwrap();
     assert!(block.json_serialize_committed_smart_contract_state().is_none());
 }
 state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying_it
@@ -584,7 +584,7 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
         assert_eq!(state.world.smart_contract_state.view().get(key), Some(value));
     }
     let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
-    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     assert_eq!(committed_hash, Hash::new(&committed_bytes));
     assert!(staged_bytes == committed_bytes && staged_hash == committed_hash,
         "DA quota checkpoint projection differs from committed WSV: \
@@ -676,7 +676,7 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
         },
         validator_set_pops: Vec::new(),
     });
-    let stale_prefix_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 99, 0);
+    let stale_prefix_header = BlockHeader::new(nonzero!(1_u64), None, None, 99, 0);
     anchored.update_latest_block_header_cache_for_tests(stale_prefix_header);
     assert_eq!(anchored.latest_block_creation_time_ms_fast(), Some(10_000));
     let anchored_view = anchored.view();

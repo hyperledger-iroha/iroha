@@ -170,7 +170,7 @@ fn event() -> EventBox {
         events::pipeline::{PipelineEventBox, PipelineWarning},
     };
     EventBox::Pipeline(PipelineEventBox::Warning(PipelineWarning {
-        header: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0),
+        header: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0),
         kind: "test".to_owned(),
         details: "canonical event".to_owned(),
     }))

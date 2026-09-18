@@ -130,6 +130,8 @@ pub enum TryReadError {
 /// Error variants for snapshot writing
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 pub(super) enum TryWriteError {
+    /// One stable snapshot observation could not be captured: {0}
+    Capture(#[source] SnapshotCaptureError),
     /// Failed reading/writing {1:?} from disk
     IO(#[source] std::io::Error, PathBuf),
     /// Error (de)serializing World State View snapshot

@@ -1751,7 +1751,6 @@ mod tests {
             NonZeroU64::new(7).expect("non-zero block height"),
             None,
             None,
-            None,
             0,
             0,
         );

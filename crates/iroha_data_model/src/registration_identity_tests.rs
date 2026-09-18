@@ -164,20 +164,17 @@ fn signed_block_identity_preserves_canonical_envelope() {
     let transaction = transaction
         .try_sign(signer.private_key())
         .expect("sign fixture transaction");
-    let entrypoint_hash = transaction.hash_as_entrypoint();
     let mut block = SignedBlock::try_genesis(vec![transaction], signer.private_key(), None, None)
         .expect("signed genesis proposal");
     assert!(!block.has_results());
     assert!(block.is_resultless_proposal());
     let proposal_hash = block.hash();
     let proposal_wire = block.encode_wire().expect("canonical resultless proposal");
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entrypoint_hash],
-            vec![Ok(DataTriggerSequence::default())],
-        )
-        .expect("attach the transaction's successful execution result");
+    crate::block::output_test_support::install_network(
+        &mut block,
+        vec![Ok(DataTriggerSequence::default())],
+    )
+    .expect("attach complete network output");
     assert!(block.has_results());
     assert!(!block.is_resultless_proposal());
     assert_eq!(block.hash(), proposal_hash);
@@ -186,10 +183,10 @@ fn signed_block_identity_preserves_canonical_envelope() {
         proposal_wire,
     );
     block
-        .validate_entrypoint_merkle_cache()
+        .validate_proposal_commitments()
         .expect("entrypoint commitment");
     block
-        .validate_result_merkle_cache()
+        .validate_output_merkle_cache()
         .expect("result commitment");
     let signatures: Vec<_> = block.signatures().collect();
     assert_eq!(signatures.len(), 1);

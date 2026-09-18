@@ -112,69 +112,97 @@ impl StateBlock<'_> {
                 "autonomous runtime catalog effect is invalid: {error}"
             ))
         };
-        self.state_ref
-            .validate_runtime_catalog_block_overlay(
-                &self.world,
-                self.pending_autoscale_lifecycle.as_ref(),
-                self._curr_block.height().get(),
-            )
+        self.validate_owned_runtime_catalog_overlay()
             .map_err(lifecycle_error)?;
-        let state_nexus = self.state_ref.nexus_snapshot();
-        let mut expected_nexus = state_nexus.clone();
-        let state_manifests = self.state_ref.lane_manifests.read().clone();
+        // Bind the actual MV predecessor and the accepted successor before
+        // comparing projections. A live State cache can belong to a discarded
+        // tip or have changed after this carrier captured its authority.
+        self.prepare_carrier_geometry().map_err(lifecycle_error)?;
+        let predecessor = self.canonical_runtime.get_before_block();
+        let mut expected_nexus = predecessor
+            .nexus_projection(&self.runtime_policy.nexus)
+            .map_err(lifecycle_error)?;
         let expected_manifests = if let Some(pending) = &self.pending_autoscale_lifecycle {
-            if pending.runtime_catalog.is_none()
-                || pending.transition != PendingAutoscaleTransition::Manual
-            {
+            let Some(runtime) = pending.runtime_catalog.as_ref() else {
+                return Err(invalid(
+                    "autonomous merge execution staged an unsupported lifecycle effect",
+                ));
+            };
+            if pending.transition != PendingAutoscaleTransition::Manual {
                 return Err(invalid(
                     "autonomous merge execution staged an unsupported lifecycle effect",
                 ));
             }
-            // Both initial pre-execution and certified replay execute under the exact stripped
-            // application header. The carrier roots are added only after these effects exist.
-            self.state_ref
-                .validate_committed_autoscale_lane_lifecycle(
-                    pending,
-                    self._curr_block.height().get(),
-                    crate::merge::merge_application_header_from_carrier(&self._curr_block).hash(),
-                    None,
-                )
-                .map_err(lifecycle_error)?;
-            let update = &pending.catalog_update;
-            expected_nexus.lane_catalog = update.updated_catalog.clone();
-            expected_nexus.lane_config = update.updated_lane_config.clone();
-            expected_nexus.dataspace_catalog = update.updated_dataspace_catalog.clone();
-            if self.lane_incarnations != update.updated_lane_incarnations
-                || self.lane_incarnation_lineage != update.updated_lane_incarnation_lineage
-                || self.lane_incarnation_activation_heights
-                    != update.updated_lane_incarnation_activation_heights
-            {
+            // Runtime catalog transitions are strictly additive. Their complete
+            // validation needs no local retirement scan or second World view.
+            let dataspaces = runtime_catalog_transition_dataspaces_from_parameters(
+                &expected_nexus,
+                &self.runtime_policy.manifests,
+                self.world.parameters.get_before_block(),
+                runtime,
+                &pending.plan,
+            )
+            .map_err(lifecycle_error)?;
+            if dataspaces != pending.catalog_update.updated_dataspace_catalog {
                 return Err(invalid(
-                    "autonomous runtime catalog incarnation projections differ from the bound effect",
+                    "autonomous runtime catalog differs from its captured baseline and additions",
                 ));
             }
-            &pending.updated_lane_manifests
+            expected_nexus.dataspace_catalog = dataspaces;
+            ensure_lane_lifecycle_compliance_ready(
+                &expected_nexus,
+                self.runtime_policy.compliance.as_deref(),
+                &pending.plan,
+            )
+            .map_err(lifecycle_error)?;
+            ensure_catalog_autoscale_lanes_consistent(
+                &expected_nexus,
+                &pending.catalog_update.updated_catalog,
+                pending.transition_height,
+                &BTreeSet::new(),
+            )
+            .map_err(lifecycle_error)?;
+            expected_nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
+            expected_nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
+            validate_nexus_routing_policy(
+                &expected_nexus.routing_policy,
+                &expected_nexus.lane_catalog,
+                &expected_nexus.dataspace_catalog,
+            )
+            .map_err(lifecycle_error)?;
+            let manifests = Arc::new(
+                self.runtime_policy
+                    .manifests
+                    .with_runtime_additions(
+                        &runtime.manifests,
+                        &expected_nexus.lane_catalog,
+                        &expected_nexus.dataspace_catalog,
+                        &expected_nexus.governance,
+                    )
+                    .map_err(runtime_catalog_invalid)
+                    .map_err(lifecycle_error)?,
+            );
+            manifests
+                .validate_active_coverage_for_catalog(&expected_nexus.lane_catalog)
+                .map_err(|error| invalid(&error.message()))?;
+            if manifests.consensus_policy_digest()
+                != pending.updated_lane_manifests.consensus_policy_digest()
+            {
+                return Err(invalid(
+                    "autonomous runtime manifest differs from its captured baseline and additions",
+                ));
+            }
+            manifests
         } else {
-            if self.lane_incarnations != self.state_ref.lane_incarnations_snapshot()
-                || self.lane_incarnation_lineage
-                    != self.state_ref.lane_incarnation_lineage_snapshot()
-                || self.lane_incarnation_activation_heights
-                    != self
-                        .state_ref
-                        .lane_incarnation_activation_heights_snapshot()
-            {
-                return Err(invalid(
-                    "autonomous merge execution changed unbound lane incarnations",
-                ));
-            }
-            &state_manifests
+            Arc::clone(&self.runtime_policy.manifests)
         };
         // Use the maintained digest with the actual compliance binding; comparing two failed
         // digest Results would otherwise conceal a configuration difference.
         let digest = |nexus| {
             iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
                 nexus,
-                self.lane_compliance
+                self.runtime_policy
+                    .compliance
                     .as_deref()
                     .map(LaneComplianceEngine::consensus_policy_digest),
                 Some(expected_manifests.baseline_consensus_policy_digest()),
@@ -194,14 +222,22 @@ impl StateBlock<'_> {
                 != expected_manifests.consensus_policy_digest()
             || self.lane_manifests.baseline_consensus_policy_digest()
                 != expected_manifests.baseline_consensus_policy_digest()
-            || compute_zk_consensus_policy_hash(&self.zk)
-                != compute_zk_consensus_policy_hash(&self.state_ref.zk_snapshot())
+            || compute_zk_consensus_policy_hash(&self.zk) != self.runtime_policy.zk_hash
+            || self
+                .lane_compliance
+                .as_deref()
+                .map(LaneComplianceEngine::consensus_policy_digest)
+                != self
+                    .runtime_policy
+                    .compliance
+                    .as_deref()
+                    .map(LaneComplianceEngine::consensus_policy_digest)
         {
             return Err(invalid(
                 "autonomous merge execution changed an unbound runtime configuration or catalog projection",
             ));
         }
-        let expected_privacy = LanePrivacyRegistry::from_manifest_registry(expected_manifests);
+        let expected_privacy = LanePrivacyRegistry::from_manifest_registry(&expected_manifests);
         if self.lane_privacy_registry.as_ref() != &expected_privacy {
             return Err(invalid(
                 "autonomous runtime catalog privacy projection differs from its manifest",

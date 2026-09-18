@@ -8,14 +8,14 @@ use nonzero_ext::nonzero;
 use norito::codec::Encode;
 #[test]
 fn block_header_roundtrip() {
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 12345, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 12345, 0);
     let bytes = norito::to_bytes(&header).expect("encode");
     let decoded: BlockHeader = norito::decode_from_bytes(&bytes).expect("decode");
     assert_eq!(decoded, header);
 }
 #[test]
 fn block_header_golden_bytes() {
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 12345, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 12345, 0);
     let bytes = header.encode();
     // `BlockHeader::new` commits the default confidential feature digest.
     let expected: &[u8] = &hex!(

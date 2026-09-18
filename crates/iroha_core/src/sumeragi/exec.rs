@@ -59,13 +59,7 @@ fn ordinary_native_amx_application_sources(
     {
         return Ok(Vec::new());
     }
-    let entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
-    let results = block.results().cloned().collect::<Vec<_>>();
-    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-    if bundle.external.len() != entrypoints.len()
-        || results.len() < bundle.external.len()
-        || block.header().result_merkle_root() != expected_result_root
-    {
+    if bundle.external.len() != block.network_entrypoint_count() {
         return Err("Native AMX application block result/context alignment is invalid".to_owned());
     }
     bundle
@@ -79,7 +73,7 @@ fn ordinary_native_amx_application_sources(
                 .map(|receipt| (index, context, receipt))
         })
         .map(|(index, context, receipt)| {
-            let entrypoint = entrypoints.get(index).ok_or_else(|| {
+            let entrypoint = block.network_entrypoint_at(index).ok_or_else(|| {
                 "Native AMX application block is missing its canonical entrypoint".to_owned()
             })?;
             if entrypoint.hash() != context.entrypoint_hash {
@@ -88,15 +82,18 @@ fn ordinary_native_amx_application_sources(
                         .to_owned(),
                 );
             }
-            let result = results.get(index).cloned().ok_or_else(|| {
-                "Native AMX application block is missing a committed transaction result".to_owned()
+            let input_index = u32::try_from(index).map_err(|_| {
+                "Native AMX entrypoint index does not fit the canonical Network output".to_owned()
+            })?;
+            let (_, output) = block.network_output_at(input_index).ok_or_else(|| {
+                "Native AMX application block is missing its exact Network output".to_owned()
             })?;
             Ok(NativeAmxApplicationSource {
                 entrypoint_index: u64::try_from(index).map_err(|_| {
                     "Native AMX entrypoint index does not fit the canonical manifest".to_owned()
                 })?,
                 entrypoint_hash: context.entrypoint_hash,
-                result,
+                result: output.result.clone(),
                 receipt: receipt.clone(),
                 finality_bound_merge: false,
             })
@@ -259,6 +256,12 @@ impl NativeAmxApplicationManifestV1 {
                 "Native AMX application manifest requires a result-bearing block".to_owned(),
             );
         }
+        // Validate the complete output owner before projecting receipts, including
+        // blocks without AMX sources. Internal outputs are not Network sources,
+        // but their structure and cached leaves still belong to this exact wire.
+        block.validate_output_merkle_cache().map_err(|error| {
+            format!("Native AMX application block output structure/cache is invalid: {error}")
+        })?;
         let executed_block_wire = block
             .encode_wire()
             .map_err(|error| format!("canonical executed block cannot be encoded: {error}"))?;
@@ -754,7 +757,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         block::{
-            BlockHeader, BlockSignature,
+            BlockHeader, BlockPayload, BlockResult, BlockSignature,
             consensus::{
                 ExecKv, ExecWitness, LaneBlockDescriptorV1, NativeAmxAttestationBodyV2,
                 NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
@@ -762,24 +765,77 @@ mod tests {
             execution_context::{
                 BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteRole,
             },
+            execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, PipelineEventPositionV1,
+                PipelineInvocationV1, TimeInvocationV1, TriggerUseV1,
+            },
+            output_budget::ExecutionOutputLimits,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        events::time::{TimeEvent, TimeInterval},
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaReserveReceiptV1,
             KagemushaReserveReceiptWitnessV1,
         },
         transaction::{
             FeePaymentIntent,
-            signed::{TransactionBuilder, TransactionEntrypoint, TransactionResultInner},
+            signed::{TransactionBuilder, TransactionEntrypoint},
         },
-        trigger::DataTriggerSequence,
     };
     use iroha_model_base::peer::PeerId;
     use iroha_primitives::time::TimeSource;
+    use norito::codec::{DecodeAll as _, Encode as _};
     use std::{num::NonZeroU64, time::Duration};
     const MANIFEST_APPLICATION_HEIGHT: u64 = 40;
     const MANIFEST_LANE_BLOCK_HEIGHT: u64 = 5;
     const MANIFEST_COORDINATOR_VIEW: u64 = 9;
+
+    fn manifest_output_limits() -> ExecutionOutputLimits {
+        ExecutionOutputLimits {
+            max_outputs: 16,
+            max_output_bytes: 1024 * 1024,
+            max_total_output_bytes: 4 * 1024 * 1024,
+            max_executed_wire_bytes: 16 * 1024 * 1024,
+        }
+    }
+
+    fn install_manifest_outputs(
+        block: &mut SignedBlock,
+        outputs: Vec<ExecutionOutputV1>,
+        fragments: u64,
+    ) {
+        block
+            .set_execution_outputs(
+                outputs,
+                fragments,
+                BTreeMap::new(),
+                Vec::new(),
+                Default::default(),
+                BTreeSet::new(),
+                Vec::new(),
+                &manifest_output_limits(),
+            )
+            .expect("attach exact typed manifest fixture outputs");
+    }
+
+    #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
+    #[norito_schema(name = "iroha_core::sumeragi::exec::tests::MutableManifestBlock")]
+    struct MutableManifestBlock {
+        signatures: BTreeSet<BlockSignature>,
+        payload: BlockPayload,
+        result: Option<BlockResult>,
+    }
+
+    fn mutate_manifest_outputs(
+        block: &SignedBlock,
+        mutate: impl FnOnce(&mut BlockResult),
+    ) -> SignedBlock {
+        let mut encoded = MutableManifestBlock::decode_all(&mut block.encode().as_slice())
+            .expect("decode structural manifest fixture");
+        mutate(encoded.result.as_mut().expect("result-bearing fixture"));
+        SignedBlock::decode_all(&mut encoded.encode().as_slice())
+            .expect("retain adversarial output structure without repairing its cache")
+    }
     #[derive(Clone)]
     struct ManifestParticipantFixture {
         proposal: LaneBlockProposalV1,
@@ -1167,8 +1223,7 @@ mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(MANIFEST_APPLICATION_HEIGHT).expect("non-zero fixture height"),
             None,
-            None,
-            None,
+            MerkleTree::root_from_typed_leaves(entrypoints.iter().copied()),
             MANIFEST_APPLICATION_HEIGHT,
             6,
         );
@@ -1179,16 +1234,6 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(initial_signature, header, transactions);
         block.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &entrypoints,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("attach exact manifest fixture results");
         let final_signature = BlockSignature::new(
             0,
             SignatureOf::try_from_hash(validator_key.private_key(), block.header().hash())
@@ -1197,6 +1242,22 @@ mod tests {
         block
             .replace_signatures([final_signature].into_iter().collect())
             .expect("replace manifest fixture signature");
+        block
+            .validate_proposal_commitments()
+            .expect("canonical manifest input commitments");
+        let proposal = block.canonical_resultless_proposal();
+        let outputs = (0..entrypoints.len())
+            .map(|index| {
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).expect("fixture input index fits u32"),
+                    result: TransactionResult::new(Ok(Vec::new())),
+                    completions: Vec::new(),
+                })
+            })
+            .collect();
+        install_manifest_outputs(&mut block, outputs, 2);
+        assert_eq!(block.header(), proposal.header());
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
         ManifestBlockFixture {
             block,
             source_ids,
@@ -1431,7 +1492,6 @@ mod tests {
             NonZeroU64::new(MANIFEST_APPLICATION_HEIGHT).expect("non-zero height"),
             None,
             None,
-            None,
             MANIFEST_APPLICATION_HEIGHT,
             0,
         );
@@ -1443,9 +1503,7 @@ mod tests {
         assert!(!block.has_results());
         NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
             .expect_err("an empty proposal still has no authenticated execution result");
-        block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach the empty execution result");
+        install_manifest_outputs(&mut block, Vec::new(), 0);
         let manifest = NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
             .expect("an executed empty block has an authenticated empty manifest");
         assert_eq!(manifest.count(), 0);
@@ -1587,27 +1645,244 @@ mod tests {
             manifest.root(),
             "the executed-wire identity in every leaf must make the manifest root change"
         );
-        let mut result_root_tampered = fixture.block.clone();
-        let header = result_root_tampered.header();
-        let execution_context = result_root_tampered.execution_context().cloned();
-        let forged_header = BlockHeader::new(
-            header.height(),
-            header.prev_block_hash(),
-            header.merkle_root(),
-            Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"forged Native AMX result root",
-            ))),
-            u64::try_from(header.creation_time().as_millis())
-                .expect("fixture creation time fits u64"),
-            header.view_change_index(),
+        let output_cache_tampered = mutate_manifest_outputs(&fixture.block, |result| {
+            let mut leaves = result.outputs.iter().map(HashOf::new).collect::<Vec<_>>();
+            leaves[0] =
+                HashOf::from_untyped_unchecked(Hash::new(b"forged Native AMX typed-output leaf"));
+            result.output_merkle = leaves.into_iter().collect();
+            assert_eq!(result.output_merkle.leaf_count(), result.outputs.len());
+        });
+        assert_eq!(output_cache_tampered.header(), fixture.block.header());
+        assert_eq!(
+            output_cache_tampered.execution_outputs(),
+            fixture.block.execution_outputs()
         );
-        result_root_tampered.replace_header_for_testing(forged_header);
-        result_root_tampered.set_execution_context(execution_context);
         assert!(
-            NativeAmxApplicationManifestV1::from_result_bearing_block(&result_root_tampered)
-                .is_err(),
-            "a header/result-tree mismatch must not reconstruct an authenticated manifest"
+            output_cache_tampered
+                .validate_output_merkle_cache()
+                .is_err()
         );
+        assert!(
+            NativeAmxApplicationManifestV1::from_result_bearing_block(&output_cache_tampered)
+                .is_err(),
+            "a stale typed-output cache must not reconstruct an authenticated manifest"
+        );
+    }
+
+    #[test]
+    fn native_amx_manifest_projects_exact_network_owners_with_internal_suffix() {
+        let mut fixture = result_bearing_native_manifest_block();
+        let mut outputs = fixture.block.execution_outputs().to_vec();
+        // Structural fixture data exercises retention of the full result. This
+        // receipt value is not evidence that State executed an asset transfer.
+        let authority = fixture
+            .block
+            .network_entrypoint_at(0)
+            .unwrap()
+            .authority()
+            .clone();
+        let receipt = iroha_data_model::events::data::prelude::AssetBatchTransferOutcome {
+            leg_index: 0,
+            leg_id: "manifest-full-result".into(),
+            asset: iroha_data_model::asset::AssetId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    iroha_model_base::domain::DomainId::try_new("manifest", "universal").unwrap(),
+                    "coin".parse().unwrap(),
+                ),
+                authority.clone(),
+            ),
+            destination: authority,
+            amount: iroha_primitives::numeric::Quantity::from(1_u32),
+            status: iroha_data_model::events::data::prelude::AssetBatchTransferLegStatus::Applied,
+        };
+        let ExecutionOutputV1::Network(first) = &mut outputs[0] else {
+            panic!("fixture first row must be Network");
+        };
+        first
+            .result
+            .set_batch_transfer_outcomes(vec![receipt.clone()]);
+        let trigger = |name: &str| TriggerUseV1 {
+            trigger_id: name.parse().expect("fixture trigger id"),
+            registered_at_height: 1,
+            action_hash: Hash::new(name.as_bytes()),
+        };
+        outputs.push(ExecutionOutputV1::pipeline_output_limit_rejection(
+            PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger: trigger("manifest_pipeline"),
+            },
+        ));
+        outputs.push(ExecutionOutputV1::time_output_limit_rejection(
+            TimeInvocationV1 {
+                schedule_index: 0,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 0,
+                        length_ms: MANIFEST_APPLICATION_HEIGHT,
+                    },
+                },
+                trigger: trigger("manifest_time"),
+            },
+        ));
+        install_manifest_outputs(&mut fixture.block, outputs, 2);
+        assert_eq!(fixture.block.network_entrypoint_count(), 2);
+        assert_eq!(fixture.block.execution_outputs().len(), 4);
+        let sources =
+            ordinary_native_amx_application_sources(&fixture.block).expect("typed Network sources");
+        assert_eq!(sources.len(), 2);
+        for (index, source) in sources.iter().enumerate() {
+            let input = fixture.block.network_entrypoint_at(index).unwrap();
+            let input_index = u32::try_from(index).unwrap();
+            let (output_index, output) = fixture.block.network_output_at(input_index).unwrap();
+            assert_eq!(output_index, input_index);
+            assert_eq!(source.entrypoint_index, u64::try_from(index).unwrap());
+            assert_eq!(source.entrypoint_hash, input.hash());
+            assert_eq!(source.result, output.result);
+        }
+        assert_eq!(
+            sources[0].result.batch_transfer_outcomes(),
+            &[receipt.clone()]
+        );
+        let manifest = NativeAmxApplicationManifestV1::from_result_bearing_block(&fixture.block)
+            .expect("internal suffix remains part of exact executed wire");
+        assert_eq!(manifest.count(), 2);
+        for entry in manifest.entries() {
+            assert_eq!(entry.leaf.members.len(), 2);
+            assert_eq!(
+                entry.results[0].batch_transfer_outcomes(),
+                &[receipt.clone()]
+            );
+            for (index, member) in entry.leaf.members.iter().enumerate() {
+                assert_eq!(member.entrypoint_index, u64::try_from(index).unwrap());
+                assert_eq!(member.entrypoint_hash, sources[index].entrypoint_hash);
+                assert_eq!(member.result_hash, sources[index].result.hash());
+                assert_eq!(entry.results[index], sources[index].result);
+            }
+        }
+    }
+
+    #[test]
+    fn native_amx_manifest_rejects_invalid_outputs_without_receipt_sources() {
+        let fixture = result_bearing_native_manifest_block();
+        for retain_context in [false, true] {
+            let mut block = fixture.block.canonical_resultless_proposal();
+            let context = retain_context.then(|| {
+                let mut context = block.execution_context().unwrap().clone();
+                for external in &mut context.external {
+                    external.native_amx_receipt = None;
+                }
+                context
+            });
+            block.set_execution_context(context);
+            install_manifest_outputs(&mut block, fixture.block.execution_outputs().to_vec(), 2);
+            let valid = NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
+                .expect("valid non-AMX carrier has an empty manifest");
+            assert_eq!(valid.count(), 0);
+            let malformed = mutate_manifest_outputs(&block, |result| {
+                result.output_merkle = MerkleTree::default();
+            });
+            assert!(NativeAmxApplicationManifestV1::from_result_bearing_block(&malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn native_amx_manifest_rejects_foreign_context_and_network_output_joins() {
+        let fixture = result_bearing_native_manifest_block();
+        for alter_count in [false, true] {
+            let mut block = fixture.block.canonical_resultless_proposal();
+            let mut context = block.execution_context().unwrap().clone();
+            if alter_count {
+                context.external.pop();
+            } else {
+                context.external[0].entrypoint_hash = context.external[1].entrypoint_hash;
+            }
+            block.set_execution_context(Some(context));
+            install_manifest_outputs(&mut block, fixture.block.execution_outputs().to_vec(), 2);
+            block
+                .validate_output_merkle_cache()
+                .expect("structurally valid outputs");
+            assert!(NativeAmxApplicationManifestV1::from_result_bearing_block(&block).is_err());
+        }
+        let foreign_join = mutate_manifest_outputs(&fixture.block, |result| {
+            let ExecutionOutputV1::Network(output) = &mut result.outputs[1] else {
+                panic!("fixture second row must be Network");
+            };
+            output.input_index = 0;
+            result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+        });
+        assert!(foreign_join.validate_output_merkle_cache().is_err());
+        assert!(NativeAmxApplicationManifestV1::from_result_bearing_block(&foreign_join).is_err());
+    }
+
+    #[test]
+    fn native_amx_changed_full_output_cannot_use_original_manifest_or_commitment() {
+        let fixture = result_bearing_native_manifest_block();
+        let original_manifest =
+            NativeAmxApplicationManifestV1::from_result_bearing_block(&fixture.block)
+                .expect("original manifest");
+        let lane_manifest = LaneFinalityManifestV1::from_result_bearing_block(&fixture.block)
+            .expect("original lane manifest");
+        let execution_witness = witness(Vec::new(), Vec::new());
+        let original_commitment = execution_commitment_from_validated_block(
+            &execution_witness,
+            &original_manifest,
+            &lane_manifest,
+            &fixture.block,
+        )
+        .expect("exact original manifest/wire projection");
+        let mut changed = fixture.block.clone();
+        let mut outputs = changed.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(output) = &mut outputs[0] else {
+            panic!("fixture first row must be Network");
+        };
+        output.result = TransactionResult::new(Err(
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted("substituted AMX outcome".into()),
+            ),
+        ));
+        install_manifest_outputs(&mut changed, outputs, 2);
+        changed
+            .validate_output_merkle_cache()
+            .expect("self-consistent changed output");
+        assert_eq!(changed.header(), fixture.block.header());
+        assert_eq!(
+            changed.canonical_resultless_proposal(),
+            fixture.block.canonical_resultless_proposal()
+        );
+        let changed_manifest = NativeAmxApplicationManifestV1::from_result_bearing_block(&changed)
+            .expect("structural projection is not execution authentication");
+        assert_eq!(changed_manifest.count(), original_manifest.count());
+        assert_ne!(
+            changed_manifest.executed_block_wire_hash(),
+            original_commitment.executed_block_wire_hash
+        );
+        assert_ne!(changed_manifest.root(), original_manifest.root());
+        assert!(!original_manifest.proof(0).unwrap().verify(
+            &HashOf::new(&changed_manifest.entries()[0].leaf),
+            &MerkleTreeCommitment::new(
+                HashOf::from_untyped_unchecked(original_manifest.root()),
+                NonZeroU64::new(u64::from(original_manifest.count())).unwrap(),
+            ),
+        ));
+        assert_eq!(
+            execution_commitment_from_validated_block(
+                &execution_witness,
+                &original_manifest,
+                &lane_manifest,
+                &changed,
+            )
+            .unwrap_err(),
+            "Native AMX manifest belongs to another validated block wire",
+        );
+        let changed_commitment = execution_commitment_from_validated_block(
+            &execution_witness,
+            &changed_manifest,
+            &lane_manifest,
+            &changed,
+        )
+        .expect("changed output has only its own structural commitment projection");
+        assert_ne!(changed_commitment, original_commitment);
     }
     #[test]
     fn roots_ignore_fastpq_payloads_match_formal_gate() {

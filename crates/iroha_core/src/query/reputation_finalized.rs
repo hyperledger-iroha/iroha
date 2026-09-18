@@ -3,7 +3,8 @@
 //! The archive is deliberately a projection store, not finality authority. A commit-owned caller
 //! supplies one immutable finalized state view and its non-forgeable Kura receipt; capture
 //! authenticates and constructs the exact record before publication. This module never falls back
-//! to a current-head view and stores no credentials, signing material, or process-local authority.
+//! to a current-head view. Durable records store no credentials, signing material,
+//! or process-local authority.
 //!
 //! Durable growth is linear in new state: each anchor stores only feed suffixes and
 //! reserve-provider upserts/removals, while authority policies are stored once by content digest.
@@ -20,6 +21,7 @@
 //! archive can be production-qualified there.
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
+    query::archive_capture::{ArchiveCaptureGate, ArchiveCaptureReservation},
     secure_file_metadata::{self, SecureMetadata},
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
@@ -69,7 +71,7 @@ use std::{
     io::{self, Read},
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use thiserror::Error;
 const ARCHIVE_VERSION_V1: u16 = 1;
@@ -1844,6 +1846,189 @@ struct ArchiveIndex {
     generation: u64,
     requires_reopen: bool,
 }
+/// An admitted candidate retaining exact archive/Kura owners without an index lock.
+///
+/// The logical reservation protects its original predecessor, capacity and
+/// compaction anchors. Readers remain available; competing writers receive the
+/// particular reservation's release event before any mutation.
+pub(crate) struct PreparedReputationCapture {
+    insertion: OwnedReputationInsertion,
+    kura: Arc<Kura>,
+}
+impl PreparedReputationCapture {
+    /// Authenticate exact durable finality, then persist the retained bytes with retry progress.
+    ///
+    /// No State projection, transition, or capacity admission is recomputed on this path.
+    pub(crate) fn publish(
+        &mut self,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+        authenticate_capture_key(
+            &self.insertion.key,
+            self.insertion.finalized_at_unix_ms,
+            &self.kura,
+            receipt,
+        )?;
+        self.insertion.persist()
+    }
+}
+struct PreparedReputationPolicy {
+    persisted: PersistedReputationAuthorityPolicyV1,
+    bytes: Vec<u8>,
+    path: PathBuf,
+    /// Exact cumulative accounting, consumed once after this immutable file is authenticated.
+    accounting: Option<(usize, u64)>,
+}
+struct PreparedReputationState {
+    policies: Vec<PreparedReputationPolicy>,
+    anchor: PersistedReputationFinalizedAnchorV1,
+    anchor_digest: [u8; 32],
+    anchor_bytes: Vec<u8>,
+    anchor_path: PathBuf,
+    next_state: ReputationReconstructionStateV1,
+    full_projection: Option<ReputationFinalizedProjectionV1>,
+    total_bytes: u64,
+    anchor_count: usize,
+    generation: u64,
+}
+struct PreparedReputationInsertion<'archive> {
+    archive: &'archive ReputationFinalizedArchive,
+    index: RwLockWriteGuard<'archive, ArchiveIndex>,
+    key: ReputationFinalizedArchiveKeyV1,
+    finalized_at_unix_ms: u64,
+    state: Option<PreparedReputationState>,
+}
+/// Exact admitted insertion after its original physical writer is released.
+struct OwnedReputationInsertion {
+    archive: Arc<ReputationFinalizedArchive>,
+    key: ReputationFinalizedArchiveKeyV1,
+    finalized_at_unix_ms: u64,
+    state: Option<PreparedReputationState>,
+    // Release predecessor/capacity custody after every retained payload.
+    reservation: ArchiveCaptureReservation,
+}
+impl OwnedReputationInsertion {
+    fn persist(
+        &mut self,
+    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+        let mut index = self.archive.write_reserved_index(&self.reservation)?;
+        persist_admitted_reputation(&self.archive, &mut index, &self.key, &mut self.state)
+    }
+}
+impl PreparedReputationInsertion<'_> {
+    fn persist(
+        &mut self,
+    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+        persist_admitted_reputation(self.archive, &mut self.index, &self.key, &mut self.state)
+    }
+
+    fn detach(
+        self,
+        archive: Arc<ReputationFinalizedArchive>,
+    ) -> Result<OwnedReputationInsertion, ReputationFinalizedArchiveError> {
+        if !std::ptr::eq(self.archive, archive.as_ref()) {
+            return Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch);
+        }
+        // The same original writer still protects all completed transition and
+        // capacity checks until this reservation is installed.
+        let reservation = archive
+            .capture_gate
+            .try_reserve()
+            .map_err(|wait| ReputationFinalizedArchiveError::CaptureReserved { wait })?;
+        let Self {
+            archive: _,
+            index,
+            key,
+            finalized_at_unix_ms,
+            state,
+        } = self;
+        drop(index);
+        Ok(OwnedReputationInsertion {
+            archive,
+            key,
+            finalized_at_unix_ms,
+            state,
+            reservation,
+        })
+    }
+}
+fn persist_admitted_reputation(
+    archive: &ReputationFinalizedArchive,
+    index: &mut ArchiveIndex,
+    key: &ReputationFinalizedArchiveKeyV1,
+    state: &mut Option<PreparedReputationState>,
+) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+    let Some(prepared) = state.as_mut() else {
+        archive.verify_storage_boundaries()?;
+        // Existing files still require storage authentication after a delayed replay.
+        archive.reconstruct_state_for_key(index, key)?;
+        return Ok(ReputationFinalizedArchiveInsertOutcome::ExactReplay);
+    };
+    archive.verify_storage_boundaries()?;
+    for policy in &mut prepared.policies {
+        if policy.accounting.is_some() {
+            publish_immutable_bytes(
+                &archive.policies,
+                archive.policies_identity,
+                &policy.path,
+                &policy.bytes,
+            )?;
+        }
+        let loaded = archive.load_policy_at(&policy.path, Some(policy.persisted.record_digest))?;
+        if loaded != policy.persisted {
+            return Err(ReputationFinalizedArchiveError::PolicyConflict {
+                digest: policy.persisted.record_digest,
+            });
+        }
+        if let Some((policy_count, total_bytes)) = policy.accounting.take() {
+            index.policies.insert(
+                policy.persisted.record_digest,
+                policy.persisted.record.clone(),
+            );
+            index.policy_count = policy_count;
+            index.total_bytes = total_bytes;
+        }
+    }
+    publish_immutable_bytes(
+        &archive.anchors,
+        archive.anchors_identity,
+        &prepared.anchor_path,
+        &prepared.anchor_bytes,
+    )?;
+    let loaded = archive.load_anchor_at(&prepared.anchor_path, Some(key))?;
+    if loaded != prepared.anchor {
+        return Err(ReputationFinalizedArchiveError::ConflictingProjection {
+            network_id: key.network_id,
+            height: key.height,
+            block_hash: key.block_hash,
+        });
+    }
+    archive.verify_storage_boundaries()?;
+    // All fallible work has finished. Taking this private action makes index publication once-only.
+    if let Some(prepared) = state.take() {
+        index.total_bytes = prepared.total_bytes;
+        index.anchor_count = prepared.anchor_count;
+        index.by_height.insert(
+            (key.network_id, key.height),
+            AnchorIndexEntry {
+                manifest: prepared.anchor.manifest,
+                anchor_digest: prepared.anchor_digest,
+                path: prepared.anchor_path,
+            },
+        );
+        if let Some(projection) = prepared.full_projection {
+            index.latest_projection.insert(key.network_id, projection);
+        } else {
+            index.latest_projection.remove(&key.network_id);
+        }
+        index
+            .latest_state
+            .insert(key.network_id, prepared.next_state);
+        index.generation = prepared.generation;
+    }
+    Ok(ReputationFinalizedArchiveInsertOutcome::Inserted)
+}
+
 #[derive(Debug, Clone)]
 struct PreparedReputationFinalizedArchiveCompactionV1 {
     network_id: NetworkId,
@@ -1852,6 +2037,41 @@ struct PreparedReputationFinalizedArchiveCompactionV1 {
     anchors: Vec<AnchorIndexEntry>,
     newly_pruned_bytes: u64,
     expected_archive_generation: u64,
+}
+fn require_contiguous_capture_key_in_index(
+    index: &ArchiveIndex,
+    key: &ReputationFinalizedArchiveKeyV1,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    if let Some(existing) = index.by_height.get(&(key.network_id.clone(), key.height)) {
+        if existing.manifest.key.block_hash != key.block_hash {
+            return Err(ReputationFinalizedArchiveError::FinalizedFork {
+                network_id: key.network_id.clone(),
+                height: key.height,
+            });
+        }
+        return Ok(());
+    }
+    let latest = index
+        .latest_state
+        .get(&key.network_id)
+        .map(|state| state.key.height);
+    if let Some(latest_height) = latest {
+        let expected_height = latest_height.checked_add(1).ok_or(
+            ReputationFinalizedArchiveError::ArchiveCoverageGap {
+                network_id: key.network_id.clone(),
+                missing_height: u64::MAX,
+                observed_height: key.height,
+            },
+        )?;
+        if key.height != expected_height {
+            return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
+                network_id: key.network_id.clone(),
+                missing_height: expected_height,
+                observed_height: key.height,
+            });
+        }
+    }
+    Ok(())
 }
 fn active_checkpoint_digest(index: &ArchiveIndex, network_id: &NetworkId) -> Option<[u8; 32]> {
     index
@@ -2362,6 +2582,11 @@ pub enum ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 /// Implementations own all credentials and durable state. Each `network_id`
 /// identifies an independent linearizable namespace containing only canonical
 /// [`ReputationFinalizedArchiveRetentionApprovalRecordV1`] values.
+///
+/// Calls run while the archive writer is held. Implementations must not acquire State/World
+/// writer guards or wait for canonical State publication; candidate publication acquires
+/// State ownership before reserving this archive. The production broker adapters perform
+/// independent bounded RPCs and retain no State owner.
 pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free production handle.
     fn handle(&self) -> &str;
@@ -2585,6 +2810,7 @@ pub struct ReputationFinalizedArchive {
     writer_lock_identity: ArchiveFileIdentity,
     writer_lock: fs::File,
     index: RwLock<ArchiveIndex>,
+    capture_gate: ArchiveCaptureGate,
 }
 impl ReputationFinalizedArchive {
     /// Open or create a direct, bounded archive and validate every durable row.
@@ -2727,6 +2953,7 @@ impl ReputationFinalizedArchive {
             writer_lock_identity,
             writer_lock,
             index: RwLock::new(ArchiveIndex::default()),
+            capture_gate: ArchiveCaptureGate::default(),
         };
         archive.verify_storage_boundaries()?;
         archive.recover_staged_files()?;
@@ -2926,7 +3153,34 @@ impl ReputationFinalizedArchive {
         kura: &Kura,
         receipt: &KuraV2CommitReceipt,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
-        let (key, finalized_at_unix_ms) = authenticate_capture_view(state_ro, kura, receipt)?;
+        let (key, finalized_at_unix_ms) = candidate_capture_key(state_ro, kura)?;
+        let mut insertion = self.prepare_capture_at_key(state_ro, key, finalized_at_unix_ms)?;
+        authenticate_capture_key(&insertion.key, finalized_at_unix_ms, kura, receipt)?;
+        insertion.persist()
+    }
+    /// Capture and admit an exact scoped candidate before Kura durability exists.
+    ///
+    /// The retained header time and hash journal identify the candidate but confer no finality.
+    /// The returned owner publishes only after authenticating its exact Kura receipt.
+    pub(crate) fn prepare_candidate_capture(
+        self: &Arc<Self>,
+        state_ro: &impl StateReadOnly,
+        kura: &Arc<Kura>,
+    ) -> Result<PreparedReputationCapture, ReputationFinalizedArchiveError> {
+        let (key, finalized_at_unix_ms) = candidate_capture_key(state_ro, kura)?;
+        Ok(PreparedReputationCapture {
+            insertion: self
+                .prepare_capture_at_key(state_ro, key, finalized_at_unix_ms)?
+                .detach(Arc::clone(self))?,
+            kura: Arc::clone(kura),
+        })
+    }
+    fn prepare_capture_at_key(
+        &self,
+        state_ro: &impl StateReadOnly,
+        key: ReputationFinalizedArchiveKeyV1,
+        finalized_at_unix_ms: u64,
+    ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
         self.require_contiguous_capture_key(&key)?;
         let previous = key
             .height
@@ -3201,7 +3455,7 @@ impl ReputationFinalizedArchive {
             },
             &authority_policy_history,
         )?;
-        self.insert_captured_state(next_state, authority_policy_history)
+        self.prepare_captured_state(next_state, authority_policy_history)
     }
     /// Capture and then qualify one frozen state view against the exact Kura tip.
     ///
@@ -3524,36 +3778,7 @@ impl ReputationFinalizedArchive {
     ) -> Result<(), ReputationFinalizedArchiveError> {
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(existing) = index.by_height.get(&(key.network_id.clone(), key.height)) {
-            if existing.manifest.key.block_hash != key.block_hash {
-                return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    network_id: key.network_id.clone(),
-                    height: key.height,
-                });
-            }
-            return Ok(());
-        }
-        let latest = index
-            .latest_state
-            .get(&key.network_id)
-            .map(|state| state.key.height);
-        if let Some(latest_height) = latest {
-            let expected_height = latest_height.checked_add(1).ok_or(
-                ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    network_id: key.network_id.clone(),
-                    missing_height: u64::MAX,
-                    observed_height: key.height,
-                },
-            )?;
-            if key.height != expected_height {
-                return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    network_id: key.network_id.clone(),
-                    missing_height: expected_height,
-                    observed_height: key.height,
-                });
-            }
-        }
-        Ok(())
+        require_contiguous_capture_key_in_index(&index, key)
     }
     /// Durably publish one immutable exact-anchor projection.
     ///
@@ -3569,8 +3794,14 @@ impl ReputationFinalizedArchive {
         &self,
         projection: ReputationFinalizedProjectionV1,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+        self.prepare_insert(projection)?.persist()
+    }
+    fn prepare_insert(
+        &self,
+        projection: ReputationFinalizedProjectionV1,
+    ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
         projection.validate()?;
-        let mut index = self.write_index()?;
+        let index = self.write_index()?;
         self.verify_storage_boundaries()?;
         let authority_policy_history = resolve_authority_policy_history(
             &index,
@@ -3586,7 +3817,13 @@ impl ReputationFinalizedArchive {
                 });
             }
             if self.reconstruct_projection(&index, &existing)? == projection {
-                return Ok(ReputationFinalizedArchiveInsertOutcome::ExactReplay);
+                return Ok(PreparedReputationInsertion {
+                    archive: self,
+                    index,
+                    key: projection.key,
+                    finalized_at_unix_ms: projection.finalized_at_unix_ms,
+                    state: None,
+                });
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
                 network_id: projection.key.network_id.clone(),
@@ -3620,27 +3857,37 @@ impl ReputationFinalizedArchive {
             &projection,
             &authority_policy_history,
         )?;
-        self.persist_new_state(
-            &mut index,
+        self.prepare_new_state(
+            index,
             predecessor.as_ref(),
             next_state,
             authority_policy_history,
             delta,
         )
     }
+    #[cfg(test)]
     fn insert_captured_state(
         &self,
         next_state: ReputationReconstructionStateV1,
         authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+        self.prepare_captured_state(next_state, authority_policy_history)?
+            .persist()
+    }
+    fn prepare_captured_state(
+        &self,
+        next_state: ReputationReconstructionStateV1,
+        authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
+    ) -> Result<PreparedReputationInsertion<'_>, ReputationFinalizedArchiveError> {
         next_state.validate()?;
         validate_authority_policy_history(
             &authority_policy_history,
             &next_state.authority_policy,
             next_state.finalized_at_unix_ms,
         )?;
-        let mut index = self.write_index()?;
+        let index = self.write_index()?;
         self.verify_storage_boundaries()?;
+        require_contiguous_capture_key_in_index(&index, &next_state.key)?;
         let subject = (next_state.key.network_id.clone(), next_state.key.height);
         if let Some(existing) = index.by_height.get(&subject).cloned() {
             if existing.manifest.key.block_hash != next_state.key.block_hash {
@@ -3656,7 +3903,13 @@ impl ReputationFinalizedArchive {
                     next_state.finalized_at_unix_ms,
                 )? == authority_policy_history
             {
-                return Ok(ReputationFinalizedArchiveInsertOutcome::ExactReplay);
+                return Ok(PreparedReputationInsertion {
+                    archive: self,
+                    index,
+                    key: next_state.key,
+                    finalized_at_unix_ms: next_state.finalized_at_unix_ms,
+                    state: None,
+                });
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
                 network_id: next_state.key.network_id.clone(),
@@ -3682,22 +3935,22 @@ impl ReputationFinalizedArchive {
         validate_reconstruction_state_against_index(&next_state, &index)?;
         let delta =
             build_anchor_delta_from_reconstruction_state(predecessor.as_ref(), &next_state)?;
-        self.persist_new_state(
-            &mut index,
+        self.prepare_new_state(
+            index,
             predecessor.as_ref(),
             next_state,
             authority_policy_history,
             delta,
         )
     }
-    fn persist_new_state(
-        &self,
-        index: &mut ArchiveIndex,
+    fn prepare_new_state<'archive>(
+        &'archive self,
+        index: RwLockWriteGuard<'archive, ArchiveIndex>,
         predecessor: Option<&ReputationReconstructionStateV1>,
         next_state: ReputationReconstructionStateV1,
         authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
         delta: ReputationFinalizedAnchorDeltaV1,
-    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
+    ) -> Result<PreparedReputationInsertion<'archive>, ReputationFinalizedArchiveError> {
         validate_authority_policy_history(
             &authority_policy_history,
             &next_state.authority_policy,
@@ -3766,9 +4019,11 @@ impl ReputationFinalizedArchive {
         let mut prepared_policies = Vec::with_capacity(persisted_policies.len());
         let mut added_policy_count = 0_usize;
         let mut added_policy_bytes = 0_u64;
+        let mut policy_count = index.policy_count;
+        let mut policy_total_bytes = index.total_bytes;
         for persisted_policy in persisted_policies {
             if let Some((_, existing)) =
-                policy_record_by_policy_digest(index, persisted_policy.record.policy_digest)?
+                policy_record_by_policy_digest(&index, persisted_policy.record.policy_digest)?
                 && existing != &persisted_policy.record
             {
                 return Err(ReputationFinalizedArchiveError::PolicyConflict {
@@ -3790,10 +4045,33 @@ impl ReputationFinalizedArchive {
                         maximum: self.bounds.max_total_bytes,
                     })?;
             }
-            prepared_policies.push((persisted_policy, policy_bytes, policy_is_new));
+            let accounting = if policy_is_new {
+                policy_count = policy_count.checked_add(1).ok_or(
+                    ReputationFinalizedArchiveError::ArchiveCapacityExceeded {
+                        maximum_entries: self.bounds.max_entries.get(),
+                    },
+                )?;
+                policy_total_bytes = policy_total_bytes
+                    .checked_add(bounded_bytes_len(&policy_bytes))
+                    .ok_or(ReputationFinalizedArchiveError::ArchiveBytesExceeded {
+                        size: u64::MAX,
+                        maximum: self.bounds.max_total_bytes,
+                    })?;
+                Some((policy_count, policy_total_bytes))
+            } else {
+                None
+            };
+            prepared_policies.push(PreparedReputationPolicy {
+                path: self
+                    .policies
+                    .join(policy_file_name(persisted_policy.record_digest)),
+                persisted: persisted_policy,
+                bytes: policy_bytes,
+                accounting,
+            });
         }
         ensure_insert_capacity(
-            index,
+            &index,
             self.bounds,
             anchor_bytes_len,
             added_policy_count,
@@ -3809,97 +4087,38 @@ impl ReputationFinalizedArchive {
                 maximum_bytes: self.bounds.max_total_bytes,
             },
         )?;
-        for (persisted_policy, policy_bytes, policy_is_new) in prepared_policies {
-            let policy_path = self
-                .policies
-                .join(policy_file_name(persisted_policy.record_digest));
-            if policy_is_new {
-                publish_immutable_bytes(
-                    &self.policies,
-                    self.policies_identity,
-                    &policy_path,
-                    &policy_bytes,
-                )?;
-                let loaded =
-                    self.load_policy_at(&policy_path, Some(persisted_policy.record_digest))?;
-                if loaded != persisted_policy {
-                    return Err(ReputationFinalizedArchiveError::PolicyConflict {
-                        digest: persisted_policy.record_digest,
-                    });
-                }
-                index.policies.insert(
-                    persisted_policy.record_digest,
-                    persisted_policy.record.clone(),
-                );
-                index.policy_count = index.policy_count.checked_add(1).ok_or(
-                    ReputationFinalizedArchiveError::ArchiveCapacityExceeded {
-                        maximum_entries: self.bounds.max_entries.get(),
-                    },
-                )?;
-                index.total_bytes = index
-                    .total_bytes
-                    .checked_add(bounded_bytes_len(&policy_bytes))
-                    .ok_or(ReputationFinalizedArchiveError::ArchiveBytesExceeded {
-                        size: u64::MAX,
-                        maximum: self.bounds.max_total_bytes,
-                    })?;
-            } else {
-                let loaded =
-                    self.load_policy_at(&policy_path, Some(persisted_policy.record_digest))?;
-                if loaded != persisted_policy {
-                    return Err(ReputationFinalizedArchiveError::PolicyConflict {
-                        digest: persisted_policy.record_digest,
-                    });
-                }
-            }
-        }
-        let anchor_path = self.record_path(&next_state.key)?;
-        publish_immutable_bytes(
-            &self.anchors,
-            self.anchors_identity,
-            &anchor_path,
-            &anchor_bytes,
-        )?;
-        let loaded = self.load_anchor_at(&anchor_path, Some(&next_state.key))?;
-        if loaded != persisted_anchor {
-            return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                network_id: next_state.key.network_id.clone(),
-                height: next_state.key.height,
-                block_hash: next_state.key.block_hash,
-            });
-        }
-        index.total_bytes = index.total_bytes.checked_add(anchor_bytes_len).ok_or(
+        let total_bytes = policy_total_bytes.checked_add(anchor_bytes_len).ok_or(
             ReputationFinalizedArchiveError::ArchiveBytesExceeded {
                 size: u64::MAX,
                 maximum: self.bounds.max_total_bytes,
             },
         )?;
-        index.anchor_count = index.anchor_count.checked_add(1).ok_or(
+        let anchor_count = index.anchor_count.checked_add(1).ok_or(
             ReputationFinalizedArchiveError::ArchiveCapacityExceeded {
                 maximum_entries: self.bounds.max_entries.get(),
             },
         )?;
-        index.by_height.insert(
-            (next_state.key.network_id.clone(), next_state.key.height),
-            AnchorIndexEntry {
-                manifest: persisted_anchor.manifest,
+        let anchor_path = self.record_path(&next_state.key)?;
+        // A compacted feed has no full projection; that is an admitted representation choice.
+        let full_projection = next_state.full_projection().ok();
+        Ok(PreparedReputationInsertion {
+            archive: self,
+            index,
+            key: next_state.key.clone(),
+            finalized_at_unix_ms: next_state.finalized_at_unix_ms,
+            state: Some(PreparedReputationState {
+                policies: prepared_policies,
+                anchor: persisted_anchor,
                 anchor_digest,
-                path: anchor_path,
-            },
-        );
-        if let Ok(full_projection) = next_state.full_projection() {
-            index
-                .latest_projection
-                .insert(next_state.key.network_id.clone(), full_projection);
-        } else {
-            index.latest_projection.remove(&next_state.key.network_id);
-        }
-        index
-            .latest_state
-            .insert(next_state.key.network_id.clone(), next_state);
-        index.generation = next_generation;
-        self.verify_storage_boundaries()?;
-        Ok(ReputationFinalizedArchiveInsertOutcome::Inserted)
+                anchor_bytes,
+                anchor_path,
+                next_state,
+                full_projection,
+                total_bytes,
+                anchor_count,
+                generation: next_generation,
+            }),
+        })
     }
     /// Freeze the exact key, content digest, active checkpoint head, and
     /// generation for a caller-owned retention decision.
@@ -5937,6 +6156,30 @@ impl ReputationFinalizedArchive {
                 reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
             });
         }
+        self.capture_gate
+            .ensure_unreserved()
+            .map_err(|wait| ReputationFinalizedArchiveError::CaptureReserved { wait })?;
+        Ok(index)
+    }
+    fn write_reserved_index(
+        &self,
+        reservation: &ArchiveCaptureReservation,
+    ) -> Result<RwLockWriteGuard<'_, ArchiveIndex>, ReputationFinalizedArchiveError> {
+        let index =
+            self.index
+                .write()
+                .map_err(|_| ReputationFinalizedArchiveError::InvalidStorage {
+                    path: self.root.clone(),
+                    reason: "archive index lock is poisoned",
+                })?;
+        if index.requires_reopen {
+            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
+                reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
+            });
+        }
+        if !reservation.authorizes(&self.capture_gate) {
+            return Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch);
+        }
         Ok(index)
     }
 }
@@ -6513,30 +6756,49 @@ fn authenticate_archive_anchor_against_kura(
     }
     Ok(())
 }
-fn authenticate_capture_view(
+fn candidate_capture_key(
     state_ro: &impl StateReadOnly,
     kura: &Kura,
-    receipt: &KuraV2CommitReceipt,
 ) -> Result<(ReputationFinalizedArchiveKeyV1, u64), ReputationFinalizedArchiveError> {
     if !std::ptr::eq(state_ro.kura(), kura) {
         return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
             reason: "immutable state view is bound to another Kura instance",
         });
     }
-    let height = receipt.height();
-    let block_hash = *receipt.block_hash().as_ref();
-    let view_height = u64::try_from(state_ro.height()).map_err(|_| {
+    let height = u64::try_from(state_ro.height()).map_err(|_| {
         ReputationFinalizedArchiveError::FinalityAuthentication {
             reason: "immutable state height exceeds the supported range",
         }
     })?;
-    if height == 0
-        || block_hash == [0; 32]
-        || view_height != height
-        || state_ro.latest_block_hash().map(|hash| *hash.as_ref()) != Some(block_hash)
-    {
+    let block_hash = state_ro.latest_block_hash().ok_or(
+        ReputationFinalizedArchiveError::FinalityAuthentication {
+            reason: "immutable state has no candidate block hash",
+        },
+    )?;
+    let finalized_at_unix_ms = state_ro.query_ledger_time_ms();
+    if finalized_at_unix_ms == 0 || finalized_at_unix_ms == u64::MAX {
         return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
-            reason: "immutable state anchor differs from the durable Kura receipt",
+            reason: "candidate header has no valid deterministic timestamp",
+        });
+    }
+    let key = ReputationFinalizedArchiveKeyV1::try_new(
+        *state_ro.network_id(),
+        height,
+        *block_hash.as_ref(),
+    )?;
+    Ok((key, finalized_at_unix_ms))
+}
+fn authenticate_capture_key(
+    key: &ReputationFinalizedArchiveKeyV1,
+    expected_finalized_at_unix_ms: u64,
+    kura: &Kura,
+    receipt: &KuraV2CommitReceipt,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    let height = key.height;
+    let block_hash = key.block_hash;
+    if receipt.height() != height || *receipt.block_hash().as_ref() != block_hash {
+        return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
+            reason: "retained capture anchor differs from the durable Kura receipt",
         });
     }
     let height_index = usize::try_from(height)
@@ -6573,7 +6835,7 @@ fn authenticate_capture_view(
             reason: "Kura has no v2 finality artifact for the capture height",
         })?;
     if !same_kura_receipt(receipt, &recovered_receipt)
-        || &artifact.height_context.network_id != state_ro.network_id()
+        || artifact.height_context.network_id != key.network_id
         || artifact.height != height
         || *artifact.block_hash.as_ref() != block_hash
     {
@@ -6581,28 +6843,23 @@ fn authenticate_capture_view(
             reason: "Kura finality artifact, receipt, and state chain do not identify one block",
         });
     }
-    let block =
-        state_ro
-            .latest_block()
-            .ok_or(ReputationFinalizedArchiveError::FinalityAuthentication {
-                reason: "exact result-bearing Kura block is unavailable to the immutable view",
-            })?;
+    let block = kura.get_block(height_index).ok_or(
+        ReputationFinalizedArchiveError::FinalityAuthentication {
+            reason: "exact result-bearing Kura block is unavailable to the retained capture",
+        },
+    )?;
     let finalized_at_unix_ms = block.header().creation_time_ms;
     if block.header().height().get() != height
         || *block.hash().as_ref() != block_hash
         || finalized_at_unix_ms == 0
         || finalized_at_unix_ms == u64::MAX
+        || finalized_at_unix_ms != expected_finalized_at_unix_ms
     {
         return Err(ReputationFinalizedArchiveError::FinalityAuthentication {
             reason: "result-bearing Kura block has a mismatched identity or timestamp",
         });
     }
-    let key = ReputationFinalizedArchiveKeyV1::try_new(
-        state_ro.network_id().clone(),
-        height,
-        block_hash,
-    )?;
-    Ok((key, finalized_at_unix_ms))
+    Ok(())
 }
 fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) -> bool {
     left.height() == right.height()
@@ -9020,6 +9277,15 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
 /// Fail-closed errors returned by the finalized reputation archive.
 #[derive(Debug, Error)]
 pub enum ReputationFinalizedArchiveError {
+    /// Another original candidate retains the archive predecessor and capacity.
+    #[error("finalized reputation archive has an outstanding candidate capture")]
+    CaptureReserved {
+        /// Exact owner-release event to await after dropping all State/archive writers.
+        wait: crate::query::ArchiveCaptureWait,
+    },
+    /// A retained insertion was presented to a different original archive owner.
+    #[error("finalized reputation capture belongs to another archive owner")]
+    CaptureOwnerMismatch,
     /// Archive resource ceilings are zero, inconsistent, or unrepresentable.
     #[error("invalid finalized reputation archive bounds: {reason}")]
     InvalidBounds {
@@ -9439,6 +9705,7 @@ pub enum ReputationFinalizedArchiveError {
 #[cfg(test)]
 mod tests {
     mod frame_identity_tests;
+    include!("reputation_finalized/preparation_tests.rs");
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{

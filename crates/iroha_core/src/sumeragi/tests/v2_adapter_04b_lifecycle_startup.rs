@@ -1539,7 +1539,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             NonZeroU64::new(round.height).expect("marker-replay height is non-zero"),
             None,
             None,
-            None,
             creation_time_ms,
             round.view,
         );

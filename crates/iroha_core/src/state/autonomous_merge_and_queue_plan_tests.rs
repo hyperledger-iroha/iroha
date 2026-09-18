@@ -273,7 +273,7 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
 
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let carrier_hash = header.hash();
     let surface = MergeExecutionCommitSurface::FinalizedCarrier {
         carrier_height: header.height().get(),
@@ -583,7 +583,8 @@ fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_st
         batch.application_block_header.height().get() > restored_height,
         "every structural negative must exercise future historical preflight"
     );
-    let state_before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let state_before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     let historical = |candidate: &MergeExecutionBatch| {
         // Exercise structural validation inside an exact carrier. Authentication
         // of that carrier's QC belongs to the recovery boundary tests.
@@ -698,7 +699,8 @@ fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_st
         "embedded autonomous source bundle hash mismatch",
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         state_before,
         "rejected future historical batches must not publish State effects"
     );
@@ -1157,7 +1159,8 @@ fn autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack() {
         "expired replay guards must remain for a later non-execution carrier"
     );
     let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
-    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     assert_eq!(committed_hash, Hash::new(&committed_bytes));
     assert!(
         staged_bytes == committed_bytes && staged_hash == committed_hash,
@@ -2440,7 +2443,7 @@ fn execution_routing_reads_only_the_exact_live_pending_queue_plan_binding() {
         "the registry hash must not authenticate a substituted same-topology plan"
     );
 
-    state.lane_incarnations.write().insert(
+    state.set_lane_incarnation_for_test(
         participant_lane,
         Hash::new(b"recreated QueuePlan participant lane"),
     );
@@ -2546,7 +2549,7 @@ fn block_execution_routing_rejects_topology_drift_with_pending_binding() {
 fn block_execution_routing_rejects_admitted_lane_incarnation_aba() {
     let (state, entrypoint, committed_plan, fresh_plan) =
         native_lane_drift_reconciliation_fixture(true);
-    state.lane_incarnations.write().insert(
+    state.set_lane_incarnation_for_test(
         LaneId::new(1),
         Hash::new(b"recreated execution-routing lane"),
     );
@@ -3506,7 +3509,6 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
     let application_header = BlockHeader::new(
         NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
-        None,
         None,
         u64::try_from(parent.header().creation_time().as_millis())
             .expect("fixture parent time fits u64")
@@ -4917,7 +4919,7 @@ fn pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_curren
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
-    let _ = state.lane_incarnations.write().insert(
+    let _ = state.set_lane_incarnation_for_test(
         LaneId::SINGLE,
         Hash::new(b"queue-plan-deferred-carrier-replaced-incarnation"),
     );
@@ -4936,7 +4938,8 @@ state_test!(consensus_stack autonomous_runtime_catalog_effects_commit_and_recove
 fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_stack() {
     let (state, entry, carrier) =
         autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     assert!(
         state
             .view()
@@ -4961,7 +4964,8 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
         );
     }
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         before,
         "dropping an authenticated staged catalog must not publish runtime effects"
     );
@@ -5008,12 +5012,14 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
             .merge_execution_already_applied(&entry, batch)
             .expect("exact replay marker")
     );
-    let committed = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let committed = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     state
         .recover_merge_ledger_from_kura()
         .expect("authenticated catalog history recovers");
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         committed,
         "recovering an already applied catalog must preserve its exact state"
     );
@@ -5081,12 +5087,14 @@ fn autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensu
             .merge_execution_already_applied(&entry, batch)
             .unwrap()
     );
-    let committed = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let committed = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     state
         .recover_merge_ledger_from_kura()
         .expect("authenticated bootstrap history recovers");
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state),
+        crate::snapshot::canonical_state_snapshot_hash(&state)
+            .expect("stable valid fixture snapshot"),
         committed
     );
     assert!(
@@ -5107,7 +5115,8 @@ state_test!(consensus_stack autonomous_runtime_catalog_effects_reject_post_stage
 fn autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_stack() {
     let (state, entry, carrier) =
         autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     for case in 0..8 {
         let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
         match case {
@@ -5182,7 +5191,8 @@ fn autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_s
             "unbound runtime projection must reject at final commit, case {case}"
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&state),
+            crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot"),
             before
         );
     }
@@ -5201,7 +5211,8 @@ fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack()
     let grant =
         AliasDataspaceBootstrapGrantV1::try_new(AUTONOMOUS_RUNTIME_DATASPACE, owner).unwrap();
     let id = grant.parameter_id().unwrap();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     for case in 0..2 {
         let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
         let root = staged.merge_execution_write_set_root();
@@ -5234,7 +5245,8 @@ fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack()
             "parameter removal/change must not reuse an authenticated write root"
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&state),
+            crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot"),
             before
         );
     }
@@ -5247,7 +5259,8 @@ fn autonomous_runtime_catalog_effects_require_matching_pending_transition_on_con
     use iroha_data_model::nexus::NexusRuntimeCatalogV1;
     let (state, entry, carrier) =
         autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
-    let before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state)
+        .expect("stable valid fixture snapshot");
     for case in 0..4 {
         let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
         match case {
@@ -5292,7 +5305,8 @@ fn autonomous_runtime_catalog_effects_require_matching_pending_transition_on_con
             "pending runtime and native protected parameter must remain exact, case {case}"
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&state),
+            crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot"),
             before
         );
     }

@@ -3787,7 +3787,10 @@ impl SidecarIndexLayout {
             .copy_from_slice(&(base_height ^ INDEXED_SIDECAR_BASE_CHECK_MASK).to_le_bytes());
         header
     }
-    fn read_from(index: &mut std::fs::File, index_len: u64) -> Result<Self, &'static str> {
+    fn read_from(
+        index: &mut (impl std::io::Read + std::io::Seek),
+        index_len: u64,
+    ) -> Result<Self, &'static str> {
         if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
             return Err("sidecar V1 base-height header is truncated");
         }

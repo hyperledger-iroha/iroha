@@ -2,6 +2,12 @@
 //!
 //! These helpers are intended for crate integration tests to avoid duplicating
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
+#[cfg(test)]
+#[path = "finality_test_support.rs"]
+mod finality;
+#[cfg(test)]
+pub(crate) use finality::torii_proof_finality_for_block;
+
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -47,6 +53,33 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+/// Attach a complete structural output collection for transport/projection tests.
+/// Each successful fixture row represents one declared fragment. This helper
+/// does not execute State or authenticate economic results or finality.
+#[cfg(test)]
+pub(crate) fn attach_fixture_execution_outputs(
+    block: &mut SignedBlock,
+    rows: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+) {
+    let fragments = u64::try_from(rows.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+    block
+        .set_execution_outputs(
+            rows,
+            fragments,
+            Default::default(),
+            vec![],
+            Default::default(),
+            Default::default(),
+            vec![],
+            &iroha_data_model::block::output_budget::ExecutionOutputLimits {
+                max_outputs: 1024,
+                max_output_bytes: 1024 * 1024,
+                max_total_output_bytes: 2 * 1024 * 1024,
+                max_executed_wire_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+}
 /// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
 #[must_use]
 pub fn signed_query_network_id() -> NetworkId {
@@ -163,12 +196,11 @@ fn apply_accepted_fixture_block(
         .unpack(|_| {});
     let committed_block = valid_block.commit_unchecked().unpack(|_| {});
     let block_ref = committed_block.as_ref();
-    for (idx, tx) in block_ref.external_transactions().enumerate() {
-        if let Some(error) = block_ref.error(idx) {
-            panic!(
-                "transaction at height {expected_height} with hash {} rejected: {error:?}",
-                tx.hash()
-            );
+    for (hash, _, result) in crate::canonical_history::signed_calls(block_ref)
+        .expect("complete fixture output ownership")
+    {
+        if let Err(error) = result.as_ref() {
+            panic!("transaction at height {expected_height} with hash {hash} rejected: {error:?}");
         }
     }
     finalize_committed_block(state, state_block, committed_block);

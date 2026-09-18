@@ -61,7 +61,7 @@ mod stream_token_custody_permission_tests {
     #[test]
     fn native_stream_token_custody_requires_exact_provider_permission_even_at_genesis() {
         let state = fixture();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let transaction = block.transaction();
         let instruction = mutation();
         assert!(initial_native_instruction_is_explicitly_admitted(
@@ -107,7 +107,7 @@ mod stream_token_custody_permission_tests {
     #[test]
     fn native_stream_token_custody_direct_and_role_delegation_preserve_exact_scope() {
         let state = fixture();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         let role: RoleId = "stream_token_custody_operator".parse().expect("role id");
         Register::role(Role::new(role.clone(), ALICE_ID.clone()).add_permission(permission(1)))

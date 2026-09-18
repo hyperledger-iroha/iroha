@@ -4036,20 +4036,19 @@ impl V2ApplyService {
                 ),
             };
         }
+        // Diagnostic only: include Network, Pipeline and Time failures from
+        // the complete output collection. Internal invocations are not submitted
+        // transactions, and these untrusted rows grant no acceptance authority.
         let rejected_result_count = failed_block
-            .has_results()
-            .then(|| {
-                failed_block
-                    .results()
-                    .filter(|result| result.is_err())
-                    .count()
-            })
-            .unwrap_or(0);
+            .execution_outputs()
+            .iter()
+            .filter(|output| output.result().is_err())
+            .count();
         if rejected_result_count == 0 {
             V2ApplyError::Validation(error.to_string())
         } else {
             V2ApplyError::Validation(format!(
-                "{error}; rejected transaction result count: {rejected_result_count}"
+                "{error}; rejected execution output count: {rejected_result_count}"
             ))
         }
     }
@@ -5015,7 +5014,7 @@ impl V2ApplyService {
             .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
-        let result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
+        let prepared = ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
             body.clone(),
             &topology,
             &self.genesis_account,
@@ -5025,43 +5024,25 @@ impl V2ApplyService {
             self.state.as_ref(),
             &mut voting_block,
         )
-        .unpack(|_| {});
-        let (valid, mut state_block) = result.map_err(|(failed_block, error)| {
+        .map_err(|(failed_block, error)| {
             Self::classify_candidate_validation_error(
                 merge_reference,
                 failed_block.as_ref(),
                 error.as_ref(),
             )
         })?;
-        self.validate_prospective_autoscale_retirement_queue(valid.as_ref(), &state_block)?;
-        let witness = state_block
-            .take_exec_witness()
-            .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-            valid.as_ref(),
-            state_block.staged_merge_entry(),
-        )
-        .map_err(V2ApplyError::ExecutionCommitment)?;
-        let lane_finality_manifest =
-            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
-                valid.as_ref(),
-            )
-            .map_err(V2ApplyError::ExecutionCommitment)?;
-        let execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_validated_block(
-                &witness,
-                &native_amx_manifest,
-                &lane_finality_manifest,
-                valid.as_ref(),
-            )
-            .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
+        debug_assert_eq!(prepared.context(), context);
+        self.validate_prospective_autoscale_retirement_queue(prepared.block(), prepared.state())?;
         self.kura
             .validate_native_amx_participant_application_evidence_byte_budget(
-                &native_amx_manifest,
+                prepared.native_amx_manifest(),
                 None,
             )
             .map_err(Self::classify_native_amx_evidence_byte_budget_error)?;
-        Ok(execution_commitment)
+        // This remains the execution-prefix projection. Metadata admission now
+        // runs before Prepare, but publication still requires the unfinished
+        // complete State owner and cannot consume this projection alone.
+        Ok(prepared.execution_prefix_commitment())
     }
     /// Revalidate one checksummed restart marker before it can restore vote authority.
     ///
@@ -5504,7 +5485,8 @@ impl V2ApplyService {
         if let Some(staged) = staged_snapshot_bytes_for_test {
             let committed = crate::snapshot::canonical_state_snapshot_bytes(self.state.as_ref());
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref())
+                    .expect("stable committed fixture snapshot"),
                 Hash::new(&committed),
                 "committed streaming WSV hash must match its canonical semantic bytes",
             );
@@ -5603,7 +5585,7 @@ impl V2ApplyService {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = subject.block_hash;
-        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref());
+        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref())?;
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
         let manifest =
@@ -5728,7 +5710,6 @@ mod fastpq_submission_tests {
             std::num::NonZeroU64::new(height).unwrap(),
             None,
             None,
-            None,
             23,
             view,
         ));
@@ -5791,3 +5772,127 @@ pub(crate) use tests::install_historical_autonomous_lane_recovery;
 pub(in crate::sumeragi) use tests::{
     ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
 };
+
+#[cfg(test)]
+mod output_validation_diagnostic_tests {
+    use super::*;
+    use iroha_data_model::{
+        block::{builder::BlockBuilder, execution_output::*},
+        events::time::{TimeEvent, TimeInterval},
+        parameter::ExecutionOutputPolicyV1,
+        transaction::{FeePaymentIntent, TransactionBuilder, TransactionResult},
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use std::num::NonZeroU64;
+
+    // These are checked structural rows used only to exercise an error message.
+    // Neither the fixture nor the diagnostic authenticates executed outcomes.
+    fn diagnostic_fixture() -> SignedBlock {
+        let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"v2 output diagnostic genesis",
+        )));
+        let mut builder = BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            Some(HashOf::from_untyped_unchecked(Hash::new(b"parent"))),
+            None,
+            10,
+            0,
+        ));
+        builder.push_transaction(
+            TransactionBuilder::new(
+                network,
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(vec![], None),
+            )
+            .sign(ALICE_KEYPAIR.private_key()),
+        );
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let trigger = |name: &str| TriggerUseV1 {
+            trigger_id: name.parse().unwrap(),
+            registered_at_height: 0,
+            action_hash: Hash::new(name.as_bytes()),
+        };
+        attach(
+            &mut block,
+            vec![
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                }),
+                ExecutionOutputV1::pipeline_output_limit_rejection(PipelineInvocationV1 {
+                    event: PipelineEventPositionV1::BlockApproved,
+                    candidate_index: 0,
+                    trigger: trigger("diagnostic_pipeline"),
+                }),
+                ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
+                    schedule_index: 0,
+                    event: TimeEvent {
+                        interval: TimeInterval {
+                            since_ms: 9,
+                            length_ms: 1,
+                        },
+                    },
+                    trigger: trigger("diagnostic_time"),
+                }),
+            ],
+        );
+        block
+    }
+
+    fn attach(block: &mut SignedBlock, rows: Vec<ExecutionOutputV1>) {
+        block
+            .set_execution_outputs(
+                rows,
+                0,
+                Default::default(),
+                vec![],
+                Default::default(),
+                Default::default(),
+                vec![],
+                &ExecutionOutputPolicyV1::bootstrap().limits(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn validation_diagnostic_counts_network_pipeline_and_time_failures() {
+        let mut block = diagnostic_fixture();
+        let error = BlockValidationError::EmptyBlock;
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 3);
+        for expected in [2, 3] {
+            if expected == 3 {
+                let mut rows = block.execution_outputs().to_vec();
+                rows[0] = ExecutionOutputV1::network_output_limit_rejection(0);
+                attach(&mut block, rows);
+            }
+            let V2ApplyError::Validation(actual) =
+                V2ApplyService::classify_candidate_validation_error(None, &block, &error)
+            else {
+                panic!("output diagnostics must not change validation classification")
+            };
+            assert_eq!(
+                actual,
+                format!("{error}; rejected execution output count: {expected}")
+            );
+        }
+    }
+
+    #[test]
+    fn resultless_and_successful_outputs_preserve_original_validation_message() {
+        let mut block = diagnostic_fixture();
+        let error = BlockValidationError::EmptyBlock;
+        let proposal = block.canonical_resultless_proposal();
+        let success = block.execution_outputs()[0].clone();
+        attach(&mut block, vec![success]);
+        for body in [&proposal, &block] {
+            let V2ApplyError::Validation(actual) =
+                V2ApplyService::classify_candidate_validation_error(None, body, &error)
+            else {
+                panic!("empty failure diagnostics must preserve validation classification")
+            };
+            assert_eq!(actual, error.to_string());
+        }
+    }
+}

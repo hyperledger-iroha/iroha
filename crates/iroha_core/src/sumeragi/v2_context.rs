@@ -1480,7 +1480,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1540,7 +1539,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1550,7 +1548,6 @@ mod tests {
         let state = lane_hash_world(&[]);
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,
@@ -1590,7 +1587,6 @@ mod tests {
         assert_ne!(hash, staged_context_hash(&changed));
         let staged = state_ab.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,
@@ -1655,7 +1651,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1673,7 +1668,6 @@ mod tests {
         drifted.set_pipeline(pipeline);
         let staged = drifted.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,

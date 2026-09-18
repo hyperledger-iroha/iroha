@@ -59,7 +59,7 @@ state_test! { sync live_native_batch_replays_without_applying_carrier_finality_o
     use super::NativeLaneBatchReplayV1;
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let expected = carrier.execution_context().unwrap().native_lane_decisions.as_deref().unwrap();
     assert_eq!(carrier.da_proof_policies(), Some(&crate::da::active_proof_policy_bundle_at_height(
         &state.nexus_snapshot(), carrier.header().height().get(),
@@ -72,7 +72,7 @@ state_test! { sync live_native_batch_replays_without_applying_carrier_finality_o
     assert_eq!(prepared.overlay().world.assets.get(&fixture.destination).unwrap().0, Quantity::from(25u32));
     assert_native_economic_terminal(prepared.overlay(), &groups[0], carrier.header().height().get());
     drop(prepared);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert!(state.kura.v2_finality_artifact(carrier.header().height().get()).unwrap().is_none());
     assert!(state.kura.read_finalized_native_lane_batch(
         NonZeroUsize::new(carrier.header().height().get() as usize).unwrap(), carrier.hash(),
@@ -83,7 +83,7 @@ state_test! { sync live_native_batch_replays_without_applying_carrier_finality_o
 state_test! { sync live_native_batch_rejects_base_and_authentically_resigned_source_substitution
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     for mutation in 0..5 {
         let mut changed = carrier.clone();
         let mut bundle = changed.execution_context().unwrap().clone();
@@ -106,14 +106,14 @@ state_test! { sync live_native_batch_rejects_base_and_authentically_resigned_sou
         }
         changed.set_execution_context(Some(bundle));
         assert!(state.replay_proposed_native_lane_batch(&changed, &[]).is_err(), "mutation {mutation}");
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     }
 }
 
 state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actual_carriers
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let input = &carrier.execution_context().unwrap().native_lane_decisions.as_deref().unwrap().groups[0].payload.input;
     for mutation in 0..11 {
         let mut changed = carrier.clone();
@@ -162,10 +162,10 @@ state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actua
         }
         let error = state.replay_proposed_native_lane_batch(&changed, &[]).err()
             .unwrap_or_else(|| panic!("mutation {mutation} must reject an invalid or unsupported carrier"));
-        if matches!(mutation, 5 | 6) { assert!(error.contains("additional carrier controls"), "{error}"); }
-        if matches!(mutation, 8 | 9) { assert!(error.contains("active pre-State policy"), "{error}"); }
-        if mutation == 10 { assert!(error.contains("unbound DA proof-policy"), "{error}"); }
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+        if matches!(mutation, 5 | 6) { assert!(error.to_string().contains("additional carrier controls"), "{error}"); }
+        if matches!(mutation, 8 | 9) { assert!(error.to_string().contains("active pre-State policy"), "{error}"); }
+        if mutation == 10 { assert!(error.to_string().contains("unbound DA proof-policy"), "{error}"); }
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     }
     let mut executed = carrier.clone();
     let groups = native_economic_groups(&fixture);
@@ -176,14 +176,14 @@ state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actua
     attach_actual_native_prefix_results_for_test(&mut executed, &prepared);
     drop(prepared);
     assert!(executed.has_results());
-    assert!(state.replay_proposed_native_lane_batch(&executed, &[]).err().unwrap().contains("resultless"));
+    assert!(state.replay_proposed_native_lane_batch(&executed, &[]).err().unwrap().to_string().contains("resultless"));
 }
 
 state_test! { sync live_native_batch_later_time_keeps_exact_source_and_owns_actual_overlay_header
     use super::NativeLaneBatchReplayV1;
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let mut later = carrier.clone();
     let mut header = later.header();
     header.creation_time_ms = header.creation_time_ms.checked_add(1).unwrap();
@@ -215,7 +215,7 @@ state_test! { sync live_native_batch_later_time_keeps_exact_source_and_owns_actu
         assert_eq!(norito::decode_canonical::<Hash>(bytes).unwrap(), identity);
     }
     drop(prepared);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert!(state.kura.v2_finality_artifact(later.header().height().get()).unwrap().is_none());
     assert!(state.kura.read_finalized_native_lane_batch(
         NonZeroUsize::new(later.header().height().get() as usize).unwrap(), later.hash(),
@@ -227,7 +227,7 @@ state_test! { sync live_native_batch_retains_exact_completed_first_sources_acros
     use super::NativeLaneBatchReplayV1;
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25), NativeEconomicCase::Transfer(30)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let first = &fixture.native.block;
     state.kura.evict_first_admission_body_for_testing(NonZeroUsize::new(first.header().height().get() as usize).unwrap(), first.hash()).unwrap();
     let NativeLaneBatchReplayV1::FirstInputRecoveryRequired { execution_index, source } = state.replay_proposed_native_lane_batch(&carrier, &[]).unwrap()
@@ -250,7 +250,7 @@ state_test! { sync live_native_batch_retains_exact_completed_first_sources_acros
     assert_eq!(prepared.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(45u32));
     assert_eq!(prepared.overlay().world.assets.get(&fixture.destination).unwrap().0, Quantity::from(55u32));
     drop(prepared);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert_eq!(outstanding.len(), 1, "scratch replay cannot acknowledge global transport custody");
     assert!(matches!(state.replay_proposed_native_lane_batch(&carrier, &[]).unwrap(), NativeLaneBatchReplayV1::FirstInputRecoveryRequired { execution_index: 0, .. }), "resultless completion never populates executed-wire storage");
 }
@@ -330,25 +330,25 @@ state_test! { sync finalized_native_batch_cannot_erase_additional_controls_befor
     use crate::kura::NativeLaneBatchCarrierReadV1;
     let (fixture, mut carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let mut bundle = carrier.execution_context().unwrap().clone();
     bundle.queue_plan_admissions = fixture.native.block.execution_context().unwrap().queue_plan_admissions.clone();
     bundle.validate_native_lane_decisions_shape().unwrap();
     carrier.set_execution_context(Some(bundle));
-    assert!(state.replay_proposed_native_lane_batch(&carrier, &[]).err().unwrap().contains("additional carrier controls"));
+    assert!(state.replay_proposed_native_lane_batch(&carrier, &[]).err().unwrap().to_string().contains("additional carrier controls"));
     let artifact = store_native_control_carrier_for_test(&fixture, &mut carrier);
     artifact.verify().unwrap();
     let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
     let error = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap_err();
-    assert!(error.contains("additional carrier controls"), "{error}");
+    assert!(error.to_string().contains("additional carrier controls"), "{error}");
     state.kura.evict_first_admission_body_for_testing(height, carrier.hash()).unwrap();
     let NativeLaneBatchCarrierReadV1::CanonicalBodyRecoveryRequired(required) = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
         else { panic!("an evicted body must be recovered before its full input shape is known"); };
     let (request, response, outstanding) = authenticated_native_batch_body_response_for_test(&fixture.native.validators[0], required.finality(), &carrier);
     let error = required.complete_from_authenticated_response(&request, &response).unwrap_err();
-    assert!(error.contains("additional carrier controls"), "{error}");
+    assert!(error.to_string().contains("additional carrier controls"), "{error}");
     assert_eq!(outstanding.len(), 1, "rejected projection cannot discharge exact transport custody");
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
 
 // Regression for output/header circularity: proposal construction never executes
@@ -357,7 +357,7 @@ state_test! { sync native_asset_registration_replays_under_actual_proposal_hash
     use super::NativeLaneBatchReplayV1;
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::RegisterAssetDefinition]);
     let state = &fixture.native.state;
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let groups = native_economic_groups(&fixture);
     let id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("native-economics", "universal").unwrap(), "registered".parse().unwrap(),
@@ -382,5 +382,70 @@ state_test! { sync native_asset_registration_replays_under_actual_proposal_hash
     assert_eq!(again.prefix_roots_for_test(), roots);
     assert_eq!(again.overlay().world.axt_asset_incarnations.get(&id), Some(&expected));
     drop(again);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
+}
+
+state_test! { sync live_native_batch_capacity_refusal_preserves_fitting_prefix_and_pending_suffix
+    use super::{NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1};
+    let (fixture, mut carrier) = proposed_native_batch_fixture(&[
+        NativeEconomicCase::Transfer(25), NativeEconomicCase::Transfer(25),
+    ]);
+    let state = &fixture.native.state;
+    let groups = native_economic_groups(&fixture);
+    let limit = groups.iter().map(|group| {
+        crate::queue::Queue::compute_proposal_gas_cost(
+            &crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                std::borrow::Cow::Borrowed(&group.body().payload().input.entrypoint),
+            ),
+        ).unwrap()
+    }).max().unwrap();
+    assert!(limit > 1);
+    // Change actual governed policy before preparing this candidate. Its batch
+    // binds the new actual pre-State; no outputs or applying finality are forged.
+    set_native_economic_gas_limit(state, limit);
+    let bind_candidate = |carrier: &mut SignedBlock, selected: &[VerifiedLaneDecisionGroupV1]| {
+        let batch = state.prepare_lane_decision_batch(selected).unwrap();
+        carrier.set_execution_context(Some(
+            BlockExecutionContextBundle::default().with_native_lane_decisions(batch),
+        ));
+        let key = merge_carrier_finality_fixture_keypair();
+        carrier.replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0, iroha_crypto::SignatureOf::from_hash(key.private_key(), carrier.hash()),
+            ),
+        ])).unwrap();
+        carrier.validate_proposal_commitments().unwrap();
+    };
+    bind_candidate(&mut carrier, &groups);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        else { panic!("exact finalized sources are available"); };
+    assert!(matches!(source.stage_with_start_hooks(),
+        Err(MergeLedgerCommitError::ExecutionBatchFull {
+            fitting_prefix: 1, gas_limit, ..
+        }) if gas_limit == limit));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
+    assert!(matches!(state.replay_proposed_native_lane_batch(&carrier, &[]),
+        Err(MergeLedgerCommitError::ExecutionBatchFull {
+            fitting_prefix: 1, gas_limit, ..
+        }) if gas_limit == limit));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
+    // The same authenticated first inputs now make progress through the exact
+    // returned prefix; the suffix remains a pending obligation on that overlay.
+    bind_candidate(&mut carrier, &groups[..1]);
+    let NativeLaneBatchReplayV1::Ready(prefix) = state
+        .replay_proposed_native_lane_batch(&carrier, &[]).unwrap()
+        else { panic!("a fitting prefix has no missing source"); };
+    assert!(prefix.executions()[0].result.is_ok());
+    assert_eq!(prefix.overlay().world.assets.get(&fixture.destination).unwrap().0,
+        Quantity::from(25u32));
+    assert_native_economic_terminal(prefix.overlay(), &groups[0], carrier.header().height().get());
+    let later = &groups[1].body().payload().input;
+    assert!(State::pending_queue_plan_binding_for_execution(
+        prefix.overlay(), &later.entrypoint, &later.routing_plan().unwrap(),
+        carrier.header().height().get(),
+    ).unwrap().is_some());
+    drop(prefix);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }

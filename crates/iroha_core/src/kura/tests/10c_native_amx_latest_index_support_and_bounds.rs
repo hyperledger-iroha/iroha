@@ -6,19 +6,14 @@ fn install_native_amx_startup_carrier_without_participant_evidence(kura: &Kura) 
             .expect("empty fixture block count"),
         0
     );
-    let entry = kura
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("non-Native startup carrier primary lane entry");
-    let configured_catalog_hash = kura
-        .configured_lane_catalog_baseline()
-        .expect("read the authenticated startup carrier catalog baseline")
-        .expect("startup carrier has an authenticated catalog baseline");
-    kura.establish_or_verify_configured_primary_geometry_anchor(
-        &entry,
-        Hash::new(b"non-Native startup carrier active lane incarnation"),
-        configured_catalog_hash,
-    )
-    .expect("bind startup carrier geometry before populating the canonical block store");
+    publish_initial_configured_lane_geometry_for_test(
+        kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::from([(
+            LaneId::SINGLE,
+            Hash::new(b"non-Native startup carrier active lane incarnation"),
+        )]),
+    );
     let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, None)
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
@@ -48,6 +43,7 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize same-depth Native manifest Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("same-depth Native manifest primary lane entry");
@@ -129,7 +125,7 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
 // completion may retire the durable index installed by the canonical Native store.
 fn native_amx_indexed_latest_index_evidence_fixture() -> (
     NativeAmxPublicationCapacityFixture,
-    LaneConfigEntry,
+    LaneStorageEntry,
     NativeAmxParticipantApplicationReceiptArtifact,
 ) {
     let fixture = native_amx_publication_capacity_fixture_with_route_count(2);
@@ -202,7 +198,7 @@ fn native_amx_indexed_latest_index_evidence_fixture() -> (
 
 fn install_native_amx_latest_index_evidence_fixture(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
 ) -> NativeAmxParticipantApplicationReceiptArtifact {
     install_native_amx_evidence_fixture_heights(kura, entry, &[1])
         .into_iter()
@@ -211,7 +207,7 @@ fn install_native_amx_latest_index_evidence_fixture(
 }
 fn install_native_amx_evidence_fixture_heights(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     participant_heights: &[u64],
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
     install_native_amx_evidence_fixture_heights_with_predecessor_drift(
@@ -223,7 +219,7 @@ fn install_native_amx_evidence_fixture_heights(
 }
 fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     participant_heights: &[u64],
     predecessor_drift_height: Option<u64>,
 ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
@@ -239,17 +235,12 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         // Preserve the authoritative incarnation when State has already initialized Kura.
         establish_dummy_store_primary_anchor(kura);
     } else {
-        // Secondary-lane callers establish the catalog geometry before using this fixture.
-        let lane_incarnation = Hash::new(
-            format!(
-                "kura-lane-incarnation:{}:{}",
-                entry.lane_id.as_u32(),
-                entry.dataspace_id.as_u64()
-            )
-            .as_bytes(),
-        );
-        kura.install_lane_incarnation_marker_if_missing_for_test(entry, lane_incarnation, 0)
-            .expect("install active Native AMX participant incarnation");
+        kura.active_lane_incarnation_marker(
+            &kura
+                .lane_storage_entry(entry.lane_id)
+                .expect("exact active identity"),
+        )
+        .expect("secondary evidence uses its already admitted exact instance");
     }
     let block = store_dummy_block_arcs(kura, 1)
         .into_iter()
@@ -267,7 +258,7 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
 }
 fn install_native_amx_evidence_fixture_at_block(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     participant_heights: &[u64],
     predecessor_drift_height: Option<u64>,
     block: Arc<SignedBlock>,
@@ -279,8 +270,12 @@ fn install_native_amx_evidence_fixture_at_block(
     let application_block_height = block.header().height().get();
     let (lane_incarnation, _) = {
         let _geometry_guard = kura.lane_geometry_lock.lock();
-        kura.active_lane_incarnation_marker(entry)
-            .expect("Native AMX fixture requires its durably bound lane geometry")
+        kura.active_lane_incarnation_marker(
+            &kura
+                .lane_storage_entry(entry.lane_id)
+                .expect("exact active identity"),
+        )
+        .expect("Native AMX fixture requires its durably bound lane geometry")
     };
     let executed_block_wire = block
         .encode_wire()
@@ -514,7 +509,7 @@ fn install_native_amx_evidence_fixture_at_block(
 }
 fn native_amx_prune_intent_for_test(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     protected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
     removal_heights: &[u64],
 ) -> NativeAmxEvidencePruneIntentV2 {
@@ -565,7 +560,7 @@ fn native_amx_prune_intent_for_test(
 }
 fn native_amx_prune_settlement_preimages_for_test(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     heights: &[u64],
 ) -> Vec<iroha_data_model::block::consensus::NativeAmxParticipantSettlement> {
     heights
@@ -591,10 +586,11 @@ fn native_amx_prune_settlement_preimages_for_test(
 struct NativeAmxTwoRouteRepairFixture {
     _temp_dir: TempDir,
     kura: Arc<Kura>,
+    lane_config: RuntimeLaneConfig,
     block: Arc<SignedBlock>,
     plan: NativeAmxParticipantApplicationEvidencePlan,
     markers: Vec<crate::state::AppliedNativeAmxParticipantFrontierMarker>,
-    entries: [LaneConfigEntry; 2],
+    entries: [LaneStorageEntry; 2],
 }
 #[allow(clippy::too_many_lines)]
 fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
@@ -604,7 +600,7 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         block,
         manifest,
         finality,
-        lane_config: _,
+        lane_config,
     } = native_amx_publication_capacity_fixture_with_route_count(2);
     // The real canonical store installs the exact pending index and reservation
     // before its result-bearing Native block becomes durable.
@@ -682,6 +678,7 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         artifacts,
     };
     NativeAmxTwoRouteRepairFixture {
+        lane_config,
         _temp_dir: temp_dir,
         kura,
         block,
@@ -719,7 +716,7 @@ fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>>
     collect(root, root, &mut files);
     files
 }
-fn native_amx_latest_index_test_paths(kura: &Kura, entry: &LaneConfigEntry) -> (PathBuf, PathBuf) {
+fn native_amx_latest_index_test_paths(kura: &Kura, entry: &LaneStorageEntry) -> (PathBuf, PathBuf) {
     let stable =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(entry, &kura.store_root);
     let temporary = stable
@@ -884,6 +881,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize bounded Native compaction Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("bounded Native compaction primary lane entry");
@@ -912,9 +910,8 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("retention plus one fully valid pair must compact at startup");
-    let reopened_entry = reopened
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("reopened bounded Native compaction lane entry");
+    assert!(reopened.lane_storage_entries.lock().is_empty());
+    let reopened_entry = entry.clone();
     assert!(
         !oldest_manifest.exists() && !oldest_receipt.exists(),
         "startup compaction must remove the oldest complete pair"
@@ -986,9 +983,8 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     let (reopened_again, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("Native compaction startup repair must be idempotent");
-    let reopened_again_entry = reopened_again
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("twice-reopened bounded Native compaction lane entry");
+    assert!(reopened_again.lane_storage_entries.lock().is_empty());
+    let reopened_again_entry = entry.clone();
     assert_eq!(
         fs::read(&latest_path).expect("reread compacted Native latest pointer"),
         latest_bytes,
@@ -1082,6 +1078,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1132,6 +1129,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize Native prune-journal Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune-journal primary lane entry");
@@ -1260,9 +1258,8 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         drop(kura);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .unwrap_or_else(|error| panic!("{crash_stage} recovery failed: {error}"));
-        let reopened_entry = reopened
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("reopened Native prune-journal lane entry");
+        assert!(reopened.lane_storage_entries.lock().is_empty());
+        let reopened_entry = entry.clone();
         assert!(
             !manifest_path.exists()
                 && !receipt_path.exists()
@@ -1340,6 +1337,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize latest-protected Native prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("latest-protected Native prune lane entry");
@@ -1449,6 +1447,7 @@ fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize hostile temporary Native prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("hostile temporary Native prune lane entry");
@@ -1516,6 +1515,7 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize protected Native prune damage Kura");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("protected Native prune damage lane entry");
@@ -1624,8 +1624,7 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             ..
         } = fixture;
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (incarnations, activation_heights) =
-            native_amx_replay_test_geometry_maps(&kura, &lane_config);
+        let (incarnations, activation_heights) = active_fixture_geometry_maps(&kura, &lane_config);
         let indexed = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
             .expect("pending exact carrier before half-pair fault")
             .records;
@@ -1754,6 +1753,7 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             indexed
         );
         let files = snapshot_regular_files_recursively(&kura.store_root);
+        let network_id = kura.bound_lane_storage_network().unwrap();
         drop(kura);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("indexed missing Native evidence must remain repair-pending");
@@ -1767,6 +1767,7 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
                 .lock()
                 .contains_key(&entry.lane_id)
         );
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
             .expect("restore only the original authenticated secondary geometry");
@@ -1814,6 +1815,7 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize strict-removal Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("strict-removal primary lane storage entry");
@@ -2091,7 +2093,7 @@ fn native_amx_latest_strict_read_rejects_stale_active_incarnation_evidence() {
         replacement,
         receipt.participant_proposal.descriptor.lane_incarnation
     );
-    kura.install_lane_incarnation_marker_for_test(&entry, replacement, 0)
+    kura.substitute_lane_marker_identity_for_test(&entry, replacement, 0)
         .expect("replace same route's active incarnation marker");
     assert!(
         kura.read_latest_native_amx_participant_application_receipt(entry.lane_id)
@@ -2107,12 +2109,24 @@ fn native_amx_latest_strict_read_rejects_stale_active_incarnation_evidence() {
 #[test]
 fn native_amx_latest_strict_read_defers_authenticated_pending_tip_metadata() {
     for pending_shape in ["metadata absent", "unbound checkpoint"] {
-        let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
-        let state = crate::state::State::new_for_testing(
-            crate::state::World::default(),
+        let directory = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+        let catalog = LaneCatalog::default();
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog).unwrap();
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            World::default(),
             Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
+            LiveQueryStore::start_test(),
+            ChainId::from("native-amx-pending-tip"),
+            test_network_id(b"kura-v2-finality-test"),
+        )
+        .expect("construct State before admitting its initial lane identity");
+        state
+            .prepare_configured_primary_geometry_anchor(&catalog)
+            .unwrap();
+        state.install_active_lane_markers_for_tests();
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("active primary route");
@@ -2184,6 +2198,7 @@ fn native_amx_latest_strict_read_preserves_one_extra_pair_until_pending_tip_reco
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open one-pair Native retention fixture");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("active primary route");
@@ -2480,6 +2495,7 @@ fn native_amx_history_read_distinguishes_empty_and_authenticated_pruned_suffix()
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open bounded history");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("active route");
@@ -2516,7 +2532,7 @@ fn native_amx_history_read_distinguishes_empty_and_authenticated_pruned_suffix()
 
 fn native_amx_prune_planning_maps_for_test(
     kura: &Kura,
-    entry: &LaneConfigEntry,
+    entry: &LaneStorageEntry,
     receipts: &[NativeAmxParticipantApplicationReceiptArtifact],
 ) -> (
     BTreeMap<u64, NativeAmxParticipantApplicationManifestArtifactV1>,
@@ -2558,6 +2574,7 @@ fn native_amx_prospective_prune_plan_is_zero_until_exact_retention_is_crossed() 
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open prospective Native prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("planner route");
@@ -2621,6 +2638,7 @@ fn native_amx_prospective_prune_plan_matches_authenticated_publication() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open authenticated Native prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("planner route");
@@ -2685,6 +2703,7 @@ fn native_amx_prospective_prune_plan_preserves_byte_and_history_bounds() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open bounded Native prune Kura");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("planner route");
@@ -2765,6 +2784,7 @@ fn native_amx_reconstructed_cleanup_reserves_exact_journal_before_growth() {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open Native journal recovery");
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("Native recovery route");
@@ -3103,6 +3123,7 @@ fn native_amx_pending_prune_journal_is_physical_not_reserved_twice() {
             &RuntimeLaneConfig::default(),
         )
         .expect("open pending journal fixture");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("pending journal route");
@@ -3208,12 +3229,17 @@ fn native_amx_capacity_restart_after_store_without_native_files_reconstructs_exa
         .iter()
         .map(|entry| {
             let (incarnation, activation) = kura
-                .active_lane_incarnation_marker(entry)
+                .active_lane_incarnation_marker(
+                    &kura
+                        .lane_storage_entry(entry.lane_id)
+                        .expect("exact active identity"),
+                )
                 .expect("authenticate the original journal-published lane");
             ((entry.lane_id, incarnation), (entry.lane_id, activation))
         })
         .unzip();
     let before_restart = snapshot_regular_files_recursively(&kura.store_root);
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -3242,7 +3268,8 @@ fn native_amx_capacity_restart_after_store_without_native_files_reconstructs_exa
         before_restart,
         "cold reservation reconstruction must not publish secondary lane evidence"
     );
-    assert_eq!(reopened.lane_storage_entries.lock().len(), 1);
+    assert_eq!(reopened.lane_storage_entries.lock().len(), 0);
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
         .expect("authenticate and restore the actual secondary lane geometry");
@@ -3308,12 +3335,17 @@ fn native_amx_capacity_restart_with_highest_half_pair_keeps_missing_component() 
             .iter()
             .map(|entry| {
                 let (incarnation, activation) = kura
-                    .active_lane_incarnation_marker(entry)
+                    .active_lane_incarnation_marker(
+                        &kura
+                            .lane_storage_entry(entry.lane_id)
+                            .expect("exact active identity"),
+                    )
                     .expect("authenticate the original journal-published lane");
                 ((entry.lane_id, incarnation), (entry.lane_id, activation))
             })
             .unzip();
         let before_restart = snapshot_regular_files_recursively(&kura.store_root);
+        let network_id = kura.bound_lane_storage_network().unwrap();
         drop(kura);
         let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -3331,7 +3363,8 @@ fn native_amx_capacity_restart_with_highest_half_pair_keeps_missing_component() 
             before_restart,
             "cold reservation reconstruction must not publish secondary lane evidence"
         );
-        assert_eq!(reopened.lane_storage_entries.lock().len(), 1);
+        assert_eq!(reopened.lane_storage_entries.lock().len(), 0);
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
             .expect("authenticate and restore the actual secondary lane geometry");
@@ -3444,6 +3477,7 @@ fn native_amx_capacity_exact_latest_temporary_recovers_without_second_allocation
             &RuntimeLaneConfig::default(),
         )
         .expect("open latest temporary fixture");
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("latest temporary route");

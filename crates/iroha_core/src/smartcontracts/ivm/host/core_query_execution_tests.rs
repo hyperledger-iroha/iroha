@@ -226,7 +226,7 @@ seiyaku DedicatedQueryContract {
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next block height");
-    let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
     let mut tx = block.transaction();
     tx.world_mut_for_testing().add_account_permission(
         &authority,

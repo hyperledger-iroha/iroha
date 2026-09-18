@@ -460,7 +460,7 @@ fn provider_reverse_index_iteration_is_exact_and_ordered() {
 }
 fn completion_anchor_hash() -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
     let header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
+        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
     iroha_crypto::HashOf::new(&header)
 }
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
@@ -1233,7 +1233,6 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
             nonzero!(2_u64),
             previous.clone(),
             None,
-            None,
             default_policy().retention_epoch * 1_000 - 1,
             0,
         );
@@ -1257,7 +1256,6 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         previous,
-        None,
         None,
         default_policy().retention_epoch * 1_000,
         0,
@@ -1325,7 +1323,6 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         previous,
-        None,
         None,
         default_policy().retention_epoch * 1_000,
         0,

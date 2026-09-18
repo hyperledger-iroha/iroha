@@ -715,7 +715,6 @@ fn reopen_with_persisted_prepare_intent(
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         4_000 + u64::from(marker),
         round.view,
     );
@@ -2964,7 +2963,6 @@ impl SumeragiV2Adapter {
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
             None,
-            None,
             9_731,
             0,
         );
@@ -3548,7 +3546,6 @@ fn same_round_timeout_retired_history_fixture(publish_timeout: bool) {
     };
     let header = BlockHeader::new(
         NonZeroU64::new(context.height).unwrap(),
-        None,
         None,
         None,
         98_114,

@@ -240,6 +240,10 @@ fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
         temp_dir.path(),
@@ -271,7 +275,12 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    let artifact_directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+    let artifact_directory = Kura::lane_artifact_dir(
+        &kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("exact persisted identity")
+            .blocks_dir(temp_dir.path()),
+    );
     fs::remove_dir(&artifact_directory).expect("remove empty fixture artifact directory");
     assert!(!artifact_directory.exists());
     assert!(matches!(
@@ -329,6 +338,10 @@ fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
         temp_dir.path(),
@@ -415,6 +428,10 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
     let conflicting_payload = conflicting_artifact
         .encode_framed()
         .expect("encode conflicting same-height certification");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
     assert!(Kura::append_indexed_sidecar(
         &data_path,
@@ -446,6 +463,10 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
         temp_dir.path(),
@@ -486,6 +507,10 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
     fs::create_dir_all(data_path.parent().expect("certified fixture parent"))
         .expect("create oversized-certified-index fixture directory");
@@ -539,6 +564,10 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
         .expect("persist current exact payload");
     let other_lane_block_height = other.origin_proposal.descriptor.lane_block_height;
     let other_proposal_height = other.origin_proposal.descriptor.proposal_height;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let other_attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
         temp_dir.path(),
@@ -599,6 +628,10 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
     kura.persist_lane_executable_payload(&historical, network_id, epoch)
         .expect("persist historical live payload");
     let later_descriptor = &later.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let later_attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
         temp_dir.path(),
@@ -788,15 +821,21 @@ fn historical_autonomous_recovery_rejects_live_certified_same_input_recreation()
     kura.persist_committed_lane_block_session(&first_b_session, &first_b_pops)
         .expect("certify the first-B attempt");
     let group = autonomous_reservation_reconciliation_group(first_b.reservation_keys.clone());
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let first_b_record_path = Kura::historical_autonomous_recovery_path_for_entry(
         lane,
         temp_dir.path(),
         first_b_record.recovery_id,
     );
     let first_b_record_bytes = fs::read(&first_b_record_path).expect("retain exact first-B seal");
-    let primary = lane_config.primary();
+    let primary = kura
+        .lane_storage_entry(lane_config.primary().lane_id)
+        .expect("capture the exact primary storage identity");
     let (primary_incarnation, primary_activation) = kura
-        .active_lane_incarnation_marker(primary)
+        .active_lane_incarnation_marker(&primary)
         .expect("read unchanged primary geometry");
     let original_incarnations = BTreeMap::from([
         (primary.lane_id, primary_incarnation),
@@ -1007,7 +1046,10 @@ fn historical_autonomous_recovery_rejects_live_certified_same_input_recreation()
         .expect("restart preserves the original unsettled owner");
     reject_unsettled_recreation(&reopened);
     assert_exact_live_owner(&reopened);
-    let lane_blocks = lane.blocks_dir(temp_dir.path());
+    let lane_blocks = reopened
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact restored identity")
+        .blocks_dir(temp_dir.path());
     let byte_limit = reopened.historical_autonomous_recovery_aggregate_byte_limit();
     let with_recovery = Kura::block_store_bytes_with_historical_limit(&lane_blocks, byte_limit)
         .expect("measure retained historical recovery");
@@ -1062,6 +1104,7 @@ fn finalized_aba_recovery_source_for_kura(
             None,
             template.network_id,
             template.epoch,
+            100,
             iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         )
     };
@@ -1153,6 +1196,51 @@ fn finalized_aba_recovery_source_for_kura(
         vec![bls_normal_pop_prove(signer.private_key()).expect("lane producer PoP")],
     );
     (payload, Arc::new(block), finality, record)
+}
+
+/// Persist an actual signed carrier and its independently authenticated recovery seal.
+pub(super) fn historical_geometry_observation_fixture(
+    temp_dir: &TempDir,
+) -> (Arc<Kura>, PathBuf, HistoricalAutonomousLaneRecoveryRecordV1) {
+    let config = kura_config_for_dir(temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (_, _, template) =
+        autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let (payload, carrier, finality, record) =
+        finalized_aba_recovery_source_for_kura(&template, &signer, None);
+    let (kura, _) = open_historical_recovery_fixture(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.store_block(carrier)
+        .expect("store actual canonical carrier");
+    let receipt = kura
+        .store_v2_finality_artifact(&finality)
+        .expect("store exact three-of-four signed finality");
+    assert_eq!(receipt.height(), record.canonical_body.height);
+    assert_eq!(receipt.block_hash(), record.canonical_body.block_hash);
+    assert_eq!(
+        receipt.artifact_hash(),
+        record.canonical_body.finality_artifact_hash
+    );
+    persist_historical_capacity_payload_fixture_at_context(
+        &kura,
+        &payload,
+        &signer,
+        finality.height_context.id(),
+    );
+    kura.persist_historical_autonomous_lane_recovery_record(&record)
+        .expect("persist authenticated historical recovery");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
+    let path = Kura::historical_autonomous_recovery_path_for_entry(
+        lane,
+        &kura.store_root(),
+        record.recovery_id,
+    );
+    (kura, path, record)
 }
 
 #[allow(clippy::too_many_lines)]

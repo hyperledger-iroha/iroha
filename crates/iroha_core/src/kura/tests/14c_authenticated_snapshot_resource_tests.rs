@@ -24,7 +24,6 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
         .expect("open real configured source Kura");
-    establish_dummy_store_primary_anchor(&kura);
     let network_id = test_network_id(b"signed-snapshot-physical-finalization");
     let mut keys = (1_u8..=4)
         .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
@@ -50,7 +49,7 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
     // The production snapshot reader restores static policy from runtime defaults.
     // Use those same defaults when signing the context: the general test constructor
     // zeros Nexus fees and changes execution policy, neither of which is snapshot state.
-    let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -58,6 +57,9 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         network_id,
     )
     .expect("open source State with the same static policy as the signed snapshot reader");
+    state
+        .prepare_configured_primary_geometry_anchor(&catalog)
+        .expect("admit the exact signed-snapshot network and initial State identity");
     state.install_active_lane_markers_for_tests();
     let topology = Topology::new(keys.iter().map(|key| PeerId::new(key.public_key().clone())));
     let mut parent = None;
@@ -68,10 +70,7 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
             header.creation_time_ms = height;
             header.merkle_root = None;
         });
-        valid
-            .as_mut()
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .unwrap();
+        install_network_index_test_outputs(valid.as_mut(), Vec::new());
         let block = valid.commit_unchecked().unpack(|_| {});
         parent = Some(block.as_ref().hash());
         kura.store_block(block.clone()).unwrap();
@@ -100,7 +99,8 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
                 snapshot_height: 3,
                 snapshot_block_hash: parent.unwrap(),
                 snapshot_block_creation_time_ms: 3,
-                snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
+                snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state)
+                    .expect("stable valid fixture snapshot"),
             },
         ),
         mode: ConsensusMode::Permissioned,
@@ -180,7 +180,7 @@ fn read_signed_snapshot_physical_fixture(
     fixture: &SignedSnapshotPhysicalFixture,
     verification_key: &iroha_crypto::PublicKey,
     policy: &SnapshotBootstrapPolicy,
-) -> std::result::Result<State, crate::snapshot::TryReadError> {
+) -> std::result::Result<Box<State>, crate::snapshot::TryReadError> {
     crate::snapshot::try_read_snapshot_with_bootstrap_policy(
         fixture.snapshot_directory.path(),
         &fixture.kura,

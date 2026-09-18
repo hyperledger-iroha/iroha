@@ -257,7 +257,6 @@ fn install_fixture_projection_policy_baseline(
         NonZeroU64::new(1).expect("non-zero fixture setup height"),
         None,
         None,
-        None,
         1_000,
         0,
     ));
@@ -706,7 +705,6 @@ impl ApplyFixture {
                     NonZeroU64::new(1).expect("non-zero fixture height"),
                     None,
                     None,
-                    None,
                     creation_time_ms,
                     0,
                 );
@@ -1077,10 +1075,10 @@ impl ApplyFixture {
             .expect("read complete durable block");
         assert!(durable.has_results());
         assert_eq!(
-            durable.results().len(),
+            durable.output_results().len(),
             self.body.external_entrypoint_count()
         );
-        assert!(durable.results().all(|result| result.is_ok()));
+        assert!(durable.output_results().all(|result| result.is_ok()));
         assert_eq!(durable.execution_context(), self.body.execution_context());
         assert!(
             self.kura
@@ -1453,8 +1451,14 @@ fn merge_entry_with_reservation(
 fn complete_empty_fixture_block(mut block: SignedBlock, key: &KeyPair) -> SignedBlock {
     assert_eq!(block.external_entrypoints_cloned().count(), 0);
     let already_complete = block.has_results().then(|| block.clone());
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach complete empty fixture execution results");
     if let Some(already_complete) = already_complete {
         assert_eq!(
@@ -1494,7 +1498,6 @@ fn merge_entry_with_reservations(
     let application_block_header = BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero fixture carrier height"),
         Some(parent.hash()),
-        None,
         None,
         2,
         0,

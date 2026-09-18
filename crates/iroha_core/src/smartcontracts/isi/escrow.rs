@@ -2484,7 +2484,6 @@ mod tests {
             nonzero_ext::nonzero!(1_u64),
             None,
             None,
-            None,
             timestamp_ms,
             0,
         )

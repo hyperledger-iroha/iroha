@@ -47,7 +47,6 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
             .expect("test policy effective height is non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1159,7 +1158,6 @@ fn active_policy_admission_rejects_completed_ivm_proved_axt() {
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
             .expect("test policy effective height is non-zero"),
-        None,
         None,
         None,
         0,

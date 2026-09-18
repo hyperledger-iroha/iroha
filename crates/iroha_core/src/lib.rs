@@ -1390,6 +1390,8 @@ mod event_ordering_tests;
 #[path = "../tests/execute_trigger_events.rs"]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+pub(crate) mod execution_output_test_support;
+#[cfg(test)]
 mod frame_identity_tests;
 #[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]

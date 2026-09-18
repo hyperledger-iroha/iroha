@@ -7,12 +7,37 @@ fn prepared_native_decision_group_for_test(
     let state = &fixture.state;
     let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
     let lane = &observed.contexts()[0];
-    let FirstLaneAdmittedInputReadV1::Ready(source) = state.first_lane_admitted_input(&observed,lane).unwrap() else {panic!("source");};
-    let LaneInputBodyPreparationV1::Ready(body) = state.prepare_lane_input_body(&observed,lane,&source).unwrap() else {panic!("body");};
-    let decisions = observed.contexts().iter().enumerate().map(|(index,lane)|
-        sign_native_group_decision_for_test(lane,&fixture.validators,&body,index as u64,index as u64+2)
-    ).collect::<Vec<_>>();
-    let super::LaneDecisionGroupPreparationV1::Ready(group) = state.prepare_lane_decision_group(&observed,lane,&source,&decisions).unwrap() else {panic!("group");};
+    let FirstLaneAdmittedInputReadV1::Ready(source) =
+        state.first_lane_admitted_input(&observed, lane).unwrap()
+    else {
+        panic!("source");
+    };
+    let LaneInputBodyPreparationV1::Ready(body) = state
+        .prepare_lane_input_body(&observed, lane, &source)
+        .unwrap()
+    else {
+        panic!("body");
+    };
+    let decisions = observed
+        .contexts()
+        .iter()
+        .enumerate()
+        .map(|(index, lane)| {
+            sign_native_group_decision_for_test(
+                lane,
+                &fixture.validators,
+                &body,
+                index as u64,
+                index as u64 + 2,
+            )
+        })
+        .collect::<Vec<_>>();
+    let super::LaneDecisionGroupPreparationV1::Ready(group) = state
+        .prepare_lane_decision_group(&observed, lane, &source, &decisions)
+        .unwrap()
+    else {
+        panic!("group");
+    };
     group
 }
 
@@ -20,20 +45,33 @@ fn resign_changed_native_group_payload_for_test(
     fixture: &LaneContextVerifiedFixture,
     source: &mut iroha_data_model::block::lane_input::LaneDecisionGroupV1,
 ) {
-    use iroha_data_model::block::{consensus_v2 as wire,lane_consensus::lane_availability_hash};
-    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    use iroha_data_model::block::{consensus_v2 as wire, lane_consensus::lane_availability_hash};
+    let observed = fixture
+        .state
+        .verified_lane_consensus_contexts()
+        .unwrap()
+        .unwrap();
     let bytes = norito::encode_canonical(&source.payload).unwrap();
-    for (decision,lane) in source.decisions.iter_mut().zip(observed.contexts()) {
+    for (decision, lane) in source.decisions.iter_mut().zip(observed.contexts()) {
         let manifest = &mut decision.manifest;
-        let chunks = wire::encode_payload_chunks(manifest.layout,&bytes).unwrap();
-        manifest.chunk_root = wire::payload_chunk_root(&chunks.iter().map(Hash::new).collect::<Vec<_>>()).unwrap();
+        let chunks = wire::encode_payload_chunks(manifest.layout, &bytes).unwrap();
+        manifest.chunk_root =
+            wire::payload_chunk_root(&chunks.iter().map(Hash::new).collect::<Vec<_>>()).unwrap();
         manifest.byte_len = bytes.len() as u64;
         manifest.chunk_count = chunks.len() as u32;
         manifest.value.descriptor_hash = source.payload.descriptor.canonical_hash().unwrap();
         manifest.value.payload_hash = Hash::new(&bytes);
-        manifest.value.availability_hash = lane_availability_hash(manifest.layout,manifest.chunk_root,manifest.byte_len,manifest.chunk_count).unwrap();
-        resign_native_group_decision_for_test(lane,&fixture.validators,decision);
-        crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(lane).decision_certificate(decision).unwrap();
+        manifest.value.availability_hash = lane_availability_hash(
+            manifest.layout,
+            manifest.chunk_root,
+            manifest.byte_len,
+            manifest.chunk_count,
+        )
+        .unwrap();
+        resign_native_group_decision_for_test(lane, &fixture.validators, decision);
+        crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(lane)
+            .decision_certificate(decision)
+            .unwrap();
     }
     source.validate_structure().unwrap();
 }

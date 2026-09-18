@@ -264,7 +264,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero block height"),
             None,
             None,
-            None,
             creation_time_ms,
             0,
         );

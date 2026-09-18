@@ -350,7 +350,10 @@ impl std::io::Write for BoundedLengthWriter {
         Ok(())
     }
 }
-fn bounded_bare_encoded_len<T: SerializePayload>(value: &T, limit: u64) -> Result<u64, Error> {
+pub(crate) fn bounded_bare_encoded_len<T: SerializePayload>(
+    value: &T,
+    limit: u64,
+) -> Result<u64, Error> {
     if let Some(exact) = value.encoded_len_exact() {
         let exact = u64::try_from(exact).unwrap_or(u64::MAX);
         if exact > limit {
@@ -1390,6 +1393,9 @@ fn scan_unsorted_transaction_page(
     let mut matched = 0_u64;
     let processed_items = Cell::new(0_u64);
     let processed_bytes = Cell::new(0_u64);
+    let scan_work_limit =
+        budget_items.unwrap_or(iroha_data_model::query::parameters::MAX_FETCH_SIZE.get());
+    let scan_byte_limit = super::tx::transaction_history_byte_limit(scan_work_limit);
     let mut values = Vec::with_capacity(page_capacity.min(1024));
     let mut has_more = false;
     let mut next_history_cursor = None;
@@ -1398,10 +1404,18 @@ fn scan_unsorted_transaction_page(
         filter,
         anchor,
         history_cursor,
-        |projection_work| {
-            let next_items = processed_items.get().saturating_add(projection_work);
+        |projection_work, source_bytes| {
+            let next_items = processed_items
+                .get()
+                .checked_add(projection_work)
+                .ok_or(Error::GasBudgetExceeded)?;
+            let next_bytes = processed_bytes
+                .get()
+                .checked_add(source_bytes)
+                .ok_or(Error::GasBudgetExceeded)?;
             processed_items.set(next_items);
-            if budget_items.is_some_and(|budget| next_items > budget) {
+            processed_bytes.set(next_bytes);
+            if next_items > scan_work_limit || next_bytes > scan_byte_limit {
                 return Err(Error::GasBudgetExceeded);
             }
             if let Some(budget) = execution_budget {
@@ -1410,13 +1424,6 @@ fn scan_unsorted_transaction_page(
             Ok(())
         },
         |transaction, matches, cursor_after| {
-            let mut current_stats = QueryExecutionStats {
-                processed_items: processed_items.get(),
-                processed_bytes: processed_bytes.get(),
-            };
-            // The history visitor already charged the projection work for this row.
-            current_stats.record_value_bytes(&transaction, execution_budget)?;
-            processed_bytes.set(current_stats.processed_bytes);
             if !matches {
                 return Ok(ControlFlow::Continue(()));
             }
@@ -1539,15 +1546,26 @@ fn collect_sorted_transaction_prefix(
     let mut matched = 0_u64;
     let processed_items = Cell::new(0_u64);
     let processed_bytes = Cell::new(0_u64);
+    let scan_work_limit =
+        budget_items.unwrap_or(iroha_data_model::query::parameters::MAX_FETCH_SIZE.get());
+    let scan_byte_limit = super::tx::transaction_history_byte_limit(scan_work_limit);
     visit_committed_transactions(
         state,
         filter,
         anchor,
         None,
-        |projection_work| {
-            let next_items = processed_items.get().saturating_add(projection_work);
+        |projection_work, source_bytes| {
+            let next_items = processed_items
+                .get()
+                .checked_add(projection_work)
+                .ok_or(Error::GasBudgetExceeded)?;
+            let next_bytes = processed_bytes
+                .get()
+                .checked_add(source_bytes)
+                .ok_or(Error::GasBudgetExceeded)?;
             processed_items.set(next_items);
-            if budget_items.is_some_and(|budget| next_items > budget) {
+            processed_bytes.set(next_bytes);
+            if next_items > scan_work_limit || next_bytes > scan_byte_limit {
                 return Err(Error::GasBudgetExceeded);
             }
             if let Some(budget) = execution_budget {
@@ -1560,8 +1578,7 @@ fn collect_sorted_transaction_prefix(
                 processed_items: processed_items.get(),
                 processed_bytes: processed_bytes.get(),
             };
-            // The history visitor already charged the projection work for this row.
-            current_stats.record_value_bytes(&value, execution_budget)?;
+            // Carrier bytes and this row were admitted before loading/cloning.
             if !matches {
                 processed_bytes.set(current_stats.processed_bytes);
                 return Ok(ControlFlow::Continue(()));
@@ -1666,6 +1683,7 @@ fn materialize_sorted_transaction_window(
     params: &QueryParams,
     anchor: TransactionHistoryAnchor,
     budget_items: Option<u64>,
+    execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<Vec<CommittedTransaction>, Error> {
     let limit = params
         .pagination
@@ -1688,7 +1706,7 @@ fn materialize_sorted_transaction_window(
         keep,
         anchor,
         budget_items,
-        None,
+        execution_budget,
     )?;
     let offset = usize::try_from(offset).unwrap_or(usize::MAX);
     let limit = usize::try_from(limit.get()).unwrap_or(usize::MAX);
@@ -1784,6 +1802,11 @@ fn scan_transaction_page(
     budget_items: Option<u64>,
     execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<ScannedTransactionPage, Error> {
+    let budget_items = Some(
+        budget_items
+            .unwrap_or(limits.max_fetch_size)
+            .min(limits.max_fetch_size),
+    );
     if params.sorting.sort_by_metadata_key.is_some() {
         if history_cursor.is_some() || known_remaining_items.is_some() {
             return Err(Error::Conversion(
@@ -1836,7 +1859,14 @@ fn try_handle_find_transactions_stored(
             &filter,
             params,
             fixed_anchor,
-            gas_budget,
+            Some(
+                gas_budget
+                    .unwrap_or(limits.max_fetch_size)
+                    .min(limits.max_fetch_size),
+            ),
+            limits
+                .ordinary_execution_limits
+                .map(OrdinaryQueryExecutionLimits::execution_budget),
         )?;
         let continuation_required =
             values.len() > usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
@@ -1864,7 +1894,9 @@ fn try_handle_find_transactions_stored(
         None,
         None,
         gas_budget,
-        None,
+        limits
+            .ordinary_execution_limits
+            .map(OrdinaryQueryExecutionLimits::execution_budget),
     )?;
     let page_len = page.values.len();
     let first_batch = project_transaction_page(page.values, selector.clone(), fetch_size)?;
@@ -1915,7 +1947,9 @@ fn try_handle_find_transactions_stored(
             Some(checkpoint.history_cursor),
             checkpoint.remaining_items,
             gas_budget,
-            None,
+            limits
+                .ordinary_execution_limits
+                .map(OrdinaryQueryExecutionLimits::execution_budget),
         )?;
         let page_len = u64::try_from(page.values.len()).unwrap_or(u64::MAX);
         let batch = project_transaction_page(page.values, selector_for_replay.clone(), fetch_size)?;
@@ -1986,8 +2020,10 @@ fn try_handle_find_transactions_ephemeral(
     budget: Option<QueryExecutionBudget>,
 ) -> Result<(QueryOutput, QueryExecutionStats), Error> {
     if limits.canonical_output_limits.is_some() {
+        // TODO: bind the carrier decode graph and projected rows to the fanout
+        // resident-memory reservation before admitting this query kind.
         return Err(Error::Conversion(
-            "canonical fanout rejects `FindTransactions` before source execution because a carrier materializes transaction rows before per-row admission"
+            "canonical fanout requires a carrier decode/resident-memory reservation before FindTransactions execution"
                 .to_owned(),
         ));
     }
@@ -5222,91 +5258,90 @@ mod tests {
     fn bls_test_keypair() -> KeyPair {
         checked_keypair()
     }
+    // Query/storage fixture: signed source identities and explicit typed results
+    // are authenticated by real CommitQCs. This is not an economic execution test.
     fn state_with_test_blocks_and_transactions(
         blocks: u64,
         valid_tx_per_block: usize,
         invalid_tx_per_block: usize,
     ) -> Result<State> {
+        use iroha_data_model::block::execution_output::{
+            ExecutionOutputV1, NetworkExecutionOutputV1,
+        };
         let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura.clone(), query_handle);
-        {
-            let (max_clock_drift, tx_limits) = {
-                let state_view = state.world.view();
-                let params = state_view.parameters();
-                (params.sumeragi().max_clock_drift(), params.transaction())
-            };
-            let crypto_cfg = state.crypto();
-            let valid_tx = {
-                let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
-                let tx = TransactionBuilder::new(
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world_with_test_domains(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            "canonical-query".parse().unwrap(),
+            crate::kura::tests::canonical_query_network_id(),
+        );
+        // Deliberately repeat the same signed sources across structural stored
+        // carriers: these tests exercise many-height index membership and pruning,
+        // not admission of repeated economic execution.
+        let sources = (0..valid_tx_per_block + invalid_tx_per_block)
+            .map(|index| {
+                let instructions: Vec<InstructionBox> = if index < valid_tx_per_block {
+                    vec![Log::new(iroha_logger::Level::INFO, "pass".into()).into()]
+                } else {
+                    let fail = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
+                    vec![fail.clone().into(), fail.into()]
+                };
+                let mut builder = TransactionBuilder::new(
                     state.network_id,
                     ALICE_ID.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions([ok_instruction])
-                .sign(ALICE_KEYPAIR.private_key());
-                AcceptedTransaction::accept(
-                    tx,
-                    &state.network_id,
-                    max_clock_drift,
-                    tx_limits,
-                    crypto_cfg.as_ref(),
-                )?
-            };
-            let invalid_tx = {
-                let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-                let tx = TransactionBuilder::new(
-                    state.network_id,
-                    ALICE_ID.clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions([fail_isi.clone(), fail_isi])
-                .sign(ALICE_KEYPAIR.private_key());
-                AcceptedTransaction::accept(
-                    tx,
-                    &state.network_id,
-                    max_clock_drift,
-                    tx_limits,
-                    crypto_cfg.as_ref(),
-                )?
-            };
-            let mut transactions = vec![valid_tx; valid_tx_per_block];
-            transactions.append(&mut vec![invalid_tx; invalid_tx_per_block]);
-            let (peer_public_key, peer_private_key) = bls_test_keypair().into_parts();
-            let peer_id = PeerId::new(peer_public_key);
-            let topology = Topology::new(vec![peer_id]);
-            let unverified_first_block = BlockBuilder::new(transactions.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(&peer_private_key)
-                .unpack(|_| {});
-            let mut state_block = state.block(unverified_first_block.header());
-            let first_block = unverified_first_block
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit(&topology)
-                .unpack(|_| {})
-                .unwrap();
-            let _events = state_block.apply(&first_block, topology.as_ref().to_owned());
-            kura.store_block(first_block).expect("store first block");
-            state_block.commit().unwrap();
-            for _ in 1u64..blocks {
-                let unverified_block = BlockBuilder::new(transactions.clone())
-                    .chain(0, state.view().latest_block().as_deref())
-                    .sign(&peer_private_key)
-                    .unpack(|_| {});
-                let mut state_block = state.block(unverified_block.header());
-                let block = unverified_block
-                    .validate_and_record_transactions(&mut state_block)
-                    .unpack(|_| {})
-                    .commit(&topology)
-                    .unpack(|_| {})
-                    .expect("Block is valid");
-                let _events = state_block.apply(&block, topology.as_ref().to_owned());
-                kura.store_block(block).expect("store block");
-                state_block.commit().unwrap();
+                );
+                builder.set_creation_time(std::time::Duration::from_millis(
+                    1000 + u64::try_from(index).unwrap(),
+                ));
+                builder
+                    .with_instructions(instructions)
+                    .sign(ALICE_KEYPAIR.private_key())
+            })
+            .collect::<Vec<_>>();
+        let mut bodies: Vec<Arc<iroha_data_model::block::SignedBlock>> = Vec::new();
+        for height in 1..=blocks {
+            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(
+                iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(height).unwrap(),
+                    bodies.last().map(|body| body.hash()),
+                    None,
+                    height * 1000 + 500,
+                    0,
+                ),
+            );
+            let mut rows = Vec::new();
+            for (index, source) in sources.iter().enumerate() {
+                builder.push_transaction(source.clone());
+                let result = if index < valid_tx_per_block {
+                    Ok(iroha_data_model::transaction::DataTriggerSequence::default())
+                } else {
+                    Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted("missing fixture domain".into())))
+                };
+                rows.push(ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).unwrap(),
+                    result: iroha_data_model::transaction::TransactionResult::new(result),
+                    completions: Vec::new(),
+                }));
             }
+            let mut body = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+            body.set_execution_outputs(
+                rows,
+                u64::try_from(valid_tx_per_block).unwrap(),
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .unwrap();
+            state.push_block_hash_for_testing(body.hash());
+            bodies.push(Arc::new(body));
         }
+        crate::kura::tests::persist_canonical_query_blocks(&kura, &bodies);
         Ok(state)
     }
     #[tokio::test]
@@ -6978,20 +7013,8 @@ mod tests {
         .execute(&ALICE_ID, &mut state_tx)?;
         SetKeyValue::domain(alpha_id.clone(), key.clone(), Json::new(2_u32))
             .execute(&ALICE_ID, &mut state_tx)?;
-        // Apply world changes and commit a minimal block to satisfy transaction storage invariants
         state_tx.apply();
-        let (peer_pk, _) = bls_test_keypair().into_parts();
-        let peer_id = PeerId::new(peer_pk);
-        let topology = Topology::new(vec![peer_id]);
-        let vcb = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
-        let _events = state_block.apply(&vcb, topology.as_ref().to_owned());
-        kura.store_block(vcb).expect("store block");
-        state_block.commit().unwrap();
+        state_block.commit_world_overlay_for_testing().unwrap();
         // Build a canonical iterable query over domains with metadata-descending sorting.
         let params = QueryParams {
             sorting: Sorting {
@@ -7398,8 +7421,11 @@ mod tests {
     async fn find_all_transactions() -> Result<()> {
         let num_blocks = 100;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
-        let txs = ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state.view())?
-            .collect::<Vec<_>>();
+        let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
+            CompoundPredicate::PASS,
+            &state.view(),
+        )?
+        .collect::<Vec<_>>();
         assert_eq!(txs.len() as u64, num_blocks * 2);
         assert_eq!(
             txs.iter().filter(|txn| txn.result().is_err()).count() as u64,
@@ -7414,7 +7440,7 @@ mod tests {
     #[test]
     fn find_transactions_bounded_ephemeral_scans_only_the_page_carriers() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7430,7 +7456,7 @@ mod tests {
             limits,
         )
         .expect("validate bounded transaction query");
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let QueryResponse::Iterable(output) = validated
             .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
             .expect("execute bounded transaction query")
@@ -7443,15 +7469,15 @@ mod tests {
         assert!(has_more);
         assert!(cursor.is_none());
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 2),
+            state_view.kura().canonical_query_reads_for_test().0,
+            2,
             "three transactions plus the bounded probe touch two two-entry carriers"
         );
     }
     #[test]
     fn find_transactions_bounded_replay_ignores_blocks_appended_after_start() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7487,16 +7513,13 @@ mod tests {
             .kura()
             .get_block(latest_height)
             .expect("latest seeded carrier");
-        let (appended, entry) = crate::smartcontracts::isi::tx::tests::certified_query_carrier(
-            &latest,
-            17,
-            true,
-            Some(&fixture.latest_lane_descriptor),
-        );
+        let appended =
+            crate::smartcontracts::isi::tx::tests::canonical_query_carrier(&latest, 17, true, 0);
+        // The retained WSV prefix remains fixed while durable Kura extends.
         state_view
             .kura()
-            .store_block_with_merge_entry(appended, &entry)
-            .expect("append carrier after query start");
+            .store_block(appended)
+            .expect("append exact carrier after query start");
         crate::kura::tests::persist_v2_finality_chain_through(
             state_view.kura(),
             NonZeroUsize::new(18).expect("appended query carrier"),
@@ -7513,7 +7536,7 @@ mod tests {
     #[test]
     fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7539,12 +7562,12 @@ mod tests {
             &query_handle,
             &state_view,
             &ALICE_ID,
-            Some(QueryExecutionBudget::from_weighted_limit(31, 1, 0)),
+            Some(QueryExecutionBudget::from_weighted_limit(32, 1, 0)),
         )
-        .expect_err("all 32 history projection units must be charged");
+        .expect_err("all 33 complete-body work units must be charged");
         assert_eq!(rejected, Error::GasBudgetExceeded);
-        state_view.kura().reset_merge_query_read_counters_for_test();
-        let item_budget = QueryExecutionBudget::from_weighted_limit(32, 1, 0);
+        state_view.kura().reset_canonical_query_reads_for_test();
+        let item_budget = QueryExecutionBudget::from_weighted_limit(33, 1, 0);
         let (QueryResponse::Iterable(output), stats) = validated
             .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(item_budget))
             .expect("execute exact transaction query")
@@ -7556,17 +7579,17 @@ mod tests {
         assert_eq!(remaining_items, Some(29));
         assert!(has_more);
         assert!(cursor.is_none());
-        assert_eq!(stats.processed_items(), 32);
+        assert_eq!(stats.processed_items(), 33);
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 16),
-            "exact query point-resolves every carrier without materializing a carrier snapshot"
+            state_view.kura().canonical_query_reads_for_test().0,
+            17,
+            "exact query reads every canonical body, including empty genesis"
         );
     }
     #[test]
     fn find_transactions_exact_budget_charges_matches_outside_pagination_window() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Exact);
@@ -7598,7 +7621,7 @@ mod tests {
     #[test]
     fn find_transactions_false_predicate_cannot_force_uncharged_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
@@ -7634,7 +7657,7 @@ mod tests {
                 QueryLimits::default().with_count_mode(count_mode),
             )
             .expect("validate false-predicate transaction query");
-            crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+            crate::smartcontracts::isi::tx::reset_canonical_network_projection_calls_for_test();
             let item_budget = QueryExecutionBudget::from_weighted_limit(1, 1, 0);
             let err = validated
                 .execute_ephemeral_with_stats(
@@ -7646,16 +7669,16 @@ mod tests {
                 .expect_err("eager carrier projection must be precharged before proof work");
             assert_eq!(err, Error::GasBudgetExceeded);
             assert_eq!(
-                crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+                crate::smartcontracts::isi::tx::canonical_network_projection_calls_for_test(),
                 0,
-                "insufficient gas must reject before merge Merkle proof reconstruction"
+                "insufficient gas must reject before canonical Network proof reconstruction"
             );
         }
     }
     #[test]
     fn find_transactions_stored_start_precharges_before_false_predicate_or_sorted_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         fixture.sandbox.state.pipeline.query_stored_min_gas_units = 1;
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
@@ -7685,8 +7708,8 @@ mod tests {
                 QueryLimits::default().with_count_mode(count_mode),
             )
             .expect("validate stored transaction query");
-            state_view.kura().reset_merge_query_read_counters_for_test();
-            crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+            state_view.kura().reset_canonical_query_reads_for_test();
+            crate::smartcontracts::isi::tx::reset_canonical_network_projection_calls_for_test();
             let err = validated
                 .execute_with_replay_state_and_start_budget(
                     &query_handle,
@@ -7698,14 +7721,14 @@ mod tests {
                 .expect_err("stored start must enforce its projection budget");
             assert_eq!(err, Error::GasBudgetExceeded);
             assert_eq!(
-                crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+                crate::smartcontracts::isi::tx::canonical_network_projection_calls_for_test(),
                 0,
-                "stored start must reject before merge Merkle proof reconstruction"
+                "stored start must reject before canonical Network proof reconstruction"
             );
             assert_eq!(
-                state_view.kura().merge_query_read_counters_for_test(),
-                (0, 0, 0),
-                "stored start must reject before merge sidecar resolution or decode"
+                state_view.kura().canonical_query_reads_for_test().0,
+                1,
+                "row work is charged after the admitted body read and before proof construction"
             );
         }
         let params = QueryParams {
@@ -7744,7 +7767,7 @@ mod tests {
     #[test]
     fn find_transactions_stored_continue_precharges_and_underfunded_retry_does_not_advance() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         // A one-item continuation replays its current two-entry carrier and
         // probes the next two-entry carrier to establish `has_more`.
         fixture.sandbox.state.pipeline.query_stored_min_gas_units = 4;
@@ -7778,35 +7801,35 @@ mod tests {
         assert_eq!(original_cursor.gas_budget, Some(4));
         let mut underfunded = original_cursor.clone();
         underfunded.gas_budget = Some(1);
-        state_view.kura().reset_merge_query_read_counters_for_test();
-        crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
+        crate::smartcontracts::isi::tx::reset_canonical_network_projection_calls_for_test();
         let err = query_handle
             .handle_iter_continue(underfunded, &ALICE_ID)
             .expect_err("continuation must enforce its current request budget");
         assert_eq!(err, Error::GasBudgetExceeded);
         assert_eq!(
-            crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+            crate::smartcontracts::isi::tx::canonical_network_projection_calls_for_test(),
             0,
-            "underfunded continuation must reject before merge Merkle proof reconstruction"
+            "underfunded continuation must reject before canonical Network proof reconstruction"
         );
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 0),
-            "underfunded continuation must reject before merge sidecar resolution or decode"
+            state_view.kura().canonical_query_reads_for_test().0,
+            1,
+            "row work is charged after the admitted body read and before proof construction"
         );
         let next = query_handle
             .handle_iter_continue(original_cursor, &ALICE_ID)
             .expect("the same cursor remains retryable with sufficient budget");
         assert_eq!(transactions_from_batch(next.batch).len(), 1);
         assert!(
-            crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test() > 0,
+            crate::smartcontracts::isi::tx::canonical_network_projection_calls_for_test() > 0,
             "successful retry should reconstruct the selected carrier proof"
         );
     }
     #[test]
     fn find_transactions_exact_stored_replay_preserves_count_cursor_and_order() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7825,7 +7848,7 @@ mod tests {
             limits,
         )
         .expect("validate exact stored transaction query");
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let QueryResponse::Iterable(first) = validated
             .execute_with_replay_state(
                 &query_handle,
@@ -7854,19 +7877,22 @@ mod tests {
         }
         assert_eq!(collected, expected);
         assert_eq!(expected_remaining, 0);
-        let (_, complete_scans, indexed_lookups) =
-            state_view.kura().merge_query_read_counters_for_test();
-        assert_eq!(complete_scans, 0);
+        let (body_reads, body_bytes) = state_view.kura().canonical_query_reads_for_test();
         assert_eq!(
-            indexed_lookups,
-            16 * 2,
-            "exact replay validates every carrier once, then resumes through each carrier once"
+            body_reads, 33,
+            "the count scan reads 17 bodies; six continuation pages read 16 bodies, repeating only split carriers"
+        );
+        assert_eq!(
+            body_bytes,
+            fixture.store.wire_bytes(1..=17)
+                + fixture.store.wire_bytes(2..=15)
+                + fixture.store.wire_bytes([10, 5])
         );
     }
     #[test]
     fn find_transactions_sorted_prefix_matches_deterministic_full_order_across_pages() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7932,10 +7958,10 @@ mod tests {
         assert_eq!(collected, expected);
     }
     #[test]
-    fn find_transactions_exact_replay_fails_closed_on_sidecar_corruption() {
+    fn find_transactions_exact_replay_fails_closed_on_body_corruption() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
-        let target_entry_hash = fixture.target_entry_hash;
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        let target_height = fixture.target_height;
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7963,9 +7989,7 @@ mod tests {
             panic!("expected iterable transaction output");
         };
         let mut cursor = first.continue_cursor.expect("exact query continuation");
-        state
-            .kura()
-            .remove_merge_entry_payload_for_test(target_entry_hash);
+        fixture.store.corrupt_body(target_height);
         loop {
             match query_handle.handle_iter_continue(cursor, &ALICE_ID) {
                 Ok(next) => {
@@ -7974,7 +7998,9 @@ mod tests {
                     );
                 }
                 Err(err) => {
-                    assert!(matches!(err, Error::Conversion(_)));
+                    assert!(
+                        matches!(err, Error::Conversion(message) if message.contains("storage authentication"))
+                    );
                     break;
                 }
             }
@@ -7983,7 +8009,7 @@ mod tests {
     #[test]
     fn find_transactions_stored_without_replay_rejects_required_continuation() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
@@ -8027,12 +8053,8 @@ mod tests {
     #[test]
     fn find_transactions_bounded_defers_old_corruption_but_exact_fails() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
-        fixture
-            .sandbox
-            .state
-            .kura()
-            .remove_merge_entry_payload_for_test(fixture.unrelated_entry_hash);
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -8064,12 +8086,14 @@ mod tests {
         let err = exact
             .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
             .expect_err("exact query must validate corrupt selected history");
-        assert!(matches!(err, Error::Conversion(_)));
+        assert!(
+            matches!(err, Error::Conversion(message) if message.contains("storage authentication"))
+        );
     }
     #[test]
     fn find_transactions_rejects_unbounded_or_oversized_sorted_prefix() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
         let sorted = Sorting {
@@ -8109,8 +8133,7 @@ mod tests {
             .get_block(nonzero!(4_usize))
             .expect("block available");
         let block_hash = block.hash();
-        let txs = ValidQuery::execute(
-            FindTransactions,
+        let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", block_hash.to_string())
             }),
@@ -8121,14 +8144,13 @@ mod tests {
         assert!(txs.iter().all(|tx| tx.block_hash == block_hash));
         assert_eq!(
             txs.iter().map(|tx| tx.entrypoint_hash).collect::<Vec<_>>(),
-            block.entrypoint_hashes().rev().collect::<Vec<_>>()
+            block.network_input_hashes().rev().collect::<Vec<_>>()
         );
         let unknown_hash =
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
                 Hash::new("missing block"),
             );
-        let missing = ValidQuery::execute(
-            FindTransactions,
+        let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("block_hash", unknown_hash.to_string())
             }),
@@ -8148,7 +8170,7 @@ mod tests {
             .get_block(nonzero!(4_usize))
             .expect("block available");
         let entrypoint_hash = block
-            .entrypoint_hashes()
+            .network_input_hashes()
             .next()
             .expect("test block has transactions");
         let indexed_heights = state_view
@@ -8161,8 +8183,7 @@ mod tests {
                 .filter_map(|height| std::num::NonZeroUsize::new(height as usize))
                 .collect()
         );
-        let txs = ValidQuery::execute(
-            FindTransactions,
+        let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", entrypoint_hash.to_string())
             }),
@@ -8189,8 +8210,7 @@ mod tests {
         >::from_untyped_unchecked(Hash::new(
             "missing transaction entrypoint",
         ));
-        let missing = ValidQuery::execute(
-            FindTransactions,
+        let missing = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("entrypoint_hash", unknown_hash.to_string())
             }),
@@ -8198,13 +8218,45 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert!(missing.is_empty());
-        state_view
-            .kura()
-            .prune_to_height(4)
-            .expect("prune test blocks");
+        assert!(matches!(
+            state_view.kura().prune_to_height(4),
+            Err(crate::kura::Error::FinalizedV2BlockMutation {
+                rewrite_from_height: 5,
+                finalized_height: 8,
+            })
+        ));
         assert_eq!(
             state_view
                 .kura()
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
+                .expect("finalized index remains complete after refused pruning"),
+            indexed_heights
+        );
+        // Index cleanup concerns an unfinalized stored suffix. Keep the exact
+        // canonical bodies but do not copy their finality artifacts: finalized
+        // history above must remain immutable under the same pruning API.
+        let pruning_kura = Kura::blank_kura_for_testing();
+        for height in 1..=num_blocks {
+            let body = state_view
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(height as usize).unwrap())
+                .expect("canonical structural body remains available");
+            pruning_kura
+                .store_block(body)
+                .expect("store unfinalized index fixture");
+        }
+        assert_eq!(
+            pruning_kura
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
+                .expect("live admitted-body index is complete"),
+            indexed_heights
+        );
+        assert!(pruning_kura.v2_finality_artifact(num_blocks)?.is_none());
+        pruning_kura
+            .prune_to_height(4)
+            .expect("prune unfinalized test suffix");
+        assert_eq!(
+            pruning_kura
                 .get_block_heights_by_entrypoint_hash(entrypoint_hash)
                 .expect("test Kura transaction index is complete"),
             (1..=4)
@@ -8218,8 +8270,11 @@ mod tests {
         let num_blocks = 8;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
         let state_view = state.view();
-        let all_txs = ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)?
-            .collect::<Vec<_>>();
+        let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
+            CompoundPredicate::PASS,
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
         let first_tx = all_txs.first().expect("test state has transactions");
         let authority = first_tx
             .entrypoint
@@ -8254,8 +8309,7 @@ mod tests {
                 .len() as u64,
             num_blocks
         );
-        let by_authority = ValidQuery::execute(
-            FindTransactions,
+        let by_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
             }),
@@ -8272,8 +8326,7 @@ mod tests {
                 .iter()
                 .all(|tx| tx.entrypoint.authority_opt() == Some(&authority))
         );
-        let by_timestamp = ValidQuery::execute(
-            FindTransactions,
+        let by_timestamp = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("timestamp_ms", timestamp_ms)
             }),
@@ -8290,8 +8343,7 @@ mod tests {
                 .iter()
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
-        let failed = ValidQuery::execute(
-            FindTransactions,
+        let failed = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("result_ok", false)
             }),
@@ -8299,9 +8351,8 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert_eq!(failed.len() as u64, num_blocks);
-        assert!(failed.iter().all(|tx| tx.result.as_ref().is_err()));
-        let missing_authority = ValidQuery::execute(
-            FindTransactions,
+        assert!(failed.iter().all(|tx| tx.result().as_ref().is_err()));
+        let missing_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", BOB_ID.to_string())
             }),
@@ -8309,8 +8360,7 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert!(missing_authority.is_empty());
-        let contradictory_authority = ValidQuery::execute(
-            FindTransactions,
+        let contradictory_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
                 p.equals("authority", authority.to_string())
                     .equals("authority", BOB_ID.to_string())
@@ -8326,14 +8376,17 @@ mod tests {
         let num_blocks = 8;
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
         let state_view = state.view();
-        let all_txs = ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)?
-            .collect::<Vec<_>>();
+        let all_txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
+            CompoundPredicate::PASS,
+            &state_view,
+        )?
+        .collect::<Vec<_>>();
         let first_tx = all_txs.first().expect("test state has transactions");
         let timestamp_ms = first_tx
             .entrypoint
             .creation_time_ms()
             .expect("test transaction has timestamp");
-        let result_ok = first_tx.result.as_ref().is_ok();
+        let result_ok = first_tx.result().as_ref().is_ok();
         let expected_heights = all_txs
             .iter()
             .filter(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
@@ -8349,8 +8402,7 @@ mod tests {
                 .expect("test Kura transaction index is complete"),
             expected_heights
         );
-        let by_timestamp_range = ValidQuery::execute(
-            FindTransactions,
+        let by_timestamp_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
@@ -8371,8 +8423,7 @@ mod tests {
                 .iter()
                 .all(|tx| tx.entrypoint.creation_time_ms() == Some(timestamp_ms))
         );
-        let by_timestamp_and_result = ValidQuery::execute(
-            FindTransactions,
+        let by_timestamp_and_result = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(timestamp_ms),
@@ -8388,7 +8439,7 @@ mod tests {
             .iter()
             .filter(|tx| {
                 tx.entrypoint.creation_time_ms() == Some(timestamp_ms)
-                    && tx.result.as_ref().is_ok() == result_ok
+                    && tx.result().as_ref().is_ok() == result_ok
             })
             .count();
         assert_eq!(
@@ -8397,7 +8448,7 @@ mod tests {
         );
         assert!(by_timestamp_and_result.iter().all(|tx| {
             tx.entrypoint.creation_time_ms() == Some(timestamp_ms)
-                && tx.result.as_ref().is_ok() == result_ok
+                && tx.result().as_ref().is_ok() == result_ok
         }));
         let impossible_lower_bound = timestamp_ms + 1;
         assert!(
@@ -8410,8 +8461,7 @@ mod tests {
                 .expect("test Kura transaction index is complete")
                 .is_empty()
         );
-        let impossible_range = ValidQuery::execute(
-            FindTransactions,
+        let impossible_range = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::from_filters(
                 iroha_data_model::query::CommittedTxFilters {
                     ts_ge: Some(impossible_lower_bound),

@@ -156,14 +156,7 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
 }
 
 fn header(height: u64) -> BlockHeader {
-    BlockHeader::new(
-        NonZeroU64::new(height).expect("height"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    )
+    BlockHeader::new(NonZeroU64::new(height).expect("height"), None, None, 0, 0)
 }
 
 fn accepted(fixture: &Fixture, instructions: Vec<InstructionBox>) -> AcceptedTransaction<'static> {

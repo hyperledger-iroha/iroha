@@ -576,6 +576,17 @@ fn encode_hex_to<S: JsonWriteSink + ?Sized>(
 }
 /// Typed, straight-line JSON writer with an opt-in checked sink path.
 pub trait FastJsonWrite {
+    /// Fixed JSON object field order, when independent of the serialized value.
+    ///
+    /// Derived named structs report their emitted fields after renaming and
+    /// skipping. Flattened fields and conditional omissions have no fixed order.
+    /// Reading this schema never constructs or serializes a value.
+    fn json_object_field_order() -> Option<&'static [&'static str]>
+    where
+        Self: Sized,
+    {
+        None
+    }
     /// Serialize into the legacy unbounded string destination.
     fn write_json(&self, output: &mut String);
     /// Serialize into a checked sink.

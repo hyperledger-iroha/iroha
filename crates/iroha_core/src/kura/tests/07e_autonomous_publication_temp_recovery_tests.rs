@@ -31,7 +31,9 @@ fn autonomous_atomic_sidecar_cleanup_preflights_before_discard_and_is_idempotent
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("open configured Kura");
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
-    let lane = lane_config.entry(LaneId::new(1)).expect("secondary lane");
+    let lane = kura
+        .lane_storage_entry(LaneId::new(1))
+        .expect("exact secondary identity");
     let directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     let residue = directory.join(".kura-sidecar-unpublished");
     let oversized = directory.join(".kura-sidecar-oversized");
@@ -63,7 +65,7 @@ fn autonomous_atomic_sidecar_cleanup_preflights_before_discard_and_is_idempotent
         let _geometry_guard = kura.lane_geometry_lock.lock();
         let _sidecar_guard = kura.sidecar_lock.lock();
         assert!(
-            kura.autonomous_lane_attempt_inventory_counts_locked(lane, 1)
+            kura.autonomous_lane_attempt_inventory_counts_locked(&lane, 1)
                 .is_err(),
             "live capacity inventory must not silently accept crash residue",
         );
@@ -179,6 +181,13 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
     bootstrap_path: &Path,
     bootstrap_bytes: &[u8],
 ) {
+    let physical_entries = {
+        let (kura, _) = open_authenticated_temp_recovery_kura(config, lane_config, catalog)
+            .expect("authenticate the original journal before fault injection");
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        kura.retained_lane_storage_entries_under_geometry_guard()
+            .expect("retain exact route identities for the path-substitution controls")
+    };
     let parent = bootstrap_path.parent().expect("bootstrap path has parent");
     let atomic_temp = parent.join(format!(
         "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX}crash-residue"
@@ -282,8 +291,7 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
             .origin_proposal
             .descriptor
             .lane_id;
-    let wrong_lane = lane_config
-        .entries()
+    let wrong_lane = physical_entries
         .iter()
         .find(|entry| entry.lane_id != bootstrap_lane_id)
         .expect("bootstrap route-swap control requires another configured lane");
@@ -674,8 +682,12 @@ fn provisional_catalog_open_detects_bootstrap_residue_without_mutating_it() {
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
         .expect("establish provisional configured catalog");
     publish_configured_catalog_baseline(&kura, &catalog);
+    publish_temp_recovery_catalog_baseline(&kura, &catalog);
+    let identity = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("exact admitted primary identity");
+    let parent = Kura::lane_artifact_dir(&identity.blocks_dir(temp_dir.path()));
     drop(kura);
-    let parent = Kura::lane_artifact_dir(&lane_config.primary().blocks_dir(temp_dir.path()));
     fs::create_dir_all(&parent).expect("create provisional bootstrap namespace");
     let residue = parent.join(format!(
         "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX}provisional"
@@ -717,7 +729,7 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
     kura.extend_hash_only_suffix_from_verified_snapshot(&[first_hash, snapshot_tail_hash])
         .expect("publish verified hash-only tail");
     drop(kura);
-    let merge_path = lane_config.primary().merge_log_path(temp_dir.path());
+    let merge_path = Kura::canonical_storage_paths(temp_dir.path()).1;
     let partial_tail = 73_u32.to_le_bytes();
     fs::OpenOptions::new()
         .append(true)

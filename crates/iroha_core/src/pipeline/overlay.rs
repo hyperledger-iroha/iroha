@@ -2646,7 +2646,14 @@ where
             // Proved executions do not support the implicit manifest registration append;
             // if a manifest is attached and missing from WSV, reject deterministically.
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
-            let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let replay = verify_ivm_proved_execution(
+                state_ro,
+                tx,
+                proved,
+                &summary,
+                None,
+                &mut IvmProvedReplayWork::default(),
+            )?;
             let execution_binding =
                 sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let _ = gas_limit; // still required for admission (fees), even when skipping VM.
@@ -3225,7 +3232,14 @@ where
             let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
             let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
-            let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let replay = verify_ivm_proved_execution(
+                state_ro,
+                tx,
+                proved,
+                &summary,
+                None,
+                &mut IvmProvedReplayWork::default(),
+            )?;
             let execution_binding =
                 sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let access_log = replay.access_log.clone();
@@ -3618,7 +3632,7 @@ mod test_support {
     /// Prepare execution against an explicit block time, retaining the large
     /// staged world on the heap while the overlay runs.
     pub(super) fn execution_block(state: &State) -> Box<crate::state::StateBlock<'_>> {
-        Box::new(state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)))
+        Box::new(state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)))
     }
 
     /// Seed a complete active lifecycle fixture, including its canonical subject and owner.
@@ -3781,7 +3795,7 @@ mod tests_overlay_manifest {
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         let overlay = TxOverlay::from_instructions(vec![malformed_sccp_record_instruction()]);
         let error = overlay
@@ -3798,7 +3812,7 @@ mod tests_overlay_manifest {
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         state_tx.current_lane_id = Some(LaneId::SINGLE);
         state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -4014,7 +4028,7 @@ mod tests_overlay_manifest {
             code_hash,
         };
         let marker = code::contract_lifecycle_state_key(&contract_address);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         {
             let mut seed = block.transaction();
@@ -4174,7 +4188,7 @@ mod tests_overlay_manifest {
         };
         let marker = code::contract_lifecycle_state_key(&contract_address);
         {
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let mut transaction = block.transaction();
             code::set_pending_contract_lifecycle(
                 &mut transaction,
@@ -4207,7 +4221,7 @@ mod tests_overlay_manifest {
             Some(pending)
         );
         assert_eq!(overlay.durable_state_overlay.get(&marker), Some(&None));
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         overlay
             .apply(&mut state_transaction, &authority)
@@ -4869,7 +4883,7 @@ seiyaku QuarantineArguments {
             Executable::ContractCall(call) => call.contract_address.clone(),
             _ => unreachable!("fixture contract call executable"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let accounts = block.accounts_snapshot();
         let upper_bound = nonzero!(1_000_000_u64);
@@ -6174,8 +6188,7 @@ seiyaku GuardedOverlayRebound {
             "expected bytecode and manifest registration ISIs"
         );
         // Seed only the bytecode into WSV.
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.contract_code.insert(code_hash, prog.clone());
@@ -6202,8 +6215,7 @@ seiyaku GuardedOverlayRebound {
             "the sole missing registration must be the manifest"
         );
         // Seed the manifest as well.
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -6496,7 +6508,7 @@ mod tests {
             "AXT-only plain IVM execution must not collapse into an empty overlay"
         );
         assert!(overlay.has_durable_state_changes());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         let error = overlay
@@ -6562,7 +6574,7 @@ mod tests {
         );
         assert!(overlay.has_durable_state_changes());
         let authority = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         overlay
@@ -6928,7 +6940,7 @@ seiyaku ProtectedProvedOverlay {
         state.zk.stark.enabled = false;
         let overlay_built = build_overlay_for_transaction(&tx, &*execution_block(&state))
             .expect("proved execution overlay");
-        let prepared_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let prepared_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let accounts = state.view().accounts_snapshot();
         let prepared = build_prepared_overlay_for_transaction_with_accounts_zk(
             &tx,
@@ -6968,7 +6980,7 @@ seiyaku ProtectedProvedOverlay {
         assert_eq!(built, vec![expected_instruction]);
         assert_eq!(built.as_slice(), proved.overlay.as_ref());
         let execute_with_current_local_verifier_config = |state: &crate::state::State| {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
             let executor = state_transaction.world.executor.clone();
@@ -7168,7 +7180,7 @@ seiyaku ProtectedProvedOverlay {
             ("alias", "changed alias binding"),
             ("alias_lease", "changed alias binding"),
         ] {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut state_tx = block.transaction();
             match mutation {
@@ -7255,7 +7267,7 @@ seiyaku ProtectedProvedOverlay {
             );
         }
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut state_tx = block.transaction();
             overlay_built
@@ -7552,6 +7564,8 @@ seiyaku ProtectedProvedOverlay {
             &summary,
             TEST_GAS_LIMIT,
             overlay_hash,
+            None,
+            &mut IvmProvedReplayWork::default(),
         )
         .expect("ivm proved replay");
         let events_commitment = replay.events_commitment;
@@ -7690,6 +7704,8 @@ seiyaku ProtectedProvedOverlay {
             &summary,
             TEST_GAS_LIMIT,
             overlay_hash,
+            None,
+            &mut IvmProvedReplayWork::default(),
         )
         .expect("ivm proved replay");
         let events_commitment = replay.events_commitment;
@@ -7813,6 +7829,8 @@ seiyaku ProtectedProvedOverlay {
             &summary,
             TEST_GAS_LIMIT,
             overlay_hash,
+            None,
+            &mut IvmProvedReplayWork::default(),
         )
         .expect("ivm proved replay");
         let expected_events_commitment = replay.events_commitment;
@@ -7950,6 +7968,42 @@ seiyaku ProtectedProvedOverlay {
             ),
             "unexpected error: {err:?}"
         );
+
+        // Exercise the actual signed Executor, including the verifier and real
+        // replay. A later block-cap refusal retains that already completed work.
+        let valid_tx = build_tx(
+            expected_events_commitment,
+            expected_gas_policy_commitment,
+            None,
+        );
+        for block_full in [false, true] {
+            let mut block = execution_block(&state);
+            let fragments = block.committed_fragment_count();
+            let mut transaction = block.transaction();
+            if block_full {
+                transaction.gas_limit_per_block = 1;
+                transaction.gas_used_in_block_so_far = 1;
+            }
+            let result = crate::executor::Executor::Initial.execute_transaction(
+                &mut transaction,
+                &authority,
+                valid_tx.clone(),
+                &mut ivm_cache,
+            );
+            if block_full {
+                assert!(
+                    matches!(result, Err(ValidationFail::NotPermitted(ref reason))
+                    if reason.starts_with("block gas limit exceeded:")),
+                    "{result:?}"
+                );
+            } else {
+                result.expect("valid actual proof and replay reach signed execution");
+            }
+            assert_eq!(transaction.last_tx_gas_used, replay.gas_used);
+            assert!(transaction.last_tx_gas_used > 0);
+            drop(transaction);
+            assert_eq!(block.committed_fragment_count(), fragments);
+        }
     }
     #[test]
     fn overlay_rejects_ivm_proved_when_overlay_hash_mismatches() {
@@ -8260,6 +8314,8 @@ seiyaku ProtectedProvedOverlay {
             &summary,
             TEST_GAS_LIMIT,
             overlay_hash,
+            None,
+            &mut IvmProvedReplayWork::default(),
         )
         .expect("ivm proved replay");
         let events_commitment = replay.events_commitment;
@@ -8306,6 +8362,31 @@ seiyaku ProtectedProvedOverlay {
             ),
             "unexpected error: {err:?}"
         );
+
+        // The real cryptographic verifier reaches replay, then rejects the
+        // dishonest overlay. Its completed work must survive that rejection.
+        let Executable::IvmProved(proved) = tx.instructions() else {
+            panic!("proved fixture");
+        };
+        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(1).unwrap());
+        let mut work = IvmProvedReplayWork::default();
+        let bounded_error = verify_ivm_proved_execution(
+            &*execution_block(&state),
+            &tx,
+            proved,
+            &summary,
+            Some(&allowance),
+            &mut work,
+        )
+        .expect_err("authenticated proof does not make its dishonest replay overlay valid");
+        assert!(
+            matches!(bounded_error, OverlayBuildError::IvmProvedReplay(ref message)
+            if message.contains("deterministic IVM replay"))
+        );
+        assert_eq!(allowance.consumed(), 1);
+        assert!(!allowance.exhausted());
+        assert_eq!(work.gas_used().unwrap(), Some(replay.gas_used));
+        assert!(replay.gas_used > 0);
     }
     #[test]
     fn derive_ivm_proved_payload_matches_replay_commitments() {
@@ -8374,6 +8455,8 @@ seiyaku ProtectedProvedOverlay {
             &summary,
             TEST_GAS_LIMIT,
             overlay_hash,
+            None,
+            &mut IvmProvedReplayWork::default(),
         )
         .expect("replay proved overlay");
         assert_eq!(
@@ -8790,6 +8873,130 @@ seiyaku ProtectedProved {
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
         (program, parsed.header_len, parsed.metadata)
     }
+    #[test]
+    fn actual_proved_replay_shares_cycles_and_retains_work_on_run_failure() {
+        // Exercise the real authorized replay VM. This fixture deliberately
+        // does not claim cryptographic proof verification; the verifier's
+        // post-replay rejection has its own authenticated-proof control above.
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 8,
+            version_minor: 1,
+            mode: ivm::ivm_mode::ZK,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(
+            &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(program);
+        let kp = checked_keypair();
+        let authority = AccountId::new(kp.public_key().clone());
+        let mut world = crate::state::World::with(
+            [],
+            [iroha_data_model::account::Account::new(authority.clone()).build(&authority)],
+            [],
+        );
+        let address = bind_sample_raw_contract(&mut world, &authority, &bytecode, 181);
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut metadata = Metadata::default();
+        bind_sample_raw_metadata(&mut metadata, &address);
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+        let overlay_hash = Hash::new(norito::to_bytes(&overlay).unwrap());
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(
+                iroha_data_model::transaction::IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay,
+                    events_commitment: Hash::new(b"unverified-events"),
+                    gas_policy_commitment: Hash::new(b"unverified-gas-policy"),
+                },
+            ))
+            .sign(kp.private_key());
+        let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let summary = cache.summarize_program(bytecode.as_ref()).unwrap();
+        let mut baseline_work = IvmProvedReplayWork::default();
+        let baseline = replay_ivm_proved_overlay(
+            &*execution_block(&state),
+            &tx,
+            &summary,
+            TEST_GAS_LIMIT,
+            overlay_hash,
+            None,
+            &mut baseline_work,
+        )
+        .unwrap();
+        assert_eq!(baseline_work.gas_used().unwrap(), Some(baseline.gas_used));
+        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(16).unwrap());
+        for expected in [8, 16] {
+            let mut work = IvmProvedReplayWork::default();
+            let replay = replay_ivm_proved_overlay(
+                &*execution_block(&state),
+                &tx,
+                &summary,
+                TEST_GAS_LIMIT,
+                overlay_hash,
+                Some(&allowance),
+                &mut work,
+            )
+            .unwrap();
+            assert_eq!(replay.gas_used, baseline.gas_used);
+            assert_eq!(replay.trace_hash, baseline.trace_hash);
+            assert_eq!(replay.events_commitment, baseline.events_commitment);
+            assert_eq!(work.gas_used().unwrap(), Some(baseline.gas_used));
+            assert_eq!(allowance.consumed(), expected);
+            assert!(!allowance.exhausted());
+            let error = replay_ivm_proved_overlay(
+                &*execution_block(&state),
+                &tx,
+                &summary,
+                TEST_GAS_LIMIT,
+                overlay_hash,
+                Some(&allowance),
+                &mut work,
+            )
+            .unwrap_err();
+            assert!(matches!(error, OverlayBuildError::ExecutionOwner(_)));
+            assert_eq!(
+                allowance.consumed(),
+                expected,
+                "reused work owner cannot run the VM again"
+            );
+        }
+        let short = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(7).unwrap());
+        let mut failed_work = IvmProvedReplayWork::default();
+        let error = replay_ivm_proved_overlay(
+            &*execution_block(&state),
+            &tx,
+            &summary,
+            TEST_GAS_LIMIT,
+            overlay_hash,
+            Some(&short),
+            &mut failed_work,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OverlayBuildError::IvmRun(ivm::VMError::ExceededMaxCycles)
+            ),
+            "{error:?}"
+        );
+        assert!(short.exhausted());
+        assert_eq!(
+            short.consumed(),
+            1,
+            "completed HALT remains charged when padding is refused"
+        );
+        let failed_gas = failed_work.gas_used().unwrap().unwrap();
+        assert!(failed_gas > 0 && failed_gas < baseline.gas_used);
+    }
+
     fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
@@ -9442,7 +9649,6 @@ seiyaku AliasBoundArguments {
             std::num::NonZeroU64::new(1).expect("non-zero test block height"),
             None,
             None,
-            None,
             1,
             0,
         );
@@ -9928,7 +10134,15 @@ fn run_vm_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Def
     host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
 ) -> Result<(), OverlayBuildError> {
     host.clear_axt_reject();
-    match vm.run_with_host(host) {
+    let result = vm.run_with_host(host);
+    finish_vm_run_with_host(host, result)
+}
+
+fn finish_vm_run_with_host<QS: crate::smartcontracts::ivm::host::QueryStateAccess + Default>(
+    host: &mut crate::smartcontracts::ivm::host::CoreHostImpl<QS>,
+    result: Result<(), ivm::VMError>,
+) -> Result<(), OverlayBuildError> {
+    match result {
         Ok(()) => Ok(()),
         Err(ivm::VMError::AmxBudgetExceeded {
             dataspace,
@@ -10004,6 +10218,8 @@ pub enum OverlayBuildError {
     /// A cryptographically valid IVM proof no longer matches deterministic
     /// replay against the current state view.
     IvmProvedReplay(String),
+    /// Local execution ownership failed; this is not a transaction rejection.
+    ExecutionOwner(String),
 }
 impl OverlayBuildError {
     /// Return whether rebuilding against a later serial state may change the result. Structural,
@@ -10027,6 +10243,7 @@ impl core::fmt::Display for OverlayBuildError {
             OverlayBuildError::GasLimit(msg) => write!(f, "{msg}"),
             OverlayBuildError::IvmLoad(e) => write!(f, "ivm.load_program: {e}"),
             OverlayBuildError::IvmRun(e) => write!(f, "ivm.run: {e}"),
+            OverlayBuildError::ExecutionOwner(message) => write!(f, "execution owner: {message}"),
             OverlayBuildError::StateRequiredSyscall(syscall) => write!(
                 f,
                 "IVM syscall 0x{syscall:06x} requires a coherent live state view"
@@ -10458,6 +10675,8 @@ fn replay_ivm_proved_overlay<R>(
     summary: &ProgramSummary,
     gas_limit: u64,
     overlay_hash: Hash,
+    cycle_budget: Option<&ivm::VmCycleBudget>,
+    work: &mut IvmProvedReplayWork,
 ) -> Result<IvmProvedReplay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
@@ -10508,7 +10727,17 @@ where
     begin_overlay_access_log(&mut host, true)?;
     vm.set_gas_limit(gas_limit);
     apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-    run_vm_with_host(&mut vm, &mut host)?;
+    work.begin()?;
+    let run_result = match cycle_budget {
+        Some(budget) => {
+            host.clear_axt_reject();
+            let result = vm.run_with_host_and_cycle_budget(&mut host, budget);
+            finish_vm_run_with_host(&mut host, result)
+        }
+        None => run_vm_with_host(&mut vm, &mut host),
+    };
+    work.gas_used = Some(gas_limit.saturating_sub(vm.remaining_gas()));
+    run_result?;
     let access_log = finish_overlay_access_log(&mut host, true)?;
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
@@ -10590,6 +10819,34 @@ pub(crate) struct IvmProvedReplay {
     pub(crate) gas_used: u64,
     pub(crate) trace_hash: Hash,
 }
+
+/// Sole observation of actual replay work, retained even when verification fails.
+/// Claimed overlay/proof counters never populate this record.
+#[derive(Default)]
+pub(crate) struct IvmProvedReplayWork {
+    started: bool,
+    gas_used: Option<u64>,
+}
+
+impl IvmProvedReplayWork {
+    fn begin(&mut self) -> Result<(), OverlayBuildError> {
+        if self.started || self.gas_used.is_some() {
+            return Err(OverlayBuildError::ExecutionOwner(
+                "replay work record was reused".into(),
+            ));
+        }
+        self.started = true;
+        Ok(())
+    }
+
+    /// Actual run gas; absent when validation refused before VM execution began.
+    pub(crate) fn gas_used(&self) -> Result<Option<u64>, &'static str> {
+        if self.started && self.gas_used.is_none() {
+            return Err("replay execution did not close its work record");
+        }
+        Ok(self.gas_used)
+    }
+}
 fn decode_ivm_proved_open_envelope(
     bytes: &[u8],
 ) -> Result<ZkOpenVerifyEnvelope, OverlayBuildError> {
@@ -10607,6 +10864,8 @@ pub(crate) fn verify_ivm_proved_execution<R>(
     tx: &SignedTransaction,
     proved: &iroha_data_model::transaction::IvmProved,
     summary: &ProgramSummary,
+    cycle_budget: Option<&ivm::VmCycleBudget>,
+    work: &mut IvmProvedReplayWork,
 ) -> Result<IvmProvedReplay, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
@@ -10867,7 +11126,15 @@ where
         return Err(OverlayBuildError::ZkProof("proof rejected".to_owned()));
     }
     // ABI V1 replay is consensus validation; no node-local setting may bypass it.
-    let replay = replay_ivm_proved_overlay(state_ro, tx, summary, tx_gas_limit, overlay_hash)?;
+    let replay = replay_ivm_proved_overlay(
+        state_ro,
+        tx,
+        summary,
+        tx_gas_limit,
+        overlay_hash,
+        cycle_budget,
+        work,
+    )?;
     if proved.events_commitment != replay.events_commitment {
         return Err(OverlayBuildError::IvmProvedReplay(
             "events commitment mismatch".to_owned(),

@@ -238,7 +238,6 @@ fn write_decision_startup_with_body_marker(
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         8_000 + u64::from(marker),
         round.view,
     );

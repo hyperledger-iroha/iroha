@@ -38,7 +38,7 @@ fn transfer_rejects_when_issuer_policy_requires_binding_for_destination() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
@@ -123,7 +123,7 @@ fn transfer_accepts_any_matching_allowed_domain_membership() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB4);
@@ -216,7 +216,7 @@ fn transfer_rejects_when_bound_domain_policy_denies_asset() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
@@ -293,7 +293,7 @@ fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(dsid);

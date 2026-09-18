@@ -10848,7 +10848,6 @@ mod tests {
                 height: NonZeroU64::new(1).expect("non-zero block height"),
                 prev_block_hash: None,
                 merkle_root: None,
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,

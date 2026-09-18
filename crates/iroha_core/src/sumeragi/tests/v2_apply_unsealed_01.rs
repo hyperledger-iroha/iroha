@@ -3890,9 +3890,8 @@ v2_apply_test!(
                 .historical_autonomous_lane_recovery_matches(install)
                 .expect("read back historical autonomous recovery")
         );
-        let lane_config = RuntimeLaneConfig::default();
-        let lane = lane_config
-            .entry(descriptor.lane_id)
+        let lane = fixture.state
+            .lane_storage_identity(descriptor.lane_id)
             .expect("historical recovery lane is configured");
         let recovery_path = lane
             .blocks_dir(fixture.kura.store_root())

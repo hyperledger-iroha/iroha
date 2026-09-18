@@ -500,10 +500,10 @@ impl V2CandidateAssembler {
         );
         let mut report = CandidateScanReport::default();
         let state_view = request.state.view();
-        let selection_max = effective_candidate_transaction_limit(
+        let selection_max = effective_output_transaction_limit(
             self.limits.max_transactions,
-            state_view.world().parameters().block().max_transactions(),
-        );
+            state_view.world().parameters().block(),
+        )?;
         let (pending, mut selection_lease) = request
             .queue
             .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
@@ -608,7 +608,6 @@ impl V2CandidateAssembler {
                 NonZeroU64::new(request.context.height)
                     .ok_or(CandidateError::BuiltHeaderMismatch)?,
                 Some(request.parent.hash()),
-                None,
                 None,
                 candidate_ledger_time_ms,
                 view,
@@ -1169,12 +1168,13 @@ pub(crate) fn candidate_block_has_proposal_work(
         || time_trigger_clock_progress_required
         || state.deterministic_start_work_pending(&block.header()) == Some(true)
 }
+// Headers carry proposal identity only; complete outputs belong to BlockResult.
+// A stripped context therefore removes only the Network input commitment.
 fn stripped_carrier_context_matches(
     built_header: &BlockHeader,
     certified_header: &BlockHeader,
 ) -> bool {
     certified_header.merkle_root().is_none()
-        && certified_header.result_merkle_root().is_none()
         && built_header.height() == certified_header.height()
         && built_header.prev_block_hash() == certified_header.prev_block_hash()
         && built_header.creation_time() == certified_header.creation_time()
@@ -1282,6 +1282,23 @@ fn order_records_by_fifo(records: &mut [CandidateRecord]) {
             .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
     });
 }
+fn effective_output_transaction_limit(
+    configured_max: NonZeroUsize,
+    parameters: iroha_data_model::parameter::BlockParameters,
+) -> Result<usize, CandidateError> {
+    let terminal_max = parameters
+        .execution_output()
+        .maximum_terminal_network_inputs()
+        .map_err(CandidateError::InvalidOutputCapacity)?;
+    let terminal_max = usize::try_from(terminal_max).map_err(|_| {
+        CandidateError::InvalidOutputCapacity("terminal count exceeds host index width".into())
+    })?;
+    Ok(
+        effective_candidate_transaction_limit(configured_max, parameters.max_transactions())
+            .min(terminal_max),
+    )
+}
+
 fn effective_candidate_transaction_limit(
     configured_max: NonZeroUsize,
     protocol_max: NonZeroU64,
@@ -1573,6 +1590,9 @@ pub(crate) enum CandidateError {
         /// Maximum inspected queue entries.
         max_queue_scan: usize,
     },
+    /// The agreed output policy cannot reserve a terminal plan before selection.
+    #[error("invalid agreed execution output capacity: {0}")]
+    InvalidOutputCapacity(String),
     /// Frozen height context failed structural validation.
     #[error("invalid Sumeragi v2 height context: {0}")]
     InvalidContext(String),
@@ -2003,17 +2023,28 @@ pub(super) mod tests {
                 header.merkle_root = None;
             });
             let mut signed: SignedBlock = valid.into();
-            signed
-                .set_transaction_results_with_transcripts(
-                    Vec::new(),
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &signed,
                     &[],
                     Vec::new(),
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                signed.set_execution_outputs(
+                    outputs,
+                    fragments,
                     BTreeMap::new(),
                     Vec::new(),
                     AxtPolicySnapshot::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("fixture parent carries the canonical empty AXT policy snapshot");
-            signed.set_committed_fragment_count(0);
+            }
+            .expect("fixture parent carries the canonical empty AXT policy snapshot");
+
             let block = ValidBlock::new_unverified_for_tests(signed)
                 .commit_unchecked()
                 .unpack(|_| {});
@@ -2928,7 +2959,6 @@ pub(super) mod tests {
             NonZeroU64::new(301).expect("successor height"),
             Some(anchor.snapshot_block_hash),
             None,
-            None,
             301,
             0,
         );
@@ -2989,7 +3019,6 @@ pub(super) mod tests {
             NonZeroU64::new(301).expect("protocol-limit effective height"),
             Some(parent_hash),
             None,
-            None,
             301,
             0,
         );
@@ -3026,17 +3055,27 @@ pub(super) mod tests {
             false
         ));
         let mut signed = candidate.block().clone();
-        signed
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &signed,
                 &[],
                 Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            signed.set_execution_outputs(
+                outputs,
+                fragments,
                 BTreeMap::new(),
                 Vec::new(),
                 AxtPolicySnapshot::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("empty protocol-limit execution record");
-        signed.set_committed_fragment_count(0);
+        }
+        .expect("empty protocol-limit execution record");
+
         let committed = ValidBlock::new_unverified_for_tests(signed)
             .commit_unchecked()
             .unpack(|_| {});
@@ -3059,7 +3098,6 @@ pub(super) mod tests {
         let successor = BlockHeader::new(
             NonZeroU64::new(302).expect("successor height"),
             Some(committed.as_ref().hash()),
-            None,
             None,
             302,
             0,
@@ -3509,17 +3547,27 @@ pub(super) mod tests {
             header.merkle_root = None;
         });
         let mut signed: SignedBlock = successor.into();
-        signed
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &signed,
                 &[],
                 Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            signed.set_execution_outputs(
+                outputs,
+                fragments,
                 BTreeMap::new(),
                 Vec::new(),
                 AxtPolicySnapshot::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("snapshot successor carries its exact empty execution outputs");
-        signed.set_committed_fragment_count(0);
+        }
+        .expect("snapshot successor carries its exact empty execution outputs");
+
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
             iroha_crypto::SignatureOf::from_hash(key.private_key(), signed.header().hash()),
@@ -3563,6 +3611,33 @@ pub(super) mod tests {
             2
         );
     }
+    #[test]
+    fn candidate_selection_reserves_future_terminal_capacity_before_signing() {
+        use iroha_data_model::parameter::{BlockParameter, Parameter, Parameters};
+        let mut parameters = Parameters::default();
+        let mut policy = parameters.block().execution_output();
+        policy.max_outputs = 1 + 2 * policy.max_pipeline_triggers + policy.max_time_invocations;
+        parameters.set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
+        assert_eq!(
+            effective_output_transaction_limit(nonzero(512), parameters.block()).unwrap(),
+            1
+        );
+        parameters.set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+            nonzero!(1_u32),
+        )));
+        assert_eq!(
+            effective_output_transaction_limit(nonzero(512), parameters.block()).unwrap(),
+            1,
+            "selection remains safe through later permitted Time growth"
+        );
+        policy.max_outputs = 1;
+        parameters.set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
+        assert!(matches!(
+            effective_output_transaction_limit(nonzero(512), parameters.block()),
+            Err(CandidateError::InvalidOutputCapacity(_))
+        ));
+    }
+
     #[test]
     fn canonical_order_preserves_fifo_independent_of_entrypoint_hash() {
         let mut records = vec![
@@ -3943,8 +4018,20 @@ pub(super) mod tests {
     #[test]
     fn certified_merge_carrier_context_rejects_timestamp_view_and_root_drift() {
         let parent = HashOf::from_untyped_unchecked(Hash::new(b"candidate carrier context parent"));
-        let built = BlockHeader::new(nonzero!(7_u64), Some(parent), None, None, 1_000, 3);
+        let built = BlockHeader::new(nonzero!(7_u64), Some(parent), None, 1_000, 3);
         assert!(stripped_carrier_context_matches(&built, &built));
+        let wrong_height = BlockHeader::new(nonzero!(8_u64), Some(parent), None, 1_000, 3);
+        assert!(!stripped_carrier_context_matches(&built, &wrong_height));
+        let wrong_parent = BlockHeader::new(
+            nonzero!(7_u64),
+            Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"different carrier parent",
+            ))),
+            None,
+            1_000,
+            3,
+        );
+        assert!(!stripped_carrier_context_matches(&built, &wrong_parent));
         let mut wrong_time = built.clone();
         wrong_time.creation_time_ms = wrong_time.creation_time_ms.saturating_add(1);
         assert!(!stripped_carrier_context_matches(&built, &wrong_time));

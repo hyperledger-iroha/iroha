@@ -273,14 +273,14 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 .store(0, Ordering::Relaxed);
         }
         fn historical_autonomous_recovery_directory_for_entry(
-            entry: &LaneConfigEntry,
+            entry: &LaneStorageEntry,
             store_root: &Path,
         ) -> PathBuf {
             Self::lane_artifact_dir(&entry.blocks_dir(store_root))
                 .join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)
         }
         fn historical_autonomous_recovery_path_for_entry(
-            entry: &LaneConfigEntry,
+            entry: &LaneStorageEntry,
             store_root: &Path,
             recovery_id: Hash,
         ) -> PathBuf {
@@ -411,6 +411,19 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             directory: &Path,
             accounted: Option<&SecureMetadata>,
         ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            Ok(self
+                .read_historical_autonomous_recovery_record_with_identity(
+                    path, directory, accounted,
+                )?
+                .map(|(record, _)| record))
+        }
+        /// Preserve the exact authenticated read for a later consuming durability barrier.
+        fn read_historical_autonomous_recovery_record_with_identity(
+            &self,
+            path: &Path,
+            directory: &Path,
+            accounted: Option<&SecureMetadata>,
+        ) -> Result<Option<(HistoricalAutonomousLaneRecoveryRecordV1, StableSidecarRead)>> {
             let Some(snapshot) = self.read_regular_sidecar_snapshot(
                 path,
                 directory,
@@ -440,7 +453,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 ));
             }
             self.validate_historical_autonomous_recovery_record_shape(&record, path)?;
-            Ok(Some(record))
+            Ok(Some((record, snapshot)))
         }
         fn validate_historical_autonomous_recovery_dependencies(
             &self,
@@ -448,9 +461,12 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             path: &Path,
         ) -> Result<()> {
             let descriptor = &record.payload.origin_proposal.descriptor;
-            let durable_payload = {
+            let (durable_artifact, entry) = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                let entry = self.retained_lane_storage_entry_for_route_under_geometry_guard(
+                    record.payload.network_id, descriptor.lane_id, descriptor.dataspace_id,
+                    descriptor.lane_incarnation, descriptor.proposal_height,
+                )?;
                 self.require_active_lane_artifact(&entry, descriptor)?;
                 let _sidecar_guard = self.sidecar_lock.lock();
                 let durable = self
@@ -471,20 +487,19 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         "historical autonomous recovery payload was durably retired",
                     ));
                 }
-                durable.artifact.executable_payload
+                (durable.artifact, entry)
             };
-            if durable_payload != record.payload {
+            if durable_artifact.executable_payload != record.payload {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     path.to_path_buf(),
                     "historical autonomous recovery payload differs from durable Kura bytes",
                 ));
             }
-            let recovered = self
-                .recover_autonomous_lane_block_payload_with_sidecar_repair(
+            let recovered = Self::recover_autonomous_lane_block_payload_from_artifact(
                     &record.payload.origin_proposal,
+                    &durable_artifact,
                     record.payload.network_id,
                     record.payload.epoch,
-                    false,
                 )
                 .map_err(|availability| {
                     Self::invalid_historical_autonomous_recovery(
@@ -495,8 +510,8 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     )
                 })?;
             let input = self
-                .read_lane_block_execution_input_with_repair_policy(
-                    descriptor.lane_id,
+                .read_retained_lane_block_execution_input_structural(
+                    &entry,
                     descriptor.lane_block_height,
                     false,
                 )
@@ -536,7 +551,10 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let descriptor = &expected.payload.origin_proposal.descriptor;
             let (path, directory) = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                let entry = self.lane_storage_entry(descriptor.lane_id)?;
+                let entry = self.retained_lane_storage_entry_for_route_under_geometry_guard(
+                    expected.payload.network_id, descriptor.lane_id, descriptor.dataspace_id,
+                    descriptor.lane_incarnation, descriptor.proposal_height,
+                )?;
                 self.require_active_lane_artifact(&entry, descriptor)?;
                 (
                     Self::historical_autonomous_recovery_path_for_entry(
@@ -630,11 +648,24 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             limit: usize,
         ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
             let _prune_guard = self.prune_lock.lock();
-            self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(limit)
+            self.ensure_prune_recovery_not_required()?;
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entries = self.lane_storage_entries.lock().values().cloned().collect::<Vec<_>>();
+            self.historical_autonomous_lane_recovery_records_at_entries_locked(limit, entries)
         }
         fn historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
             &self,
             limit: usize,
+        ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            self.ensure_prune_recovery_not_required()?;
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entries = self.retained_lane_storage_entries_under_geometry_guard()?;
+            self.historical_autonomous_lane_recovery_records_at_entries_locked(limit, entries)
+        }
+        fn historical_autonomous_lane_recovery_records_at_entries_locked(
+            &self,
+            limit: usize,
+            entries: Vec<LaneStorageEntry>,
         ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
             #[cfg(test)]
             self.historical_autonomous_recovery_inventory_scans
@@ -645,14 +676,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery reader has an invalid record limit",
                 ));
             }
-            self.ensure_prune_recovery_not_required()?;
-            let _geometry_guard = self.lane_geometry_lock.lock();
-            let entries = self
-                .lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>();
             let _sidecar_guard = self.sidecar_lock.lock();
             let mut records = Vec::new();
             let mut aggregate_bytes = 0_u64;
@@ -830,7 +853,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
         }
         fn historical_autonomous_execution_input_route_capacity_locked(
             &self,
-            entry: &LaneConfigEntry,
+            entry: &LaneStorageEntry,
         ) -> Result<HistoricalAutonomousExecutionInputRouteCapacity> {
             let (data_path, index_path) =
                 Self::lane_block_execution_input_paths_for_entry(entry, &self.store_root);
@@ -974,61 +997,20 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 if let Some(layout) = route.layout
                     && lane_block_height < layout.base_height
                 {
-                    let prepend = route
-                        .layout
-                        .expect("checked present layout")
-                        .base_height
-                        .checked_sub(lane_block_height)
-                        .ok_or_else(|| {
-                            Self::invalid_historical_autonomous_recovery(
-                                route.namespace.index_path.clone(),
-                                "historical autonomous execution-input prepend underflowed",
-                            )
-                        })?;
-                    if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            route.namespace.index_path.clone(),
-                            "historical autonomous execution-input prepend exceeds its bounded window",
-                        ));
-                    }
-                    let entry_count = route
-                        .layout
-                        .expect("checked present layout")
-                        .entry_count
-                        .checked_add(prepend)
-                        .ok_or_else(|| {
-                            Self::invalid_historical_autonomous_recovery(
-                                route.namespace.index_path.clone(),
-                                "historical autonomous execution-input prepend count overflowed",
-                            )
-                        })?;
-                    let new_index_len = entry_count
-                        .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                        .and_then(|bytes| {
-                            bytes.checked_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-                        })
-                        .ok_or_else(|| {
-                            Self::invalid_historical_autonomous_recovery(
-                                route.namespace.index_path.clone(),
-                                "historical autonomous execution-input prepend bytes overflowed",
-                            )
-                        })?;
-                    let layout = SidecarIndexLayout::based(lane_block_height, new_index_len)
-                        .map_err(|reason| {
-                            Self::invalid_historical_autonomous_recovery(
-                                route.namespace.index_path.clone(),
-                                format!(
-                                    "historical autonomous execution-input prepend layout is invalid: {reason}"
-                                ),
-                            )
-                        })?;
-                    let peak = payload_len.checked_add(new_index_len).ok_or_else(|| {
-                        Self::invalid_historical_autonomous_recovery(
+                    let next = BoundProgressAppendIntentV1::prepend_layout(layout, lane_block_height)
+                        .map_err(|reason| Self::invalid_historical_autonomous_recovery(
+                            route.namespace.index_path.clone(), reason))?;
+                    let intent_len = BoundProgressAppendIntentV1::prepend_encoded_len(
+                        &route.namespace, &route.namespace.data_path, &route.namespace.index_path,
+                        lane_block_height, layout, route.data_len, payload_len,
+                    ).map_err(|reason| Self::invalid_historical_autonomous_recovery(
+                        route.namespace.index_path.clone(), reason))?;
+                    let peak = payload_len.checked_add(next.aligned_len - old_index_len)
+                        .and_then(|bytes| bytes.checked_add(u64::try_from(intent_len).ok()?))
+                        .ok_or_else(|| Self::invalid_historical_autonomous_recovery(
                             route.namespace.data_path.clone(),
-                            "historical autonomous execution-input prepend peak overflowed",
-                        )
-                    })?;
-                    (layout, new_index_len, peak)
+                            "historical autonomous execution-input prepend peak overflowed"))?;
+                    (next, next.aligned_len, peak)
                 } else {
                     let index_growth = if route
                         .layout

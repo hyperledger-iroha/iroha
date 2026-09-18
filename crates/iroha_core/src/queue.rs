@@ -3833,9 +3833,7 @@ impl PendingKagemushaOperation {
     pub fn signed_transaction(&self) -> &SignedTransaction {
         match self.transaction.as_accepted().entrypoint() {
             TransactionEntrypoint::External(transaction) => transaction,
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::SealedReveal(_)
-            | TransactionEntrypoint::Time(_) => {
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::SealedReveal(_) => {
                 unreachable!("indexed Kagemusha V1 operation must retain its external carrier")
             }
         }
@@ -5276,10 +5274,6 @@ impl Queue {
                         reveal.signed_transaction().instructions(),
                     )
                 }
-                TransactionEntrypoint::Time(time) => time
-                    .instructions
-                    .iter()
-                    .any(|instruction| kagemusha_operation_request_v1(instruction).is_some()),
                 TransactionEntrypoint::SealedCommitment(_) => false,
                 TransactionEntrypoint::External(_) => unreachable!(),
             };
@@ -12951,9 +12945,9 @@ impl Queue {
     }
     /// Derive the deterministic upper bound charged to proposal gas selection.
     ///
-    /// Runtime-dependent executables are charged their signature-bound gas limit. Native
-    /// instruction executables are charged the deterministic instruction meter, while system
-    /// entrypoints use their dedicated fixed accounting.
+    /// External transactions and sealed reveals with runtime-dependent executables are charged
+    /// their signature-bound gas limit. Native instruction executables use the deterministic
+    /// instruction meter; sealed commitments use their encoded-size accounting.
     ///
     /// # Errors
     ///
@@ -12972,7 +12966,6 @@ impl Queue {
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
                 Self::signed_executable_proposal_gas_cost(reveal.signed_transaction())
             }
-            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => Ok(0),
         }
     }
     fn extract_lane_identity_metadata(
@@ -21272,7 +21265,6 @@ impl Queue {
                     Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
                 }
             }
-            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
     #[cfg(any(test, feature = "telemetry"))]
@@ -24289,18 +24281,19 @@ pub mod tests {
             queue,
             state,
             primary,
+            primary_keypair,
             ..
         } = policy_only_dataspace_queue_fixture(&time_source, false, Some((LaneId::new(1), 2)));
-        let tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::Time(TimeTriggerEntrypoint {
-                id: "future-autoscale-admission".parse().expect("trigger id"),
-                instructions: ExecutionStep(iroha_primitives::const_vec::ConstVec::from(Vec::<
-                    InstructionBox,
-                >::new(
-                ))),
-                authority: primary,
-            }),
-        ));
+        let tx = accepted_tx_with(
+            primary,
+            &primary_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "future autoscale admission".into(),
+            ))],
+            Metadata::default(),
+        );
 
         let state_view = state.view();
         #[cfg(feature = "telemetry")]
@@ -30476,6 +30469,121 @@ pub mod tests {
         );
     }
     #[test]
+    fn sealed_network_sources_preserve_routing_identity_and_queue_costs() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
+        let (authority, keypair) = gen_account_in("sealed-network-queue");
+        let signed = TransactionBuilder::new_with_time_source(
+            queue_test_network_id(),
+            authority.clone(),
+            &time_source,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed queue accounting".into())])
+        .sign(keypair.private_key());
+        let salt = [0x53; 32];
+        let deadline = 9;
+        let commitment_hash = compute_sealed_transaction_commitment(
+            &queue_test_network_id(),
+            &signed,
+            salt,
+            deadline,
+        );
+        let commitment = SignedSealedTransactionCommitment::sign(
+            SealedTransactionCommitmentPayload::new(
+                queue_test_network_id(),
+                authority.clone(),
+                commitment_hash,
+                2,
+                deadline,
+                None,
+            ),
+            keypair.private_key(),
+        );
+        let reveal = SealedTransactionReveal::new(commitment_hash, signed.clone(), salt);
+        let accept = |entrypoint| {
+            AcceptedTransaction::accept_entrypoint_at_time(
+                entrypoint,
+                &queue_test_network_id(),
+                Duration::ZERO,
+                TransactionParameters::default(),
+                &iroha_config::parameters::actual::Crypto::default(),
+                signed.creation_time(),
+            )
+            .expect("signed Network source passes stateless admission")
+        };
+        let external = accept(TransactionEntrypoint::External(signed.clone()));
+        let revealed = accept(TransactionEntrypoint::SealedReveal(reveal));
+        let committed = accept(TransactionEntrypoint::SealedCommitment(commitment));
+        assert_ne!(revealed.hash_as_entrypoint(), external.hash_as_entrypoint());
+        assert_eq!(revealed.external(), Some(&signed));
+        assert_eq!(committed.external(), None);
+        assert_eq!(
+            crate::tx::exact_signed_transaction_hash(revealed.entrypoint()),
+            Some(signed.hash()),
+        );
+        assert_eq!(
+            crate::tx::exact_signed_transaction_hash(committed.entrypoint()),
+            None
+        );
+        assert_eq!(SignedTransaction::from(revealed.clone()), signed);
+        assert_eq!(revealed.creation_time(), external.creation_time());
+        assert_eq!(revealed.time_to_live(), external.time_to_live());
+        assert_eq!(committed.creation_time(), Duration::ZERO);
+        assert_eq!(committed.time_to_live(), None);
+        assert_eq!(
+            TransactionRoutingView::authority_opt(&revealed),
+            Some(&authority)
+        );
+        assert_eq!(
+            TransactionRoutingView::authority_opt(&committed),
+            Some(&authority)
+        );
+        assert_eq!(
+            TransactionRoutingView::executable(&revealed),
+            TransactionRoutingView::executable(&external),
+        );
+        assert!(TransactionRoutingView::executable(&committed).is_none());
+        assert_eq!(
+            TransactionRoutingView::routing_hash(&revealed),
+            TransactionRoutingView::routing_hash(&external),
+        );
+        assert_eq!(
+            TransactionRoutingView::routing_hash(&committed),
+            Hash::from(committed.hash_as_entrypoint()),
+        );
+        assert!(TransactionRoutingView::any_matching_instruction(
+            &revealed,
+            &mut |_| true
+        ));
+        assert!(!TransactionRoutingView::any_matching_instruction(
+            &committed,
+            &mut |_| true
+        ));
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&revealed),
+            Queue::compute_proposal_gas_cost(&external)
+        );
+        assert_eq!(
+            Queue::compute_teu_weight(&revealed),
+            Queue::compute_teu_weight(&external)
+        );
+        let commitment_cost = gas::meter_sealed_transaction_commitment(committed.encoded_len());
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&committed),
+            Ok(commitment_cost)
+        );
+        assert_eq!(Queue::compute_teu_weight(&committed), commitment_cost);
+        for accepted in [external, revealed, committed] {
+            assert!(
+                Queue::classify_pending_kagemusha_operation(&CheckedTransaction::new_unchecked(
+                    accepted
+                ),)
+                .expect("non-KAGEMUSHA input is not a pending operation")
+                .is_none()
+            );
+        }
+    }
+    #[test]
     fn proposal_gas_cost_fails_closed_and_charges_signed_runtime_limit() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let network_id = queue_test_network_id();
@@ -30499,6 +30607,25 @@ pub mod tests {
             Queue::compute_proposal_gas_cost(&missing_limit),
             Err(ProposalGasCostError::MissingSignedGasLimit),
             "an invariant violation must not become zero-cost proposal work"
+        );
+        let missing_signed = missing_limit.external().expect("external fixture").clone();
+        let missing_salt = [0x54; 32];
+        let missing_reveal = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                compute_sealed_transaction_commitment(
+                    &network_id,
+                    &missing_signed,
+                    missing_salt,
+                    9,
+                ),
+                missing_signed,
+                missing_salt,
+            )),
+        ));
+        assert_eq!(
+            Queue::compute_proposal_gas_cost(&missing_reveal),
+            Err(ProposalGasCostError::MissingSignedGasLimit),
+            "wrapping an invalid runtime gas owner in a sealed reveal must not make it free",
         );
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"

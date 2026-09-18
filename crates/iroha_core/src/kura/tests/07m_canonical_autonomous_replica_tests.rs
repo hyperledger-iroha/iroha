@@ -236,6 +236,8 @@ fn canonical_autonomous_replica_fixture() -> CanonicalAutonomousReplicaFixture {
         .expect("attach exact canonical carrier hint");
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    kura.bind_lane_storage_network(network_id)
+        .expect("bind the exact canonical carrier network before its H0 anchor");
     let configured_catalog_hash = kura
         .configured_lane_catalog_baseline()
         .expect("read configured catalog baseline")
@@ -427,13 +429,22 @@ fn evict_canonical_replica_terminal_carrier_to_local_sidecar(
 }
 
 fn canonical_terminal_payload_for_replica_network_test(
-    lane: &LaneConfigEntry,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     height_context_id: HeightContextId,
     network_id: NetworkId,
     epoch: u64,
     signer: &KeyPair,
 ) -> LaneExecutablePayloadV1 {
-    let template = canonical_terminal_payload_for_test(lane, height_context_id, signer, 0xA7);
+    let mut template =
+        canonical_terminal_payload_for_test(lane_id, dataspace_id, height_context_id, signer, 0xA7);
+    template.origin_proposal.descriptor.lane_incarnation = lane_incarnation;
+    template.origin_proposal.descriptor.descriptor_hash = template
+        .origin_proposal
+        .descriptor
+        .computed_descriptor_hash();
+    template.origin_proposal.proposal_hash = template.origin_proposal.computed_proposal_hash();
     let local_peer = PeerId::new(signer.public_key().clone());
     let (reservation_owner_hash, proposal_identity_hash) =
         autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -446,6 +457,7 @@ fn canonical_terminal_payload_for_replica_network_test(
         .expect("derive mixed-carrier owned reservation identities");
     let mut reservations = template.reservation_keys;
     for reservation in &mut reservations {
+        reservation.lane_incarnation = lane_incarnation;
         reservation.reservation_owner_hash = reservation_owner_hash;
         reservation.proposal_identity_hash = proposal_identity_hash;
     }
@@ -621,7 +633,9 @@ fn canonical_autonomous_replica_is_idempotent_non_owning_and_restart_stable() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("strict restart recovers canonical replica pair");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     assert_eq!(
         reopened
             .durable_canonical_autonomous_lane_replica(
@@ -679,9 +693,9 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     assert_eq!(authorized_group, group);
     assert_eq!(ordered_keys, fixture.payload.reservation_keys);
     let descriptor = &fixture.payload.origin_proposal.descriptor;
-    let entry = fixture
-        .lane_config
-        .entry(descriptor.lane_id)
+    let entry = &fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
         .expect("replica lane entry");
     let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
         entry,
@@ -775,14 +789,19 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         "a semantically invalid canonical V1 terminal outcome must fail closed",
     );
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBasisV1")]
+    #[norito_schema(
+        name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBasisV1"
+    )]
     #[derive(Encode)]
     enum UnknownTerminalOutcomeBasisV1 {
         #[codec(index = 2)]
         FutureReplica,
     }
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBodyV1", frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1")]
+    #[norito_schema(
+        name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBodyV1",
+        frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1"
+    )]
     #[derive(Encode)]
     struct UnknownTerminalOutcomeBodyV1 {
         version: u16,
@@ -792,7 +811,10 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         stage: AutonomousLifecycleTerminalOutcomeStageV1,
     }
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeV1", frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1")]
+    #[norito_schema(
+        name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeV1",
+        frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1"
+    )]
     #[derive(Encode)]
     struct UnknownTerminalOutcomeV1 {
         body: UnknownTerminalOutcomeBodyV1,
@@ -953,7 +975,9 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     let (committee_reopened, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("structural startup authenticates replica outcome before peer binding");
-    committee_reopened.replace_lane_storage_entries_for_test(&lane_config);
+    committee_reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     let committee_error = committee_reopened
         .bind_local_peer_id(PeerId::new(validators[0].public_key().clone()))
         .expect_err("peer binding must reject canonical-replica custody for a committee member");
@@ -966,7 +990,9 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     drop(committee_reopened);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("strict restart authenticates replica Complete outcome before peer binding");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     reopened
         .bind_local_peer_id(outsider_peer)
         .expect("rebind exact noncommittee replica peer after restart");
@@ -1098,9 +1124,9 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
         .expect("consume pre-crash Queue authorization");
     assert_eq!(authorized_group, group);
     let descriptor = fixture.payload.origin_proposal.descriptor.clone();
-    let entry = fixture
-        .lane_config
-        .entry(descriptor.lane_id)
+    let entry = &fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
         .expect("Pending replica lane entry");
     let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
         entry,
@@ -1141,7 +1167,9 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
     let (committee_reopened, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("strict pre-bind restart authenticates replica Pending evidence");
-    committee_reopened.replace_lane_storage_entries_for_test(&lane_config);
+    committee_reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     let committee_error = committee_reopened
         .bind_local_peer_id(PeerId::new(validators[0].public_key().clone()))
         .expect_err("committee member cannot bind over replica Pending custody");
@@ -1155,7 +1183,9 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
 
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("second strict restart keeps replica Pending recoverable");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     reopened
         .bind_local_peer_id(outsider_peer)
         .expect("bind the noncommittee peer after Pending restart");
@@ -1238,9 +1268,9 @@ fn canonical_replica_pending_rejects_remote_only_terminal_carrier_without_mutati
     ));
     let descriptor = &fixture.payload.origin_proposal.descriptor;
     let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-        fixture
-            .lane_config
-            .entry(descriptor.lane_id)
+        &fixture
+            .kura
+            .lane_storage_entry(descriptor.lane_id)
             .expect("remote-only replica lane entry"),
         &fixture.kura.store_root,
         descriptor.lane_block_height,
@@ -1306,9 +1336,9 @@ fn canonical_replica_pending_and_complete_pin_corrupt_carrier_on_strict_restart(
         assert_eq!(authorized_group, group);
         let descriptor = &fixture.payload.origin_proposal.descriptor;
         let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-            fixture
-                .lane_config
-                .entry(descriptor.lane_id)
+            &fixture
+                .kura
+                .lane_storage_entry(descriptor.lane_id)
                 .expect("pinned-carrier replica lane entry"),
             &fixture.kura.store_root,
             descriptor.lane_block_height,
@@ -1431,9 +1461,9 @@ fn canonical_replica_terminal_only_capacity_is_exact_and_restart_stable() {
         .expect("replica Pending length fits u64")
     };
     let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-        fixture
-            .lane_config
-            .entry(descriptor.lane_id)
+        &fixture
+            .kura
+            .lane_storage_entry(descriptor.lane_id)
             .expect("capacity fixture configured lane"),
         &fixture.kura.store_root,
         descriptor.lane_block_height,
@@ -1555,7 +1585,9 @@ fn canonical_replica_terminal_only_capacity_is_exact_and_restart_stable() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("strict restart accepts completed terminal-only replica at exact cap");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     reopened
         .bind_local_peer_id(outsider_peer)
         .expect("peer-bound audit accepts completed terminal-only replica at exact cap");
@@ -1595,7 +1627,13 @@ fn canonical_carrier_keeps_owned_and_replica_terminal_bases_distinct() {
     let height_context_id = finality.height_context.id();
     let primary = fixture.lane_config.primary();
     let owned_payload = canonical_terminal_payload_for_replica_network_test(
-        primary,
+        primary.lane_id,
+        primary.dataspace_id,
+        fixture
+            .kura
+            .lane_storage_entry(primary.lane_id)
+            .expect("published primary identity")
+            .incarnation,
         height_context_id,
         fixture.network_id,
         fixture.epoch,
@@ -1652,9 +1690,9 @@ fn canonical_carrier_keeps_owned_and_replica_terminal_bases_distinct() {
             .consume_for_queue()
             .expect("consume mixed-carrier Queue source authorization");
         assert_eq!(group, authorized_group);
-        let lane_entry = fixture
-            .lane_config
-            .entry(group.identity.lane_id)
+        let lane_entry = &fixture
+            .kura
+            .lane_storage_entry(group.identity.lane_id)
             .expect("mixed-carrier lane entry");
         let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
             lane_entry,
@@ -1732,9 +1770,9 @@ fn canonical_carrier_keeps_owned_and_replica_terminal_bases_distinct() {
 fn canonical_autonomous_replica_retains_first_valid_quorum_proof_variant() {
     let fixture = canonical_autonomous_replica_fixture();
     let descriptor = &fixture.certified.proposal.descriptor;
-    let entry = fixture
-        .lane_config
-        .entry(descriptor.lane_id)
+    let entry = &fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
         .expect("lane entry");
     let (data_path, index_path) =
         Kura::canonical_autonomous_lane_replica_paths_for_entry(entry, &fixture.kura.store_root);
@@ -1791,7 +1829,9 @@ fn canonical_autonomous_replica_retains_first_valid_quorum_proof_variant() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("strict restart recovers first canonical replica proof");
-    reopened.replace_lane_storage_entries_for_test(&lane_config);
+    reopened
+        .restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
     assert_eq!(
         reopened
             .persist_canonical_autonomous_lane_replica(&alternate_certified)
@@ -1827,9 +1867,9 @@ fn canonical_autonomous_replica_corruption_and_wrong_context_fail_closed() {
             )
             .is_err()
     );
-    let entry = fixture
-        .lane_config
-        .entry(descriptor.lane_id)
+    let entry = &fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
         .expect("lane entry");
     let (data_path, _) =
         Kura::canonical_autonomous_lane_replica_paths_for_entry(entry, &fixture.kura.store_root);

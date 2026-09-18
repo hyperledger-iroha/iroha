@@ -24,6 +24,12 @@ if str(FORMAL_CHECKER_DIR) not in sys.path:
 
 import sumeragi_v2_multilane_authority_recovery_contract as authority_recovery_contract
 import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
+import sumeragi_v2_multilane_geometry_evidence_contract as geometry_evidence_contract
+import sumeragi_v2_multilane_historical_geometry_contract as historical_geometry_contract
+import sumeragi_v2_multilane_membership_contract as membership_contract
+import sumeragi_v2_multilane_delegated_state_contract as delegated_state_contract
+import sumeragi_v2_multilane_native_preparation_contract as native_preparation_contract
+import sumeragi_v2_multilane_native_publication_contract as native_publication_contract
 from sumeragi_v2_multilane_autonomous_terminal_contract import (
     AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
     AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS,
@@ -756,6 +762,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
     *native_merge_manifest.NATIVE_MERGE_SOURCE_BINDINGS,
     native_merge_manifest.NATIVE_APPLICATION_MANIFEST_BINDING,
     *native_merge_manifest.NATIVE_MERGE_MANIFEST_CALLER_BINDINGS,
+    *native_preparation_contract.PREPARATION_OWNER_BINDINGS,
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
@@ -1092,13 +1099,15 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         (
             "state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>",
             "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "transactions.prepare_commit()",
+            "let transactions = tx_validate_result?;",
             "let autoscale_lifecycle_guard",
             "autoscale_retirement_queue_veto.as_mut()",
             "state_commit_authorization.take()",
             ".consume_for_state_commit(",
             "State commit authorization rejected the exact carrier transition",
             "apply_committed_autoscale_lane_geometry",
-            "transactions.commit()",
+            "transactions.publish()",
         ),
     ),
 ) + reviewed_source.NATIVE_PREPUBLICATION_REVIEWED_BINDINGS
@@ -1127,12 +1136,14 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         "commit_inner",
         (
             "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "transactions.prepare_commit()",
+            "let transactions = tx_validate_result?;",
             "let autoscale_lifecycle_guard",
             "autoscale_retirement_queue_veto.as_mut()",
             "state_commit_authorization.take()",
             ".consume_for_state_commit(",
             "state_ref.apply_committed_autoscale_lane_geometry(",
-            "transactions.commit()",
+            "transactions.publish()",
         ),
     ),
     (
@@ -1173,7 +1184,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         (
             "let latest_temp_present = self",
             "require_native_amx_latest_index_temp_recovery_unambiguous_locked(",
-            "complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)",
+            "self.complete_native_amx_evidence_prune_intent_locked(",
             "recover_native_amx_evidence_publication_temp_locked(",
             "let inventory = self.inventory_native_amx_evidence_files_locked",
             "let mut validated_manifests = BTreeMap::new()",
@@ -1183,7 +1194,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             "reconcile_native_amx_latest_index_temp_locked(",
             "let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked",
             "match (expected, current)",
-            "prune_native_amx_evidence_pairs_locked(&entry, &namespace)",
+            "self.prune_native_amx_evidence_pairs_locked(",
         ),
     ),
     (
@@ -1299,6 +1310,108 @@ NATIVE_EXACT_OBJECT_PRUNE_BINDINGS = (
             "verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked",
             "remove_bound_progress_file_if_matches",
             "sync_native_amx_evidence_namespace",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        'validate_native_amx_evidence_prune_intent_locked',
+        (
+            'NativeAmxEvidencePruneIntentV2::VERSION',
+            'active_lane_incarnation_marker',
+            'native_amx_evidence_prune_intent_max_entries',
+            'derive_native_amx_evidence_prune_protected_latest_locked',
+            'protected_latest != intent.protected_latest',
+            'native_amx_evidence_prune_entry_kind',
+            'participant_height == 0',
+            'participant_height >= protected_height',
+            'artifact_hash',
+            'entries are not strictly ordered',
+            'complete manifest/receipt pairs',
+            'if preimage_heights != removal_heights',
+            'original_links.keys().copied().collect::<BTreeSet<_>>() != original_heights',
+            'Self::validate_native_amx_settlement_chain_links(&original_links)',
+            'receipt.participant_settlement != *settlement',
+            'one oldest contiguous prefix',
+            'validate_native_amx_retained_history_continuity',
+            'validate_native_amx_evidence_prune_protected_latest_locked',
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        'plan_native_amx_evidence_pair_prune_locked',
+        (
+            'decode_native_amx_manifest_file_locked(entry, namespace, file)?',
+            'decode_native_amx_receipt_file_locked(entry, namespace, file)?',
+            'Self::plan_native_amx_evidence_prune_intent_from_artifacts(\n            self.native_amx_participant_evidence_retention(),\n            self.native_amx_participant_evidence_file_bytes(),\n            self.native_amx_evidence_prune_intent_max_bytes(),\n            &manifests,\n            &receipts,\n        )?',
+            'derive_native_amx_evidence_prune_protected_latest_locked',
+            'intent.protected_latest != protected_latest',
+            'for removal in &intent.entries',
+            'read_native_amx_evidence_file_bytes_locked(namespace, file)?',
+            'if Hash::new(bytes) != removal.artifact_hash',
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        'plan_native_amx_evidence_prune_intent_from_artifacts',
+        (
+            'retention.get().checked_add(1)',
+            'if manifests.len() > count_limit || receipts.len() > count_limit',
+            'Self::validate_native_amx_retained_history_continuity(manifests, receipts, false)',
+            'NativeAmxEvidencePruneProtectedLatestV2::from_artifacts(',
+            'for height in complete.iter().rev()',
+            'if pair_len > stable_byte_limit',
+            'let fits = !stopped',
+            'kept_complete.len() < retention.get()',
+            '.checked_add(pair_len)',
+            '.is_some_and(|bytes| bytes <= stable_byte_limit)',
+            'if !fits {\n                stopped = true;\n                continue;\n            }',
+            'if !kept_complete.contains(&protected_height)',
+            'for height in complete.difference(&kept_complete)',
+            'NativeAmxEvidencePruneIntentV2::MANIFEST_KIND',
+            'NativeAmxEvidencePruneIntentV2::RECEIPT_KIND',
+            'artifact_hash: Hash::new(bytes)',
+            'NativeAmxEvidencePruneIntentV2::VERSION',
+            'Self::collect_native_amx_prune_settlement_preimages(',
+            'bytes.is_empty() || bytes.len() > journal_byte_limit',
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        'collect_native_amx_prune_settlement_preimages',
+        (
+            'if !intent.removed_settlements.is_empty()',
+            'let mut retained_bytes = norito::encode_canonical(intent)?.len()',
+            'if retained_bytes == 0 || retained_bytes > byte_limit',
+            'if removal.kind != NativeAmxEvidencePruneIntentV2::RECEIPT_KIND',
+            'let settlement = load(removal.participant_height)?',
+            'let settlement_bytes = norito::encode_canonical(&settlement)?.len()',
+            '.checked_add(settlement_bytes)',
+            '.and_then(|bytes| bytes.checked_add(PREFIX_HEADROOM))',
+            'if next_bytes > byte_limit',
+            'removed_settlements.try_reserve_exact(1)?',
+            'removed_settlements.push(settlement)',
+            'retained_bytes = next_bytes',
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        'prune_native_amx_evidence_pairs_locked',
+        (
+            'complete_native_amx_evidence_prune_intent_locked(batch.guard(), entry, namespace)?',
+            'recover_native_amx_evidence_publication_temp_locked(',
+            'NativeAmxEvidenceRecoveryPhase::Startup',
+            'self.plan_native_amx_evidence_pair_prune_locked(entry, namespace, &inventory)?',
+            'self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?',
+            'bytes.is_empty() || bytes.len() > self.native_amx_evidence_prune_intent_max_bytes()',
+            'if !self.publish_bound_noclobber_file_locked(',
+            'Native AMX evidence prune intent appeared concurrently',
+            'self.complete_native_amx_evidence_prune_intent_locked(\n            publication.guard(),\n            entry,\n            namespace,\n        )?',
+            'self.inventory_native_amx_evidence_files_locked(namespace, false)?',
         ),
     ),
 )
@@ -3251,9 +3364,15 @@ def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
     # implementations such as `CheckedReplayAuthorizationDomain::clone`;
     # treating that method as an unscoped `fn clone` would allow an unrelated
     # implementation in the same file to satisfy the binding.
+    # Retained ownership types have lifetime-parameterized inherent impls.
+    # Keep the self type exact: a similarly named owner or a trait argument
+    # mentioning Owner must not satisfy its method obligation. Nested generic
+    # syntax remains unsupported and fails closed instead of guessing an owner.
+    generic = r"(?:<[^<>{}\n]*>)?"
+    exact_owner = rf"{re.escape(owner)}{generic}"
     impl_re = re.compile(
-        rf"(?m)^[ \t]*impl[ \t]+(?:"
-        rf"{re.escape(owner)}|[^{{\n]+[ \t]+for[ \t]+{re.escape(owner)}"
+        rf"(?m)^[ \t]*impl{generic}[ \t]+(?:"
+        rf"{exact_owner}|[^{{\n]+[ \t]+for[ \t]+{exact_owner}"
         rf")[ \t]*(?=\{{)"
     )
     return tuple(
@@ -3737,6 +3856,12 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         Path("pytests/scripts/sumeragi_v2_multilane_authority_recovery_test.py"),
         *native_merge_manifest.NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES,
         *passive_recovery_contract.PASSIVE_RECOVERY_SOURCE_RELATIVES,
+        *geometry_evidence_contract.GEOMETRY_EVIDENCE_SOURCE_RELATIVES,
+        *historical_geometry_contract.HISTORICAL_GEOMETRY_SOURCE_RELATIVES,
+        *membership_contract.MEMBERSHIP_SOURCE_RELATIVES,
+        *delegated_state_contract.DELEGATED_STATE_SOURCE_RELATIVES,
+        *native_preparation_contract.NATIVE_PREPARATION_SOURCE_RELATIVES,
+        *native_publication_contract.SOURCE_RELATIVES,
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path("pytests/scripts/sumeragi_v2_multilane_queue_plan_cases.py"),
         Path(
@@ -4634,6 +4759,10 @@ def _validate_native_prepublication_contract(
             )
         if item is None:
             continue
+        if symbol in native_publication_contract.PUBLICATION_SYMBOLS:
+            item = native_publication_contract.new_publication_path(item, symbol, errors)
+            if item is None:
+                continue
         cursor = -1
         for token in tokens:
             count = item.count(token)
@@ -4673,42 +4802,7 @@ def _validate_native_prepublication_contract(
         )
 
     kura_relative = "crates/iroha_core/src/kura.rs"
-    persist_key = (
-        kura_relative,
-        "fn",
-        "persist_native_amx_participant_application_evidence_under_publication_guard",
-    )
-    persist_item = binding_items.get(persist_key)
-    if persist_item is not None:
-        normalized = " ".join(persist_item.split())
-        phase_snippets = (
-            "for (manifest, _) in &plan.artifacts { "
-            "self.write_native_amx_participant_application_manifest_artifact_"
-            "with_retention_policy_under_publication_guard( "
-            "manifest, permit_cleanup, )?; }",
-            "let manifest_readback = self."
-            "read_back_native_amx_plan_manifests_under_publication_guard(plan)?;",
-            "for (manifest, receipt) in &plan.artifacts { "
-            "self.write_native_amx_participant_application_receipt_artifact_"
-            "only_with_retention_policy_under_publication_guard( "
-            "receipt, manifest, permit_cleanup, )?; }",
-            "for ((manifest, receipt), preflight) in "
-            "plan.artifacts.iter().zip(route_preflights.iter()) { "
-            "self.write_native_amx_participant_receipt_latest_index_"
-            "for_prepublication_under_publication_guard( "
-            "receipt, manifest, permit_cleanup, preflight, )?; }",
-            "if permit_cleanup { for (_, receipt) in &plan.artifacts { "
-            "self.cleanup_native_amx_participant_application_evidence_"
-            "under_publication_guard( receipt, )?; } }",
-        )
-        for snippet in phase_snippets:
-            if snippet not in normalized:
-                errors.append(
-                    f"{root / kura_relative}: Native prepublication phase "
-                    "loops must remain manifest-all, receipt-all, latest-all, "
-                    "read-back-authenticated, then cleanup-only-after-WSV"
-                )
-                break
+    native_publication_contract.validate_phases(binding_items, errors)
 
     expected_mode_methods = {
         "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata": (
@@ -5577,6 +5671,22 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     )
     _validate_native_prepublication_contract(root, models, errors)
     passive_recovery_contract.validate_passive_recovery_contract(root, models, errors, _rust_binding_item)
+    geometry_evidence_contract.validate_geometry_evidence_contract(
+        root, models, errors, _rust_binding_item
+    )
+    delegated_state_contract.validate_delegated_state_contract(
+        root, models, errors, _rust_binding_item,
+    )
+    native_preparation_contract.validate_native_preparation_contract(
+        root, models, errors, _rust_binding_item,
+    )
+    native_publication_contract.validate_owners(root, models, errors, _rust_binding_item)
+    membership_contract.validate_membership_contract(
+        root, models, errors, _rust_binding_item,
+    )
+    historical_geometry_contract.validate_historical_geometry_contract(
+        root, models, errors, _rust_binding_item
+    )
     _validate_native_exact_object_prune_contract(root, models, errors)
     _validate_queue_plan_pending_membership_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(

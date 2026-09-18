@@ -2462,7 +2462,6 @@ pub fn apply_with_state_block<T>(
             .expect("block height must always fit into NonZeroU64"),
         prev_hash,
         None,
-        None,
         wall_clock_ms.max(ledger_time_ms),
         0,
     );

@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Work location: `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`. All ongoing source edits and validation use this checkout; temporary source checkouts are retired from this workflow.
+
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are
 open. Starting source: `b2e4c86cc2586038ea16e94de3d7aefe94ea4040`.
 

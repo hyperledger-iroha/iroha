@@ -527,11 +527,8 @@ mod tests {
             );
         }
         let proposal = install_passive_diagnostic_lane_artifact(&state, &kura);
-        let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
-            &iroha_data_model::nexus::LaneCatalog::default(),
-        );
-        let lane_artifact_dir = lane_config
-            .entry(proposal.descriptor.lane_id)
+        let lane_artifact_dir = state
+            .lane_storage_identity(proposal.descriptor.lane_id)
             .expect("Torii diagnostic lane entry")
             .blocks_dir(kura.store_root())
             .join("lane_artifacts");
@@ -665,7 +662,6 @@ mod tests {
             height: NonZeroU64::new(7).unwrap(),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -687,7 +683,6 @@ mod tests {
                 height: NonZeroU64::new(7).unwrap(),
                 prev_block_hash: None,
                 merkle_root: None,
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
@@ -705,7 +700,6 @@ mod tests {
             height: NonZeroU64::new(3).unwrap(),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -727,7 +721,6 @@ mod tests {
                 height: NonZeroU64::new(3).unwrap(),
                 prev_block_hash: None,
                 merkle_root: None,
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,

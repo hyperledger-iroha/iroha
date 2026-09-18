@@ -62,7 +62,6 @@ fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is
         NonZeroU64::new(1).expect("height>0"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -146,7 +145,6 @@ fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
     let height = next_block_height(app);
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,
@@ -696,7 +694,6 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
     let height = next_block_height(app);
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,

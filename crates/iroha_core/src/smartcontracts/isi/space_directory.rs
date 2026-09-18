@@ -475,7 +475,7 @@ mod tests {
         seed_dataspace_catalog_with_alias(&mut state, dataspace, "sbp");
         grant_uaid_manifest_permission(&mut state.world, &hbl_registrar, dataspace, hbl_uaid);
         grant_uaid_manifest_permission(&mut state.world, &ubl_registrar, dataspace, ubl_uaid);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         PublishSpaceDirectoryManifest {
@@ -542,7 +542,7 @@ mod tests {
             dataspace,
             ubl_domain,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(hbl_customer.clone()).with_uaid(Some(hbl_uaid)))
@@ -643,7 +643,7 @@ mod tests {
             dataspace,
             ubl_domain,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(customer.clone()).with_uaid(Some(uaid)))
@@ -752,7 +752,7 @@ mod tests {
         let dataspace = DataSpaceId::new(11);
         seed_dataspace_catalog(&mut state, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 1);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = PublishSpaceDirectoryManifest { manifest }
@@ -773,7 +773,7 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 5);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         PublishSpaceDirectoryManifest {
@@ -812,7 +812,7 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &grantee, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 7);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         PublishSpaceDirectoryManifest {
@@ -845,7 +845,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -907,7 +907,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -964,7 +964,7 @@ mod tests {
         let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -1048,7 +1048,7 @@ mod tests {
         let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -1126,7 +1126,7 @@ mod tests {
         let dataspace = DataSpaceId::new(404);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 1);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = PublishSpaceDirectoryManifest { manifest }
@@ -1154,7 +1154,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-revoke"));
         let dataspace = DataSpaceId::new(405);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = RevokeSpaceDirectoryManifest {
@@ -1187,7 +1187,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-expire"));
         let dataspace = DataSpaceId::new(406);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = ExpireSpaceDirectoryManifest {
@@ -1218,7 +1218,7 @@ mod tests {
             .account_permissions
             .insert(grantee.clone(), Permissions::new());
         let manifest = sample_manifest(uaid, dataspace, 8);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = PublishSpaceDirectoryManifest { manifest }

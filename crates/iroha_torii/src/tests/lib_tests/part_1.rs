@@ -1674,7 +1674,6 @@ fn bind_asset_alias_for_test(
         NonZeroU64::new(height).expect("non-zero height"),
         None,
         None,
-        None,
         creation_time_ms,
         0,
     );
@@ -2169,7 +2168,6 @@ fn seed_proof_record_at_height(
     set_latest_block_height(app, height.saturating_sub(1));
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,
@@ -2915,7 +2913,6 @@ fn set_latest_block_height(app: &SharedAppState, height: u64) {
             NonZeroU64::new(next_height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -2938,7 +2935,6 @@ fn grant_alias_resolve_permissions(
     let height = next_block_height(app);
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,
@@ -2988,7 +2984,6 @@ fn grant_alias_resolve_dataspace_permission(
     let height = next_block_height(app);
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,
@@ -3214,7 +3209,6 @@ fn grant_account_permissions_for_test(
         NonZeroU64::new(height).expect("height>0"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -3253,7 +3247,6 @@ fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSp
     let height = next_block_height(app);
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height>0"),
-        None,
         None,
         None,
         0,

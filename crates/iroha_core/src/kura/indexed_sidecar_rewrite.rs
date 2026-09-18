@@ -397,9 +397,9 @@ impl Kura {
                 return false;
             };
             output_base_height = window_base_height;
-            if source_start == 0 {
-                return true;
-            }
+            // The test-only retained-window mode deliberately materializes an
+            // unchanged window too, so crash controls reach the real temporary
+            // write and promotion barriers rather than an earlier no-op.
         }
         let mut data = match std::fs::File::open(data_path) {
             Ok(file) => file,

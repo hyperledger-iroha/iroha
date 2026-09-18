@@ -24,7 +24,7 @@ use iroha_data_model::{
     },
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionDomain,
-        TransactionEntrypoint, TransactionPayload,
+        TransactionPayload,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -924,33 +924,31 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         else {
             return ModerationSubmissionLookupV1::Unknown;
         };
-        let Some(block) = view.kura().get_block(block_height) else {
+        drop(view);
+        let work = crate::routing::app_query_limits().max_fetch_size;
+        let Ok(carrier) = self.state.read_finalized_execution_carrier(
+            block_height,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        ) else {
             return ModerationSubmissionLookupV1::Unknown;
         };
-        let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
-            return ModerationSubmissionLookupV1::Unknown;
-        };
-        if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash
+        if carrier.block().hash() != expected_block_hash
+            || self.state.committed_entrypoint_height(&entrypoint_hash) != Some(block_height)
         {
             return ModerationSubmissionLookupV1::Unknown;
         }
-        let external_entrypoint_count = block.external_entrypoint_count();
-        let mut exact_results = block
-            .entrypoint_results()
-            .take(external_entrypoint_count)
-            .filter_map(|(_, entrypoint, result)| {
-                if !crate::transaction_entrypoint_matches_indexed_identity(
-                    &entrypoint,
-                    &entrypoint_hash,
-                ) {
-                    return None;
-                }
-                matches!(
-                    entrypoint,
-                    TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_)
-                )
-                .then_some(result.0.is_ok())
-            });
+        let Ok(calls) = crate::canonical_history::signed_calls(carrier.block()) else {
+            return ModerationSubmissionLookupV1::Unknown;
+        };
+        let mut exact_results = calls.filter_map(|(source_hash, signed, result)| {
+            crate::signed_transaction_carrier_matches_indexed_identity(
+                &source_hash,
+                signed,
+                &entrypoint_hash,
+            )
+            .then_some(result.is_ok())
+        });
         match (exact_results.next(), exact_results.next()) {
             (Some(true), None) => ModerationSubmissionLookupV1::Applied { transaction_id },
             (Some(false), None) => ModerationSubmissionLookupV1::Rejected {

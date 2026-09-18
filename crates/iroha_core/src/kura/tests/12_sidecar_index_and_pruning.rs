@@ -1723,12 +1723,21 @@ fn prune_intent_tampering_fails_closed() {
         )
         .expect("write symlink target intent");
         symlink(&symlink_target, &intent_path).expect("create intent symlink");
-        assert!(matches!(
-            Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-            Err(Error::IO(source, path)) if source.kind() == ErrorKind::InvalidData
-                && source.to_string().contains("configured Kura tree contains a symbolic link")
-                && path == intent_path
-        ));
+        let error = match Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("canonical prune-intent inventory must reject the symlink"),
+        };
+        assert!(
+            matches!(&error, Error::PruneIntentConflict(message)
+            if message == &format!(
+                "canonical prune-intent artifact {} is not a regular no-follow file",
+                intent_path.display(),
+            )),
+            "unexpected prune-intent symlink rejection: {error:?}"
+        );
         assert!(
             std::fs::symlink_metadata(&intent_path)
                 .expect("retain rejected intent symlink")
@@ -1768,6 +1777,7 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
+    establish_dummy_store_primary_anchor(&kura);
     let mut blocks = DummyBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
     kura.store_block(blocks.next()).expect("store block 2");

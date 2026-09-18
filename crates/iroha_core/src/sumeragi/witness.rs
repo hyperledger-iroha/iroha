@@ -1139,7 +1139,7 @@ mod tests {
         }
     }
     fn access_key_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+        BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)
     }
     fn bool_json_bytes(value: bool) -> Vec<u8> {
         Json::new(value).get().as_bytes().to_vec()

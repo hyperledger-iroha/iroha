@@ -68,7 +68,11 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
             Some(&actual),
         )
         .expect("selected-profile signed genesis must execute on a foreign-profile thread");
-        assert!(executed.results().all(|result| result.as_ref().is_ok()));
+        assert!(
+            executed
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
         assert_eq!(staged.nexus_amx, expected_nexus);
         assert_eq!(staged.execution_policy, expected_execution);
         assert_eq!(chain_discriminant(), 888, "preexecution leaked its profile");
@@ -97,7 +101,12 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
                     &actual.zk,
                 )),
             );
-        assert!(generated.0.results().all(|result| result.as_ref().is_ok()));
+        assert!(
+            generated
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
         assert_eq!(generated_staged.nexus_amx, expected_nexus);
         assert_eq!(generated_staged.execution_policy, expected_execution);
         assert_eq!(chain_discriminant(), 888, "generation leaked its profile");

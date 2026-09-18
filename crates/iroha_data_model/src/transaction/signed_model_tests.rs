@@ -25,7 +25,7 @@ use crate::{
         ExecutableBatchItem,
         executable::{ContractInvocation, IvmProved},
     },
-    trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+    trigger::DataTriggerSequence,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -2774,14 +2774,10 @@ fn entrypoint_hashes_match_direct_encoding() {
     );
     assert_eq!(tx.hash_as_entrypoint(), entry.hash());
     assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
-    let time_entry = TimeTriggerEntrypoint {
-        id: "trigger".parse().unwrap(),
-        instructions: ExecutionStep(ConstVec::from(vec![])),
-        authority,
-    };
-    let entry_time = TransactionEntrypoint::Time(time_entry.clone());
-    assert_eq!(HashOf::new(&entry_time), entry_time.hash());
-    assert_eq!(time_entry.hash_as_entrypoint(), entry_time.hash());
+    assert!(
+        TransactionEntrypoint::decode_all(&mut [3_u8, 0, 0, 0].as_slice()).is_err(),
+        "retired synthetic Time tag must fail network decoding"
+    );
 }
 
 #[test]

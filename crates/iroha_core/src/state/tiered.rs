@@ -52,6 +52,8 @@ pub struct TieredStateBackend {
     snapshot_counter: u64,
     /// Whether the snapshot counter has been seeded from disk.
     snapshot_counter_seeded: bool,
+    /// A complete retained baseline has been published, including an empty one.
+    snapshot_baseline_ready: bool,
     /// Per-entry metadata tracking heat and payload hashes.
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
     /// Stable key metadata required to rebuild snapshot manifests incrementally.
@@ -99,12 +101,19 @@ impl TieredSnapshotDiff {
 #[derive(Default)]
 pub(crate) struct TieredSnapshotPayload {
     entries: Vec<TieredSnapshotPayloadEntry>,
+    complete: bool,
 }
 struct TieredSnapshotPayloadEntry {
     key: TieredKeyHandle,
     value: Option<Box<dyn TieredSnapshotValue>>,
 }
 impl TieredSnapshotPayload {
+    pub(crate) fn with_scope(complete: bool) -> Self {
+        Self {
+            entries: Vec::new(),
+            complete,
+        }
+    }
     pub(crate) fn push_value<T>(&mut self, key: TieredKeyHandle, value: Option<T>)
     where
         T: json::JsonSerialize + MeasuredBytes + Send + Sync + 'static,
@@ -173,6 +182,7 @@ impl TieredStateBackend {
             max_cold_bytes,
             snapshot_counter: 0,
             snapshot_counter_seeded: false,
+            snapshot_baseline_ready: false,
             entries: BTreeMap::new(),
             entry_keys: BTreeMap::new(),
             last_manifest: None,
@@ -192,6 +202,7 @@ impl TieredStateBackend {
     pub fn record_world_snapshot(&mut self, world: &World) -> Result<()> {
         if let Some(plan) = self.plan_world_snapshot(world)? {
             self.execute_snapshot_plan(plan, world)?;
+            self.snapshot_baseline_ready = true;
         }
         Ok(())
     }
@@ -201,7 +212,7 @@ impl TieredStateBackend {
         world: &World,
         diff: &TieredSnapshotDiff,
     ) -> Result<()> {
-        if self.entries.is_empty() {
+        if !self.snapshot_baseline_ready {
             return self.record_world_snapshot(world);
         }
         if let Some(plan) = self.plan_world_snapshot_with_diff(world, diff)? {
@@ -214,17 +225,31 @@ impl TieredStateBackend {
         &mut self,
         payload: &TieredSnapshotPayload,
     ) -> Result<()> {
-        if self.entries.is_empty() {
-            return Ok(());
+        if !payload.complete && !self.snapshot_baseline_ready {
+            eyre::bail!("incremental tiered payload has no complete snapshot baseline");
         }
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(());
         };
+        if payload.complete && !self.snapshot_baseline_ready {
+            // An initial or failed baseline has no reusable payload authority.
+            self.entries.clear();
+            self.entry_keys.clear();
+        }
+        // Any error below requires another complete retained baseline. A later
+        // incremental payload cannot silently continue from partial metadata.
+        self.snapshot_baseline_ready = false;
         let payload_cache = if payload.is_empty() {
             SnapshotPayloadCache::default()
         } else {
             self.apply_snapshot_payload(snapshot_idx, payload)?
         };
+        if payload.complete {
+            self.entries
+                .retain(|id, _| payload_cache.payloads.contains_key(id));
+            self.entry_keys
+                .retain(|id, _| payload_cache.payloads.contains_key(id));
+        }
         let scores = self.build_scores_from_keys(snapshot_idx);
         let plan = self.build_snapshot_plan(
             root,
@@ -234,6 +259,7 @@ impl TieredStateBackend {
             Some(&payload_cache.payloads),
         )?;
         self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
+        self.snapshot_baseline_ready = true;
         Ok(())
     }
     fn seed_snapshot_counter_if_needed(&mut self) -> Result<()> {
@@ -1143,10 +1169,9 @@ impl TieredStateBackend {
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-    /// Returns whether the backend has been seeded with at least one entry.
-    #[must_use]
-    pub(crate) fn has_entries(&self) -> bool {
-        !self.entries.is_empty()
+    /// Whether incremental payloads can extend an actual complete baseline.
+    pub(crate) fn snapshot_baseline_ready(&self) -> bool {
+        self.snapshot_baseline_ready
     }
     /// Returns the cached manifest of the latest snapshot, if any.
     #[must_use]
@@ -5514,6 +5539,271 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::{fs, num::NonZeroU32};
     use tempfile::tempdir;
+
+    fn assert_retained_value(backend: &TieredStateBackend, key: &StatePath, value: &[u8]) {
+        let encoded_key = TieredKeyHandle::SmartContractState(key.clone())
+            .encode_key()
+            .unwrap();
+        let manifest = backend.last_manifest().expect("retained snapshot manifest");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SmartContractState
+                    && entry.key_payload == encoded_key
+            })
+            .expect("retained state key");
+        assert_eq!(
+            entry.value_hash_hex,
+            hex::encode(sha256(&json::to_vec(&value.to_vec()).unwrap()))
+        );
+    }
+
+    fn wait_snapshot_worker_idle(worker: &super::super::TieredSnapshotWorker) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut pending = worker.inner.pending.lock();
+        while pending.payload.is_some() || pending.processing {
+            assert!(
+                !worker
+                    .inner
+                    .cvar
+                    .wait_until(&mut pending, deadline)
+                    .timed_out(),
+                "snapshot worker did not drain"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_worker_bounds_pending_work_without_losing_disjoint_or_later_updates() {
+        use super::super::TieredSnapshotWorker;
+        use std::sync::{Arc, mpsc};
+        let temp = tempdir().unwrap();
+        let backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::new(
+            true,
+            0,
+            0,
+            0,
+            Some(temp.path().to_path_buf()),
+            None,
+            0,
+            0,
+        )));
+        backend
+            .lock()
+            .record_world_snapshot(&World::default())
+            .unwrap();
+        let worker = TieredSnapshotWorker::new(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        assert!(
+            worker.enabled(),
+            "regression requires a real background worker"
+        );
+        let (a, b) = (dummy_state_entry(201).0, dummy_state_entry(202).0);
+        let payload = |key: &StatePath, value| {
+            let mut payload = TieredSnapshotPayload::default();
+            payload.push_value(
+                TieredKeyHandle::SmartContractState(key.clone()),
+                Some(vec![value]),
+            );
+            payload
+        };
+        // Holding only the backend blocks its I/O, not dequeue or capacity
+        // notification. The worker never needs a State or World lock.
+        let blocked_backend = backend.lock();
+        assert!(worker.schedule(payload(&a, 1_u8)).is_ok());
+        {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut pending = worker.inner.pending.lock();
+            while !pending.processing {
+                assert!(
+                    !worker
+                        .inner
+                        .cvar
+                        .wait_until(&mut pending, deadline)
+                        .timed_out()
+                );
+            }
+            assert!(pending.payload.is_none());
+        }
+        assert!(worker.schedule(payload(&b, 2_u8)).is_ok());
+        std::thread::scope(|scope| {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = &worker;
+            let a = &a;
+            scope.spawn(move || {
+                entered_tx.send(()).unwrap();
+                assert!(worker.schedule(payload(a, 3_u8)).is_ok());
+                done_tx.send(()).unwrap();
+            });
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            {
+                let pending = worker.inner.pending.lock();
+                let queued = pending
+                    .payload
+                    .as_ref()
+                    .expect("second update remains queued");
+                assert_eq!(queued.entries.len(), 1);
+                assert!(
+                    matches!(&queued.entries[0].key, TieredKeyHandle::SmartContractState(key) if key == &b)
+                );
+            }
+            drop(blocked_backend);
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        });
+        wait_snapshot_worker_idle(&worker);
+        let backend = backend.lock();
+        assert_retained_value(&backend, &a, &[3]);
+        assert_retained_value(&backend, &b, &[2]);
+        assert_eq!(backend.last_manifest().unwrap().snapshot_index, 4);
+    }
+
+    #[test]
+    fn complete_empty_payload_establishes_a_valid_cold_baseline() {
+        let temp = tempdir().unwrap();
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        assert!(!backend.snapshot_baseline_ready());
+        assert!(
+            backend
+                .record_world_snapshot_with_payload(&TieredSnapshotPayload::default())
+                .is_err()
+        );
+        assert!(backend.last_manifest().is_none());
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(true))
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_eq!(backend.last_manifest().unwrap().total_entries, 0);
+        let key = dummy_state_entry(203).0;
+        let mut update = TieredSnapshotPayload::default();
+        update.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![8_u8]),
+        );
+        backend.record_world_snapshot_with_payload(&update).unwrap();
+        assert_retained_value(&backend, &key, &[8]);
+        let mut removal = TieredSnapshotPayload::default();
+        removal.push_value::<Vec<u8>>(TieredKeyHandle::SmartContractState(key), None);
+        backend
+            .record_world_snapshot_with_payload(&removal)
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_eq!(backend.last_manifest().unwrap().total_entries, 0);
+    }
+
+    #[test]
+    fn failed_payload_requires_another_complete_baseline_before_incremental_work() {
+        let temp = tempdir().unwrap();
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(true))
+            .unwrap();
+        let key = dummy_state_entry(205).0;
+        let mut update = TieredSnapshotPayload::default();
+        update.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![5_u8]),
+        );
+        let next_index = backend.last_manifest().unwrap().snapshot_index + 1;
+        let conflict = temp.path().join(format!("{next_index:020}.staging"));
+        fs::write(&conflict, b"blocked staging directory").unwrap();
+        assert!(backend.record_world_snapshot_with_payload(&update).is_err());
+        assert!(!backend.snapshot_baseline_ready());
+        fs::remove_file(conflict).unwrap();
+        assert!(backend.record_world_snapshot_with_payload(&update).is_err());
+        let mut complete = TieredSnapshotPayload::with_scope(true);
+        complete.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![6_u8]),
+        );
+        backend
+            .record_world_snapshot_with_payload(&complete)
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_retained_value(&backend, &key, &[6]);
+    }
+
+    #[test]
+    fn inert_and_shutdown_workers_return_unmodified_payloads_for_ordered_fallback() {
+        use super::super::TieredSnapshotWorker;
+        use std::sync::{Arc, atomic::Ordering};
+        let temp = tempdir().unwrap();
+        let backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::new(
+            true,
+            0,
+            0,
+            0,
+            Some(temp.path().to_path_buf()),
+            None,
+            0,
+            0,
+        )));
+        let inert = TieredSnapshotWorker::inert(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        let key = dummy_state_entry(204).0;
+        let mut baseline = TieredSnapshotPayload::with_scope(true);
+        baseline.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![1_u8]),
+        );
+        let baseline = match inert.schedule(baseline) {
+            Err(payload) => payload,
+            Ok(()) => panic!("inert worker accepted payload"),
+        };
+        backend
+            .lock()
+            .record_world_snapshot_with_payload(&baseline)
+            .unwrap();
+        let worker = TieredSnapshotWorker::new(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        assert!(worker.enabled());
+        let mut accepted = TieredSnapshotPayload::default();
+        accepted.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![2_u8]),
+        );
+        assert!(worker.schedule(accepted).is_ok());
+        {
+            let _pending = worker.inner.pending.lock();
+            worker.inner.shutdown.store(true, Ordering::Relaxed);
+            worker.inner.cvar.notify_all();
+        }
+        let mut later = TieredSnapshotPayload::default();
+        later.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![3_u8]),
+        );
+        let later = match worker.schedule(later) {
+            Err(payload) => payload,
+            Ok(()) => panic!("shutdown worker accepted payload"),
+        };
+        // Returning the later payload guarantees all previously accepted work
+        // finished, so synchronous fallback cannot be overwritten by the worker.
+        assert_retained_value(&backend.lock(), &key, &[2]);
+        backend
+            .lock()
+            .record_world_snapshot_with_payload(&later)
+            .unwrap();
+        assert_retained_value(&backend.lock(), &key, &[3]);
+    }
 
     #[test]
     fn retired_commit_qc_segment_is_rejected() {

@@ -10,7 +10,7 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         query_handle,
         ChainId::from("multisig-cancel-prunes-target"),
     );
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
     let domain_id: iroha_model_base::domain::DomainId =

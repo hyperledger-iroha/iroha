@@ -219,12 +219,34 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     assert!(
         valid_block
             .as_ref()
-            .entrypoint_results()
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, output) = valid_block
+                    .as_ref()
+                    .network_output_at(
+                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    )
+                    .expect("every queried input has its explicit Network output");
+                assert_eq!(usize::try_from(output_index).unwrap(), index);
+                (index, entrypoint, &output.result)
+            })
             .all(|(_, _, result)| result.0.is_ok()),
         "native AMX transaction should execute successfully: {:?}",
         valid_block
             .as_ref()
-            .entrypoint_results()
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, output) = valid_block
+                    .as_ref()
+                    .network_output_at(
+                        u32::try_from(index).expect("fixture Network index fits u32"),
+                    )
+                    .expect("every queried input has its explicit Network output");
+                assert_eq!(usize::try_from(output_index).unwrap(), index);
+                (index, entrypoint, &output.result)
+            })
             .collect::<Vec<_>>()
     );
     let statements = valid_block.as_ref().lane_finality_statements();
@@ -474,7 +496,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         core::num::NonZeroU64::new(5).expect("non-zero height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     );
@@ -566,7 +587,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
     ));
     let mut block_header = BlockHeader::new(
         core::num::NonZeroU64::new(5).expect("non-zero height"),
-        None,
         None,
         None,
         1_700_000_000_000,

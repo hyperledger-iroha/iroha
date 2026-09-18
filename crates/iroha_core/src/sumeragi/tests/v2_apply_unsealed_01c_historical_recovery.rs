@@ -188,7 +188,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             == MergeFrontierFixtureCase::StartupRegistryBoundaries
         {
             let before_prepare =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot");
             let prepared = prepare_canonical_autonomous_batch_with_instructions(
                 &fixture,
                 &queue,
@@ -211,7 +212,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 },
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before_prepare,
                 "preparing exact queued claims must not modify canonical State",
             );
@@ -292,7 +294,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 .clone();
             assert_eq!(context.height, 3);
             let before_reservation =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot");
             let reserved = reserve_prepared_canonical_autonomous_batch(
                 &fixture,
                 &queue,
@@ -301,7 +304,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 Some(native_amx_receipts_for_apply_fixture),
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before_reservation,
                 "reserving already-admitted inputs must not modify canonical State",
             );
@@ -1101,9 +1105,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 }
                 MergeFrontierFixtureCase::DamagedKura => {
                     use std::io::Write as _;
-                    let path = iroha_config::parameters::actual::LaneConfig::default()
-                        .primary()
-                        .blocks_dir(fixture.kura.store_root())
+                    let path = Kura::canonical_storage_paths(&fixture.kura.store_root())
+                        .0
                         .join("blocks.index");
                     std::fs::OpenOptions::new()
                         .append(true)
@@ -1403,7 +1406,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
         let pre_live_state_hash =
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot");
         let pre_live_merge_ledger = fixture.state.merge_ledger.snapshot();
         if frontier_case == MergeFrontierFixtureCase::SuccessfulApply {
             let pause = service.pause_successful_apply_frontier_for_test();
@@ -1561,7 +1565,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         assert!(error.requires_restart_recovery());
         assert_eq!(fixture.state.committed_height(), source_height);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             pre_live_state_hash,
             "failed live Native prepublication must not stage WSV"
         );
@@ -1586,7 +1591,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             .expect("read result-bearing Native merge carrier after live crash");
         assert!(durable_carrier.has_results());
         assert_eq!(
-            durable_carrier.results().len(),
+            durable_carrier.output_results().len(),
             0,
             "compact merge carrier must not duplicate certified autonomous results"
         );
@@ -1828,7 +1833,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         let structural_native_receipt_bytes = norito::encode_canonical(&structural_native_receipt)
             .expect("encode exact structural Native receipt");
         let pre_startup_state_hash =
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot");
         let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
         let pre_startup_balance = autonomous_balance();
         assert!(participant_metadata_is_committed());
@@ -1981,7 +1987,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         );
         assert_eq!(fixture.state.committed_height(), 3);
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             pre_startup_state_hash,
             "startup evidence repair must not mutate canonical WSV"
         );
@@ -2174,7 +2181,8 @@ fn assert_cold_merge_registry_replay_boundary(
         .into_state_from_json(snapshot)
         .and_then(|mut state| {
             let restored_nexus = state.nexus_snapshot();
-            let restored_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+            let restored_hash = crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot");
             // Authenticate Kura's primary and restore the exact snapshot storage
             // cursor before applying static policy, as the daemon does at startup.
             state
@@ -2220,7 +2228,8 @@ fn assert_cold_merge_registry_replay_boundary(
                 startup_nexus.dataspace_catalog,
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(&state),
+                crate::snapshot::canonical_state_snapshot_hash(&state)
+                    .expect("stable valid fixture snapshot"),
                 restored_hash,
                 "startup runtime attachment must preserve the restored canonical State",
             );
@@ -2264,7 +2273,8 @@ fn assert_cold_merge_registry_replay_boundary(
     }
     drop(cold);
 
-    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+        .expect("stable valid fixture snapshot");
     let complete_snapshot = norito::json::to_value(fixture.state.as_ref())
         .expect("snapshot the exactly applied merge carrier");
     for (height, snapshot) in [
@@ -2304,7 +2314,8 @@ fn assert_cold_merge_registry_replay_boundary(
             vec![Arc::new(entry.clone())]
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&partial),
+            crate::snapshot::canonical_state_snapshot_hash(&partial)
+                .expect("stable valid fixture snapshot"),
             expected_hash
         );
         for key in reservations {
@@ -2328,7 +2339,8 @@ fn assert_cold_merge_registry_replay_boundary(
         vec![Arc::new(entry.clone())]
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        crate::snapshot::canonical_state_snapshot_hash(&restored)
+            .expect("stable valid fixture snapshot"),
         expected_hash
     );
     drop(restored);
@@ -2380,7 +2392,8 @@ fn assert_cold_merge_registry_replay_boundary(
                 }
             }
             world.commit();
-            let before = crate::snapshot::canonical_state_snapshot_hash(&restored);
+            let before = crate::snapshot::canonical_state_snapshot_hash(&restored)
+                .expect("stable valid fixture snapshot");
             if height == 3 {
                 let error = restored
                     .validate_certified_merge_entry_for_global_order(entry, mode)
@@ -2406,7 +2419,8 @@ fn assert_cold_merge_registry_replay_boundary(
                 assert_eq!(restored.committed_height(), 3);
                 assert!(restored.merge_ledger.snapshot().is_empty());
                 assert_eq!(
-                    crate::snapshot::canonical_state_snapshot_hash(&restored),
+                    crate::snapshot::canonical_state_snapshot_hash(&restored)
+                        .expect("stable valid fixture snapshot"),
                     before
                 );
             }
@@ -2424,7 +2438,8 @@ fn assert_cold_merge_registry_replay_boundary(
         }
     }
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         expected_hash,
         "all startup and rejection checks leave the original canonical state intact",
     );

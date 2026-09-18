@@ -75,7 +75,7 @@ fn check_full_quantity_ledger() {
         };
         // Seed through real mint/transfer instructions. The mixed-scale case
         // retains a third balance so total supply remains the canonical maximum.
-        let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 6, 0));
+        let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 6, 0));
         {
             let mut tx = setup.transaction();
             tx.tx_call_hash = Some(Hash::new(format!("quantity-fixture-mint-{index}")));
@@ -107,7 +107,7 @@ fn check_full_quantity_ledger() {
             }
         }
         setup.commit_world_overlay_for_testing().unwrap();
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 7, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 7, 0);
         let mut block = state.block(header);
         assert_eq!(
             block
@@ -330,7 +330,7 @@ fn check_supply_changes_between_transfers() {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 6, 0));
+        let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 6, 0));
         {
             let mut tx = setup.transaction();
             tx.tx_call_hash = Some(Hash::new(b"mixed-source-initial-mint"));
@@ -340,7 +340,7 @@ fn check_supply_changes_between_transfers() {
             tx.apply();
         }
         setup.commit_world_overlay_for_testing().unwrap();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 7, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 7, 0));
         crate::sumeragi::witness::start_block();
         let call = Hash::new(if mint {
             b"transfer-mint-transfer".as_slice()

@@ -3,7 +3,6 @@ fn distinct_body(fixture: &Fixture) -> (wire::BlockSubject, Vec<u8>) {
         NonZeroU64::new(1).expect("height"),
         None,
         None,
-        None,
         2_000,
         0,
     );

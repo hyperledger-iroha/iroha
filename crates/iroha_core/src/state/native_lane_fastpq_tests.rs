@@ -115,7 +115,7 @@ state_test! { sync native_fastpq_transfer_and_reveal_keep_actual_sources_through
         let fixture = native_economic_fixture(&[case], true);
         let state = &fixture.native.state;
         let groups = native_economic_groups(&fixture);
-        let before = crate::snapshot::canonical_state_snapshot_hash(state);
+        let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
         let header = native_fastpq_actual_application_header(&fixture);
         let mut prepared = native_fastpq_prepare(state, &header, &groups);
         assert!(prepared.executions()[0].result.is_ok(), "{:?}", prepared.executions()[0].result);
@@ -141,7 +141,7 @@ state_test! { sync native_fastpq_transfer_and_reveal_keep_actual_sources_through
             "common output drain preserves the actual sealed capture owner");
         assert!(overlay.verified_fastpq_source_inventory_for_capture().is_ok());
         drop(prepared);
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     }
 }
 
@@ -155,7 +155,7 @@ state_test! { sync native_fastpq_common_inventory_retains_due_start_and_actual_p
         });
     let state = &fixture.native.state;
     let groups = native_economic_groups(&fixture);
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let header = native_fastpq_actual_application_header(&fixture);
     assert_eq!(header.height().get(), 7);
     let mut prepared = native_fastpq_prepare(state, &header, &groups);
@@ -183,7 +183,7 @@ state_test! { sync native_fastpq_common_inventory_retains_due_start_and_actual_p
     assert_eq!(actual.len(), 2);
     assert!(actual.contains_key(&native_call) && actual.contains_key(&protocol));
     drop(prepared);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before,
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before,
         "native, start transition and additional protocol work all roll back together");
     assert_eq!(state.world.governance_referenda.view().get("native-source-due-start").unwrap().status,
         GovernanceReferendumStatus::Proposed);
@@ -193,7 +193,7 @@ state_test! { sync native_fastpq_omission_substitution_and_competing_inputs_latc
     let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], true);
     let state = &fixture.native.state;
     let groups = native_economic_groups(&fixture);
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let header = native_fastpq_actual_application_header(&fixture);
     let input = groups[0].body().payload().input.entrypoint.clone();
     let route = groups[0].body().payload().input.routing_plan().unwrap().coordinator_route();
@@ -242,7 +242,7 @@ state_test! { sync native_fastpq_omission_substitution_and_competing_inputs_latc
             "restoring supplied bytes cannot clear failed inventory ownership");
         assert_eq!(overlay.fastpq_source_inventory().unwrap_err(), error);
         drop(prepared);
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     }
 }
 
@@ -250,7 +250,7 @@ state_test! { sync native_fastpq_post_prefix_actual_extra_row_cannot_replace_pri
     let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], true);
     let state = &fixture.native.state;
     let groups = native_economic_groups(&fixture);
-    let before = crate::snapshot::canonical_state_snapshot_hash(state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let header = native_fastpq_actual_application_header(&fixture);
     let mut prepared = native_fastpq_prepare(state, &header, &groups);
     let input = &groups[0].body().payload().input;
@@ -268,7 +268,7 @@ state_test! { sync native_fastpq_post_prefix_actual_extra_row_cannot_replace_pri
     assert!(error.contains("native FASTPQ rows"), "{error}");
     assert_eq!(overlay.fastpq_source_inventory().unwrap_err(), error);
     drop(prepared);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
 
 state_test! { sync native_fastpq_duplicate_snapshot_selection_is_atomic_and_rejection_keeps_inventory_entry

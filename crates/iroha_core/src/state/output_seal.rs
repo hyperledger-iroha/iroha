@@ -1,0 +1,238 @@
+//! Consuming common output attachment, preserving State ownership on every exit.
+//! This seals actual output/source metadata, not final witness or publication authority.
+
+use super::*;
+use crate::queue::RoutingDecision;
+use iroha_data_model::nexus::LaneFinalityStatement;
+
+/// Block validation supplies its checked settlement projection before attachment.
+/// Rows, sources, receipts, transcripts and applying policy remain State-owned.
+pub(crate) struct ExecutionOutputSealMetadata {
+    /// Actual fragment count after the finalizer's deterministic State changes.
+    pub(crate) committed_fragment_count: u64,
+    /// Complete statements derived from actual settlement and frozen source routes.
+    pub(crate) lane_finality_statements: Vec<LaneFinalityStatement>,
+}
+
+/// Keep source-specific validation errors intact across State's consuming seal.
+#[derive(Debug)]
+pub(crate) enum ExecutionOutputSealError<E> {
+    /// The State owner, retained source or canonical attachment was inconsistent.
+    Owner(String),
+    /// The block finalizer rejected its actual deterministic effects.
+    Finalizer(E),
+}
+
+impl<E> From<String> for ExecutionOutputSealError<E> {
+    fn from(error: String) -> Self {
+        Self::Owner(error)
+    }
+}
+
+impl<E> From<&str> for ExecutionOutputSealError<E> {
+    fn from(error: &str) -> Self {
+        Self::Owner(error.to_owned())
+    }
+}
+
+struct SealOwner<'owner, 'state> {
+    state: &'owner mut StateBlock<'state>,
+    finished: bool,
+}
+
+impl Drop for SealOwner<'_, '_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+        }
+    }
+}
+
+impl StateBlock<'_> {
+    /// Run the complete execution output owner and consume its actual sources.
+    /// The caller still owes source/finality and non-output resource admission.
+    /// TODO: complete persistent State/read authority and publication admission;
+    /// the sealed output owner does not grant commit authority by itself.
+    pub(crate) fn execute_and_seal_ordinary_outputs<E>(
+        &mut self,
+        block: &mut SignedBlock,
+        genesis: Option<&crate::block::AuthenticatedGenesisOutputSource>,
+        finalize: impl FnOnce(
+            &mut Self,
+            &SignedBlock,
+            &[RoutingDecision],
+        ) -> Result<ExecutionOutputSealMetadata, E>,
+    ) -> Result<(), ExecutionOutputSealError<E>> {
+        self.reserve_ordinary_execution_outputs(block)?;
+        self.execute_ordinary_output_plan(block, genesis)?;
+        self.seal_execution_outputs(block, finalize)
+    }
+
+    /// Consume completed actual execution exactly once and attach all metadata.
+    /// Taking or dropping the capsule never clears the publication guard. The
+    /// finalizer cannot supply replacement rows, sources or policy. All its State
+    /// effects precede transcript sealing and the sole checked model attachment.
+    pub(crate) fn seal_execution_outputs<E>(
+        &mut self,
+        block: &mut SignedBlock,
+        finalize: impl FnOnce(
+            &mut Self,
+            &SignedBlock,
+            &[RoutingDecision],
+        ) -> Result<ExecutionOutputSealMetadata, E>,
+    ) -> Result<(), ExecutionOutputSealError<E>> {
+        let Some(ExecutionOutputPlanState::Retained(retained)) = self
+            .execution_output_plan
+            .replace(ExecutionOutputPlanState::Sealing)
+        else {
+            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            return Err("output seal requires one retained actual execution".into());
+        };
+        let mut owner = SealOwner {
+            state: self,
+            finished: false,
+        };
+        let state = &mut *owner.state;
+        let result = (|| {
+            // Reauthenticate auxiliary proposal bodies before any finalizer work;
+            // equal headers and Network roots alone do not bind those bytes.
+            block.validate_proposal_commitments()?;
+            let input_root = MerkleTree::root_from_typed_leaves(
+                block.network_entrypoints().map(TransactionEntrypoint::hash),
+            )
+            .map(Hash::from);
+            if retained.proposal != block.hash()
+                || block.header() != state._curr_block
+                || retained.input_root != input_root
+            {
+                return Err("output seal source differs from its actual execution".into());
+            }
+            if retained.native {
+                state.validate_native_output_carrier(block)?;
+            } else if state.native_lane_stage.is_some()
+                || block
+                    .execution_context()
+                    .is_some_and(|context| context.native_lane_decisions.is_some())
+            {
+                return Err("execution output seal cannot substitute native authority".into());
+            }
+            let sources = retained
+                .sources
+                .ok_or("output seal requires all actual phases")?;
+            if sources.is_native() != retained.native
+                || sources.proposal() != block.hash()
+                || sources.source_context().network_id != state.network_id
+                || sources.source_context().height != state._curr_block.height().get()
+                || sources.entries().len() != retained.rows.len()
+                || sources.network_routes().len() != block.network_entrypoint_count()
+            {
+                return Err("output seal lost its complete actual source inventory".into());
+            }
+            if !state.batch_transfer_outcomes.is_empty() {
+                return Err("output seal retains unowned business receipts".into());
+            }
+            let metadata = finalize(state, block, sources.network_routes())
+                .map_err(ExecutionOutputSealError::Finalizer)?;
+            if !matches!(
+                state.execution_output_plan,
+                Some(ExecutionOutputPlanState::Sealing)
+            ) {
+                return Err("output finalizer invalidated its State owner".into());
+            }
+            if !state.batch_transfer_outcomes.is_empty() {
+                return Err("output finalizer introduced unowned business receipts".into());
+            }
+            let fragments = u64::try_from(state.committed_fragment_count())
+                .map_err(|_| "committed fragment count exceeds u64")?;
+            if fragments != metadata.committed_fragment_count {
+                return Err("output finalizer did not account for every applied fragment".into());
+            }
+            let tx_set = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                (0..block.network_entrypoint_count()).map(|index| {
+                    block
+                        .network_entrypoint_at(index)
+                        .expect("immutable Network count and source positions agree")
+                }),
+            )
+            .map_err(|error| error.to_string())?;
+            state.set_fastpq_tx_set_hash(tx_set.into());
+            let pending = state.submit_transfer_transcript_digest_batch();
+            state.finalize_owned_fastpq_source_inventory_with_pending(&sources, pending)?;
+            let transcripts = state.drain_transfer_transcripts_with_pending(None);
+            let envelopes = state.drain_axt_envelopes();
+            let policy = state.axt_policy_snapshot();
+            let transitions = state.axt_authorization_transitioned().clone();
+            let limits = state.frozen_output_capacity()?.policy.limits();
+            let measured = retained.rows.iter().try_fold(0_u64, |total, row| {
+                let bytes = norito::canonical_frame_len(row).map_err(|error| error.to_string())?;
+                total
+                    .checked_add(u64::try_from(bytes).map_err(|_| "row length exceeds u64")?)
+                    .ok_or_else(|| "retained row bytes overflow".to_owned())
+            })?;
+            if measured != retained.row_bytes {
+                return Err("retained rows differ from their consumed output budget".into());
+            }
+            // Borrow the actual World journals after every finalizer effect.
+            // Encoding failure is a local ownership error before attachment.
+            let world_delta = state.world.net_state_delta()?;
+            block
+                .set_execution_outputs(
+                    retained.rows,
+                    fragments,
+                    transcripts,
+                    envelopes,
+                    policy,
+                    transitions,
+                    metadata.lane_finality_statements,
+                    &limits,
+                )
+                .map_err(|error| error.to_string())?;
+            let wire = block.encode_wire().map_err(|error| error.to_string())?;
+            Ok(SealedExecutionOutputs {
+                world_delta,
+                proposal: block.hash(),
+                wire_hash: Hash::new(&wire),
+                wire_bytes: u64::try_from(wire.len())
+                    .map_err(|_| "sealed wire length exceeds u64")?,
+            })
+        })();
+        match result {
+            Ok(sealed) => {
+                state.execution_output_plan = Some(ExecutionOutputPlanState::Sealed(sealed));
+                owner.finished = true;
+                Ok(())
+            }
+            Err(error) => {
+                state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+                Err(error)
+            }
+        }
+    }
+
+    /// Check the exact attached wire while publication is still gated. Later
+    /// signatures or result changes require the eventual final publication owner;
+    /// they cannot reuse this earlier attachment's binding.
+    pub(crate) fn verify_execution_output_seal(&self, block: &SignedBlock) -> Result<(), String> {
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
+        else {
+            return Err("execution outputs do not have a completed seal".into());
+        };
+        let limits = self.frozen_output_capacity()?.policy.limits();
+        block
+            .validate_execution_outputs(&limits)
+            .map_err(|error| error.to_string())?;
+        let wire = block.encode_wire().map_err(|error| error.to_string())?;
+        if sealed.proposal != block.hash()
+            || self._curr_block != block.header()
+            || u64::try_from(wire.len()).ok() != Some(sealed.wire_bytes)
+            || Hash::new(&wire) != sealed.wire_hash
+        {
+            return Err("execution output attachment changed after its seal".into());
+        }
+        if self.world.net_state_delta()? != sealed.world_delta {
+            return Err("World values changed after the execution output seal".into());
+        }
+        self.verified_fastpq_source_inventory_for_capture()?;
+        Ok(())
+    }
+}

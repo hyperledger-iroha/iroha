@@ -109,6 +109,7 @@ def test_ast_reader_authenticates_the_same_inventory_as_checker_bootstrap() -> N
     [
         "crates/iroha_core/src/block.rs",
         "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+        "crates/iroha_core/src/kura.rs",
     ],
 )
 def test_inventory_matches_live_reviewed_rust_closure(
@@ -125,9 +126,22 @@ def test_inventory_matches_live_reviewed_rust_closure(
     assert errors == []
     assert closure is not None
     if owner == "crates/iroha_core/src/block.rs":
-        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:2] == (
+        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:3] == (
+            "block/carrier_preparation.rs",
             "block/post_execution_tail.rs",
             "block/post_execution_tail_tests.rs",
+        )
+        assert "block/output_event_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+    elif owner == "crates/iroha_core/src/smartcontracts/ivm/host.rs":
+        assert "host/shared_vm_cycle_budget_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+    else:
+        reviewed = module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+        first_test = reviewed.index("kura/tests/canonical_network_index.rs")
+        assert reviewed[first_test:first_test + 4] == (
+            "kura/tests/canonical_network_index.rs",
+            "kura/tests/bounded_canonical_body_reads.rs",
+            "kura/tests/committed_network_proof_support.rs",
+            "kura/tests/canonical_network_query_support.rs",
         )
     parent = Path(owner)
     assert tuple(
@@ -170,6 +184,13 @@ def test_ast_reader_has_no_former_owner_fallback(tmp_path: Path) -> None:
         "omitted_child",
         "omitted_common_tail",
         "omitted_common_tail_tests",
+        "omitted_carrier_preparation",
+        "omitted_output_event_tests",
+        "omitted_shared_vm_cycle_budget_tests",
+        "omitted_canonical_network_index",
+        "omitted_bounded_canonical_body_reads",
+        "omitted_committed_network_proof_support",
+        "omitted_canonical_network_query_support",
         "duplicate_assignment",
         "executable_payload",
     ],
@@ -181,12 +202,26 @@ def test_ast_reader_rejects_inventory_substitution(tmp_path: Path, mutation: str
     if mutation == "omitted_child":
         source = source.replace("        'consensus_v2_context_tests.rs',\n", "")
         expected = "manifest digest must equal"
-    elif mutation in ("omitted_common_tail", "omitted_common_tail_tests"):
-        component = (
-            "block/post_execution_tail.rs"
-            if mutation == "omitted_common_tail"
-            else "block/post_execution_tail_tests.rs"
-        )
+    elif mutation in (
+        "omitted_common_tail", "omitted_common_tail_tests",
+        "omitted_carrier_preparation", "omitted_output_event_tests",
+        "omitted_shared_vm_cycle_budget_tests",
+        "omitted_canonical_network_index",
+        "omitted_bounded_canonical_body_reads",
+        "omitted_committed_network_proof_support",
+        "omitted_canonical_network_query_support",
+    ):
+        component = {
+            "omitted_common_tail": "block/post_execution_tail.rs",
+            "omitted_common_tail_tests": "block/post_execution_tail_tests.rs",
+            "omitted_carrier_preparation": "block/carrier_preparation.rs",
+            "omitted_output_event_tests": "block/output_event_tests.rs",
+            "omitted_shared_vm_cycle_budget_tests": "host/shared_vm_cycle_budget_tests.rs",
+            "omitted_canonical_network_index": "kura/tests/canonical_network_index.rs",
+            "omitted_bounded_canonical_body_reads": "kura/tests/bounded_canonical_body_reads.rs",
+            "omitted_committed_network_proof_support": "kura/tests/committed_network_proof_support.rs",
+            "omitted_canonical_network_query_support": "kura/tests/canonical_network_query_support.rs",
+        }[mutation]
         declaration = f"        '{component}',\n"
         assert source.count(declaration) == 1
         source = source.replace(declaration, "")

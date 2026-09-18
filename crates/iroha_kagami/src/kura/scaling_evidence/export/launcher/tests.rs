@@ -7,18 +7,15 @@ use norito::codec::Encode as _;
 mod fixture;
 
 fn bindings(f: &fixture::Fixture) -> Vec<HeightInputBinding> {
-    vec![
-        HeightInputBinding {
-            height: 1,
-            finality_hash: Hash::new(norito::encode_canonical(&f.first).unwrap()),
-            query_hashes: vec![],
-        },
-        HeightInputBinding {
-            height: 2,
-            finality_hash: Hash::new(norito::encode_canonical(&f.second).unwrap()),
-            query_hashes: f.queries().iter().map(Hash::new).collect(),
-        },
-    ]
+    f.heights
+        .iter()
+        .map(|height| HeightInputBinding {
+            height: height.block.header().height().get(),
+            finality_hash: Hash::new(norito::encode_canonical(&height.proof).unwrap()),
+            contexts_hash: Hash::new(&height.evidence),
+            query_hashes: height.queries().iter().map(Hash::new).collect(),
+        })
+        .collect()
 }
 
 fn request(f: &fixture::Fixture) -> RequestV1 {
@@ -44,7 +41,14 @@ fn roundtrip_preserves_every_independent_fact_and_actual_signed_request() {
         assert_eq!(decoded.first_context, original.first_context);
         assert_eq!(decoded.first_height, original.first_height);
         assert_eq!(decoded.last_height, original.last_height);
-        assert_eq!(decoded.lane_catalog_hash, original.lane_catalog_hash);
+        assert_eq!(
+            decoded.nexus_amx_context_hash,
+            original.nexus_amx_context_hash
+        );
+        assert_eq!(
+            decoded.execution_policy_hash,
+            original.execution_policy_hash
+        );
         assert_eq!(
             norito::encode_canonical(&decoded.active_lanes).unwrap(),
             norito::encode_canonical(&original.active_lanes).unwrap()
@@ -66,6 +70,7 @@ fn roundtrip_preserves_every_independent_fact_and_actual_signed_request() {
         for (got, expected) in actual.iter().zip(expected) {
             assert_eq!(got.height, expected.height);
             assert_eq!(got.finality_hash, expected.finality_hash);
+            assert_eq!(got.contexts_hash, expected.contexts_hash);
             assert_eq!(got.query_hashes, expected.query_hashes);
         }
         assert_eq!(
@@ -283,5 +288,5 @@ fn launcher_request_declares_v1_canonical_identity_before_plan_admission() {
     assert_eq!(bytes, frame(&fixture));
     let (plan, _, bindings) = decode_frame(&bytes).unwrap().into_parts();
     assert_eq!(plan.scheduled.len(), 8);
-    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings.len(), fixture.heights.len());
 }

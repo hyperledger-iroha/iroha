@@ -346,7 +346,7 @@ mod tests {
         accounts: &[(AccountId, UniversalAccountId, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,
     ) {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         {
@@ -404,7 +404,7 @@ mod tests {
         assets: &[(AssetDefinitionId, &str, AssetBalanceScope, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,
     ) {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         {

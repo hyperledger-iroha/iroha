@@ -1577,32 +1577,6 @@ fn list_receipts_for_account(
     records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
     Ok(records.iter().map(receipt_response_from_record).collect())
 }
-fn external_signed_transaction_results(
-    block: &SignedBlock,
-) -> impl Iterator<
-    Item = (
-        HashOf<TransactionEntrypoint>,
-        SignedTransaction,
-        &iroha_data_model::transaction::TransactionResult,
-    ),
-> + '_ {
-    let external_total = block.external_entrypoint_count();
-    block
-        .external_entrypoints_cloned()
-        .take(external_total)
-        .zip(block.results().take(external_total))
-        .filter_map(|(entrypoint, result)| {
-            let entrypoint_hash = entrypoint.hash();
-            let signed = match entrypoint {
-                TransactionEntrypoint::External(signed) => signed,
-                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    return None;
-                }
-            };
-            Some((entrypoint_hash, signed, result))
-        })
-}
 fn committed_transaction_by_hash(
     app: &SharedAppState,
     payment_tx_hash: &str,
@@ -1624,30 +1598,50 @@ fn committed_transaction_by_hash(
     };
     let height_u64 = u64::try_from(height.get())
         .map_err(|_| conversion_error("payment transaction height exceeds u64"))?;
-    let Some(block) = app.state.block_by_height(height) else {
-        return Err(not_permitted_error(
-            "vpn payment transaction block is not available",
-        ));
-    };
-    for (entrypoint_hash, tx, result) in external_signed_transaction_results(block.as_ref()) {
+    let work = crate::routing::app_query_limits().max_fetch_size;
+    let carrier = app
+        .state
+        .read_finalized_execution_carrier(
+            height,
+            work,
+            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+        )
+        .map_err(|error| {
+            conversion_error(format!("VPN payment history is unavailable: {error}"))
+        })?;
+    let mut found = None;
+    for (entrypoint_hash, tx, result) in crate::canonical_history::signed_calls(carrier.block())
+        .map_err(|error| conversion_error(error.to_string()))?
+    {
         if !crate::signed_transaction_carrier_matches_indexed_identity(
             &entrypoint_hash,
-            &tx,
+            tx,
             &target,
         ) {
             continue;
         }
-        if result.as_ref().is_err() {
+        if found.is_some() {
+            return Err(not_permitted_error(
+                "VPN payment has duplicate Network sources",
+            ));
+        }
+        if result.is_err() {
             return Err(not_permitted_error(
                 "vpn payment transaction did not commit successfully",
             ));
         }
-        return Ok((tx, height_u64));
+        found = Some(tx.clone());
     }
-    Err(not_permitted_error(
-        "vpn payment transaction was indexed but not found in its block",
-    ))
+    if app.state.committed_entrypoint_height(&target) != Some(height) {
+        return Err(not_permitted_error(
+            "VPN payment membership changed during authentication",
+        ));
+    }
+    found.map(|tx| (tx, height_u64)).ok_or_else(|| {
+        not_permitted_error("vpn payment transaction was indexed but not found in its block")
+    })
 }
+
 fn open_lease_matches_quote(
     open: &OpenVpnLeaseEscrow,
     quote: &VpnQuoteRecord,

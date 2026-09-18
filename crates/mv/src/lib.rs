@@ -5,6 +5,17 @@
 //! The abstractions here are intentionally small to avoid pulling heavy dependencies. They are
 //! suitable for in-memory testing or thin adapters in higher-level crates.
 use core::fmt::Debug;
+mod publication;
+pub use publication::PublicationPreparationError;
+
+/// How a block acquired its exact published predecessor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockMode {
+    /// Extend current state, replacing the prior block's undo with this block's undo.
+    Ordinary,
+    /// First undo the published tip, then stage a replacement at that cut.
+    Replace,
+}
 /// MVCC cell primitives (versioned slots and helpers).
 pub mod cell;
 /// Norito JSON helpers for MV types.

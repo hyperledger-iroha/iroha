@@ -1,5 +1,7 @@
 //! Parameter module split into system and custom parameters.
 pub mod custom;
+pub mod execution_output;
+pub use execution_output::ExecutionOutputPolicyV1;
 pub mod system;
 pub(crate) use custom::CustomParameters;
 pub use custom::{CustomParameter, CustomParameterId};
@@ -15,3 +17,6 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_parameter_identity_tests;
+
+#[cfg(test)]
+mod execution_output_parameter_tests;

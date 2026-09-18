@@ -669,9 +669,9 @@ def snapshot_events(role, invocation):
 
 
 def native_kura_tip(role):
-    # Exact observed primary-lane hash journal; native tail/od project only the
+    # Exact observed chain-scoped hash journal; native tail/od project only the
     # final public 32-byte block hash. No ledger/state payload enters Python.
-    path = STATE_ROOT / role / 'storage/kura/blocks/lane_000_core/blocks.hashes'
+    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
     before = stamp(path)
     need(before[6] >= 32 and before[6] % 32 == 0, 'canonical Kura hash journal size differs')
     tail = subprocess.Popen(['/usr/bin/tail', '-c', '32', str(path)],
@@ -696,7 +696,7 @@ def native_kura_tip(role):
 def native_kura_hash(role, height):
     """Project one retained public hash; native tools alone read the journal."""
     need(role in ROLES and type(height) is int and height > 0, 'invalid retained Kura height')
-    path = STATE_ROOT / role / 'storage/kura/blocks/lane_000_core/blocks.hashes'
+    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
     before = stamp(path)
     need(before[6] >= height * 32, 'retained Kura height is missing')
     reader = subprocess.Popen(['/usr/bin/dd', 'if=' + str(path), 'bs=32',

@@ -2229,7 +2229,6 @@ mod tests {
                 NonZeroU64::new(height).expect("height"),
                 previous,
                 None,
-                None,
                 0,
                 0,
             )

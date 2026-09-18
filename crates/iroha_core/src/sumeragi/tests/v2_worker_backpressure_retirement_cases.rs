@@ -10,7 +10,11 @@ fn production_exact_output_observes_finality_only_after_state_commit() {
         });
     valid
         .as_mut()
-        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .set_execution_outputs(
+            Vec::new(), 0, Default::default(), Vec::new(), Default::default(),
+            Default::default(), Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
         .expect("attach empty block result metadata");
     let block = valid.commit_unchecked().unpack(|_| {});
     service

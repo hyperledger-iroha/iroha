@@ -166,7 +166,7 @@ mod sorafs_repair_admission {
     #[test]
     fn initial_executor_repair_preserves_provider_scope_and_authority_bound_replay() {
         let mut state = fixture([0xE1; 32]);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 2_000, 0);
         let block_hash = HashOf::new(&header);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
@@ -252,7 +252,6 @@ mod sorafs_repair_admission {
             nonzero!(2_u64),
             None,
             None,
-            None,
             2_000,
             0,
         ));
@@ -306,7 +305,7 @@ mod sorafs_repair_admission {
     #[test]
     fn initial_executor_repair_appeal_requires_provider_owner_and_rejects_rebound_replay() {
         let mut state = fixture([0xE1; 32]);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 2_000, 0);
         let block_hash = HashOf::new(&header);
         let mut block = state.block(header);
         let mut transaction = block.transaction();

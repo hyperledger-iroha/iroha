@@ -226,7 +226,7 @@ fn presigned_block_with_creation_after_txs(
         let tree: iroha_crypto::MerkleTree<TransactionEntrypoint> = hashes.collect();
         tree.root()
     };
-    let mut header = BlockHeader::new(nonzero!(2_u64), None, None, None, block_ct, 0);
+    let mut header = BlockHeader::new(nonzero!(2_u64), None, None, block_ct, 0);
     header.merkle_root = merkle_root;
     let sig = BlockSignature::new(
         0,

@@ -115,7 +115,6 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         NonZeroU64::new(1).expect("height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     ));
@@ -233,9 +232,9 @@ fn block_history_tamper_rejected_without_mutation() {
     let committed_baseline = baseline_valid.commit_unchecked().unpack(|_| {});
     let committed_baseline_signed: SignedBlock = committed_baseline.clone().into();
     assert!(
-        committed_baseline.as_ref().error(0).is_none(),
+        committed_baseline.as_ref().output_error(0).is_none(),
         "baseline transaction rejected during execution: {:?}",
-        committed_baseline.as_ref().error(0)
+        committed_baseline.as_ref().output_error(0)
     );
     let _ = baseline_state_block.apply_without_execution(&committed_baseline, vec![peer.clone()]);
     baseline_state_block

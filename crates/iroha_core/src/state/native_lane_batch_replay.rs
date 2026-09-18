@@ -4,12 +4,13 @@
 //! not finality of the proposed applying carrier. Historical inclusion additionally
 //! requires its private Kura seal. A post-closure State cannot replace the prefix.
 //! Neither entry point grants carrier validity, publication or lane Apply.
-//! TODO: integrate remaining controls/Time/witness with the sole ValidBlock
+//! The common producer owns actual Network/Pipeline/Time output retention.
+//! TODO: integrate remaining controls/State witness with the sole ValidBlock
 //! replay/Apply consumer; keep production native carrier admission disabled.
 
 use super::{
-    AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, State,
-    VerifiedFirstLaneAdmittedInputV1, VerifiedLaneContexts, VerifiedLaneDecisionGroupV1,
+    AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, MergeLedgerCommitError,
+    State, VerifiedFirstLaneAdmittedInputV1, VerifiedLaneContexts, VerifiedLaneDecisionGroupV1,
     lane_decision_batch::PreparedLaneDecisionBatchV1,
 };
 use crate::kura::FinalizedNativeLaneBatchV1;
@@ -63,7 +64,7 @@ pub(crate) enum NativeLaneBatchSourcePreparationV1<'state> {
     ObservationChanged,
 }
 impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
-    fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, String> {
+    fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
         match self {
             Self::Ready(source) => source.replay_scratch(),
             Self::FirstInputRecoveryRequired {
@@ -87,27 +88,40 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
             )
     }
 
-    fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, String> {
+    fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
         self.stage_with_start_hooks()
     }
 
     /// Consume exact pre-State source authority through the SAME ordered
-    /// constructor as scratch: shared start hooks, native execution, prefix seal.
+    /// constructor as scratch: shared start hooks, native metadata and common
+    /// Network/Pipeline/Time output ownership.
+    /// A capacity refusal preserves its typed fitting prefix for proposal selection;
+    /// it cannot be flattened into a terminal input error.
     /// This remains disposable and StateBlock::commit rejects the native seal.
-    /// TODO: add results/Time/witness and exact publication/Apply authorization
+    /// TODO: integrate consuming output sealing, complete State witness and exact publication/Apply authorization
     /// to the sole ValidBlock consumer before enabling native production inputs.
-    pub(crate) fn stage_with_start_hooks(self) -> Result<NativeLaneBatchReplayV1<'state>, String> {
+    pub(crate) fn stage_with_start_hooks(
+        self,
+    ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
         if !self.is_current() {
             return Ok(NativeLaneBatchReplayV1::ObservationChanged);
         }
         // Hash before the constructor takes its MV writer; never reread State
         // or perform Kura I/O while the returned overlay owns its guards.
-        let actual_base = self.state.lane_execution_state_hash();
+        let actual_base = match self.state.lane_execution_state_hash() {
+            Ok(hash) => hash,
+            Err(error) if error.is_observation_changed() => {
+                return Ok(NativeLaneBatchReplayV1::ObservationChanged);
+            }
+            Err(error) => return Err(error.into()),
+        };
         if !self.is_current() {
             return Ok(NativeLaneBatchReplayV1::ObservationChanged);
         }
         if actual_base != self.batch.base_state_hash {
-            return Err("native prepared source no longer matches its exact applying base".into());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "native prepared source no longer matches its exact applying base".into(),
+            ));
         }
         let prepared =
             self.state
@@ -118,9 +132,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         ) {
             return Ok(NativeLaneBatchReplayV1::ObservationChanged);
         }
-        Ok(NativeLaneBatchReplayV1::Ready(
-            prepared.map_err(|error| error.to_string())?,
-        ))
+        Ok(NativeLaneBatchReplayV1::Ready(prepared?))
     }
 }
 
@@ -137,8 +149,9 @@ impl State {
         &self,
         included: &FinalizedNativeLaneBatchV1,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
-    ) -> Result<NativeLaneBatchReplayV1<'_>, String> {
-        self.prepare_finalized_native_lane_batch_source(included, recovered)?
+    ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
+        self.prepare_finalized_native_lane_batch_source(included, recovered)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
             .replay_scratch()
     }
 
@@ -153,8 +166,9 @@ impl State {
         &self,
         carrier: &SignedBlock,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
-    ) -> Result<NativeLaneBatchReplayV1<'_>, String> {
-        self.prepare_proposed_native_lane_batch_source(carrier, recovered)?
+    ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
+        self.prepare_proposed_native_lane_batch_source(carrier, recovered)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
             .replay_scratch()
     }
 
@@ -202,7 +216,9 @@ impl State {
             return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
         }
         let (height, hash, network, expected_policy_hash) = {
-            let view = self.view();
+            let Some(view) = self.try_view_once().map_err(|error| error.to_string())? else {
+                return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            };
             (
                 view.block_hashes.len() as u64,
                 view.block_hashes.last().copied(),
@@ -224,7 +240,13 @@ impl State {
                     .into(),
             );
         }
-        let base_hash = self.lane_execution_state_hash();
+        let base_hash = match self.lane_execution_state_hash() {
+            Ok(hash) => hash,
+            Err(error) if error.is_observation_changed() => {
+                return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
             return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
         }

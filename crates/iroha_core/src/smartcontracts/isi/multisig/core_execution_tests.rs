@@ -384,7 +384,7 @@ fn initial_executor_runs_multisig_flow() {
         query_handle,
         ChainId::from("multisig-test-chain"),
     );
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
     let domain_id: iroha_model_base::domain::DomainId =

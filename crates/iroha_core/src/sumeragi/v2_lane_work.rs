@@ -5120,7 +5120,6 @@ impl V2LaneWorkAdapter {
             || header.view_change_index() != active_view
             || header.creation_time() != logical_time
             || header.merkle_root().is_some()
-            || header.result_merkle_root().is_some()
         {
             return Err(V2LaneWorkError::InvalidContext(
                 "derived merge carrier header differs from the frozen round".to_owned(),
@@ -5280,8 +5279,14 @@ impl V2LaneWorkAdapter {
                         {
                             return None;
                         }
-                        let state_hash = *current_state_hash
-                            .get_or_insert_with(|| self.state.lane_execution_state_hash());
+                        let state_hash = match current_state_hash {
+                            Some(hash) => hash,
+                            None => {
+                                let hash = self.state.lane_execution_state_hash().ok()?;
+                                current_state_hash = Some(hash);
+                                hash
+                            }
+                        };
                         (preflight.preflight_state_hash == Some(state_hash))
                             .then(|| preflight.has_rejections())
                     },
@@ -21992,7 +21997,6 @@ pub(super) mod tests {
             .carrier_context_header();
         assert_eq!(view_zero, rebuilt);
         assert_eq!(view_zero.merkle_root(), None);
-        assert_eq!(view_zero.result_merkle_root(), None);
         let view_three = adapter
             .merge_carrier_context_header(3)
             .expect("derive exact higher-view carrier context");
@@ -27079,17 +27083,31 @@ pub(super) mod tests {
             let entrypoint_hash = transaction.hash_as_entrypoint();
             let mut block =
                 SignedBlock::genesis(vec![transaction], transaction_key.private_key(), None, None);
-            block
-                .set_transaction_results(
-                    Vec::new(),
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &block,
                     &[entrypoint_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach deterministic genesis transaction result");
+            }
+            .expect("attach deterministic genesis transaction result");
             assert!(block.header().is_genesis());
             assert_eq!(block.external_entrypoint_count(), 1);
             assert!(block.has_results());
-            assert!(block.header().result_merkle_root().is_some());
+            assert!(block.output_merkle_commitment().is_some());
             assert!(block.execution_context().is_none());
             let signature =
                 SignatureOf::try_from_hash(transaction_key.private_key(), block.header().hash())
@@ -28843,7 +28861,6 @@ pub(super) mod tests {
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
             None,
-            None,
             1,
             0,
         );
@@ -28862,13 +28879,26 @@ pub(super) mod tests {
             BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership.clone()]),
         ));
-        block
-            .set_transaction_results(
-                Vec::new(),
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &block,
                 &[entrypoint_hash],
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("attach canonical restart transaction result");
+        }
+        .expect("attach canonical restart transaction result");
         let signature =
             SignatureOf::try_from_hash(keys[leader].private_key(), block.header().hash())
                 .expect("sign complete result-bearing ordinary carrier");
@@ -28933,7 +28963,6 @@ pub(super) mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("fixture block height is non-zero"),
             parent,
-            None,
             None,
             height,
             0,
@@ -29049,7 +29078,6 @@ pub(super) mod tests {
                 .parent_commit_qc
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
-            None,
             None,
             adapter.context.height,
             view,
@@ -30736,7 +30764,6 @@ pub(super) mod tests {
                     .as_ref()
                     .map(|qc| qc.subject.block_hash),
                 None,
-                None,
                 adapter.context.height,
                 0,
             );
@@ -30748,13 +30775,27 @@ pub(super) mod tests {
                 u64::try_from(leader_index).expect("leader index fits u64"),
                 keys[leader_index].private_key(),
             );
-            canonical_block
-                .set_transaction_results(
-                    Vec::new(),
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &canonical_block,
                     &[entrypoint_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                canonical_block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach large canonical result");
+            }
+            .expect("attach large canonical result");
             let signature = SignatureOf::try_from_hash(
                 keys[leader_index].private_key(),
                 canonical_block.header().hash(),
@@ -31503,11 +31544,8 @@ pub(super) mod tests {
         };
         let lane_entry = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(proposal.descriptor.lane_id)
-            .expect("fixture lane storage entry")
-            .clone();
+            .lane_storage_identity(proposal.descriptor.lane_id)
+            .expect("fixture lane storage identity");
         let lane_artifact_dir = lane_entry
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts");

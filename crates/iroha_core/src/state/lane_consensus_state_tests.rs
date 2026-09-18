@@ -1,7 +1,8 @@
 // Native state ownership, full-set witness and snapshot regressions.
 
 fn configured_lane_context_queue_plan_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(empty_global_block_after(None).hash());
+    let network_id =
+        iroha_data_model::NetworkId::from_genesis_hash(empty_global_block_after(None).hash());
     let (state, validators, commit_keys, parent) =
         configured_single_lane_merge_state_with_network(network_id);
     let parent = advance_queue_plan_fixture_to_beacon_parent(&state, parent);
@@ -13,15 +14,23 @@ fn lane_opening_context_for_state_test(
 ) -> iroha_data_model::block::consensus_v2::HeightContext {
     let mut parent = None;
     for height in 1..=state.committed_height() {
-        let block = state.kura.get_block(NonZeroUsize::new(height).unwrap()).unwrap();
+        let block = state
+            .kura
+            .get_block(NonZeroUsize::new(height).unwrap())
+            .unwrap();
         parent = Some(merge_carrier_finality_artifact_with_network(
-            &block, parent.as_ref(), state.network_id,
+            &block,
+            parent.as_ref(),
+            state.network_id,
         ));
     }
     let parent = parent.unwrap();
     crate::sumeragi::v2_context::build_successor_height_context(
-        &parent, parent.height_context.nexus_amx_context_hash, None,
-    ).unwrap()
+        &parent,
+        parent.height_context.nexus_amx_context_hash,
+        None,
+    )
+    .unwrap()
 }
 
 state_test! { sync lane_consensus_full_set_witness_rejects_mutation_removal_and_duplicates
@@ -89,7 +98,7 @@ state_test! { sync lane_consensus_snapshot_requires_field_and_hashes_the_complet
         (*DEFAULT_TEST_CHAIN_ID).clone(),
         iroha_data_model::NetworkId::from_genesis_hash(empty_global_block_after(None).hash()),
     );
-    let empty_root = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let empty_root = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     let empty = norito::json::to_value(&state).unwrap();
     assert!(empty.get("lane_consensus_contexts").is_some());
     let restored = deserialize_state_snapshot_value(empty.clone()).unwrap();
@@ -104,7 +113,7 @@ state_test! { sync lane_consensus_snapshot_requires_field_and_hashes_the_complet
     let mut cell = state.lane_consensus_contexts.block();
     *cell.get_mut() = LaneConsensusContextsV1::new(vec![context]).unwrap();
     cell.commit();
-    assert_ne!(crate::snapshot::canonical_state_snapshot_hash(&state), empty_root,
+    assert_ne!(crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"), empty_root,
         "frozen contexts must not be redacted as local consensus sidecars");
     assert!(deserialize_state_snapshot_value(norito::json::to_value(&state).unwrap()).is_err(),
         "a context opening after the snapshot height cannot be restored");
@@ -141,8 +150,8 @@ state_test! { sync lane_consensus_opens_from_admitted_work_and_survives_global_a
     let snapshot = norito::json::to_value(&state).unwrap();
     let restored = deserialize_state_snapshot_value_with_kura(snapshot, Arc::clone(&state.kura)).unwrap();
     assert_eq!(restored.view().lane_consensus_contexts, original);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&restored),
-        crate::snapshot::canonical_state_snapshot_hash(&state));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&restored).expect("stable valid fixture snapshot"),
+        crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot"));
 
     let successor = empty_global_block_after(Some(&block));
     let mut later = lane_opening_context_for_state_test(&state);

@@ -335,7 +335,6 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -419,7 +418,6 @@ fn runtime_catalog_rejects_ineligible_committee_without_partial_state() {
                 NonZeroU64::new(2).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             ));
@@ -459,7 +457,6 @@ fn runtime_catalog_rejects_stale_roots_and_genesis_without_partial_state() {
             let height = if case == 3 { 1 } else { 2 };
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(height).unwrap(),
-                None,
                 None,
                 None,
                 0,

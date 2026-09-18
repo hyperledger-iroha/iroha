@@ -77,10 +77,14 @@ impl AutonomousLifecycleBootstrapCompletion {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutonomousLaneBlockViewStateReadMode {
+enum AutonomousLaneBlockViewStateReadMode<'a> {
     MainOnly,
     LatestReadOnly,
-    Recover { pending_canonical_bytes: u64 },
+    Recover {
+        pending_canonical_bytes: u64,
+        /// Exact active or retained entry authenticated by the enclosing reader.
+        entry: &'a LaneStorageEntry,
+    },
 }
 /// Result of a lane auxiliary-artifact persistence attempt serialized with
 /// application-receipt publication and merge-frontier compaction.
@@ -132,7 +136,7 @@ impl AutonomousLaneAttemptInventoryBudget {
     }
 }
 struct AutonomousLifecycleTerminalPendingPublicationPlan {
-    entry: LaneConfigEntry,
+    entry: LaneStorageEntry,
     identity: (u64, u64),
     path: PathBuf,
     outcome: AutonomousLifecycleTerminalOutcomeV1,
@@ -910,7 +914,7 @@ impl Kura {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX)
     }
     fn autonomous_lifecycle_terminal_outcome_path_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         store_root: &Path,
         lane_block_height: u64,
         proposal_height: u64,
@@ -989,7 +993,7 @@ impl Kura {
     /// The caller holds the full prune/canonical/geometry/sidecar lock corridor.
     fn active_autonomous_terminal_evidence_references_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
     ) -> Result<AutonomousTerminalEvidenceReferences> {
         let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         let directory_entries = match std::fs::read_dir(&directory) {
@@ -1096,7 +1100,7 @@ impl Kura {
     /// recovery and before any pair can be compacted.
     fn validate_active_autonomous_terminal_evidence_references_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         expected: &AutonomousTerminalEvidenceReferences,
     ) -> Result<()> {
         let observed = self.active_autonomous_terminal_evidence_references_locked(entry)?;
@@ -1324,7 +1328,13 @@ impl Kura {
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<LaneBlockApplicationReceiptArtifact> {
         let descriptor = &payload.origin_proposal.descriptor;
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let entry = self.existing_work_lane_storage_entry_under_geometry_guard(
+            payload.network_id,
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+            descriptor.proposal_height,
+        )?;
         self.require_active_lane_artifact(&entry, descriptor)?;
         let (receipt_data_path, receipt_index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
@@ -1503,7 +1513,7 @@ impl Kura {
     fn autonomous_lifecycle_terminal_source_matches_release_locked(
         &self,
         pending_canonical_bytes: Option<u64>,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: Option<&AutonomousLaneSlotRetirementV1>,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
@@ -1550,7 +1560,7 @@ impl Kura {
     fn autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
         &self,
         pending_canonical_bytes: Option<u64>,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: Option<&AutonomousLaneSlotRetirementV1>,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
@@ -1616,7 +1626,7 @@ impl Kura {
     }
     fn autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
@@ -1685,7 +1695,7 @@ impl Kura {
     fn require_autonomous_lifecycle_retired_attempt_complete_for_ordinary_certificate_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         record: &AutonomousLaneBlockDurableRecord,
     ) -> Result<()> {
         let payload = &record.artifact.executable_payload;
@@ -1784,7 +1794,7 @@ impl Kura {
     }
     fn read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
     ) -> Result<AutonomousLifecycleCursorV1> {
         let descriptor = &payload.origin_proposal.descriptor;
@@ -1827,7 +1837,7 @@ impl Kura {
     }
     fn prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<AutonomousLifecycleTerminalPendingPublicationPlan> {
@@ -1950,7 +1960,7 @@ impl Kura {
     /// bytes so this record can never be confused with owned lifecycle custody.
     fn prepare_canonical_replica_terminal_outcome_pending_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<AutonomousLifecycleTerminalPendingPublicationPlan> {
@@ -2146,7 +2156,7 @@ impl Kura {
     /// recovered from the replica.
     fn validate_canonical_replica_terminal_outcome_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         outcome: &AutonomousLifecycleTerminalOutcomeV1,
     ) -> Result<LaneExecutablePayloadV1> {
         let local_peer = self.local_peer_id.get().ok_or_else(|| {
@@ -2168,7 +2178,7 @@ impl Kura {
     /// validator above, which every recovery or completion path must use.
     fn validate_canonical_replica_terminal_outcome_on_startup_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         outcome: &AutonomousLifecycleTerminalOutcomeV1,
     ) -> Result<LaneExecutablePayloadV1> {
         self.validate_canonical_replica_terminal_outcome_for_local_peer_locked(entry, outcome, None)
@@ -2176,7 +2186,7 @@ impl Kura {
 
     fn validate_canonical_replica_terminal_outcome_for_local_peer_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         outcome: &AutonomousLifecycleTerminalOutcomeV1,
         local_peer: Option<&PeerId>,
     ) -> Result<LaneExecutablePayloadV1> {
@@ -2454,10 +2464,8 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let active_entries = self
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
+            .retained_lane_storage_entries_under_geometry_guard()?
+            .into_iter()
             .map(|entry| {
                 (
                     Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
@@ -2861,7 +2869,7 @@ impl Kura {
     fn persist_autonomous_lifecycle_terminal_outcome_pending_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<AutonomousLifecycleTerminalOutcomeV1> {
@@ -2887,7 +2895,7 @@ impl Kura {
     fn persist_autonomous_lifecycle_replica_terminal_outcome_complete_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
         terminal: ProductionInFlightFirstReleaseStateProjection,
@@ -3152,7 +3160,13 @@ impl Kura {
                 ));
             }
             let descriptor = &payload.origin_proposal.descriptor;
-            let lane_entry = self.lane_storage_entry(descriptor.lane_id)?;
+            let lane_entry = self.existing_work_lane_storage_entry_under_geometry_guard(
+                payload.network_id,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.proposal_height,
+            )?;
             self.require_active_lane_artifact(&lane_entry, descriptor)?;
             let receipt = LaneBlockApplicationReceiptArtifact::new_merge_execution(
                 entry,
@@ -3575,7 +3589,13 @@ impl Kura {
                 }
             }
             let identity = expected_group.identity;
-            let entry = self.lane_storage_entry(identity.lane_id)?;
+            let entry = self.existing_work_lane_storage_entry_under_geometry_guard(
+                self.bound_lane_storage_network()?,
+                identity.lane_id,
+                identity.dataspace_id,
+                identity.lane_incarnation,
+                identity.proposal_height,
+            )?;
             let (active_incarnation, activation_height) =
                 self.active_lane_incarnation_marker(&entry)?;
             let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
@@ -3834,7 +3854,13 @@ impl Kura {
                     ));
                 }
             };
-            let entry = self.lane_storage_entry(claim.lane_id)?;
+            let entry = self.existing_work_lane_storage_entry_under_geometry_guard(
+                claim.network_id,
+                claim.lane_id,
+                claim.dataspace_id,
+                claim.lane_incarnation,
+                claim.proposal_height,
+            )?;
             let (active_incarnation, activation_height) =
                 self.active_lane_incarnation_marker(&entry)?;
             if entry.dataspace_id != claim.dataspace_id
@@ -4037,17 +4063,10 @@ impl Kura {
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let mut entries = self
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            Self::lane_artifact_dir(&left.blocks_dir(&self.store_root)).cmp(
-                &Self::lane_artifact_dir(&right.blocks_dir(&self.store_root)),
-            )
-        });
+        let mut entries = self.retained_lane_storage_entries_under_geometry_guard()?;
+        // Recovery order follows authenticated route identity, independent of
+        // the content-addressed directory spelling for each retained instance.
+        entries.sort_by_key(|entry| entry.identity);
         let _sidecar_guard = self.sidecar_lock.lock();
         let mut canonical_entries = BTreeMap::new();
         let mut release_recoveries = Vec::new();
@@ -4465,7 +4484,13 @@ impl Kura {
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(identity.lane_id)?;
+        let entry = self.existing_work_lane_storage_entry_under_geometry_guard(
+            self.bound_lane_storage_network()?,
+            identity.lane_id,
+            identity.dataspace_id,
+            identity.lane_incarnation,
+            identity.proposal_height,
+        )?;
         let _sidecar_guard = self.sidecar_lock.lock();
         let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
             &entry,
@@ -4705,7 +4730,7 @@ impl Kura {
     /// Collect one startup terminal outcome, if `name` belongs to that namespace.
     fn collect_autonomous_lifecycle_terminal_outcome_for_startup_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         directory: &Path,
         path: &Path,
         name: &str,
@@ -4763,12 +4788,7 @@ impl Kura {
         let pending_canonical_bytes =
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
-        let entries = self
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let entries = self.retained_lane_storage_entries_under_geometry_guard()?;
         let _sidecar_guard = self.sidecar_lock.lock();
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup_locked(
             pending_canonical_bytes,
@@ -4786,7 +4806,7 @@ impl Kura {
     fn seal_completed_autonomous_lifecycle_replica_claims_on_startup_locked(
         &self,
         pending_canonical_bytes: u64,
-        entries: &[LaneConfigEntry],
+        entries: &[LaneStorageEntry],
     ) -> Result<()> {
         let mut capacity_cache = AutonomousReplicaClaimStartupCapacityCache::default();
         let mut directory_entries_seen = 0_usize;
@@ -4944,7 +4964,7 @@ impl Kura {
     fn validate_autonomous_lifecycle_terminal_outcomes_on_startup_locked(
         &self,
         pending_canonical_bytes: u64,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         attempts: &BTreeMap<
             u64,
             Vec<(
@@ -5047,7 +5067,7 @@ impl Kura {
     fn validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         path: &Path,
         bootstrap: &AutonomousLifecycleBootstrapV1,
     ) -> Result<()> {

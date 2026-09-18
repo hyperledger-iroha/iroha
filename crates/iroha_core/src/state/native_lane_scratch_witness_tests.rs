@@ -197,7 +197,7 @@ state_test! { sync native_scratch_due_hooks_and_markers_preserve_unrelated_same_
     assert!(!Arc::ptr_eq(&fixture.native.state.kura, &owner.native.state.kura));
     let groups = native_economic_groups(&fixture);
     let header = empty_global_block_after(Some(&fixture.native.block)).header();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot");
     native_scratch_prove_due_hook_records(&fixture);
     let expected = native_scratch_capture_around(&owner, || {});
     for with_markers in [false, true] {
@@ -216,7 +216,7 @@ state_test! { sync native_scratch_due_hooks_and_markers_preserve_unrelated_same_
             }
         });
         assert_eq!(actual, expected, "same real owner bytes with wrapper markers={with_markers}");
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state), before);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
     }
 }
 
@@ -226,7 +226,7 @@ state_test! { sync native_scratch_constructor_failure_preserves_unrelated_same_t
     let groups = native_economic_groups(&fixture);
     let mut foreign_parent = empty_global_block_after(Some(&fixture.native.block)).header();
     foreign_parent.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(b"foreign scratch parent"))));
-    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot");
     let expected = native_scratch_capture_around(&owner, || {});
     for with_markers in [false, true] {
         let actual = native_scratch_capture_around(&owner, || {
@@ -238,7 +238,7 @@ state_test! { sync native_scratch_constructor_failure_preserves_unrelated_same_t
             assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
         });
         assert_eq!(actual, expected);
-        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state), before);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
     }
 }
 
@@ -253,14 +253,14 @@ state_test! { sync native_scratch_late_marker_failure_rolls_back_hook_and_preser
     storage.insert(marker, norito::encode_canonical(&Hash::new(b"existing native application")).unwrap());
     storage.commit();
     let header = empty_global_block_after(Some(&fixture.native.block)).header();
-    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot");
     let expected = native_scratch_capture_around(&owner, || {});
     let actual = native_scratch_capture_around(&owner, || {
         let error = fixture.native.state.prepare_native_batch_on_carrier(header, &groups).err().expect("late native marker collision");
         assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     });
     assert_eq!(actual, expected);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
     let world = fixture.native.state.world.view();
     assert!(world.governance_locks.get(NATIVE_SCRATCH_UNLOCK).is_some());
     assert_eq!(world.assets.get(&fixture.source).unwrap().0, Quantity::from(90u32));

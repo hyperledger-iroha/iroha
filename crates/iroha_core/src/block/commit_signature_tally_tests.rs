@@ -26,7 +26,7 @@ fn commit_signature_tally_dedups_and_counts_set_b() {
         PeerId::new(kp_proxy.public_key().clone()),
         PeerId::new(kp_set_b.public_key().clone()),
     ]);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
@@ -50,7 +50,7 @@ fn is_commit_rejects_duplicate_signer_index() {
         PeerId::new(kp_leader.public_key().clone()),
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
@@ -74,7 +74,7 @@ fn is_commit_rejects_proxy_tail_spoof() {
         PeerId::new(kp_leader.public_key().clone()),
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
@@ -97,7 +97,7 @@ fn is_commit_rejects_leader_spoof() {
         PeerId::new(kp_leader.public_key().clone()),
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_spoof.private_key(), hash)),
@@ -121,7 +121,7 @@ fn is_commit_rejects_set_b_spoof() {
         PeerId::new(kp_proxy.public_key().clone()),
         PeerId::new(kp_set_b.public_key().clone()),
     ]);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
@@ -143,7 +143,7 @@ fn commit_with_signers_rejects_invalid_block_signature() {
         PeerId::new(kp_proxy.public_key().clone()),
     ]);
     // Corrupt the leader signature so the block signatures are no longer trustworthy.
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let signatures = BTreeSet::from([
         BlockSignature::new(0, checked_block_signature(kp_proxy.private_key(), hash)),
