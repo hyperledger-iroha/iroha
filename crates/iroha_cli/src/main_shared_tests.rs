@@ -3376,17 +3376,24 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_missing_asset_diagno
             assert_eq!(query.asset_id(), &id);
             if missing {
                 let error = result.expect_err("singular missing asset must remain an error");
-                assert!(matches!(
-                    error.downcast_ref::<iroha::query::QueryError>(),
-                    Some(iroha::query::QueryError::Other(_))
-                ));
-                let rendered = format!("{error:#}");
-                assert!(rendered.contains("HTTP 404"));
-                assert!(rendered.contains("query_validation_failed"));
                 let expected = iroha::data_model::query::error::QueryExecutionFail::Find(
                     iroha::data_model::query::error::FindError::Asset(Box::new(id.clone())),
                 )
                 .to_string();
+                let Some(iroha::query::QueryError::Http {
+                    status,
+                    code,
+                    message,
+                }) = error.downcast_ref::<iroha::query::QueryError>()
+                else {
+                    panic!("expected typed HTTP query error, got {error:?}");
+                };
+                assert_eq!(*status, iroha::http::StatusCode::NOT_FOUND);
+                assert_eq!(code, "query_validation_failed");
+                assert_eq!(message, &expected);
+                let rendered = format!("{error:#}");
+                assert!(rendered.contains("HTTP 404"));
+                assert!(rendered.contains("query_validation_failed"));
                 assert!(rendered.contains(&expected));
                 assert!(!rendered.contains("live query store"));
                 assert!(context.output.is_none());
