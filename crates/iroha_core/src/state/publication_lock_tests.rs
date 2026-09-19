@@ -1,6 +1,6 @@
 //! Real State fence releases wake retries without a new block or publication.
 
-use super::*;
+use crate::publication_lock::*;
 use crate::state::{State, World};
 use std::{
     future::Future,
@@ -20,7 +20,7 @@ fn state() -> State {
     )
 }
 
-fn locks(state: &State) -> [&StatePublicationMutex; 3] {
+fn locks(state: &State) -> [&PublicationMutex; 3] {
     [
         &state.state_commit_lock,
         &state.state_write_lock,
@@ -39,7 +39,7 @@ fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
-fn waiting(lock: &StatePublicationMutex) -> mv::ReleaseFuture {
+fn waiting(lock: &PublicationMutex) -> mv::ReleaseFuture {
     lock.try_lock_or_wait()
         .err()
         .expect("actual mutex is held")
@@ -49,7 +49,7 @@ fn waiting(lock: &StatePublicationMutex) -> mv::ReleaseFuture {
 #[test]
 fn fair_unlock_releases_the_physical_mutex_before_waking_publication_retries() {
     struct CheckUnlocked {
-        lock: Arc<StatePublicationMutex>,
+        lock: Arc<PublicationMutex>,
         count: AtomicUsize,
     }
     impl Wake for CheckUnlocked {
@@ -62,7 +62,7 @@ fn fair_unlock_releases_the_physical_mutex_before_waking_publication_retries() {
         }
     }
 
-    let lock = Arc::new(StatePublicationMutex::default());
+    let lock = Arc::new(PublicationMutex::default());
     let guard = lock.lock();
     let mut wait = waiting(&lock);
     let check = Arc::new(CheckUnlocked {
@@ -241,4 +241,26 @@ fn cancelling_one_state_fence_waiter_preserves_other_waiters() {
         assert_eq!(retained_count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut retained, &retained_count).is_ready());
     }
+}
+
+#[test]
+fn fair_unlock_releases_actual_state_fence_before_notification() {
+    let state = state();
+    let generation = state.state_view_generation();
+    for lock in locks(&state) {
+        let guard = lock.lock();
+        let mut wait = waiting(lock);
+        let count = Arc::new(WakeCount::default());
+        assert!(poll(&mut wait, &count).is_pending());
+        guard.unlock_fair();
+        assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut wait, &count).is_ready());
+        let successor = lock.try_lock_or_wait().expect("physical guard released");
+        let mut successor_wait = waiting(lock);
+        assert!(poll(&mut successor_wait, &count).is_pending());
+        drop(successor);
+        assert!(poll(&mut successor_wait, &count).is_ready());
+    }
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(state.state_view_generation(), generation);
 }

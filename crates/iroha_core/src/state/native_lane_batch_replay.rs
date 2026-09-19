@@ -12,7 +12,7 @@
 use super::{
     AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, MergeLedgerCommitError,
     State, VerifiedFirstLaneAdmittedInputV1, VerifiedLaneContexts, VerifiedLaneDecisionGroupV1,
-    lane_decision_batch::PreparedLaneDecisionBatchV1,
+    lane_decision_batch::{PreparedLaneDecisionBatchV1, RecordedNativeLaneBatchV1},
 };
 use crate::kura::FinalizedNativeLaneBatchV1;
 use iroha_crypto::HashOf;
@@ -46,8 +46,7 @@ pub(crate) struct PreparedNativeLaneBatchSourceV1<'state> {
     state: &'state State,
     observed: VerifiedLaneContexts,
     generation: u64,
-    carrier: BlockHeader,
-    batch: Arc<LaneDecisionBatchV1>,
+    input: Arc<SignedBlock>,
     groups: Vec<VerifiedLaneDecisionGroupV1>,
 }
 
@@ -81,6 +80,75 @@ impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
 }
 
 impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
+    /// Validate the original global proposal and retain its actual execution
+    /// through the common deterministic metadata tail. This unpublished owner
+    /// grants neither production admission nor voting or Apply authority.
+    pub(crate) fn prepare_candidate(
+        self,
+        context: crate::sumeragi::v2::VerifiedHeightContext,
+        genesis_account: &iroha_data_model::account::AccountId,
+        time_source: &iroha_primitives::time::TimeSource,
+        block_cadence: std::time::Duration,
+    ) -> Result<Option<super::PreparedCarrier<'state>>, MergeLedgerCommitError> {
+        crate::block::ValidBlock::prepare_native_candidate(
+            self,
+            context,
+            genesis_account,
+            time_source,
+            block_cadence,
+        )
+    }
+
+    /// Borrow a current source and retain its original generation for preflight.
+    /// A later State publication must invalidate the complete observation even
+    /// when it starts between this check and the first global validation read.
+    pub(crate) fn preparation_input(&self) -> Option<(&'state State, &SignedBlock, u64)> {
+        self.is_current()
+            .then_some((self.state, &self.input, self.generation))
+    }
+
+    /// Consume these original first-carrier/Decision owners through actual
+    /// output sealing and witness capture. A changed observation returns no
+    /// execution; the caller must refresh its source authority. The returned
+    /// owner remains unpublished and does not authenticate the global proposal.
+    pub(crate) fn record_execution(
+        self,
+        carrier: SignedBlock,
+        context: crate::sumeragi::v2::VerifiedHeightContext,
+    ) -> Result<Option<RecordedNativeLaneBatchV1<'state>>, MergeLedgerCommitError> {
+        // A recorder-owning caller must not wait for a State writer which may
+        // itself be waiting for that recorder. This check acquires no locks.
+        crate::sumeragi::witness::ensure_exec_witness_capture_available()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
+        if !self.is_current() {
+            return Ok(None);
+        }
+        if carrier != *self.input {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "recorded Native carrier differs from the prepared source".into(),
+            ));
+        }
+        // The equality check joins the complete retained source to the moved
+        // carrier. Release its duplicate bytes before actual execution begins.
+        drop(self.input);
+        let recorded = self
+            .state
+            .record_native_lane_decision_batch(carrier, self.groups, context);
+        if !super::is_stable_state_view_generation(
+            self.generation,
+            self.state.state_view_generation(),
+        ) {
+            return Ok(None);
+        }
+        recorded.map(Some)
+    }
+
+    /// Inspect original source allocations in custody qualification only.
+    #[cfg(test)]
+    pub(super) fn groups_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
+        &self.groups
+    }
+
     fn is_current(&self) -> bool {
         self.observed.is_current(self.state)
             && super::is_stable_state_view_generation(
@@ -95,7 +163,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
 
     /// Consume exact pre-State source authority through the SAME ordered
     /// constructor as scratch: shared start hooks, native metadata and common
-    /// Network/Pipeline/Time output ownership.
+    /// Network/Pipeline/Time output ownership, retaining the original verified groups.
     /// A capacity refusal preserves its typed fitting prefix for proposal selection;
     /// it cannot be flattened into a terminal input error.
     /// Scratch execution remains disposable: its native seal alone never grants
@@ -103,16 +171,10 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     pub(crate) fn stage_with_start_hooks(
         self,
     ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
-        let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
-        self.stage_with_pristine_controls(|_| Ok(()))
-    }
-
-    /// Consume authenticated source custody under ValidBlock's witness owner.
-    /// The callback runs after source preflight and before shared start hooks.
-    pub(crate) fn stage_with_pristine_controls(
-        self,
-        pristine: impl FnOnce(&mut super::StateBlock<'state>) -> Result<(), MergeLedgerCommitError>,
-    ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
+        let batch = crate::block::native_lane_batch_for_scratch(&self.input)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         if !self.is_current() {
             return Ok(NativeLaneBatchReplayV1::ObservationChanged);
         }
@@ -128,17 +190,14 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         if !self.is_current() {
             return Ok(NativeLaneBatchReplayV1::ObservationChanged);
         }
-        if actual_base != self.batch.base_state_hash {
+        if actual_base != batch.base_state_hash {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "native prepared source no longer matches its exact applying base".into(),
             ));
         }
-        let prepared = self.state.prepare_native_batch_with_pristine_stage(
-            self.carrier,
-            &self.batch,
-            &self.groups,
-            pristine,
-        );
+        let prepared =
+            self.state
+                .replay_lane_decision_batch(&self.input.header(), batch, self.groups);
         if !super::is_stable_state_view_generation(
             self.generation,
             self.state.state_view_generation(),
@@ -269,6 +328,8 @@ impl State {
         included: &FinalizedNativeLaneBatchV1,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         self.prepare_finalized_native_lane_batch_source(included, recovered)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
             .replay_scratch()
@@ -286,6 +347,8 @@ impl State {
         carrier: &SignedBlock,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         self.prepare_proposed_native_lane_batch_source(carrier, recovered)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
             .replay_scratch()
@@ -298,7 +361,7 @@ impl State {
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
         self.prepare_native_lane_batch_from_pre_state(
-            included.carrier_header(),
+            included.carrier(),
             included.batch(),
             included.finality().height_context.network_id,
             recovered,
@@ -315,9 +378,8 @@ impl State {
         if !carrier.is_resultless_proposal() {
             return Err("live native replay requires an exact resultless proposal".into());
         }
-        let header = carrier.header();
-        let batch = crate::block::native_lane_batch_for_scratch(carrier)?;
-        self.prepare_native_lane_batch_from_pre_state(&header, batch, self.network_id, recovered)
+        let batch = crate::block::native_lane_batch_for_execution(carrier)?;
+        self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, recovered)
     }
 
     /// Authenticate native sources for the sole global execution owner. Carrier
@@ -327,12 +389,7 @@ impl State {
         carrier: &SignedBlock,
     ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
         let batch = crate::block::native_lane_batch_for_execution(carrier)?;
-        self.prepare_native_lane_batch_from_pre_state(
-            &carrier.header(),
-            batch,
-            self.network_id,
-            &[],
-        )
+        self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, &[])
     }
 
     /// Sole source authentication kernel. Raw arguments to this
@@ -340,11 +397,13 @@ impl State {
     /// shape/inclusion, and each source still traverses the private input/group join.
     fn prepare_native_lane_batch_from_pre_state(
         &self,
-        carrier: &BlockHeader,
+        carrier: &SignedBlock,
         batch: &LaneDecisionBatchV1,
         expected_network: NetworkId,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()?;
+        let header = carrier.header();
         let generation = self.state_view_generation();
         if generation % 2 != 0 {
             return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
@@ -359,7 +418,7 @@ impl State {
                 view.network_id,
                 HashOf::new(&crate::da::active_proof_policy_bundle_at_height(
                     &view.nexus,
-                    carrier.height().get(),
+                    header.height().get(),
                 )),
             )
         };
@@ -368,7 +427,7 @@ impl State {
         }
         // Both wrappers bind the source bytes to this actual carrier header.
         // The active DA policy is authenticated from the exact applying pre-State.
-        if carrier.da_proof_policies_hash() != Some(expected_policy_hash) {
+        if header.da_proof_policies_hash() != Some(expected_policy_hash) {
             return Err(
                 "native carrier DA proof-policy snapshot differs from active pre-State policy"
                     .into(),
@@ -386,8 +445,8 @@ impl State {
         }
         if network != expected_network
             || height != batch.base_state_height
-            || height.checked_add(1) != Some(carrier.height().get())
-            || hash != carrier.prev_block_hash()
+            || height.checked_add(1) != Some(header.height().get())
+            || hash != header.prev_block_hash()
             || base_hash != batch.base_state_hash
             || batch.groups.iter().any(|execution| {
                 execution
@@ -462,8 +521,7 @@ impl State {
                 state: self,
                 observed,
                 generation,
-                carrier: carrier.clone(),
-                batch: Arc::new(batch.clone()),
+                input: Arc::new(carrier.clone()),
                 groups,
             },
         ))

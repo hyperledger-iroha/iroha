@@ -46,6 +46,9 @@ pub(in crate::state) struct SealedExecutionOutputs {
     // Captured by the sole witness recorder before the witness is handed out.
     witness_hash: Option<HashOf<iroha_data_model::block::consensus::ExecWitness>>,
     witness_surface: Option<Box<crate::state::output_publication::FinalizedPublicationSurface>>,
+    // Preserve the actual complete invocation owner after inventory derivation;
+    // a projection or caller-supplied row list cannot replace these sources.
+    sources: OwnedExecutionSources,
 }
 
 /// Exact durable finality over this owner's complete outputs and actual witness.
@@ -59,6 +62,18 @@ pub(in crate::state) struct FinalizedExecutionOutputs {
     authorized: AuthorizedExecutionOutputs,
     surface: Box<crate::state::output_publication::FinalizedPublicationSurface>,
     _events_hash: Hash,
+}
+
+impl SealedExecutionOutputs {
+    /// Borrow actual invocation custody retained by the sole output producer.
+    pub(in crate::state) fn sources(&self) -> &OwnedExecutionSources {
+        &self.sources
+    }
+
+    /// Exact proposal whose result-bearing wire and World prefix were sealed.
+    pub(in crate::state) fn proposal(&self) -> HashOf<iroha_data_model::block::BlockHeader> {
+        self.proposal
+    }
 }
 
 /// Owns both the State borrow and its only mutable output budget. It cannot be

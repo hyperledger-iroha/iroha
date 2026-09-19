@@ -423,6 +423,7 @@ mod lane_admitted_input;
     )
 )]
 mod lane_decision_batch;
+pub(crate) use lane_decision_batch::NativeExecutionCustody;
 #[cfg_attr(
     not(test),
     expect(
@@ -432,6 +433,8 @@ mod lane_decision_batch;
 )]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
+pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
+#[cfg(test)]
 pub(crate) use native_lane_batch_replay::{
     NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
 };
@@ -443,6 +446,7 @@ pub(crate) use native_lane_batch_replay::{
     )
 )]
 mod lane_decision_execution;
+pub(crate) use lane_decision_execution::PreexecutedLaneDecisionGroupV1;
 #[cfg_attr(
     not(test),
     expect(
@@ -1542,8 +1546,9 @@ macro_rules! with_world_overlay_fields {
         )
     };
 }
-mod publication_lock;
-use publication_lock::{StatePublicationGuard, StatePublicationMutex};
+use crate::publication_lock::{PublicationGuard, PublicationMutex};
+#[cfg(test)]
+mod publication_lock_tests;
 
 mod world_commit;
 #[cfg_attr(
@@ -3269,6 +3274,11 @@ pub enum MergeLedgerCommitError {
     /// The complete applying State changed or was busy during source observation.
     #[error("merge execution State observation changed; reacquire the source")]
     ExecutionObservationChanged,
+    /// Local execution attempted State access while already owning its recorder,
+    /// or attempted recording in a suppressed or unfinished capture scope.
+    /// This is a caller scheduling error, never evidence of an invalid input.
+    #[error("merge execution recorder ownership conflict: {0}")]
+    ExecutionRecorderConflict(String),
     /// The merge entry must contain settlement snapshots, an execution batch, or one drain certificate.
     #[error(
         "merge ledger entry must include a lane snapshot, execution batch, or drain certificate"
@@ -12636,7 +12646,7 @@ pub struct State {
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
-    lane_lifecycle_lock: StatePublicationMutex,
+    lane_lifecycle_lock: PublicationMutex,
     /// Outermost lock serializing QueuePlan sidecar snapshot-to-persistence operations.
     ///
     /// The admission path acquires this before `state_commit_lock`; block commit
@@ -12645,9 +12655,9 @@ pub struct State {
     /// to race from the same stale inventory snapshot.
     queue_plan_admission_persistence_lock: parking_lot::Mutex<()>,
     /// Lock serializing complete block commits across fallible pre-publication work.
-    state_commit_lock: Arc<StatePublicationMutex>,
+    state_commit_lock: Arc<PublicationMutex>,
     /// Lock serializing writer commit phases that mutate several state components.
-    state_write_lock: StatePublicationMutex,
+    state_write_lock: PublicationMutex,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
     /// Wakeup for retained work awaiting a stable committed State frontier.
@@ -13707,7 +13717,7 @@ pub struct StateBlock<'state> {
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
     /// Lock serializing multi-component writer commit phases.
-    state_write_lock: &'state StatePublicationMutex,
+    state_write_lock: &'state PublicationMutex,
     /// Ledger-derived DA commitments indexed while applying the block.
     pub(crate) da_commitments:
         &'state parking_lot::RwLock<crate::da::commitment_store::DaCommitmentStore>,
@@ -13737,7 +13747,7 @@ pub struct StateBlock<'state> {
     staged_merge_entry: Option<MergeLedgerEntry>,
     /// Private native source seal; roots bind the shared start+native prefix.
     /// Publication remains forbidden until the sole consumer owns the final seal.
-    native_lane_stage: Option<Box<lane_decision_batch::NativeLaneStageSealV1>>,
+    native_lane_stage: Option<Arc<lane_decision_batch::NativeLaneStageSealV1>>,
     /// Exact proposal-native QueuePlan certificates staged before ordinary
     /// carrier-block effects. These controls are ordered by the Sumeragi QC,
     /// independently from the Nexus merge ledger.
@@ -27787,7 +27797,7 @@ impl State {
     /// ownership`, so a queue operation either becomes visible before a drain
     /// closes or validates against the fully published post-transition
     /// catalog.
-    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> StatePublicationGuard<'_> {
+    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> PublicationGuard<'_> {
         self.lane_lifecycle_lock.lock()
     }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
@@ -29908,10 +29918,10 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
-            lane_lifecycle_lock: StatePublicationMutex::default(),
+            lane_lifecycle_lock: PublicationMutex::default(),
             queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: Arc::new(StatePublicationMutex::default()),
-            state_write_lock: StatePublicationMutex::default(),
+            state_commit_lock: Arc::new(PublicationMutex::default()),
+            state_write_lock: PublicationMutex::default(),
             view_generation: AtomicU64::new(0),
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -32626,7 +32636,7 @@ impl State {
     }
     /// Exclude committed State publication while consensus consumes a
     /// generation-bound validation result and performs its private-key action.
-    pub(crate) fn consensus_publication_lease(&self) -> StatePublicationGuard<'_> {
+    pub(crate) fn consensus_publication_lease(&self) -> PublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
     #[inline]
@@ -52846,18 +52856,19 @@ impl<'state> StateBlock<'state> {
         &self,
         block: &SignedBlock,
     ) -> Result<(), BlockValidationError> {
+        // An absent bundle has no cursor work. Do not re-enter the live cache
+        // hydrator while this execution owns the State writers: a concurrent
+        // rewind can clear the cache before waiting for those same writers.
+        let Some(bundle) = block.da_commitments() else {
+            return Ok(());
+        };
         self.state_ref
             .ensure_da_indexes_hydrated()
             .map_err(BlockValidationError::from)?;
         let mut cursors = self.da_shard_cursors.read().clone();
         let height = block.header().height().get();
-        // DA bundles advance shard cursors; touched lanes require a cursor only when a
-        // commitment bundle is supplied for the block.
-        let bundle_opt = block.da_commitments();
-        if let Some(bundle) = bundle_opt {
-            self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
-            self.validate_touched_lane_cursors(&cursors, height)?;
-        }
+        self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
+        self.validate_touched_lane_cursors(&cursors, height)?;
         Ok(())
     }
     /// Drain the accumulated transfer transcripts recorded while executing this block.
@@ -53601,22 +53612,32 @@ impl<'state> StateBlock<'state> {
             &mut self._curr_block,
             batch.application_block_header.clone(),
         );
-        let execution =
-            State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay);
+        // Runtime catalog incarnations are derived by actual execution under
+        // this certified application header. Keep that same header through
+        // pristine surface and application-root validation; the fully staged
+        // merge entry is not available as a later derivation owner yet.
+        let execution = (|| {
+            let actual_lanes =
+                State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay)?;
+            if actual_lanes != batch.lanes {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "ordered execution results or derived settlement evidence differ".to_owned(),
+                ));
+            }
+            self.update_merge_metadata(entry);
+            self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
+            if self.merge_execution_write_set_root() != batch.application_write_set_root {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "canonical application write set differs".to_owned(),
+                ));
+            }
+            Ok(())
+        })();
+        // Restore on every Result exit, including execution/surface/root refusal.
+        // Marker staging and the final carrier authorization below still bind
+        // the exact outer header, whose application projection was checked above.
         self._curr_block = carrier_header;
-        let actual_lanes = execution?;
-        if actual_lanes != batch.lanes {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "ordered execution results or derived settlement evidence differ".to_owned(),
-            ));
-        }
-        self.update_merge_metadata(entry);
-        self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
-        if self.merge_execution_write_set_root() != batch.application_write_set_root {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical application write set differs".to_owned(),
-            ));
-        }
+        execution?;
         self.stage_merge_execution_markers(entry.epoch_id, batch)?;
         let actual_write_set_root = self.merge_execution_write_set_root();
         let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
@@ -64723,6 +64744,7 @@ impl StateTransaction<'_, '_> {
                 output_capacity::ExecutionOutputPlanState::Sealed(_)
                     | output_capacity::ExecutionOutputPlanState::Authorized(_)
                     | output_capacity::ExecutionOutputPlanState::Finalized(_)
+                    | output_capacity::ExecutionOutputPlanState::Captured
             )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
@@ -64751,6 +64773,7 @@ impl StateTransaction<'_, '_> {
                 output_capacity::ExecutionOutputPlanState::Sealed(_)
                     | output_capacity::ExecutionOutputPlanState::Authorized(_)
                     | output_capacity::ExecutionOutputPlanState::Finalized(_)
+                    | output_capacity::ExecutionOutputPlanState::Captured
             )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()

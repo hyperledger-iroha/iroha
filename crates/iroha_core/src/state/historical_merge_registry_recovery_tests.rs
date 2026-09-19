@@ -428,3 +428,146 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
         );
     }
 }
+
+state_test!(consensus_stack certified_catalog_geometry_uses_actual_execution_header_before_carrier_binding
+    certified_catalog_geometry_uses_actual_execution_header_before_carrier_binding_on_consensus_stack();
+);
+fn certified_catalog_geometry_uses_actual_execution_header_before_carrier_binding_on_consensus_stack()
+ {
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        ..
+    } = unpersisted_autonomous_merge_commit_fixture(
+        false,
+        false,
+        None,
+        false,
+        Some(AutonomousRuntimeEffectFixture::Catalog),
+        false,
+    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let durable_before = state.kura.blocks_count();
+    let application_header = entry
+        .execution_batch
+        .as_ref()
+        .unwrap()
+        .application_block_header;
+    assert_eq!(
+        application_header,
+        crate::merge::merge_application_header_from_carrier(&carrier.header())
+    );
+    assert_ne!(application_header.hash(), carrier.header().hash());
+    let mut staged = state
+        .block_with_certified_merge_entry(carrier.header(), &entry, ConsensusMode::Permissioned)
+        .expect("actual certified catalog execution and pristine geometry validation");
+    assert_eq!(staged._curr_block, carrier.header());
+    assert_eq!(staged.staged_merge_entry(), Some(&entry));
+    assert!(staged.canonical_wsv_merge_commit_authorization.is_some());
+    assert!(
+        staged
+            .canonical_carrier_commit_metadata_authorization
+            .is_none()
+    );
+    let pending = staged.pending_autoscale_lifecycle.as_ref().unwrap();
+    assert_eq!(pending.transition, PendingAutoscaleTransition::Manual);
+    assert!(pending.runtime_catalog.is_some());
+    assert!(
+        pending
+            .catalog_update
+            .updated_lane_incarnations
+            .contains_key(&AUTONOMOUS_RUNTIME_LANE)
+    );
+    // After successful staging, the exact retained certified entry supplies the
+    // same derivation header while the scope again owns the outer carrier.
+    staged
+        .prepare_carrier_geometry()
+        .expect("same accepted geometry after staging");
+    let original = staged._curr_block;
+    let changed_time = u64::try_from(original.creation_time().as_millis()).unwrap() + 1;
+    staged._curr_block = BlockHeader::new(
+        original.height(),
+        original.prev_block_hash(),
+        None,
+        changed_time,
+        original.view_change_index(),
+    );
+    assert!(
+        staged.prepare_carrier_geometry().is_err(),
+        "retained entry cannot authorize a different ledger-time derivation"
+    );
+    staged._curr_block = original;
+    staged
+        .prepare_carrier_geometry()
+        .expect("original exact header restored");
+    // This test stops at the actual staging owner. It does not fabricate the
+    // missing common output seal, CommitQC or complete publication authority.
+    drop(staged);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert_eq!(state.kura.blocks_count(), durable_before);
+}
+
+state_test!(consensus_stack certified_catalog_surface_refusal_restores_outer_header_and_drops_overlay
+    certified_catalog_surface_refusal_restores_outer_header_and_drops_overlay_on_consensus_stack();
+);
+fn certified_catalog_surface_refusal_restores_outer_header_and_drops_overlay_on_consensus_stack() {
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        ..
+    } = unpersisted_autonomous_merge_commit_fixture(
+        false,
+        false,
+        None,
+        false,
+        Some(AutonomousRuntimeEffectFixture::Catalog),
+        false,
+    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let durable_before = state.kura.blocks_count();
+    let outer = carrier.header();
+    let mut staged = state.merge_preexecution_block(outer);
+    // This real staging scope has an independently dirtied non-execution owner.
+    // The initial pristine check does not admit topology writes; the complete
+    // pristine surface check must reject them after the certified execution.
+    assert!(!staged.commit_topology.is_empty());
+    staged
+        .commit_topology
+        .mutate_vec(|topology| topology.clear());
+    assert!(staged.commit_topology.is_dirty());
+    let error = staged
+        .stage_certified_merge_entry(&entry, ConsensusMode::Permissioned)
+        .expect_err("pristine certified execution cannot own a topology change");
+    assert!(
+        matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(ref message)
+        if message == "autonomous merge execution staged an effect outside the bound WSV overlay")
+    );
+    assert_eq!(
+        staged._curr_block, outer,
+        "every Result refusal restores the original carrier header"
+    );
+    assert!(staged.staged_merge_entry().is_none());
+    assert!(staged.canonical_wsv_merge_commit_authorization.is_none());
+    assert!(
+        staged
+            .canonical_carrier_commit_metadata_authorization
+            .is_none()
+    );
+    drop(staged);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert_eq!(state.kura.blocks_count(), durable_before);
+    // A new actual scope can stage the unchanged source after dropping refusal.
+    drop(
+        state
+            .block_with_certified_merge_entry(outer, &entry, ConsensusMode::Permissioned)
+            .expect("unchanged certified source retries after dropped refusal"),
+    );
+}

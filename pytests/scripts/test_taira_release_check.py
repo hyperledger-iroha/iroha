@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 # public-admission boundary control, 22 producer controls after two renames, and one
 # early supervisor build-identity control, six typed status contention controls,
 # three generated ledger/HTTP operator custody controls, and eleven finality witness
-# and native inspection controls.
+# and native inspection controls, plus four prebuilt portability/admission controls.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -32,8 +32,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -71,6 +71,31 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_prebuilt_portability_controls_are_required_and_focused_on_both_platforms(self):
+        required = (
+            "tests::program_absolute_prebuilt_override_does_not_require_checkout",
+            "tests::program_discovery_requires_checkout_with_context",
+            "tests::program_absolute_prebuilt_override_rejects_partial_release_identity",
+            "tests::program_absolute_prebuilt_override_requires_active_release_checkout",
+        )
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("prebuilt_portability_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["test-network"]
+                names = [name for _, tests in stages for name in tests]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(names.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("test-network=" + regression,))
+                        self.assertEqual(tuple(focused), ("test-network",))
+                        self.assertEqual([name for _, tests in focused["test-network"] for name in tests], [regression])
+                        listing = "\n".join(name + ": test" for name in names if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
     def test_finality_witness_and_native_inspection_controls_are_required_in_both_scopes(self):
         required = {
             'cli': (
@@ -781,7 +806,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (946, 1124)), ("linux", (951, 1129))):
+        for platform, counts in (("darwin", (950, 1128)), ("linux", (955, 1133))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)

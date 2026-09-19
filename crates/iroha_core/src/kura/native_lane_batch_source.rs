@@ -18,12 +18,16 @@ type Result<T> = std::result::Result<T, String>;
 pub(crate) struct FinalizedNativeLaneBatchV1 {
     source: NativeLaneBatchRecoveryV1,
     carrier_header: BlockHeader,
-    batch: LaneDecisionBatchV1,
+    carrier: SignedBlock,
 }
 impl FinalizedNativeLaneBatchV1 {
     /// Exact applying-carrier finality, not a caller's batch hash or roster.
     pub(crate) fn finality(&self) -> &V2FinalityArtifact {
         self.source.finality()
+    }
+    /// Whole authenticated proposal, including every independent control.
+    pub(crate) fn carrier(&self) -> &SignedBlock {
+        &self.carrier
     }
     /// Exact globally authenticated applying header.
     pub(crate) fn carrier_header(&self) -> &BlockHeader {
@@ -31,7 +35,10 @@ impl FinalizedNativeLaneBatchV1 {
     }
     /// Included inputs, still requiring actual pre-State authentication/replay.
     pub(crate) fn batch(&self) -> &LaneDecisionBatchV1 {
-        &self.batch
+        self.carrier
+            .execution_context()
+            .and_then(|bundle| bundle.native_lane_decisions.as_deref())
+            .expect("private constructor retains a complete authenticated Native carrier")
     }
 }
 
@@ -90,13 +97,13 @@ impl NativeLaneBatchRecoveryV1 {
                 return Err("native batch executed image differs from finalized wire".into());
             }
         }
-        // Retaining only header/batch must not erase extra controls and permit
-        // an incomplete historical replay. Use the live scratch shape as well.
-        let batch = crate::block::native_lane_batch_for_scratch(block)?;
+        // Retain every authenticated input/control. Scratch must refuse unsupported
+        // work; recorded execution consumes it with the exact verified context.
+        crate::block::native_lane_batch_for_execution(block)?;
         Ok(FinalizedNativeLaneBatchV1 {
             source: self.clone(),
             carrier_header: block.header(),
-            batch: batch.clone(),
+            carrier: block.canonical_resultless_proposal(),
         })
     }
 }

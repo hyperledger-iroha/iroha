@@ -13,7 +13,8 @@ fn native_publication_carrier_for_test(
         .expect("fixture parent has genuine finality");
     let context = crate::sumeragi::v2_context::build_successor_height_context(
         &parent,
-        parent.height_context.nexus_amx_context_hash,
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&fixture.native.state)
+            .expect("derive Native applying policy from its exact committed predecessor"),
         None,
     )
     .expect("derive exact native applying authority");

@@ -72,7 +72,7 @@ def test_geometry_evidence_contract_is_connected_to_release_gate():
 @pytest.mark.parametrize("symbol", [
     "ObservedNativeAmxEvidence", "observe_geometry_native_amx_per_height_evidence",
     "read_and_attest_geometry_native_amx_per_height_evidence", "attest",
-    "maintain_lane_retirement_route_locked",
+    "maintain_lane_retirement_route_locked", "certified_history_has_committed_rewrite_locked",
 ])
 def test_geometry_evidence_contract_rejects_missing_ledger_owner(fixture, symbol):
     _, _, checker, models = fixture
@@ -140,3 +140,32 @@ def test_geometry_evidence_contract_rejects_dropped_progress_pair(fixture):
         "&receipt_data,", "&lane_data,",
     )
     assert any("executable relation" in e for e in validate(fixture))
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("fn certified_history_has_committed_rewrite_locked(", ".is_some()", ".is_none()"),
+    ("fn certified_history_has_committed_rewrite_locked(", "Self::autonomous_lane_merge_bundle_paths_for_entry", "Self::certified_lane_block_paths_for_entry"),
+    ("if self.certified_history_has_committed_rewrite_locked(entry)? {", ".is_none()", ".is_some()"),
+    ("if self.certified_history_has_committed_rewrite_locked(entry)? {", ".saturating_sub(self.lane_history_retention.get() as u64)", ".saturating_add(self.lane_history_retention.get() as u64)"),
+    ("if self.certified_history_has_committed_rewrite_locked(entry)? {", ".transpose()?", ".transpose().unwrap_or(None)"),
+    ("if self.certified_history_has_committed_rewrite_locked(entry)? {", "retention.as_ref()", "None"),
+    ("if self.certified_history_has_committed_rewrite_locked(entry)? {", "Some(&frontier_read.frontier.artifact)", "None"),
+    ("if let Some(frontier) =", ".is_none()", ".is_some()"),
+])
+def test_geometry_evidence_contract_rejects_branch_specific_rewrite_mutations(fixture, anchor, old, new):
+    root, support, checker, _ = fixture
+    support.replace_once_after(root / checker.geometry_evidence_contract.MAINTENANCE, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("must have one" in error or "digest" in error for error in errors), errors
+
+
+def test_geometry_evidence_contract_requires_terminal_rewrite_before_frontier_recovery(fixture):
+    root, support, checker, _ = fixture
+    support.swap_ordered_once_after(
+        root / checker.geometry_evidence_contract.MAINTENANCE,
+        "fn maintain_lane_retirement_route_locked(",
+        "recover_certified_bundle_history_rewrites_locked(",
+        "recover_certified_lane_block_pair_from_frontier_locked(",
+    )
+    assert any("missing or reorders" in error for error in validate(fixture))

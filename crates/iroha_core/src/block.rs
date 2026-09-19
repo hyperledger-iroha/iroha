@@ -51,8 +51,9 @@
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
 mod native_lane_carrier;
-pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
-pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
+pub(crate) use native_lane_carrier::{
+    native_lane_batch_for_execution, native_lane_batch_for_scratch,
+};
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -4181,6 +4182,12 @@ pub(crate) mod valid {
             block_cadence: Duration,
             authority: VerifiedReplayProposal,
         },
+        // Private preparation only: all common checks still run. No live
+        // validator entry selects this profile or exposes a Native ValidBlock.
+        NativePreparation {
+            block_cadence: Duration,
+            context: SumeragiV2ValidationContext,
+        },
     }
     impl ConsensusValidationProfile {
         #[cfg(test)]
@@ -4198,6 +4205,7 @@ pub(crate) mod valid {
         const fn v2_block_cadence(&self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. }
+                | Self::NativePreparation { block_cadence, .. }
                 | Self::VerifiedReplay { block_cadence, .. } => Some(*block_cadence),
                 Self::SignedGenesis { .. } => None,
             }
@@ -4206,14 +4214,18 @@ pub(crate) mod valid {
             &self,
         ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
             match self {
-                Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
+                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
+                    context.snapshot_bootstrap
+                }
                 Self::VerifiedReplay { authority, .. } => authority.context.snapshot_bootstrap,
                 Self::SignedGenesis { .. } => None,
             }
         }
         const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
             match self {
-                Self::SumeragiV2 { context, .. } => Some(context),
+                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
+                    Some(context)
+                }
                 Self::VerifiedReplay { authority, .. } => Some(&authority.context),
                 Self::SignedGenesis { .. } => None,
             }
@@ -4223,7 +4235,9 @@ pub(crate) mod valid {
         ) -> iroha_data_model::block::consensus_v2::ConsensusMode {
             match self {
                 Self::SignedGenesis { consensus_mode } => *consensus_mode,
-                Self::SumeragiV2 { context, .. } => context.consensus_mode,
+                Self::SumeragiV2 { context, .. } | Self::NativePreparation { context, .. } => {
+                    context.consensus_mode
+                }
                 Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
             }
         }
@@ -5853,6 +5867,63 @@ pub(crate) mod valid {
         axt_snapshot_mismatch: bool,
         has_native_participant_frontiers: bool,
     }
+    /// Actual pristine consensus work, shared by ordinary and Native execution.
+    /// Preparation reads the committed predecessor before acquiring State writers;
+    /// consumption applies these exact effects once on the retained overlay.
+    struct PreparedPristineConsensusEffects {
+        header: BlockHeader,
+        effects: iroha_data_model::consensus::NposConsensusEffects,
+        prune_keys: Vec<Hash>,
+        expected_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
+        roster: Vec<PeerId>,
+    }
+    impl PreparedPristineConsensusEffects {
+        fn apply(self, state_block: &mut StateBlock<'_>) -> Result<(), BlockValidationError> {
+            if state_block._curr_block != self.header {
+                return Err(ValidBlock::npos_effects_error(
+                    "pristine effects have another carrier",
+                ));
+            }
+            state_block.apply_pristine_npos_consensus_effects(
+                &self.effects, &self.prune_keys, self.expected_anchor, &self.roster,
+                self.header.height().get(), self.header.view_change_index(), self.header.creation_time_ms,
+            ).map(|_| ()).map_err(|error| ValidBlock::npos_effects_error(format!(
+                "NPoS consensus effects are not applicable to pristine parent state: {error}"
+            )))
+        }
+    }
+
+    /// Owned, authenticated control inputs for the same Native execution scope.
+    /// This is neither global block validity nor publication authority.
+    pub(crate) struct PreparedNativeExecutionControls<'state> {
+        state: &'state State,
+        generation: u64,
+        header: BlockHeader,
+        admissions: Vec<Vec<u8>>,
+        npos: Option<PreparedPristineConsensusEffects>,
+        context: crate::sumeragi::v2::VerifiedHeightContext,
+    }
+    impl PreparedNativeExecutionControls<'_> {
+        /// Consume after pristine source preflight and recorder acquisition,
+        /// before the constructor's start hooks, on that original overlay.
+        pub(crate) fn apply(
+            self,
+            overlay: &mut StateBlock<'_>,
+        ) -> Result<crate::sumeragi::v2::VerifiedHeightContext, BlockValidationError> {
+            overlay
+                .validate_native_pristine_control_owner(self.state, self.generation, &self.header)
+                .map_err(ValidBlock::execution_context_error)?;
+            if !self.admissions.is_empty() {
+                overlay
+                    .stage_queue_plan_admissions_for_carrier(&self.admissions)
+                    .map_err(|error| ValidBlock::execution_context_error(error.to_string()))?;
+            }
+            if let Some(npos) = self.npos {
+                npos.apply(overlay)?;
+            }
+            Ok(self.context)
+        }
+    }
     /// Move-only permission minted solely by strict parent-state block validation.
     /// The consumer cannot substitute a local pulse, roster, pruning plan or carrier.
     pub(crate) struct VerifiedMergeBeaconPulse {
@@ -6852,6 +6923,138 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
+        fn prepare_pristine_consensus_effects(
+            block: &SignedBlock,
+            state: &State,
+            authenticated_height_context: Option<
+                &iroha_data_model::block::consensus_v2::HeightContext,
+            >,
+        ) -> Result<Option<PreparedPristineConsensusEffects>, BlockValidationError> {
+            crate::smartcontracts::ivm::active_runtime_abi_hash(
+                &state.world_view(),
+                block.header().height().get(),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "persisted active runtime ABI is incompatible with this node: {error:?}"
+                ))
+            })?;
+            let Some(effects) = block.npos_consensus_effects() else {
+                return Ok(None);
+            };
+            let context = authenticated_height_context.ok_or_else(|| {
+                Self::npos_effects_error(
+                    "NPoS finality effects require the authenticated height context",
+                )
+            })?;
+            let header = block.header();
+            let height = header.height().get();
+            Ok(Some(PreparedPristineConsensusEffects {
+                prune_keys: crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                    state,
+                    height,
+                    effects.v2_evidence_admissions.len(),
+                ),
+                expected_anchor: header.prev_block_hash().map(|block_hash| {
+                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                        height: height.saturating_sub(1),
+                        block_hash,
+                    }
+                }),
+                roster: context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect(),
+                effects: effects.clone(),
+                header,
+            }))
+        }
+
+        /// Join a cryptographically verified applying context to this exact
+        /// committed State and proposal before acquiring execution writers.
+        pub(crate) fn prepare_native_execution_controls<'state>(
+            block: &SignedBlock,
+            state: &'state State,
+            context: crate::sumeragi::v2::VerifiedHeightContext,
+        ) -> Result<PreparedNativeExecutionControls<'state>, BlockValidationError> {
+            crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+                .map_err(Self::execution_context_error)?;
+            super::native_lane_batch_for_execution(block).map_err(Self::execution_context_error)?;
+            block
+                .validate_proposal_commitments()
+                .map_err(Self::execution_context_error)?;
+            state
+                .ensure_da_indexes_hydrated()
+                .map_err(BlockValidationError::from)?;
+            let generation = state.state_view_generation();
+            let frozen = context.context();
+            let view = state.view();
+            if frozen.network_id != *view.network_id()
+                || frozen.height != block.header().height().get()
+                || u64::try_from(view.height())
+                    .ok()
+                    .and_then(|height| height.checked_add(1))
+                    != Some(frozen.height)
+                || block.header().prev_block_hash() != view.latest_block_hash()
+                || frozen
+                    .parent_commit_qc
+                    .as_ref()
+                    .map(|qc| qc.subject.block_hash)
+                    != view.latest_block_hash()
+            {
+                return Err(Self::execution_context_error(
+                    "Native applying context differs from the exact carrier pre-State, height or network",
+                ));
+            }
+            let expected_da_policy =
+                crate::da::active_proof_policy_bundle_at_height(&view.nexus, frozen.height);
+            if block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy)) {
+                return Err(Self::execution_context_error(
+                    "Native carrier DA proof-policy snapshot differs from active pre-State policy",
+                ));
+            }
+            drop(view);
+            let nexus = crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
+                .map_err(|error| Self::execution_context_error(error.to_string()))?;
+            let policy = crate::sumeragi::v2_recovery::committed_execution_policy_hash(state)
+                .map_err(|error| Self::execution_context_error(error.to_string()))?;
+            if frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy {
+                return Err(Self::execution_context_error(
+                    "Native applying context differs from the committed Nexus or execution policy",
+                ));
+            }
+            Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;
+            let npos = Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?;
+            Ok(PreparedNativeExecutionControls {
+                state,
+                generation,
+                header: block.header(),
+                admissions: block
+                    .execution_context()
+                    .expect("checked Native shape")
+                    .queue_plan_admissions
+                    .clone(),
+                npos,
+                context,
+            })
+        }
+
+        /// Complete the shared postchecks and authenticated successor opening
+        /// within the original Native scope, before its sole witness capture.
+        pub(crate) fn finalize_native_execution_contexts(
+            block: &SignedBlock,
+            state: &mut StateBlock<'_>,
+            context: &crate::sumeragi::v2::VerifiedHeightContext,
+        ) -> Result<(), BlockValidationError> {
+            Self::validate_staged_execution_controls(block, state)?;
+            validate_axt_envelopes(block, state)?;
+            state.validate_da_shard_cursors(block)?;
+            Self::validate_sccp_commitment_root(block)?;
+            state
+                .finalize_lane_consensus_contexts(block, Some(context.context()))
+                .map_err(Self::execution_context_error)
+        }
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
@@ -6863,102 +7066,16 @@ pub(crate) mod valid {
             replay: Option<&VerifiedReplayProposal>,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
-            crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &state.world_view(),
-                block.header().height().get(),
-            )
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "persisted active runtime ABI is incompatible with this node: {error:?}"
-                ))
-            })?;
-            let prepared_npos = if let Some(effects) = block.npos_consensus_effects() {
-                let context = authenticated_height_context.ok_or_else(|| {
-                    Self::npos_effects_error(
-                        "NPoS finality effects require the authenticated height context",
-                    )
-                })?;
-                let roster = context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect::<Vec<_>>();
-                let height = block.header().height().get();
-                let prune_keys =
-                    crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                        state,
-                        height,
-                        effects.v2_evidence_admissions.len(),
-                    );
-                let expected_anchor = block.header().prev_block_hash().map(|block_hash| {
-                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
-                        height: height.saturating_sub(1),
-                        block_hash,
-                    }
-                });
-                Some((effects, prune_keys, expected_anchor, roster))
-            } else {
-                None
-            };
-            let apply_npos = |state_block: &mut StateBlock<'_>| {
-                let Some((effects, prune_keys, expected_anchor, roster)) = &prepared_npos else {
-                    return Ok(());
-                };
-                state_block
-                    .apply_pristine_npos_consensus_effects(
-                        effects,
-                        prune_keys,
-                        expected_anchor.clone(),
-                        roster,
-                        block.header().height().get(),
-                        block.header().view_change_index(),
-                        block.header().creation_time_ms,
-                    )
-                    .map(|_| ())
-                    .map_err(|error| {
-                        Self::npos_effects_error(format!(
-                            "NPoS consensus effects are not applicable to pristine parent state: {error}"
-                        ))
-                    })
-            };
+            let prepared_npos = Self::prepare_pristine_consensus_effects(
+                block,
+                state,
+                authenticated_height_context,
+            )?;
             let execution_context = block.execution_context();
             if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
-                if soft_fork {
-                    return Err(Self::execution_context_error(
-                        "soft-fork replacement cannot apply native lane Decisions",
-                    ));
-                }
-                Self::validate_npos_effects_with_state(
-                    block,
-                    state,
-                    authoritative_mode,
-                    authenticated_height_context,
-                )?;
-                let source = state
-                    .prepare_canonical_native_lane_batch_source(block)
-                    .map_err(Self::execution_context_error)?;
-                let crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) = source else {
-                    return Err(Self::execution_context_error(
-                        "native execution requires current complete authenticated first sources",
-                    ));
-                };
-                let staged = source
-                    .stage_with_pristine_controls(|overlay| {
-                        apply_npos(overlay).map_err(|error| {
-                            crate::state::MergeLedgerCommitError::ExecutionBatchInvalid(
-                                error.to_string(),
-                            )
-                        })
-                    })
-                    .map_err(|error| Self::execution_context_error(error.to_string()))?;
-                return match staged {
-                    crate::state::NativeLaneBatchReplayV1::Ready(prepared) => {
-                        Ok(prepared.into_overlay())
-                    }
-                    _ => Err(Self::execution_context_error(
-                        "native source observation changed before execution",
-                    )),
-                };
+                return Err(Self::execution_context_error(
+                    "native execution requires its original recorded source owner",
+                ));
             }
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
             if let Some(reference) = merge_reference {
@@ -6979,19 +7096,22 @@ pub(crate) mod valid {
                         "merge beacon composition requires an authenticated height context",
                     )
                 })?;
-                let (effects, prune_keys, _, roster) = prepared_npos.as_ref().ok_or_else(|| {
+                let prepared = prepared_npos.as_ref().ok_or_else(|| {
                     Self::npos_effects_error("merge beacon composition lacks effects")
                 })?;
                 Some(VerifiedMergeBeaconPulse {
                     header: block.header(),
                     network_id: context.network_id,
-                    effects: (*effects).clone(),
-                    prune_keys: prune_keys.clone(),
-                    roster: roster.clone(),
+                    effects: prepared.effects.clone(),
+                    prune_keys: prepared.prune_keys.clone(),
+                    roster: prepared.roster.clone(),
                     parent_surface: crate::state::merge_beacon_parent_surface(&state.world_view()),
                 })
             } else {
                 None
+            };
+            let apply_npos = |state_block: &mut StateBlock<'_>| {
+                prepared_npos.map_or(Ok(()), |prepared| prepared.apply(state_block))
             };
             let queue_plan_admissions = execution_context
                 .map(|bundle| bundle.queue_plan_admissions())
@@ -8294,6 +8414,20 @@ pub(crate) mod valid {
         fn validate_execution_context_header(
             block: &SignedBlock,
         ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
+            let bundle = Self::checked_execution_context_header(block)?;
+            // TODO: enable only with the sole Native replay/Apply consumer and
+            // atomic retirement of old economic signers. Private preparation
+            // cannot grant admission, voting or publication permission.
+            if bundle.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
+                return Err(Self::execution_context_error(
+                    "native lane economic carrier is not active",
+                ));
+            }
+            Ok(bundle)
+        }
+        fn checked_execution_context_header(
+            block: &SignedBlock,
+        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
             match (
                 block.header().execution_context_hash(),
                 block.execution_context(),
@@ -8315,15 +8449,6 @@ pub(crate) mod valid {
                     bundle
                         .validate_native_lane_decisions_shape()
                         .map_err(Self::execution_context_error)?;
-                    // TODO: enable only with the sole native carrier replay/Apply
-                    // consumer and atomic retirement of old economic signers.
-                    // Private historical inclusion reads below this live boundary
-                    // do not grant admission, voting or publication permission.
-                    if bundle.native_lane_decisions.is_some() {
-                        return Err(Self::execution_context_error(
-                            "native lane economic carrier is not active",
-                        ));
-                    }
                     let actual = HashOf::new(bundle);
                     if actual != expected {
                         return Err(Self::execution_context_error(
@@ -9656,7 +9781,16 @@ pub(crate) mod valid {
             state: &impl StateReadOnly,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
-            let bundle = Self::validate_execution_context_header(block)?;
+            let bundle = if matches!(
+                &validation_profile,
+                ConsensusValidationProfile::NativePreparation { .. }
+            ) {
+                super::native_lane_batch_for_execution(block)
+                    .map_err(Self::execution_context_error)?;
+                Self::checked_execution_context_header(block)?
+            } else {
+                Self::validate_execution_context_header(block)?
+            };
             let context_required =
                 !block.header().is_genesis() && block.external_entrypoint_count() != 0;
             let Some(bundle) = bundle else {
@@ -10828,62 +10962,6 @@ pub(crate) mod valid {
             lane_summaries: &BTreeMap<LaneId, LaneSummary>,
         ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
         {
-            if let Some(batch) = block
-                .execution_context()
-                .and_then(|bundle| bundle.native_lane_decisions.as_deref())
-            {
-                state_block
-                    .validate_native_output_source(block)
-                    .map_err(Self::execution_context_error)?;
-                if !state_block.drain_settlement_records().is_empty()
-                    || !state_block.drain_nexus_fee_records().is_empty()
-                {
-                    return Err(Self::execution_context_error(
-                        "native common tail retains settlement without an authenticated source owner",
-                    ));
-                }
-                let commitments = Self::nonempty_native_lane_settlements(
-                    state_block
-                        .native_lane_settlement_commitments()
-                        .map_err(Self::execution_context_error)?
-                        .ok_or_else(|| {
-                            Self::execution_context_error(
-                                "native settlement lost its executed source",
-                            )
-                        })?,
-                )?;
-                let mut coordinates = BTreeMap::new();
-                for group in &batch.groups {
-                    let descriptor = &group.payload.descriptor;
-                    let descriptor_hash = descriptor
-                        .canonical_hash()
-                        .map_err(Self::execution_context_error)?;
-                    for slot in &descriptor.slots {
-                        if coordinates
-                            .insert(
-                                (slot.route.lane_id, slot.route.dataspace_id),
-                                LanePayloadCoordinate {
-                                    lane_incarnation: slot.lane_incarnation,
-                                    lane_block_height: slot.lane_height,
-                                    lane_block_descriptor_hash: descriptor_hash,
-                                },
-                            )
-                            .is_some()
-                        {
-                            return Err(Self::execution_context_error(
-                                "native settlement repeats a frozen route",
-                            ));
-                        }
-                    }
-                }
-                return Self::finalize_lane_settlement_commitments(
-                    block,
-                    state_block,
-                    &commitments,
-                    lane_summaries,
-                    &coordinates,
-                );
-            }
             let mut native_amx_receipts_by_hash = BTreeMap::new();
             if let Some(bundle) = block.execution_context() {
                 for (entrypoint, context) in block
@@ -11307,12 +11385,15 @@ pub(crate) mod valid {
                     )
                 })?;
             }
-            let native = block
+            if block
                 .execution_context()
-                .is_some_and(|bundle| bundle.native_lane_decisions.is_some());
-            let expired = if native {
-                0
-            } else {
+                .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+            {
+                return Err(Self::execution_context_error(
+                    "native outputs require their original recorded source owner",
+                ));
+            }
+            let expired =
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
                 )
@@ -11320,8 +11401,7 @@ pub(crate) mod valid {
                     Self::execution_context_error(format!(
                         "SoraFS pin expiry maintenance failed: {error}"
                     ))
-                })?
-            };
+                })?;
             if expired != 0 {
                 iroha_logger::debug!(
                     count = expired,
@@ -11340,14 +11420,9 @@ pub(crate) mod valid {
                     advertised_transitions.as_ref(),
                 )
             };
-            let result = if native {
-                state_block.seal_execution_outputs(block, finalize)
-            } else {
-                // Standalone ordinary callers may enter with a plain overlay;
-                // native execution always begins recording before its constructor.
-                crate::sumeragi::witness::start_block();
-                state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize)
-            };
+            // Standalone ordinary callers may enter with a plain overlay.
+            crate::sumeragi::witness::start_block();
+            let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
@@ -24460,10 +24535,22 @@ pub(crate) mod tests {
             post_effect_authorization_calls, 4,
             "both Sumeragi-v2 fixtures, authenticated keep-voting validation, and unchecked execution must gate merge execution after effects"
         );
+        let native_finalizer = source
+            .split_once("pub(crate) fn finalize_native_execution_contexts(")
+            .expect("source-owned native finalizer")
+            .1
+            .split_once("fn state_block_for_execution<")
+            .expect("ordinary execution boundary follows the native finalizer")
+            .0;
+        assert_eq!(
+            native_finalizer.matches(&staged_reference_needle).count(),
+            1,
+            "source-owned native finalization must independently check its exact staged controls"
+        );
         assert_eq!(
             staged_reference_calls,
-            post_effect_authorization_calls + 1,
-            "the only staged-reference path without the voting gate must remain the test-only SCCP root probe"
+            post_effect_authorization_calls + 2,
+            "only the test-only SCCP probe and source-owned native finalizer omit the old merge voting gate"
         );
     }
     include!("block/validation_native_amx_test_support.rs");

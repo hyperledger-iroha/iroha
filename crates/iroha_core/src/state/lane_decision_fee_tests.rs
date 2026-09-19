@@ -141,7 +141,7 @@ state_test! { sync native_economic_direct_fee_exact_burn_and_event_survive_scrat
     // events; it does not intercept, fabricate or mutate the economic result.
     let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let prepared = state.prepare_native_batch_on_carrier(header, &groups).unwrap();
+    let prepared = state.prepare_native_batch_on_carrier(header, groups.clone()).unwrap();
     let batch = prepared.batch().clone();
     assert!(prepared.executions()[0].result.is_ok(), "{:?}", prepared.executions()[0].result);
     assert_eq!(batch.groups[0], groups[0].to_wire());
@@ -162,7 +162,7 @@ state_test! { sync native_economic_direct_fee_exact_burn_and_event_survive_scrat
     assert_native_direct_fee_balance(state.view().world(), &fee_asset, 20);
     assert_native_direct_fee_status(&fee_asset, 1);
 
-    let replay = state.replay_lane_decision_batch(&carrier, &batch, &groups).unwrap();
+    let replay = state.replay_lane_decision_batch(&carrier, &batch, groups.clone()).unwrap();
     assert_eq!(replay.batch(), &batch, "fee effects are part of the exact replayed write roots/results");
     assert_native_direct_fee_balance(&replay.overlay().world, &fee_asset, 15);
     assert_eq!(replay.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(75u32));
@@ -193,7 +193,7 @@ state_test! { sync native_economic_direct_fee_cap_and_payer_rejections_settle_he
         let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
         let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let prepared = state.prepare_native_batch_on_carrier(header, &groups)
+        let prepared = state.prepare_native_batch_on_carrier(header, groups.clone())
             .expect("an authenticated admitted input that cannot pay is terminally rejected, not an endlessly invalid carrier");
         let batch = prepared.batch().clone();
         let execution = &prepared.executions()[0];
@@ -212,7 +212,7 @@ state_test! { sync native_economic_direct_fee_cap_and_payer_rejections_settle_he
         assert_native_direct_fee_status(&fee_asset, 0);
         drop(prepared);
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
-        let replay = state.replay_lane_decision_batch(&carrier, &batch, &groups).unwrap();
+        let replay = state.replay_lane_decision_batch(&carrier, &batch, groups.clone()).unwrap();
         assert_eq!(replay.batch(), &batch);
         assert_native_economic_terminal(replay.overlay(), &groups[0], carrier.height().get());
         assert_native_direct_fee_balance(&replay.overlay().world, &fee_asset, policy.funding);
@@ -244,7 +244,7 @@ state_test! { sync native_economic_direct_fee_late_batch_failure_discards_real_b
     let header = carrier.clone();
     let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let error = state.prepare_native_batch_on_carrier(header, &groups).err().expect("late marker conflict");
+    let error = state.prepare_native_batch_on_carrier(header, groups.clone()).err().expect("late marker conflict");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_native_direct_fee_status(&fee_asset, 1);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
@@ -285,7 +285,7 @@ state_test! { sync native_economic_direct_fee_execution_time_exhaustion_rejects_
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let prepared = state.prepare_native_batch_on_carrier(header, &groups).unwrap();
+    let prepared = state.prepare_native_batch_on_carrier(header, groups.clone()).unwrap();
     let batch = prepared.batch().clone();
     assert_eq!(batch.groups.len(), 2);
     assert!(prepared.executions()[0].result.is_ok(), "{:?}", prepared.executions()[0].result);
@@ -305,7 +305,7 @@ state_test! { sync native_economic_direct_fee_execution_time_exhaustion_rejects_
     drop(prepared);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     assert_native_direct_fee_balance(state.view().world(), &fee_asset, 9);
-    let replay = state.replay_lane_decision_batch(&carrier, &batch, &groups).unwrap();
+    let replay = state.replay_lane_decision_batch(&carrier, &batch, groups.clone()).unwrap();
     assert_eq!(replay.batch(), &batch);
     assert_native_direct_fee_balance(&replay.overlay().world, &fee_asset, 4);
     for group in &groups { assert_native_economic_terminal(replay.overlay(), group, carrier.height().get()); }

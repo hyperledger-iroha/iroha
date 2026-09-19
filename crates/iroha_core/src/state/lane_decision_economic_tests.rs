@@ -18,7 +18,7 @@ enum NativeEconomicCase {
 }
 
 struct NativeEconomicFixture {
-    native: LaneContextVerifiedFixture,
+    native: LaneContextVerifiedFixture<Box<State>>,
     source: AssetId,
     destination: AssetId,
 }
@@ -53,14 +53,31 @@ fn native_economic_fixture_with_fee_policy(
     )
 }
 
-// Finish World/State construction before reserving the later admission overlays.
-// Keeping the constructed State boxed also avoids copying it into each caller's
-// fixture setup frame on the ordinary test-thread stack.
-fn native_economic_initial_state(
+// Keep the World/State construction frame separate from every nested block
+// acquisition. A lexical scope alone does not reduce debug-build stack frames.
+// The returned Box is the original State; no snapshot, clone or replay is used.
+struct NativeEconomicStateSetup {
+    state: Box<State>,
+    kura: Arc<Kura>,
+    genesis: SignedBlock,
+    nexus: iroha_config::parameters::actual::Nexus,
+    configured_catalog_hash: Hash,
+    source_key: KeyPair,
+    source_account: AccountId,
+    destination_account: AccountId,
+    source: AssetId,
+    destination: AssetId,
+    fee_asset: AssetId,
+    // Fixture input consumed before transaction signing and first admission.
+    fee_intent: Option<iroha_data_model::transaction::FeePaymentIntent>,
+}
+
+// Do not inline the large constructor into a caller that acquires WorldBlock.
+#[inline(never)]
+fn native_economic_state_setup(
     direct_fee: Option<NativeEconomicDirectFee>,
-    runtime_effect: bool,
     initialize_world: impl FnOnce(&mut World),
-) -> (Box<State>, KeyPair, AssetId, AssetId, SignedBlock) {
+) -> NativeEconomicStateSetup {
     let source_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let destination_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).unwrap();
     let source_account = AccountId::new(source_key.public_key().clone());
@@ -108,10 +125,6 @@ fn native_economic_initial_state(
     );
     initialize_world(&mut world);
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    if runtime_effect {
-        nexus.staking.restricted_validator_mode =
-            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
-    }
     // These balance/order/rollback controls use an explicit zero-charge policy,
     // as the existing autonomous transfer fixture does. Empty signed fee limits
     // are valid only because the actual configured charge is zero.
@@ -155,23 +168,30 @@ fn native_economic_initial_state(
         &nexus.configured_lane_catalog,
     )
     .expect("authenticate the actual configured catalog before opening fixture State");
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
-        world,
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        (*DEFAULT_TEST_CHAIN_ID).clone(),
-        NetworkId::from_genesis_hash(genesis.hash()),
-    )
-    .expect("construct State before authenticating its configured primary geometry");
-    // Convenience State fixtures install default markers eagerly. Follow the
-    // actual startup order here, then apply only the usual test runtime limits.
-    state.configure_test_runtime_defaults();
-    state.install_pre_genesis_nexus_for_testing(nexus);
-    assert_eq!(
-        kura.configured_lane_catalog_baseline().unwrap(),
-        Some(configured_catalog_hash),
+    let state = Box::new(
+        State::try_new_with_chain_and_network_id_with_default_telemetry(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            NetworkId::from_genesis_hash(genesis.hash()),
+        )
+        .expect("construct State before authenticating its configured primary geometry"),
     );
-    (Box::new(state), source_key, source, destination, genesis)
+    NativeEconomicStateSetup {
+        state,
+        kura,
+        genesis,
+        nexus,
+        configured_catalog_hash,
+        source_key,
+        source_account,
+        destination_account,
+        source,
+        destination,
+        fee_asset,
+        fee_intent: None,
+    }
 }
 
 fn native_economic_fixture_with_world_initializer(
@@ -199,22 +219,79 @@ fn native_economic_fixture_with_initializers(
     initialize_world: impl FnOnce(&mut World),
     before_admission: impl FnOnce(&State, &SignedBlock),
 ) -> Box<NativeEconomicFixture> {
+    let mut setup = native_economic_state_setup(direct_fee, initialize_world);
+    if cases
+        .iter()
+        .any(|case| matches!(case, NativeEconomicCase::RuntimeEffect(_)))
+    {
+        setup.nexus.staking.restricted_validator_mode =
+            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    }
+    native_economic_fixture_from_state_with_initializer(
+        cases,
+        atomic_group,
+        genesis_layout,
+        direct_fee,
+        setup,
+        before_admission,
+    )
+}
+
+fn native_economic_fixture_from_state(
+    cases: &[NativeEconomicCase],
+    atomic_group: bool,
+    genesis_layout: Option<DataAvailabilityLayout>,
+    direct_fee: Option<NativeEconomicDirectFee>,
+    setup: NativeEconomicStateSetup,
+) -> Box<NativeEconomicFixture> {
+    native_economic_fixture_from_state_with_initializer(
+        cases,
+        atomic_group,
+        genesis_layout,
+        direct_fee,
+        setup,
+        |_, _| {},
+    )
+}
+
+// Only pointer-sized State custody remains live while the actual genesis,
+// admission and finality producers acquire their original nested writers.
+#[inline(never)]
+fn native_economic_fixture_from_state_with_initializer(
+    cases: &[NativeEconomicCase],
+    atomic_group: bool,
+    genesis_layout: Option<DataAvailabilityLayout>,
+    direct_fee: Option<NativeEconomicDirectFee>,
+    setup: NativeEconomicStateSetup,
+    before_admission: impl FnOnce(&State, &SignedBlock),
+) -> Box<NativeEconomicFixture> {
     use iroha_data_model::transaction::signed::{
         SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
     };
     assert!(!cases.is_empty() && cases.len() <= 2);
     assert!(!atomic_group || cases.len() == 1);
-    let (state, source_key, source, destination, genesis) = native_economic_initial_state(
-        direct_fee,
-        cases
-            .iter()
-            .any(|case| matches!(case, NativeEconomicCase::RuntimeEffect(_))),
-        initialize_world,
+    let NativeEconomicStateSetup {
+        mut state,
+        kura,
+        genesis,
+        nexus,
+        configured_catalog_hash,
+        source_key,
+        source_account,
+        destination_account,
+        source,
+        destination,
+        fee_asset,
+        fee_intent,
+    } = setup;
+    // Convenience State fixtures install default markers eagerly. Follow the
+    // actual startup order here, then apply only the usual test runtime limits.
+    state.configure_test_runtime_defaults();
+    state.install_pre_genesis_nexus_for_testing(nexus);
+    assert_eq!(
+        kura.configured_lane_catalog_baseline().unwrap(),
+        Some(configured_catalog_hash),
     );
-    let source_account = source.account().clone();
-    let destination_account = destination.account().clone();
-    let fee_asset = native_economic_direct_fee_asset(&source);
-    let kura = Arc::clone(&state.kura);
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
@@ -307,19 +384,21 @@ fn native_economic_fixture_with_initializers(
     let mut first_binding = None;
     let mut shared_commitment = None;
     let mut first_ordered_reveal = None;
-    let fee_intent = direct_fee.map_or_else(
-        || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        |policy| {
-            iroha_data_model::transaction::FeePaymentIntent::authority(
-                vec![iroha_data_model::transaction::FeeChargeLimit::new(
-                    iroha_data_model::transaction::FeeChargeKind::Nexus,
-                    fee_asset.definition().clone(),
-                    Quantity::from(policy.signed_max),
-                )],
-                None,
-            )
-        },
-    );
+    let fee_intent = fee_intent.unwrap_or_else(|| {
+        direct_fee.map_or_else(
+            || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            |policy| {
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                        iroha_data_model::transaction::FeeChargeKind::Nexus,
+                        fee_asset.definition().clone(),
+                        Quantity::from(policy.signed_max),
+                    )],
+                    None,
+                )
+            },
+        )
+    });
     for (index, case) in cases.iter().enumerate() {
         let mut builder =
             TransactionBuilder::new(state.network_id, source_account.clone(), fee_intent.clone());
@@ -608,7 +687,16 @@ fn native_economic_fixture_with_initializers(
     // authenticated witness and finality. The applying batch is prepared only
     // after this exact committed prefix; no certified base is rewritten.
     before_admission(&state, &block);
-    let opening = if let Some(layout) = genesis_layout {
+    let opening = {
+        let layout = genesis_layout.unwrap_or(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        });
+        let policy = crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state).unwrap();
         // Choose geometry before any signed finality or frozen lane instance.
         // Native historical recovery tests exercise the real enclosing batch,
         // whose carrier is larger than this helper's original 4 KiB default.
@@ -621,6 +709,7 @@ fn native_economic_fixture_with_initializers(
                 previous.as_ref(),
                 state.network_id,
                 layout,
+                policy,
             );
             let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
             assert_eq!(receipt.height(), artifact.height);
@@ -634,8 +723,6 @@ fn native_economic_fixture_with_initializers(
             None,
         )
         .unwrap()
-    } else {
-        lane_opening_context_for_state_test(&state)
     };
     let mut overlay = state
         .block_with_queue_plan_admissions(block.header(), &controls)
@@ -660,7 +747,7 @@ fn native_economic_fixture_with_initializers(
         .unwrap();
     Box::new(NativeEconomicFixture {
         native: LaneContextVerifiedFixture {
-            state: *state,
+            state,
             validators,
             binding: first_binding.unwrap(),
             block,

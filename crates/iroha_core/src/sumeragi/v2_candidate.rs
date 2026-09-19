@@ -2215,16 +2215,35 @@ pub(super) mod tests {
             new_queue_plan_admission_binding, queue_plan_admission_attestation_signing_bytes_v1,
         };
         use iroha_data_model::{
+            IntoKeyValue, Registrable,
+            account::Account,
             consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-            nexus::{LaneStorageProfile, LaneVisibility},
         };
+        let route = RoutingDecision::default();
+        let nexus = state.nexus_snapshot();
+        let lane = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == route.lane_id)
+            .expect("carrier admission route exists in the current catalog");
+        assert_eq!(lane.dataspace_id, route.dataspace_id);
         // Global commit topology alone does not establish native route authority.
-        // Install the exact four live keys/PoPs and manifest bindings used below.
+        // Install the exact four accounts/live keys/PoPs and manifest bindings.
+        // The manifest must retain the actual catalog identity: a made-up
+        // governance policy is discarded by the scoped runtime rebind.
         let keys = (0xA7_u8..=0xAA)
             .map(|tag| KeyPair::try_from_seed(vec![tag; 32], Algorithm::BlsNormal).unwrap())
             .collect::<Vec<_>>();
         let mut world = state.world.block();
         for (index, key) in keys.iter().enumerate() {
+            let validator = AccountId::new(key.public_key().clone());
+            if world.accounts.get(&validator).is_none() {
+                let (account_id, account_value) = Account::new(validator.clone())
+                    .build(&validator)
+                    .into_key_value();
+                world.accounts.insert(account_id, account_value);
+            }
             let id = ConsensusKeyId::new(
                 ConsensusKeyRole::Validator,
                 format!("carrier-budget-{index}"),
@@ -2269,14 +2288,14 @@ pub(super) mod tests {
             .collect();
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
             BTreeMap::from([(
-                LaneId::SINGLE,
+                lane.id,
                 LaneManifestStatus {
-                    lane: LaneId::SINGLE,
-                    alias: "default".to_owned(),
-                    dataspace: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Public,
-                    storage: LaneStorageProfile::FullReplica,
-                    governance: Some("default-lane-governance".to_owned()),
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility,
+                    storage: lane.storage,
+                    governance: lane.governance.clone(),
                     manifest_path: Some(std::path::PathBuf::from(
                         "/tmp/carrier-budget-manifest.json",
                     )),
@@ -2289,15 +2308,54 @@ pub(super) mod tests {
                 },
             )]),
         )));
-        let route = RoutingDecision::default();
         let plan = RoutingPlan::single(route);
+        let view = state.view();
+        let scoped_manifest = view
+            .lane_manifests
+            .status(lane.id)
+            .expect("the current scoped projection retains the carrier manifest");
+        assert_eq!(scoped_manifest.alias, lane.alias);
+        assert_eq!(scoped_manifest.dataspace, lane.dataspace_id);
+        assert_eq!(scoped_manifest.governance, lane.governance);
+        assert_eq!(scoped_manifest.visibility, lane.visibility);
+        assert_eq!(scoped_manifest.storage, lane.storage);
+        let scoped_rules = scoped_manifest
+            .governance_rules
+            .as_ref()
+            .expect("the actual catalog rebind preserves all four validator bindings");
+        assert_eq!(scoped_rules.validator_bindings.len(), 4);
+        for binding in &scoped_rules.validator_bindings {
+            assert!(view.world().accounts().get(&binding.validator).is_some());
+            assert!(
+                crate::state::live_consensus_key_pop_for_peer_on_lane(
+                    view.world(),
+                    &binding.peer_id,
+                    context.height,
+                    lane.id,
+                )
+                .is_some()
+            );
+        }
         let validators = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
-            &state.view(),
+            &view,
             route,
             context.height,
         )
         .unwrap();
         assert_eq!(validators.len(), 4);
+        assert_eq!(
+            validators,
+            context
+                .roster
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect::<Vec<_>>(),
+            "the current route authority must be the frozen four-validator committee"
+        );
+        let lane_incarnation = view
+            .lane_incarnation_at_height(route.lane_id, context.height)
+            .expect("the same current view owns the admission's lane incarnation");
+        drop(view);
         let admission_context = QueuePlanAdmissionContextV1 {
             version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: anchor.snapshot_height,
@@ -2306,9 +2364,7 @@ pub(super) mod tests {
             routing_plan_digest: plan.digest(),
             route_incarnations: vec![QueuePlanRouteIncarnationV1 {
                 leg: plan.legs()[0],
-                lane_incarnation: state
-                    .lane_incarnation_at_height(route.lane_id, context.height)
-                    .unwrap(),
+                lane_incarnation,
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validators),
                 validator_count: 4,

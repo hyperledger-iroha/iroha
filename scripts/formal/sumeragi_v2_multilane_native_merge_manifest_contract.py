@@ -1249,11 +1249,11 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "Ok(prepared.execution_prefix_commitment())",
     ),
     (
-        native_preparation.PREPARED,
+        native_preparation.PREFIX,
         "method",
-        "PreparedCarrier::prepare",
-        "let native_amx_manifest = exec::NativeAmxApplicationManifestV1::"
-        "from_result_bearing_block_and_merge_entry( block, state.staged_merge_entry(), )?;",
+        "PrefixPreparation::capture",
+        "let manifest = exec::NativeAmxApplicationManifestV1::"
+        "from_result_bearing_block_and_merge_entry( block, None, )?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",

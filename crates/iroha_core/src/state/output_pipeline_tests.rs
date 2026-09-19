@@ -31,8 +31,10 @@ fn write(key: &str) -> InstructionBox {
     SetKeyValue::account(ALICE_ID.clone(), key.parse().unwrap(), Json::new(1)).into()
 }
 
-fn pipeline_fixture(bytes: u64, triggers: Vec<Trigger>) -> (State, SignedBlock) {
-    let state = fixture(bytes, None);
+// Keep the large fixture State out of caller frames containing execution overlays.
+#[inline(never)]
+fn pipeline_fixture(bytes: u64, triggers: Vec<Trigger>) -> (Box<State>, SignedBlock) {
+    let state = Box::new(fixture(bytes, None));
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = parameters.get().block().execution_output();

@@ -14,7 +14,7 @@ state_test! { sync native_economic_batch_seals_actual_transfer_and_all_instance_
     assert_eq!(batch.groups, vec![groups[0].to_wire()]);
     let mut carrier = empty_global_block_after(Some(&fixture.native.block));
     carrier.set_execution_context(Some(BlockExecutionContextBundle::default().with_native_lane_decisions(batch.clone())));
-    let prepared = state.replay_lane_decision_batch(&carrier.header(), &batch, &groups).unwrap();
+    let prepared = state.replay_lane_decision_batch(&carrier.header(), &batch, groups.clone()).unwrap();
     assert!(prepared.executions()[0].result.is_ok());
     assert_eq!(prepared.executions()[0].source, batch.groups[0]);
     let roots = prepared.prefix_roots_for_test();
@@ -39,7 +39,7 @@ state_test! { sync native_economic_batch_seals_actual_transfer_and_all_instance_
     assert_eq!(LaneDecisionBatchV1::decode_canonical(&bytes, bytes.len()).unwrap(), batch);
     drop(prepared);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
-    let replay = state.replay_lane_decision_batch(&carrier.header(), &batch, &groups).unwrap();
+    let replay = state.replay_lane_decision_batch(&carrier.header(), &batch, groups.clone()).unwrap();
     assert_eq!(replay.batch(), &batch);
     assert_eq!(replay.prefix_roots_for_test(), roots);
     assert_eq!(replay.executions().iter().map(|result| result.result.clone()).collect::<Vec<_>>(), actual_results);
@@ -65,20 +65,20 @@ state_test! { sync native_economic_batch_replay_rejects_tampered_source_and_actu
             3 => changed.groups.push(changed.groups[0].clone()),
             _ => unreachable!(),
         }
-        assert!(state.replay_lane_decision_batch(&carrier, &changed, &groups).is_err(), "mutation {mutation}");
+        assert!(state.replay_lane_decision_batch(&carrier, &changed, groups.clone()).is_err(), "mutation {mutation}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
     }
     let mut different = carrier.clone();
     different.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(b"foreign actual parent"))));
-    assert!(state.replay_lane_decision_batch(&different, &batch, &groups).is_err());
-    assert!(state.replay_lane_decision_batch(&carrier, &batch, &[]).is_err());
+    assert!(state.replay_lane_decision_batch(&different, &batch, groups.clone()).is_err());
+    assert!(state.replay_lane_decision_batch(&carrier, &batch, Vec::new()).is_err());
     // A different proposal time is a valid different execution context. The same
     // source can be reproposed; its marker identity binds the actual header.
     let later = BlockHeader::new(carrier.height(), carrier.prev_block_hash(), None,
         u64::try_from(carrier.creation_time().as_millis()).unwrap()+1, carrier.view_change_index());
     assert_ne!(super::lane_decision_batch::native_application_identity(&carrier,batch.canonical_hash().unwrap()),
         super::lane_decision_batch::native_application_identity(&later,batch.canonical_hash().unwrap()));
-    drop(state.replay_lane_decision_batch(&later, &batch, &groups).unwrap());
+    drop(state.replay_lane_decision_batch(&later, &batch, groups.clone()).unwrap());
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
 
@@ -94,7 +94,7 @@ state_test! { sync native_economic_batch_existing_instance_marker_drops_every_ec
     storage.commit();
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let carrier = empty_global_block_after(Some(&fixture.native.block)).header();
-    let error = state.prepare_native_batch_on_carrier(carrier, &groups).err().expect("marker collision");
+    let error = state.prepare_native_batch_on_carrier(carrier, groups.clone()).err().expect("marker collision");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
@@ -108,14 +108,14 @@ state_test! { sync native_observation_preserves_stable_bad_source_but_retries_ch
     let carrier = empty_global_block_after(Some(&fixture.native.block)).header();
     let mut bad = batch.clone();
     bad.base_state_hash = HashOf::from_untyped_unchecked(Hash::new(b"stable foreign base"));
-    assert!(matches!(state.replay_lane_decision_batch(&carrier, &bad, &groups),
+    assert!(matches!(state.replay_lane_decision_batch(&carrier, &bad, groups.clone()),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))),
         "same-generation source mismatch remains an actual rejection");
     for fail in [false, true] {
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
         let result = with_stable_observation(state, || {
             let result = if fail {
-                state.replay_lane_decision_batch(&carrier, &bad, &groups).map(|_| batch.clone())
+                state.replay_lane_decision_batch(&carrier, &bad, groups.clone()).map(|_| batch.clone())
             } else {
                 state.prepare_lane_decision_batch(&groups)
             };
@@ -157,7 +157,7 @@ state_test! { sync native_economic_batch_preserves_merge_ledger_query_metadata
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let groups = native_economic_groups(&fixture);
     let carrier = empty_global_block_after(Some(&fixture.native.block));
-    let prepared = state.prepare_native_batch_on_carrier(carrier.header(), &groups)
+    let prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups)
         .expect("actual native source executes from its exact current pre-State");
     assert!(prepared.executions()[0].result.is_ok());
     assert_eq!(prepared.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(75_u32));

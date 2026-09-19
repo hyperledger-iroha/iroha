@@ -171,7 +171,7 @@ state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actua
     let groups = native_economic_groups(&fixture);
     let prepared = state.prepare_native_batch_on_carrier(
         carrier.header(),
-        &groups,
+        groups.clone(),
     ).unwrap();
     attach_actual_native_prefix_results_for_test(&mut executed, &prepared);
     drop(prepared);
@@ -255,10 +255,10 @@ state_test! { sync live_native_batch_retains_exact_completed_first_sources_acros
     assert!(matches!(state.replay_proposed_native_lane_batch(&carrier, &[]).unwrap(), NativeLaneBatchReplayV1::FirstInputRecoveryRequired { execution_index: 0, .. }), "resultless completion never populates executed-wire storage");
 }
 
-// Keep the large State move out of the race test frame on the default stack.
+// Consume the original heap State without moving its value onto the test stack.
 fn proposed_native_batch_shared_state_fixture() -> (Arc<State>, SignedBlock) {
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
-    (Arc::new(fixture.native.state), carrier)
+    (Arc::from(fixture.native.state), carrier)
 }
 
 state_test! { sync live_native_batch_discards_a_changed_publication_during_finality_io
@@ -293,7 +293,7 @@ fn store_native_control_carrier_for_test(
     let state = &fixture.native.state;
     let groups = native_economic_groups(fixture);
     let prepared = state
-        .prepare_native_batch_on_carrier(carrier.header(), &groups)
+        .prepare_native_batch_on_carrier(carrier.header(), groups.clone())
         .unwrap();
     attach_actual_native_prefix_results_for_test(carrier, &prepared);
     drop(prepared);
@@ -339,15 +339,20 @@ state_test! { sync finalized_native_batch_cannot_erase_additional_controls_befor
     let artifact = store_native_control_carrier_for_test(&fixture, &mut carrier);
     artifact.verify().unwrap();
     let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
-    let error = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap_err();
+    let NativeLaneBatchCarrierReadV1::Ready(included) = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
+        else { panic!("durable complete control carrier"); };
+    assert_eq!(included.carrier(), &carrier.canonical_resultless_proposal());
+    let error = state.replay_finalized_native_lane_batch(&included, &[]).err().expect("scratch cannot erase retained controls");
     assert!(error.to_string().contains("additional carrier controls"), "{error}");
     state.kura.evict_first_admission_body_for_testing(height, carrier.hash()).unwrap();
     let NativeLaneBatchCarrierReadV1::CanonicalBodyRecoveryRequired(required) = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
         else { panic!("an evicted body must be recovered before its full input shape is known"); };
     let (request, response, outstanding) = authenticated_native_batch_body_response_for_test(&fixture.native.validators[0], required.finality(), &carrier);
-    let error = required.complete_from_authenticated_response(&request, &response).unwrap_err();
+    let recovered = required.complete_from_authenticated_response(&request, &response).unwrap();
+    assert_eq!(recovered.carrier(), included.carrier());
+    let error = state.replay_finalized_native_lane_batch(&recovered, &[]).err().expect("recovery retains the same complete control carrier");
     assert!(error.to_string().contains("additional carrier controls"), "{error}");
-    assert_eq!(outstanding.len(), 1, "rejected projection cannot discharge exact transport custody");
+    assert_eq!(outstanding.len(), 1, "projection cannot discharge exact transport custody");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
 

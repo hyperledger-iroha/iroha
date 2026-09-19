@@ -17,7 +17,8 @@ fn publish_next_native_group_for_test(
         .expect("actual parent finality");
     let context = crate::sumeragi::v2_context::build_successor_height_context(
         &finality,
-        finality.height_context.nexus_amx_context_hash,
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
+            .expect("derive Native applying policy from its exact committed predecessor"),
         None,
     )
     .expect("successor inherits exact four-validator authority");

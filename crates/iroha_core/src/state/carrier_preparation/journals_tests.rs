@@ -14,7 +14,16 @@ fn admit_runtime_for_test(
     Ok(())
 }
 
-fn admit_journals_for_test(state: &StateBlock<'_>) -> Result<(), std::convert::Infallible> {
+fn admit_journals_for_test(
+    inputs: CarrierJournalInputs<'_, '_>,
+) -> Result<(), std::convert::Infallible> {
+    let state = inputs.state;
+    assert_eq!(inputs.prefix.sources().proposal(), state._curr_block.hash());
+    inputs
+        .prefix
+        .inventory()
+        .verify_ordinary_witness_bundles(&inputs.prefix.witness().fastpq_transcripts)
+        .unwrap();
     let mode = state.canonical_runtime.mode();
     assert_eq!(state.commit_topology.mode(), mode);
     assert_eq!(state.prev_commit_topology.mode(), mode);
@@ -44,10 +53,16 @@ fn journal_admission_refusal_drops_the_complete_original_carrier() {
     let result = prepared.prepare_journals(Some(&archive), None, |original| {
         assert!(!called);
         called = true;
-        assert_eq!(original.canonical_runtime.mode(), mv::BlockMode::Ordinary);
-        assert_eq!(original.world.musubi_resolver_index_checkpoints.len(), 1);
         assert_eq!(
-            original.commit_topology.get(),
+            original.state.canonical_runtime.mode(),
+            mv::BlockMode::Ordinary
+        );
+        assert_eq!(
+            original.state.world.musubi_resolver_index_checkpoints.len(),
+            1
+        );
+        assert_eq!(
+            original.state.commit_topology.get(),
             &context
                 .roster
                 .iter()
@@ -182,9 +197,13 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     let journals = prepared
         .prepare_journals(None, None, |original| {
             admissions += 1;
+            let original_state = original.state;
             admit_journals_for_test(original)?;
-            assert_eq!(original.world.external_event_buf, original_events);
-            assert_eq!(original.world.musubi_resolver_index_checkpoints.len(), 1);
+            assert_eq!(original_state.world.external_event_buf, original_events);
+            assert_eq!(
+                original_state.world.musubi_resolver_index_checkpoints.len(),
+                1
+            );
             Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released)))
         })
         .unwrap();
@@ -197,13 +216,14 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     assert_eq!(*journals.context, context);
     assert_eq!(
         journals
+            .components
             .runtime
             .canonical_runtime
             .touched_value()
             .map(|values| (values.before.clone(), values.after.clone())),
         runtime_delta
     );
-    assert!(journals.runtime.matches_current(&state));
+    assert!(journals.components.runtime.matches_current(&state));
     // All original World and runtime writers are free while their captured
     // values and archive plans remain owned by this candidate.
     drop(state.canonical_runtime.block());
@@ -211,39 +231,60 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     drop(state.prev_commit_topology.block());
     drop(state.lane_consensus_contexts.block());
     assert_eq!(
-        journals.block_hashes.as_slice().last(),
+        journals.components.block_hashes.as_slice().last(),
         Some(&proposal.hash())
     );
-    assert!(journals.block_hashes.matches_current(&state.block_hashes));
+    assert!(
+        journals
+            .components
+            .block_hashes
+            .matches_current(&state.block_hashes)
+    );
     assert!(state.block_hashes.inner.try_write().is_some());
-    assert_eq!(journals.block_hashes.mode(), mv::BlockMode::Ordinary);
-    assert_eq!(journals.block_hashes.pending(), &[proposal.hash()]);
+    assert_eq!(
+        journals.components.block_hashes.mode(),
+        mv::BlockMode::Ordinary
+    );
+    assert_eq!(
+        journals.components.block_hashes.pending(),
+        &[proposal.hash()]
+    );
     assert_eq!(
         journals
+            .components
             .world
             .field("musubi_resolver_index_checkpoints")
             .unwrap()
             .touched_values,
         1
     );
-    assert_eq!(journals.world.field_count(), 278);
-    assert_eq!(journals.world.mode(), mv::BlockMode::Ordinary);
-    assert!(journals.world.matches_current(&state.world));
-    assert_eq!(journals.world.external_events(), original_events.as_slice());
+    assert_eq!(journals.components.world.field_count(), 278);
+    assert_eq!(journals.components.world.mode(), mv::BlockMode::Ordinary);
+    assert!(journals.components.world.matches_current(&state.world));
+    assert_eq!(
+        journals.components.world.external_events(),
+        original_events.as_slice()
+    );
     drop(state.world.block());
-    assert_eq!(journals.transactions.staged_membership().0.get(), 1);
+    assert_eq!(
+        journals.components.transactions.staged_membership().0.get(),
+        1
+    );
     assert_eq!(
         journals
+            .components
             .transactions
             .observe_predecessor(&state.transactions),
         storage_transactions::MembershipPredecessorStatus::Current
     );
     // Membership's writer is already released while the other journals live.
     drop(state.transactions.block());
-    assert!(matches!(
-        journals.effects.execution_output_plan,
-        Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
-    ));
+    assert_eq!(journals.source_prefix.sources().proposal(), proposal.hash());
+    journals
+        .source_prefix
+        .inventory()
+        .verify_ordinary_witness_bundles(&journals.source_prefix.witness().fastpq_transcripts)
+        .unwrap();
     assert!(!journals.publication_events.is_empty());
     assert_eq!(state.transactions.latest_height(), 0);
     assert_eq!(state.committed_height(), 0);
@@ -283,7 +324,7 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
     let returned = std::thread::spawn(move || {
         assert_eq!(journals.execution_prefix_commitment(), prefix);
         assert_eq!(journals.valid.as_ref().hash(), proposal.hash());
-        assert_eq!(journals.world.field_count(), 278);
+        assert_eq!(journals.components.world.field_count(), 278);
         assert!(!journals.publication_events.is_empty());
         journals
     })
@@ -530,4 +571,84 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
             before
         );
     }
+}
+
+#[test]
+fn journal_resource_refusal_precedes_geometry_projection() {
+    #[derive(Debug, PartialEq, Eq)]
+    enum Capacity {
+        Exhausted,
+    }
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let mut prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("actual candidate: {error}"));
+    // Deliberate test-only projection drift would fail geometry capture. Whole
+    // capture admission must nevertheless precede its allocating projections.
+    prepared.state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
+    assert!(prepared.state.prepare_carrier_geometry().is_err());
+    let mut called = false;
+    let error = prepared
+        .prepare_journals(None, None, |_| {
+            called = true;
+            Err::<(), _>(Capacity::Exhausted)
+        })
+        .err()
+        .expect("local capture refusal");
+    assert!(called);
+    assert!(matches!(
+        error,
+        CarrierJournalPreparationError::JournalAdmission(Capacity::Exhausted)
+    ));
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert!(state.block_hashes.inner.try_write().is_some());
+    assert_eq!(state.kura.blocks_count(), 0);
+}
+
+#[test]
+fn geometry_refusal_drops_originals_before_capture_reservation() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct Reservation<'a> {
+        state: &'a State,
+        released: Arc<AtomicUsize>,
+        originals_released_first: Arc<AtomicBool>,
+    }
+    impl Drop for Reservation<'_> {
+        fn drop(&mut self) {
+            self.originals_released_first.store(
+                self.state.block_hashes.inner.try_write().is_some(),
+                Ordering::SeqCst,
+            );
+            self.released.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let mut prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("actual candidate: {error}"));
+    prepared.state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
+    assert!(prepared.state.prepare_carrier_geometry().is_err());
+    let released = Arc::new(AtomicUsize::new(0));
+    let originals_released_first = Arc::new(AtomicBool::new(false));
+    let error = prepared
+        .prepare_journals(None, None, |_| {
+            Ok::<_, std::convert::Infallible>(Reservation {
+                state: &state,
+                released: Arc::clone(&released),
+                originals_released_first: Arc::clone(&originals_released_first),
+            })
+        })
+        .err()
+        .expect("geometry drift refuses capture");
+    assert!(matches!(error, CarrierJournalPreparationError::Geometry(_)));
+    assert_eq!(released.load(Ordering::SeqCst), 1);
+    assert!(originals_released_first.load(Ordering::SeqCst));
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert_eq!(state.kura.blocks_count(), 0);
 }

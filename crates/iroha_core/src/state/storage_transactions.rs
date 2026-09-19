@@ -695,9 +695,11 @@ mod block {
         }
     }
 }
-pub(crate) use block::{DetachedTransactionsBlock, PreparedTransactionsBlock};
 #[cfg(test)]
-pub(crate) use block::{MembershipPredecessorStatus, PreparedDetachedTransactionsBlock};
+pub(crate) use block::MembershipPredecessorStatus;
+pub(crate) use block::{
+    DetachedTransactionsBlock, PreparedDetachedTransactionsBlock, PreparedTransactionsBlock,
+};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
 

@@ -1,7 +1,9 @@
 // Native State/Kura authentication and publication-race controls.
 
-struct LaneContextVerifiedFixture {
-    state: State,
+// The economic fixture retains its large State allocation across nested block setup.
+// Other fixtures keep their existing by-value owner through the default type.
+struct LaneContextVerifiedFixture<StateOwner = State> {
+    state: StateOwner,
     validators: Vec<KeyPair>,
     binding: crate::torii_proxy::QueuePlanAdmissionBindingV1,
     block: SignedBlock,
@@ -45,10 +47,12 @@ fn publish_lane_context_verified_fixture(
     iroha_data_model::block::consensus_v2::HeightContext,
     ExecWitness,
 ) {
-    seed_exact_queue_plan_admission_state_for_test(state, certificate);
-    let block = empty_global_block_after(Some(parent));
+    let block = lane_context_admission_carrier_for_test(parent, certificate);
     let opening = lane_opening_context_for_state_test(state);
-    let mut overlay = state.block(block.header());
+    let predecessor_runtime = state.canonical_runtime.view().get().clone();
+    let mut overlay = state
+        .block_with_queue_plan_admissions(block.header(), &[certificate.to_vec()])
+        .unwrap();
     overlay
         .finalize_lane_consensus_contexts(&block, Some(&opening))
         .unwrap();
@@ -56,9 +60,17 @@ fn publish_lane_context_verified_fixture(
     overlay
         .capture_lane_consensus_contexts(&mut witness)
         .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .unwrap();
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
+    assert_eq!(
+        state.canonical_runtime.predecessor_view().get().as_ref(),
+        Some(&predecessor_runtime),
+        "snapshot fixture must retain the actual pre-carrier runtime"
+    );
     state.kura.store_block(Arc::new(block.clone())).unwrap();
     (block, opening, witness)
 }

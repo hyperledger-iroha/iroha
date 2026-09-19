@@ -206,16 +206,17 @@ fn candidate_preparation_retains_actual_prefix_and_context_without_publication()
         prepared.state.world.musubi_resolver_index_checkpoints.len(),
         1
     );
-    assert!(prepared.state.exec_witness.is_some());
-    assert!(
-        prepared
-            .state
-            .verified_fastpq_source_inventory_for_capture()
-            .is_ok()
-    );
+    assert!(prepared.state.exec_witness.is_none());
+    assert!(prepared.state.fastpq_source_inventory.is_none());
+    prepared
+        .source_prefix
+        .inventory()
+        .verify_ordinary_witness_bundles(&prepared.source_prefix.witness().fastpq_transcripts)
+        .unwrap();
+    assert_eq!(prepared.source_prefix.sources().proposal(), proposal.hash());
     assert!(matches!(
         prepared.state.execution_output_plan.as_ref(),
-        Some(ExecutionOutputPlanState::Sealed(_))
+        Some(ExecutionOutputPlanState::Captured)
     ));
     assert!(
         prepared

@@ -4,7 +4,7 @@ type TailBatchOutcomes = BTreeMap<
 >;
 
 #[test]
-fn native_settlement_projection_rejects_evidence_without_contributing_transactions() {
+fn native_settlement_relay_requires_receipts_and_contributing_transactions() {
     let empty = LaneBlockCommitment {
         block_height: 1,
         lane_id: LaneId::SINGLE,
@@ -20,23 +20,43 @@ fn native_settlement_projection_rejects_evidence_without_contributing_transactio
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    assert!(
-        ValidBlock::nonempty_native_lane_settlements(std::slice::from_ref(&empty))
-            .unwrap()
-            .is_empty()
-    );
-    for field in 0..4 {
-        let mut changed = empty.clone();
-        *match field {
-            0 => &mut changed.total_local_amount,
-            1 => &mut changed.total_xor_due,
-            2 => &mut changed.total_xor_after_haircut,
-            _ => &mut changed.total_xor_variance,
-        } = Quantity::from(1u32);
-        assert!(
-            ValidBlock::nonempty_native_lane_settlements(&[changed]).is_err(),
-            "zero-count settlement cannot silently discard monetary evidence: {field}"
-        );
+    for tx_count in [0, 1] {
+        let mut commitment = empty.clone();
+        commitment.tx_count = tx_count;
+        assert!(!ValidBlock::native_settlement_requires_relay(&commitment).unwrap());
+        for field in 0..4 {
+            let mut changed = commitment.clone();
+            *match field {
+                0 => &mut changed.total_local_amount,
+                1 => &mut changed.total_xor_due,
+                2 => &mut changed.total_xor_after_haircut,
+                _ => &mut changed.total_xor_variance,
+            } = Quantity::from(1u32);
+            assert!(
+                ValidBlock::native_settlement_requires_relay(&changed).is_err(),
+                "receipt-free settlement cannot discard monetary evidence: {tx_count}/{field}"
+            );
+        }
+        commitment.receipts.push(LaneSettlementReceipt {
+            source_id: [1; 32],
+            local_amount: Quantity::zero(),
+            xor_due: Quantity::zero(),
+            xor_after_haircut: Quantity::zero(),
+            xor_variance: Quantity::zero(),
+            timestamp_ms: 1,
+        });
+        let relay = ValidBlock::native_settlement_requires_relay(&commitment);
+        if tx_count == 0 {
+            assert!(
+                relay.is_err(),
+                "a receipt requires a contributing transaction"
+            );
+        } else {
+            assert!(
+                relay.unwrap(),
+                "an actual receipt requires relay validation"
+            );
+        }
     }
 }
 

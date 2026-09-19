@@ -207,7 +207,8 @@ impl State {
     > {
         // This standalone scratch owner must isolate the entire constructor:
         // start hooks run before native economics and may record real transfers.
-        // Never acquire/reset a recorder here; the caller may already own one.
+        // A caller owning a recorder is refused by the shared constructor before
+        // State acquisition; suppression alone cannot prevent lock inversion.
         let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
         self.with_native_lane_execution(application_block_header, groups, |_, executions| {
             Ok(executions)
@@ -217,10 +218,8 @@ impl State {
     /// Constructor-owned transition: preflight on exact applying pre-State,
     /// shared start effects once, then economics under H-effective policies.
     /// The private continuation is never minted from a post-hook overlay.
-    /// This kernel neither acquires/resets nor suppresses a witness recorder.
-    /// Standalone scratch wrappers isolate their whole lifetime; a future sole
-    /// canonical consumer must supply its own complete witness lifecycle.
-    /// TODO: qualify that lifecycle and rollback before enabling native publication.
+    /// Standalone scratch wrappers isolate their whole lifetime. Recording
+    /// consumers use the same scoped kernel with an owned recorder continuation.
     pub(super) fn with_native_lane_execution<'state, R>(
         &'state self,
         header: super::BlockHeader,
@@ -230,21 +229,36 @@ impl State {
             Vec<PreexecutedLaneDecisionGroupV1>,
         ) -> Result<R, super::MergeLedgerCommitError>,
     ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
-        self.with_native_lane_execution_and_pristine_stage(header, groups, |_| Ok(()), finish)
+        self.with_native_lane_execution_scope(
+            header,
+            groups,
+            |_| Ok(()),
+            finish,
+            |_, result, ()| Ok(result),
+        )
     }
 
-    /// Execute native sources after exact preflight and authenticated pristine
-    /// controls, retaining the caller's complete execution witness owner.
-    pub(super) fn with_native_lane_execution_and_pristine_stage<'state, R>(
+    /// Acquire the execution scope only after the actual State writers and
+    /// pristine source checks, and retain it through every start/output phase.
+    /// The final continuation owns that same scope for metadata and capture.
+    /// Failure drops it and the unpublished overlay without exposing either.
+    pub(super) fn with_native_lane_execution_scope<'state, Scope, R, Finished>(
         &'state self,
         header: super::BlockHeader,
         groups: &[VerifiedLaneDecisionGroupV1],
-        pristine: impl FnOnce(&mut StateBlock<'state>) -> Result<(), super::MergeLedgerCommitError>,
-        finish: impl FnOnce(
+        enter: impl FnOnce(&mut StateBlock<'state>) -> Result<Scope, super::MergeLedgerCommitError>,
+        finish_native: impl FnOnce(
             &mut StateBlock<'state>,
             Vec<PreexecutedLaneDecisionGroupV1>,
         ) -> Result<R, super::MergeLedgerCommitError>,
-    ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
+        finish_scope: impl FnOnce(
+            &mut StateBlock<'state>,
+            R,
+            Scope,
+        ) -> Result<Finished, super::MergeLedgerCommitError>,
+    ) -> Result<(Box<StateBlock<'state>>, Finished), super::MergeLedgerCommitError> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(super::MergeLedgerCommitError::ExecutionRecorderConflict)?;
         // The constructor acquires a coherent predecessor and retains the
         // actual World, membership, hash and runtime writer guards throughout
         // this transition. Its policy projections are immutable snapshots.
@@ -267,13 +281,19 @@ impl State {
                 overlay
                     .preflight_lane_decision_execution_inputs(groups)
                     .map_err(invalid)?;
-                pristine(overlay)?;
-                Ok(NativeLaneAfterStartV1 {
-                    header: overlay._curr_block.clone(),
-                    groups,
-                })
+                let scope = enter(overlay)?;
+                Ok((
+                    NativeLaneAfterStartV1 {
+                        header: overlay._curr_block.clone(),
+                        groups,
+                    },
+                    scope,
+                ))
             },
-            |overlay, preflight| overlay.produce_native_execution_outputs(preflight, finish),
+            |overlay, (preflight, scope)| {
+                let result = overlay.produce_native_execution_outputs(preflight, finish_native)?;
+                finish_scope(overlay, result, scope)
+            },
         )
     }
 }

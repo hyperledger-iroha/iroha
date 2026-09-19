@@ -7,7 +7,6 @@ use super::*;
 
 #[path = "runtime_publication.rs"]
 mod publication;
-#[cfg(test)]
 pub(super) use publication::{PreparedRuntimeJournals, RuntimePublicationError};
 
 #[cfg(test)]

@@ -50,7 +50,7 @@ fn native_fastpq_prepare<'state>(
 ) -> super::lane_decision_batch::PreparedLaneDecisionBatchV1<'state> {
     let batch = state.prepare_lane_decision_batch(groups).unwrap();
     state
-        .replay_lane_decision_batch(header, &batch, groups)
+        .replay_lane_decision_batch(header, &batch, groups.to_vec())
         .unwrap()
 }
 

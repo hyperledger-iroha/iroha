@@ -462,6 +462,24 @@ opt-level = 3
 [profile.test.package.ark-serialize]
 opt-level = 3
 
+# Linux startup profiling found unoptimized field arithmetic instantiated in
+# halo2curves-axiom. Optimize this crate in both runnable profiles while keeping
+# their existing debug assertions and overflow checks.
+[profile.dev.package.halo2curves-axiom]
+opt-level = 3
+
+[profile.test.package.halo2curves-axiom]
+opt-level = 3
+
+# Pasta owns the concrete field and curve operations reexported by halo2curves.
+# Optimizing the reexporting crate alone leaves its upstream arithmetic at O0.
+# Preserve assertions and overflow checks in both local runnable profiles.
+[profile.dev.package.pasta_curves]
+opt-level = 3
+
+[profile.test.package.pasta_curves]
+opt-level = 3
+
 [profile.dev.package.norito]
 opt-level = 3
 

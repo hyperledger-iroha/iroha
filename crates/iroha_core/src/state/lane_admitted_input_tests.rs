@@ -178,14 +178,29 @@ state_test! { sync first_lane_input_reader_rejects_missing_proof_and_false_sourc
     assert!(state.first_lane_admitted_input(&observed, &observed.contexts()[0]).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), corrupt, "read cannot repair occupied corruption");
     std::fs::write(&path, exact).unwrap();
-    let inconsistent = lane_context_verified_fixture();
+    let mut inconsistent = lane_context_verified_fixture();
+    assert_eq!(inconsistent.block.execution_context().unwrap().queue_plan_admissions.len(), 1);
+    // Authenticate an explicitly false source position: the real carrier has
+    // index zero only, while its signed context witness claims index one.
+    let mut contexts = inconsistent.state.lane_consensus_contexts.view().get().clone();
+    contexts.contexts[0].admission_priority.admission_index = 1;
+    let commitment = LaneConsensusContextsCommitmentV1::from_contexts(
+        inconsistent.state.network_id, inconsistent.block.header().height().get(), &contexts,
+    ).unwrap();
+    inconsistent.witness.writes.iter_mut().find(|entry|
+        entry.key == super::lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY
+    ).unwrap().value = norito::to_bytes(&commitment).unwrap();
+    let mut cell = inconsistent.state.lane_consensus_contexts.block();
+    *cell.get_mut() = contexts;
+    cell.commit();
     let (artifact, receipt) = stage_lane_context_fixture_finality(
         &inconsistent.state, &inconsistent.block, inconsistent.opening, inconsistent.witness,
     );
     inconsistent.state.kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
     let false_source = inconsistent.state.verified_lane_consensus_contexts().unwrap().unwrap();
-    assert!(inconsistent.state.first_lane_admitted_input(&false_source, &false_source.contexts()[0]).is_err(),
-        "fixture-only raw registry seeding cannot supply an admission omitted from the actual carrier");
+    assert_eq!(inconsistent.state.first_lane_admitted_input(&false_source, &false_source.contexts()[0]).unwrap_err(),
+        "first-admission canonical index is absent from its carrier",
+        "signed context witness cannot supply an admission omitted from the actual carrier");
     assert!(matches!(state.first_lane_admitted_input(&observed, &false_source.contexts()[0]).unwrap(),
         FirstLaneAdmittedInputReadV1::InstanceNotCurrent));
 }

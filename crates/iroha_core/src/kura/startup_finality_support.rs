@@ -374,8 +374,8 @@ impl V2StartupReplayStorageBinding {
 /// exact live-body validation performed by the startup audit.
 pub(crate) struct V2StartupFinalityVerificationSession<'a> {
     kura: &'a Kura,
-    _prune_guard: parking_lot::MutexGuard<'a, ()>,
-    _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
+    _prune_guard: PublicationGuard<'a>,
+    _canonical_chain_guard: PublicationGuard<'a>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,
     binding: V2StartupReplayStorageBinding,
 }

@@ -10219,6 +10219,10 @@ include!("native_publication_test_support.rs");
 include!("native_completed_history_tests.rs");
 include!("native_lane_live_carrier_tests.rs");
 include!("native_lane_consumer_stage_tests.rs");
+include!("native_lane_recorded_execution_tests.rs");
+include!("native_lane_economic_relay_tests.rs");
+include!("native_lane_control_execution_tests.rs");
+include!("native_lane_preparation_tests.rs");
 include!("lane_instance_tests.rs");
 include!("lane_instance_body_tests.rs");
 include!("lane_instance_persistence_tests.rs");
@@ -26129,24 +26133,27 @@ lane_relay_state_test! { lane_relay_publication_retains_lifecycle_fence_through_
         }
         // The publisher has updated State but cannot yet update status. A
         // lifecycle reset must remain excluded across this publication cut.
-        let held = inserted
-            && match state.lane_lifecycle_lock.try_lock_or_wait() {
-                Ok(_) => false,
-                Err(wait) => tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build()
-                    .expect("build lifecycle release observation runtime")
-                    .block_on(async {
-                        tokio::time::timeout(Duration::from_secs(1), wait.wait_for_release())
-                            .await
-                            .is_err()
-                    }),
-            };
+        let mut release = inserted
+            .then(|| state.lane_lifecycle_lock.try_lock_or_wait().err())
+            .flatten()
+            .map(|wait| wait.wait_for_release());
+        let poll = |wait: &mut mv::ReleaseFuture| {
+            std::future::Future::poll(
+                std::pin::Pin::new(wait),
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            )
+        };
+        let held = release.as_mut().is_some_and(|wait| poll(wait).is_pending());
         drop(publication_guard);
         let result = publisher.join().expect("relay publisher completed");
         assert!(inserted, "publisher must reach the State cache before status");
         assert!(held, "lifecycle reset must wait for relay status publication");
         assert_eq!(result.expect("publish both relay caches"), LaneRelayInsert::Inserted);
+        assert!(
+            release.as_mut().is_some_and(|wait| poll(wait).is_ready()),
+            "finishing status publication must wake the actual lifecycle waiter",
+        );
+        assert!(state.lane_lifecycle_lock.try_lock_or_wait().is_ok());
     });
     assert_eq!(
         crate::sumeragi::status::lane_relay_envelopes_snapshot(),

@@ -136,8 +136,8 @@ state_test! { sync native_consumer_stage_rejects_membership_carrier_and_prefix_w
     let carrier = native_consumer_stage_carrier(&fixture);
     let groups = native_economic_groups(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    for mutation in 0..3 {
-        let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), &groups).unwrap();
+    for mutation in 0..5 {
+        let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap();
         let overlay = prepared.overlay_mut_for_test();
         overlay.validate_native_lane_execution().unwrap();
         match mutation {
@@ -151,6 +151,8 @@ state_test! { sync native_consumer_stage_rejects_membership_carrier_and_prefix_w
                 let key: iroha_model_base::state_path::StatePath = "native_stage_unbound_write".parse().unwrap();
                 overlay.world.smart_contract_state.insert(key, vec![7]);
             },
+            3 => overlay.staged_queue_plan_admissions.push(vec![7]),
+            4 => overlay.applied_npos_consensus_effects_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"foreign pristine control"))),
             _ => unreachable!(),
         }
         assert!(overlay.validate_native_lane_execution().is_err(), "mutation {mutation}");
@@ -207,7 +209,7 @@ state_test! { sync native_consumer_stage_cannot_publish_through_empty_old_merge_
     let state = &fixture.native.state; let carrier = native_consumer_stage_carrier(&fixture);
     let groups = native_economic_groups(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    let mut overlay = state.prepare_native_batch_on_carrier(carrier.header(), &groups).unwrap().into_overlay_for_test();
+    let mut overlay = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap().into_overlay_for_test();
     assert!(overlay.start_of_block_effects_applied);
     overlay.stage_canonical_carrier_membership([],NonZeroUsize::new(carrier.header().height().get() as usize).unwrap()).unwrap();
     let called=Arc::new(AtomicBool::new(false));
@@ -298,7 +300,7 @@ state_test! { sync native_common_owner_executes_and_seals_pipeline_and_time_once
         let signatures = carrier.signatures().cloned().collect::<Vec<_>>();
         assert!(carrier.external_entrypoints_slice().is_empty());
         assert_eq!(carrier.network_entrypoint_count(), 1);
-        let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), &groups).unwrap();
+        let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap();
         let rows = prepared.overlay().retained_execution_outputs_for_test().unwrap().to_vec();
         assert!(matches!(rows.as_slice(), [ExecutionOutputV1::Network(_), ExecutionOutputV1::Pipeline(_), ExecutionOutputV1::Time(_)]));
         assert!(rows.iter().all(|row| row.result().is_ok()), "{rows:?}");
@@ -337,7 +339,7 @@ state_test! { sync native_common_owner_refuses_foreign_carrier_before_finalizati
     let groups = native_economic_groups(&fixture);
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), &groups).unwrap();
+    let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap();
     let mut foreign = carrier.clone();
     let mut batch = prepared.batch().clone();
     batch.base_state_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign native economic predecessor"));
@@ -348,4 +350,91 @@ state_test! { sync native_common_owner_refuses_foreign_carrier_before_finalizati
     assert!(matches!(prepared.overlay().execution_output_plan, Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)));
     drop(prepared);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
+}
+
+state_test! { sync native_consumer_source_custody_moves_original_all_route_owners
+    use super::{NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1};
+    let fixture = native_economic_fixture_with_genesis_layout(
+        &[NativeEconomicCase::Transfer(25)], true,
+        Some(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 8192,
+            data_shards: 1, parity_shards: 1, max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
+        }),
+    );
+    let state = &fixture.native.state;
+    let carrier = native_consumer_stage_carrier(&fixture);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        else { panic!("real four-validator first sources and all-route Decisions"); };
+    let groups = source.groups_for_test();
+    assert_eq!(groups.len(), 1);
+    assert!(groups[0].contexts().len() > 1, "exercise every affected route, not only the coordinator");
+    let original_groups = groups.as_ptr();
+    let original = groups.iter().map(|group| (
+        group.body().canonical_bytes().as_ptr(),
+        group.body().source().canonical_control_bytes().as_ptr(),
+        group.decisions().as_ptr(),
+        group.contexts().as_ptr(),
+        group.body().source().source().finality().clone(),
+        group.to_wire(),
+    )).collect::<Vec<_>>();
+    let NativeLaneBatchReplayV1::Ready(staged) = source.stage_with_start_hooks().unwrap()
+        else { panic!("same actual predecessor"); };
+    assert_eq!(staged.sources_for_test().as_ptr(), original_groups,
+        "the original verified Vec moves across execution, not a wire-derived replacement");
+    for ((group, original), wire) in staged.sources_for_test().iter().zip(&original).zip(&staged.batch().groups) {
+        assert_eq!(group.body().canonical_bytes().as_ptr(), original.0);
+        assert_eq!(group.body().source().canonical_control_bytes().as_ptr(), original.1);
+        assert_eq!(group.decisions().as_ptr(), original.2);
+        assert_eq!(group.contexts().as_ptr(), original.3);
+        assert_eq!(group.body().source().source().finality(), &original.4);
+        assert_eq!(wire, &original.5);
+        assert_eq!(group.body().payload(), &wire.payload);
+        assert_eq!(group.decisions(), wire.decisions);
+    }
+    assert_eq!(staged.executions()[0].source, original[0].5);
+    assert!(staged.executions()[0].result.is_ok());
+    staged.overlay().validate_native_lane_execution().unwrap();
+    assert_eq!(staged.overlay().world.assets.get(&fixture.destination).unwrap().0, Quantity::from(25u32));
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    drop(staged);
+    // Reacquiring the original State writers proves the consumed stage released them.
+    drop(state.block(carrier.header()));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    assert!(state.kura.v2_finality_artifact(carrier.header().height().get()).unwrap().is_none());
+    assert!(crate::block::ValidBlock::validate_inactive_native_carrier_for_test(&carrier)
+        .unwrap_err().to_string().contains("not active"));
+}
+
+state_test! { sync native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged
+    use super::{NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1};
+    let fixture = native_consumer_stage_fixture(false);
+    let state = &fixture.native.state;
+    let carrier = native_consumer_stage_carrier(&fixture);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        else { panic!("current authenticated source"); };
+    assert!(!source.groups_for_test().is_empty());
+    let publication = state.begin_state_view_write();
+    drop(publication);
+    assert!(matches!(source.stage_with_start_hooks().unwrap(), NativeLaneBatchReplayV1::ObservationChanged));
+    drop(state.block(carrier.header()));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+
+    let groups = native_economic_groups(&fixture);
+    let mut substituted = state.prepare_lane_decision_batch(&groups).unwrap();
+    substituted.groups[0].payload.descriptor.admission_carrier_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign first carrier after owned admission"));
+    assert!(state.replay_lane_decision_batch(&carrier.header(), &substituted, groups).is_err());
+    drop(state.block(carrier.header()));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    assert!(state.kura.v2_finality_artifact(carrier.header().height().get()).unwrap().is_none());
 }

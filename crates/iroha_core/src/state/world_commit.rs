@@ -56,7 +56,7 @@ impl<'state> PreparedWorldCommit<'state> {
     /// Finish the same deterministic tail while the consuming carrier still
     /// owns every State journal. Its returned effects are retained by that
     /// read-only owner; they cannot publish or make an unprepared World valid.
-    fn prepare_overlay(
+    pub(in crate::state) fn prepare_overlay(
         world: &mut WorldBlock<'state>,
         block_height: u64,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -243,66 +243,6 @@ impl<'state> PreparedWorldCommit<'state> {
         for lane in stale {
             world.lane_relay_emergency_validators.remove(lane);
         }
-    }
-}
-
-impl StateBlock<'_> {
-    /// Complete the World tail before the consuming carrier is exposed read-only.
-    /// Decision/durability and non-World aggregate publication remain separate.
-    pub(in crate::state) fn prepare_carrier_world_effects(
-        &mut self,
-    ) -> Result<PreparedWorldEffects, String> {
-        if !matches!(
-            self.execution_output_plan,
-            Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
-        ) || self.exec_witness.is_none()
-            || self.block_hashes.pending.as_slice() != [self._curr_block.hash()]
-        {
-            return Err("World carrier preparation requires sealed execution, its witness and exact staged metadata".into());
-        }
-        self.validate_canonical_runtime_projection()?;
-        self.verify_lane_consensus_contexts_publication()?;
-        self.validate_merge_carrier_entrypoint_binding()
-            .map_err(|error| error.to_string())?;
-        self.finalize_axt_asset_incarnations()
-            .map_err(|error| error.to_string())?;
-        self.finalize_axt_policy_transition_ratchets()
-            .map_err(|error| error.to_string())?;
-        if !self
-            .staged_merge_entry
-            .as_ref()
-            .is_some_and(|entry| entry.execution_batch.is_some())
-        {
-            self.prune_axt_replay_ledger(
-                current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms),
-                self.nexus.axt.replay_retention_slots.get(),
-            );
-        }
-        let height = self._curr_block.height().get();
-        self.validate_owned_runtime_catalog_overlay()
-            .map_err(|error| error.to_string())?;
-        if let Some(pending) = &self.pending_autoscale_lifecycle {
-            let predecessor = self
-                .canonical_runtime
-                .get_before_block()
-                .nexus_projection(&self.nexus)
-                .map_err(|error| error.to_string())?;
-            ensure_pending_autoscale_lifecycle_staking_is_safe(
-                &self.world,
-                &predecessor,
-                pending,
-                height,
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        PreparedWorldCommit::prepare_overlay(
-            &mut self.world,
-            height,
-            &self.nexus,
-            &self.lane_incarnation_activation_heights,
-            self.pending_da_pin_intents.as_ref(),
-            self.pending_autoscale_lifecycle.as_ref(),
-        )
     }
 }
 

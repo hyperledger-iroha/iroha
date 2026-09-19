@@ -1284,6 +1284,41 @@ pub(crate) enum BlockSignaturePolicy {
     /// Require signature index zero and the configured genesis public key.
     GenesisAuthority(PublicKey),
 }
+/// Authenticate the sole immutable origin-view block signature under its
+/// frozen context. Later reproposals retain this origin, never today's leader.
+pub(crate) fn verify_origin_block_signature(
+    context: &wire::HeightContext,
+    block: &SignedBlock,
+    policy: &BlockSignaturePolicy,
+) -> Result<(), V2BodyStoreError> {
+    let (expected_index, expected_key) = match policy {
+        BlockSignaturePolicy::RotatingLeader => {
+            let leader = context.leader(block.header().view_change_index());
+            let leader_index =
+                usize::try_from(leader).map_err(|_| V2BodyStoreError::LeaderOutOfRange)?;
+            let leader_key = context
+                .roster
+                .get(leader_index)
+                .ok_or(V2BodyStoreError::LeaderOutOfRange)?
+                .validator
+                .public_key();
+            (u64::from(leader), leader_key)
+        }
+        BlockSignaturePolicy::GenesisAuthority(public_key) => (0, public_key),
+    };
+    let mut signatures = block.signatures();
+    let signature = signatures
+        .next()
+        .ok_or(V2BodyStoreError::MissingExpectedSignature)?;
+    if signatures.next().is_some() || signature.index() != expected_index {
+        return Err(V2BodyStoreError::InvalidExpectedSignatureSet);
+    }
+    signature
+        .signature()
+        .verify_hash(expected_key, block.hash())
+        .map_err(|_| V2BodyStoreError::InvalidExpectedSignature)?;
+    Ok(())
+}
 impl ValidatedBodyReceipt {
     /// Durable body receipt whose exact bytes passed validation.
     pub(crate) const fn durable(&self) -> &DurableBodyReceipt {
@@ -4429,33 +4464,7 @@ impl V2BodyStore {
         if header.prev_block_hash() != expected_parent {
             return Err(V2BodyStoreError::ParentMismatch);
         }
-        let (expected_index, expected_key) = match &self.signature_policy {
-            BlockSignaturePolicy::RotatingLeader => {
-                let leader = self.context.leader(body_origin_view);
-                let leader_index =
-                    usize::try_from(leader).map_err(|_| V2BodyStoreError::LeaderOutOfRange)?;
-                let leader_key = self
-                    .context
-                    .roster
-                    .get(leader_index)
-                    .ok_or(V2BodyStoreError::LeaderOutOfRange)?
-                    .validator
-                    .public_key();
-                (u64::from(leader), leader_key)
-            }
-            BlockSignaturePolicy::GenesisAuthority(public_key) => (0, public_key),
-        };
-        let mut signatures = block.signatures();
-        let signature = signatures
-            .next()
-            .ok_or(V2BodyStoreError::MissingExpectedSignature)?;
-        if signatures.next().is_some() || signature.index() != expected_index {
-            return Err(V2BodyStoreError::InvalidExpectedSignatureSet);
-        }
-        signature
-            .signature()
-            .verify_hash(expected_key, block.hash())
-            .map_err(|_| V2BodyStoreError::InvalidExpectedSignature)?;
+        verify_origin_block_signature(&self.context, &block, &self.signature_policy)?;
         Ok(())
     }
     fn validate_marker(
