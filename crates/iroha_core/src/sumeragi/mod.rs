@@ -530,12 +530,54 @@ pub(crate) mod v2_beacon;
 pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
 // TODO: native wire evidence becomes live only through the shared lane reducer driver.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_body_store;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_driver;
 pub(crate) mod v2_lane_frame_bounds;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_instance;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_payload;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_wal;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_wire;
 pub(crate) mod v2_lane_work;
 pub(crate) mod v2_lifecycle_coordinator;

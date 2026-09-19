@@ -6,7 +6,9 @@
 //! suitable for in-memory testing or thin adapters in higher-level crates.
 use core::fmt::Debug;
 mod publication;
-pub use publication::{PublicationPreparationError, PublicationPreparationResult};
+pub use publication::{
+    BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,
+};
 mod release;
 pub use release::{ReleaseFuture, ReleaseGuard, ReleaseNotification, ReleaseWait};
 

@@ -2002,7 +2002,8 @@ fn block_store_read_only_finality_verifies_without_mutation() {
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality");
     let path = kura.block_store.lock().path_to_blockchain.clone();
     let before = snapshot_regular_files_recursively(&path);
@@ -2025,7 +2026,8 @@ fn block_store_read_only_finality_rejects_invalid_signature_and_binding() {
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality");
     let directory = kura.block_store.lock().path_to_blockchain.clone();
     let finality = kura.v2_finality_artifact_path(1);
@@ -2067,7 +2069,8 @@ fn block_store_read_only_finality_rejects_noncanonical_and_missing_records() {
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality");
     let directory = kura.block_store.lock().path_to_blockchain.clone();
     let finality = kura.v2_finality_artifact_path(1);
@@ -2093,7 +2096,8 @@ fn block_store_read_only_finality_rejects_unpublished_journal_boundary() {
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block)).expect("store block");
     let artifact = v2_finality_artifact_for_block(&block);
-    kura.store_v2_finality_artifact(&artifact)
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("store finality");
     let directory = kura.block_store.lock().path_to_blockchain.clone();
     let marker = kura.block_store.lock().commit_marker_path();

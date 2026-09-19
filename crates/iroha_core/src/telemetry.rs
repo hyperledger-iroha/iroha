@@ -7160,7 +7160,7 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::{message::BlockMessage, network_topology::Topology},
+        sumeragi::message::BlockMessage,
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -8527,7 +8527,7 @@ mod tests {
         account_id: AccountId,
         account_keypair: KeyPair,
         leader_private_key: PrivateKey,
-        topology: Topology,
+        finality_keys: Vec<KeyPair>,
     }
     #[test]
     fn lane_manifest_readiness_exposed() {
@@ -10600,20 +10600,38 @@ mod tests {
         use super::*;
         include!("telemetry/classified_status_tests.rs");
     }
+    mod finality_test_fixture {
+        use super::*;
+        include!("telemetry/finality_test_fixture.rs");
+    }
+    mod output_publication_authorization_tests {
+        use super::*;
+        include!("telemetry/output_publication_authorization_tests.rs");
+    }
     impl SystemUnderTest {
         fn new() -> Self {
             let metrics = Arc::new(Metrics::default());
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let (leader_public_key, leader_private_key) =
-                checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-            let local_peer_id = PeerId::new(leader_public_key);
+            let mut finality_keys = (0xD3_u8..=0xD6)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive telemetry finality validator")
+                })
+                .collect::<Vec<_>>();
+            finality_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let local_peer_id = PeerId::new(finality_keys[0].public_key().clone());
+            let leader_private_key = finality_keys[0].private_key().clone();
             let (account_id, account_keypair) = gen_account_in("wonderland");
             let account = Account::new(account_id.clone()).build(&account_id);
             let world = World::with([], [account], []);
             {
                 let mut peers_block = world.peers.block();
-                let _ = peers_block.get_mut().push(local_peer_id.clone());
+                peers_block.get_mut().extend(
+                    finality_keys
+                        .iter()
+                        .map(|key| PeerId::new(key.public_key().clone())),
+                );
                 peers_block.commit();
             }
             let state = Arc::new(State::with_telemetry(
@@ -10645,7 +10663,6 @@ mod tests {
             )
             .expect("test telemetry resource registration");
             let network_id = state.network_id;
-            let topology = Topology::new(vec![local_peer_id.clone()]);
             Self {
                 telemetry,
                 _child: child,
@@ -10657,8 +10674,8 @@ mod tests {
                 online_peers_tx: peers_tx,
                 account_id,
                 account_keypair,
-                topology,
                 leader_private_key,
+                finality_keys,
             }
         }
         fn accepted_transaction<I>(
@@ -10672,15 +10689,36 @@ mod tests {
                 let params = &self.state.view().world.parameters;
                 (params.sumeragi().max_clock_drift(), params.transaction())
             };
-            let tx = TransactionBuilder::new_with_time_source(
-                self.network_id,
-                self.account_id.clone(),
-                &self.time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions(instructions)
-            .sign(self.account_keypair.private_key());
+            let genesis = self.state.committed_height() == 0;
+            let builder = if genesis {
+                TransactionBuilder::new_genesis_with_time_source(
+                    self.account_id.clone(),
+                    &self.time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            } else {
+                TransactionBuilder::new_with_time_source(
+                    self.network_id,
+                    self.account_id.clone(),
+                    &self.time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            };
+            let tx = builder
+                .with_instructions(instructions)
+                .sign(self.account_keypair.private_key());
             let crypto_cfg = self.state.crypto();
+            if genesis {
+                AcceptedTransaction::validate_genesis_with_now(
+                    &tx,
+                    max_clock_drift,
+                    &self.account_id,
+                    crypto_cfg.as_ref(),
+                    self.time_source.get_unix_time(),
+                )
+                .expect("telemetry fixture uses authenticated genesis transactions");
+                return AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+            }
             AcceptedTransaction::accept_with_time_source(
                 tx,
                 &self.network_id,
@@ -10692,9 +10730,14 @@ mod tests {
             .unwrap()
         }
         fn build_block(&self, transactions: Vec<AcceptedTransaction<'static>>) -> NewBlock {
+            let signing_key = if self.state.committed_height() == 0 {
+                self.account_keypair.private_key()
+            } else {
+                &self.leader_private_key
+            };
             BlockBuilder::new_with_time_source(transactions, self.time_source.clone())
                 .chain(0, self.state.view().latest_block().as_deref())
-                .sign(&self.leader_private_key)
+                .sign(signing_key)
                 .unpack(|_| {})
         }
         fn create_block(&self) -> NewBlock {
@@ -10703,19 +10746,34 @@ mod tests {
         }
         fn commit_block(&self, block: NewBlock) -> CommittedBlock {
             let mut state_block = self.state.block(block.header());
-            let block = block
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {})
-                .commit(&self.topology)
-                .unpack(|_| {})
-                .unwrap();
-            let _events =
-                state_block.apply_without_execution(&block, self.topology.as_ref().to_owned());
+            let block = self.validate_block(block, &mut state_block);
+            let _events = state_block
+                .apply_without_execution_with_verified_v2_finality(&block)
+                .expect("telemetry fixture prepares exact finality-authorized publication");
             state_block.commit().unwrap();
-            self.kura
-                .store_block(block.clone())
-                .expect("store block for telemetry fixture");
+            self.promote_finality(&block);
             block
+        }
+        fn validate_block(
+            &self,
+            block: NewBlock,
+            state_block: &mut crate::state::StateBlock<'_>,
+        ) -> CommittedBlock {
+            let mut context = self.finality_context(&block.header());
+            let genesis = block.header().is_genesis();
+            let mut signed: iroha_data_model::block::SignedBlock = block.into();
+            crate::block::ValidBlock::execute_block_outputs_and_capture_for_test(
+                &mut signed,
+                state_block,
+                genesis.then_some(&self.account_id),
+                &mut context,
+            )
+            .expect("telemetry fixture executes exact authenticated transaction sources");
+            if genesis {
+                crate::block::check_genesis_block(&signed, &self.account_id)
+                    .expect("genesis execution retains canonical signed admission and outputs");
+            }
+            self.finalize_block(signed, state_block, context)
         }
         async fn report_commit_block(&self, block_header: &BlockHeader) {
             let handle = self.telemetry.clone();
@@ -11098,16 +11156,8 @@ mod tests {
 
                 let candidate = sut.create_block();
                 let mut state_block = sut.state.block(candidate.header());
-                let committed = candidate
-                    .validate_and_record_transactions(&mut state_block)
-                    .unpack(|_| {})
-                    .commit(&sut.topology)
-                    .unpack(|_| {})
-                    .expect("fixture block has its required signatures");
+                let committed = sut.validate_block(candidate, &mut state_block);
                 let external_count = committed.as_ref().external_transactions().len() as u64;
-                sut.kura
-                    .store_block(committed.clone())
-                    .expect("durably append before publishing the state transition");
                 sut.mock_time_handle.advance(Duration::from_millis(100));
                 if report_before_publication {
                     sut.report_commit_block(&committed.as_ref().header()).await;
@@ -11140,10 +11190,12 @@ mod tests {
                 }
 
                 let _events = state_block
-                    .apply_without_execution(&committed, sut.topology.as_ref().to_owned());
+                    .apply_without_execution_with_verified_v2_finality(&committed)
+                    .expect("telemetry fixture prepares exact persisted carrier publication");
                 state_block
                     .commit()
                     .expect("publish the exact persisted block");
+                sut.promote_finality(&committed);
                 sut.force_sync().await;
                 assert_eq!(metrics.block_height.get(), old_height + 1);
                 assert_eq!(metrics.block_height_non_empty.get(), old_non_empty + 1);

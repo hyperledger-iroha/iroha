@@ -1433,7 +1433,7 @@ fn production_state_apply_surface_requires_transient_v2_capability() {
     let apply_source = include_str!("../sumeragi/v2_apply.rs");
     for signature in [
         "pub fn apply_without_execution(",
-        "pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>)",
+        "pub fn apply_fixture_block(",
     ] {
         let offset = state_source
             .find(signature)
@@ -1449,6 +1449,7 @@ fn production_state_apply_surface_requires_transient_v2_capability() {
         .expect("production v2 State apply method");
     let verified = &state_source[verified_start..verified_start + 750];
     assert!(verified.contains("let topology = self.verified_v2_apply_topology(block)?;"));
+    assert!(verified.contains("self.finalize_authorized_execution_outputs(block,"));
     assert!(
         !verified.contains("topology: Vec<PeerId>"),
         "production State apply must not accept caller-supplied topology"
@@ -2594,6 +2595,7 @@ fn deserialize_state_snapshot_value_with_kura(
     kura: Arc<Kura>,
 ) -> Result<Box<State>, json::Error> {
     deserialize::KuraSeed {
+        lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura,
         query_handle: LiveQueryStore::start_test(),
         #[cfg(feature = "telemetry")]
@@ -5077,7 +5079,7 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
             "derived account index `{derived_field}` must not be serialized"
         );
     }
-    let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5348,7 +5350,7 @@ state_test! { sync asset_definition_alias_bindings_roundtrip_through_state_json
     seed_snapshot_asset_incarnations(&mut world);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5456,7 +5458,7 @@ state_test! { sync asset_escrow_record_roundtrips_through_state_json
     world.asset_escrows.insert(public_id, public_record.clone());
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5584,7 +5586,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         block.commit();
     }
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
     for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "space_directory_manifests"] {
@@ -5702,6 +5704,30 @@ fn strict_kura_for_testing(
         .expect("init kura");
     kura
 }
+fn autoscale_storage_state_for_testing(
+    kura: Arc<Kura>,
+    query_handle: crate::query::store::LiveQueryStoreHandle,
+) -> State {
+    let mut state = State::try_new(
+        World::default(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("construct autoscale State before provisioning lane instances");
+    // Durable identity must authorize the initial physical instance before
+    // test defaults install markers or a lifecycle transition can reuse it.
+    state
+        .prepare_configured_primary_geometry_anchor(&LaneCatalog::default())
+        .expect("authenticate the configured primary autoscale instance");
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .expect("restore the authenticated primary autoscale geometry");
+    state.install_active_lane_markers_for_tests();
+    state.configure_test_runtime_defaults();
+    state
+}
 macro_rules! autoscale_storage_fixture {
     ($temp_dir:ident, $store_root:ident, $cold_root:ident, $kura:ident, $query:ident) => {
         let $temp_dir = tempfile::tempdir().expect("temp dir");
@@ -5713,7 +5739,7 @@ macro_rules! autoscale_storage_fixture {
     };
     ($temp_dir:ident, $store_root:ident, $cold_root:ident, $kura:ident, $query:ident, $state:ident) => {
         autoscale_storage_fixture!($temp_dir, $store_root, $cold_root, $kura, $query);
-        let mut $state = State::new_for_testing(World::default(), Arc::clone(&$kura), $query);
+        let mut $state = autoscale_storage_state_for_testing(Arc::clone(&$kura), $query);
     };
 }
 fn authenticated_kura_for_testing(
@@ -6254,7 +6280,7 @@ state_test! { sync proof_status_index_roundtrips_through_state_json
     );
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.view();
     let_row! { verified_ids = FindProofRecordsByStatus { status: ProofStatus::Verified, } .execute(CompoundPredicate::PASS, &view) .expect("query verified proof records") .map(|record| record.id) .collect::<Vec<_>>() };
@@ -6564,53 +6590,31 @@ state_test! { sync committed_entrypoint_height_reads_transactions_index
     let_row! { unknown = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed([9; Hash::LENGTH])) };
     assert_eq!(state.committed_entrypoint_height(&unknown), None);
 }
-state_test! { sync merge_entrypoints_commit_in_canonical_carrier_membership
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture(false, false);
-    let expected_membership = entry
-        .execution_batch
-        .as_ref()
-        .expect("fixture carries autonomous execution")
-        .lanes
-        .iter()
-        .flat_map(|execution| {
-            execution
-                .entrypoints
-                .iter()
-                .map(TransactionEntrypoint::hash)
-                .chain(
-                    execution
-                        .authenticated_signed_replay_aliases
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .map(HashOf::<TransactionEntrypoint>::from_untyped_unchecked),
-                )
-        })
-        .collect::<HashSet<_>>();
-    assert!(!expected_membership.is_empty());
-    let state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    let_row! { carrier_height = usize::try_from(carrier.header().height().get()) .ok() .and_then(NonZeroUsize::new) .expect("carrier height fits canonical membership storage") };
-    assert!(
-        state_block
-            .transactions
-            .has_exact_staged_block(carrier_height, &expected_membership),
-        "the canonical carrier row must contain exactly the certified merge membership"
-    );
-    commit_staged_autonomous_for_test(state_block)
-        .expect("merge carrier membership should commit with its canonical block");
-    for entrypoint_hash in expected_membership {
-        assert_eq!(
-            state.committed_entrypoint_height(&entrypoint_hash),
-            Some(carrier_height)
-        );
+state_test! { sync native_entrypoints_commit_in_canonical_carrier_membership
+    let (fixture, carrier, context) = native_publication_fixture_for_test(&[NativeEconomicCase::Reveal(0)]);
+    let state = &fixture.native.state;
+    let batch = carrier.execution_context().unwrap().native_lane_decisions.as_deref().unwrap();
+    let mut expected_membership = HashSet::new();
+    for group in &batch.groups {
+        let input = &group.payload.input.entrypoint;
+        expected_membership.insert(input.hash());
+        if let TransactionEntrypoint::SealedReveal(reveal) = input {
+            expected_membership.insert(HashOf::from_untyped_unchecked(Hash::from(reveal.signed_transaction().hash())));
+        }
     }
-    let encoded = norito::json::to_json(&state.transactions.view())
-        .expect("serialize canonical transaction membership");
-    assert!(
-        !encoded.contains("direct_committed"),
-        "transaction snapshots must expose only the canonical membership index"
-    );
+    assert_eq!(expected_membership.len(), 2, "the outer reveal and authenticated signed replay alias are both indexed");
+    let (overlay, committed) = prepared_native_publication_for_test(state, &carrier, context);
+    let carrier_height = NonZeroUsize::new(usize::try_from(carrier.header().height().get()).unwrap()).unwrap();
+    assert!(overlay.transactions.has_exact_staged_block(carrier_height, &expected_membership),
+        "the canonical carrier contains exactly its executed native source membership");
+    overlay.commit().expect("native membership commits with its finalized carrier");
+    promote_native_execution_finality_for_test(state, &committed);
+    for entrypoint_hash in expected_membership {
+        assert_eq!(state.committed_entrypoint_height(&entrypoint_hash), Some(carrier_height));
+    }
+    let encoded = norito::json::to_json(&state.transactions.view()).unwrap();
+    assert!(!encoded.contains("direct_committed"),
+        "transaction snapshots expose only the canonical membership index");
 }
 state_test! { sync unbound_merge_entrypoint_membership_is_rejected
     let state = blank_test_state();
@@ -10210,6 +10214,9 @@ include!("native_lane_scratch_witness_tests.rs");
 include!("ordinary_common_tail_tests.rs");
 include!("pipeline_outcome_ownership_tests.rs");
 include!("native_lane_batch_replay_tests.rs");
+include!("native_execution_finality_test_support.rs");
+include!("native_publication_test_support.rs");
+include!("native_completed_history_tests.rs");
 include!("native_lane_live_carrier_tests.rs");
 include!("native_lane_consumer_stage_tests.rs");
 include!("native_lane_recorded_execution_tests.rs");
@@ -10269,6 +10276,18 @@ fn lane_artifact_block_and_session_for_state_test(
     let_row! { session = crate::lane_consensus::CommittedLaneBlockSession { proposal, prepare_qc, commit_qc, } };
     let_row! { signer_pop = iroha_crypto::bls_normal_pop_prove(validator_keypair.private_key()) .expect("canonical lane artifact signer PoP") };
     let signer_pops = BTreeMap::from([(validator_keypair.public_key().clone(), signer_pop)]);
+    block.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new())
+            .with_lane_payload_ownerships(vec![ownership]),
+    ));
+    block
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(keypair.private_key(), block.hash()),
+            ),
+        ]))
+        .expect("sign the exact ownership-bearing predecessor proposal");
     let_row! { results = entrypoint_hashes .iter() .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new())) .collect() };
     {
         let outputs = crate::execution_output_test_support::structural_network_outputs(
@@ -10290,10 +10309,11 @@ fn lane_artifact_block_and_session_for_state_test(
         )
     }
     .expect("attach lane artifact fixture results");
-    block.set_execution_context(Some(
-        iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new())
-            .with_lane_payload_ownerships(vec![ownership]),
-    ));
+    assert_eq!(
+        block.output_results().len(),
+        entrypoint_hashes.len(),
+        "canonical predecessor results must bind the final ownership-bearing proposal",
+    );
     (block, session, signer_pops)
 }
 fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
@@ -11366,19 +11386,7 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
 }
 state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
-    state
-        .prepare_configured_primary_geometry_anchor(&LaneCatalog::default())
-        .expect("admit the configured primary before testing physical geometry rollback");
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
-    let initial_nexus = state.nexus_snapshot();
-    kura.establish_or_verify_configured_primary_geometry_anchor(
-        initial_nexus.lane_config.primary(),
-        state.lane_incarnations_snapshot()[&LaneId::SINGLE],
-        kura.configured_lane_catalog_baseline()
-            .expect("read authenticated configured catalog")
-            .expect("configured catalog was admitted at open"),
-    )
-    .expect("anchor configured primary before structural carrier writes");
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
     let_row! { AutoscaleCommitRevalidationStage { state_block, elastic_blocks_dir, elastic_snapshot_dir, } = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root) };
@@ -11748,7 +11756,8 @@ fn autoscale_commit_revalidation_fixture(
     let store_root = temp_dir.path().join("kura");
     let cold_root = temp_dir.path().join("cold");
     let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-    let mut state = blank_test_state_from_kura(&kura);
+    let mut state =
+        autoscale_storage_state_for_testing(Arc::clone(&kura), LiveQueryStore::start_test());
     state
         .set_nexus(autoscale_transition_test_nexus(
             vec![LaneConfig::default()],
@@ -19632,7 +19641,7 @@ state_test! { sync apply_lane_lifecycle_tiered_failure_does_not_create_kura_lane
     let initial_config = RuntimeLaneConfig::default();
     let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let state = autoscale_storage_state_for_testing(kura, query_handle);
 
     let cold_root = temp_dir.path().join("cold");
     std::fs::write(&cold_root, b"blocker file").expect("blocker file");
@@ -19659,7 +19668,7 @@ state_test! { sync apply_lane_lifecycle_tiered_failure_does_not_create_kura_lane
 }
 state_test! { sync apply_lane_lifecycle_kura_preflight_failure_does_not_create_tiered_lane_storage
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let state = autoscale_storage_state_for_testing(kura, query_handle);
 
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
@@ -20976,7 +20985,7 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
         })
         .expect("retire lane1 before simulating a restart and recreation");
     let retired_snapshot = norito::json::to_value(&state).expect("serialize retired state");
-    let_row! { mut restarted = deserialize::KuraSeed { kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
+    let_row! { mut restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
     assert_eq!(
         restarted.lane_incarnation_lineage_snapshot()[&LaneId::new(1)],
         historical_lineage,
@@ -22169,7 +22178,7 @@ state_test! { sync set_tiered_backend_does_not_recreate_scaled_in_lane_geometry
 }
 state_test! { sync tiered_startup_failure_does_not_create_kura_lane_storage
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = autoscale_storage_state_for_testing(kura, query_handle);
     std::fs::write(&cold_root, b"blocker file").expect("seed tiered cold root blocker");
     let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
     let kura_before = exact_test_tree_fingerprint(&store_root);
@@ -22181,7 +22190,7 @@ state_test! { sync tiered_startup_failure_does_not_create_kura_lane_storage
 }
 state_test! { sync configured_catalog_rejection_does_not_create_tiered_lane_storage
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = autoscale_storage_state_for_testing(kura, query_handle);
     state
         .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
         .expect("configure tiered state before Kura preflight test");
@@ -22235,7 +22244,7 @@ fn assert_lane_relabel_preflight_is_atomic(
     conflict: LaneRelabelStorageConflict,
 ) {
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = autoscale_storage_state_for_testing(kura, query_handle);
     match api {
         LaneRetirementApi::SetNexus => state
             .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
@@ -22385,7 +22394,7 @@ fn assert_lane_retirement_preflight_is_atomic(case: LaneRetirementPreflightCase)
         .expect("nexus status test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = autoscale_storage_state_for_testing(kura, query_handle);
     match case.api {
         LaneRetirementApi::SetNexus => state
             .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
@@ -22468,7 +22477,7 @@ state_test! { sync set_nexus_retire_tiered_preflight_failure_preserves_catalog_a
 #[test]
 fn apply_lane_lifecycle_same_plan_replace_retains_old_instance_and_provisions_fresh_lane() {
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let state = autoscale_storage_state_for_testing(kura, query_handle);
 
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
@@ -24306,7 +24315,7 @@ state_test! { sync apply_lane_lifecycle_same_plan_recreated_lane_resets_da_curso
     let_row! { lane1_config = LaneConfig { id: recreated_lane_id, alias: "beta".to_string(), ..LaneConfig::default() } };
     let_row! { two_lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), lane1_config.clone()], ) .expect("two-lane catalog") };
     let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-    let (kura, state) = authenticated_startup_state_for_testing(
+    let (_kura, state) = authenticated_startup_state_for_testing(
         temp_dir.path().join("same-plan-kura"), &LaneCatalog::default(),
     );
     install_existing_nexus_geometry_for_test(
@@ -24369,7 +24378,7 @@ state_test! { sync configured_lane_lifecycle_same_shard_dataspace_rebind_persist
     let_row! { lane1_config = LaneConfig { id: rebound_lane_id, alias: "beta".to_string(), ..LaneConfig::default() } };
     let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), lane1_config.clone()], ) .expect("initial lane catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-    let (kura, state) = authenticated_startup_state_for_testing(
+    let (_kura, state) = authenticated_startup_state_for_testing(
         temp_dir.path().join("same-shard-rebind-kura"), &LaneCatalog::default(),
     );
     install_existing_nexus_geometry_for_test(
@@ -26346,7 +26355,7 @@ fn merge_candidates_ignore_verified_lane_relay_record_for_future_created_autosca
 lane_relay_state_test! { merge_candidates_restart_hydrates_only_active_verified_lane_relay_records let (state, validator_keypairs) = setup_lane_relay_burn_state(); let_row! { validator_ids: Vec<_> = validator_keypairs .iter() .map(|keypair| AccountId::new(keypair.public_key().clone())) .collect() }; let signers: Vec<&KeyPair> = validator_keypairs.iter().collect(); let signers_bitmap = full_signer_bitmap(validator_keypairs.len()); let future_created_lane = LaneId::new(1);
    // The active relay belongs to the canonical single-lane snapshot. The
    // future and unknown routes below are independent adversarial records.
-let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_committed_height_for_state_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
+let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_committed_height_for_state_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
    install_lane_manifest_registry_for_keypairs(&restarted, &[LaneId::SINGLE], &validator_keypairs);
    let carrier_height = u64::try_from(restarted.committed_height()).expect("fixture height fits u64") + 1;
    assert_eq!(carrier_height, 2, "restored relay source supplies the next global carrier parent");
@@ -26484,7 +26493,7 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
     }
     seed_autoscale_sample_history_for_snapshot_test(&state);
     let json_value = norito::json::to_value(&state).expect("serialize state snapshot");
-    let_row! { restarted = deserialize::KuraSeed { kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
+    let_row! { restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
     {
         let mut nexus = restarted.nexus.write();
         nexus.fees.settlement_mode =
@@ -31388,7 +31397,7 @@ state_test! { sync both_state_constructors_account_exactly_for_distinct_journal_
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
         let expected = seed_distinct_state_journal_main_and_temp_files(&kura);
-        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
+        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
         assert_eq!(state.query_index_status_snapshot(), expected.query_index);
         assert_eq!(
             state.query_projection_checkpoint_snapshot(),
@@ -35024,7 +35033,11 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     assert_eq!(state_block.fastpq_source_inventory().unwrap().unwrap().tx_set_hash(), tx_set_hash);
     state_block.capture_exec_witness().unwrap();
     let witness = state_block.take_exec_witness().expect("witness captured");
-    assert_eq!(witness.writes.len(), 3);
+    assert_eq!(witness.writes.len(), 4);
+    assert!(witness.writes.iter().any(|write| {
+        write.key.as_slice()
+            == super::lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY
+    }));
     assert!(witness.writes.iter().any(|write| {
         write.key.as_slice()
             == iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1
@@ -38266,6 +38279,7 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
     )
     .expect("reopen Fast Kura fixture");
     let seed = || deserialize::KuraSeed {
+        lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura: Arc::clone(&fast_kura),
         query_handle: LiveQueryStore::start_test(),
         #[cfg(feature = "telemetry")]
@@ -41941,6 +41955,9 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    // The low-level callback fixture retains the source invocation before its
+    // body, just as the canonical external execution owner does.
+    transaction.tx_call_hash = Some(Hash::from(dummy_accepted_transaction().hash()));
     transaction.gas_limit_per_block = 4;
     transaction.world.add_account_permission(
         &ALICE_ID,

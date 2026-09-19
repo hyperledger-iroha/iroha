@@ -3547,6 +3547,7 @@ fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
             .get(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
             .is_some()
 }
+#[cfg(test)]
 /// Return whether a signed transaction advertises validation-fee policy/coordinate metadata.
 /// Such transactions require consensus credit post-processing and must not use detached batch
 /// merge paths that commit effects before admission facts.

@@ -11,13 +11,14 @@
 //! TODO: compose the complete canonical State tree, lifecycle and agreed resource
 //! admission before changing consensus commitments or enabling publication.
 
-use super::{CellBlock, StorageBlock, WorldBlock};
+use super::{CellBlock, StorageBlock, World, WorldBlock};
 use iroha_crypto::Hash;
 use mv::{Key, Value};
 use norito::codec::Encode;
 
 const VALUE_DOMAIN: &[u8] = b"iroha:world-net-delta:value:bare-v1\0";
 const START_DOMAIN: &[u8] = b"iroha:world-net-delta:start:v1\0";
+const PUBLICATION_START_DOMAIN: &[u8] = b"iroha:world-publication-journal:start:v1\0";
 const FIELD_DOMAIN: &[u8] = b"iroha:world-net-delta:field:v1\0";
 const ENTRY_DOMAIN: &[u8] = b"iroha:world-net-delta:entry:v1\0";
 const END_FIELD_DOMAIN: &[u8] = b"iroha:world-net-delta:end-field:v1\0";
@@ -32,13 +33,13 @@ pub(crate) struct WorldNetDelta {
     fields: u64,
 }
 
-impl WorldNetDelta {
-    /// Domain-separated binding to the visited fields and their net changes.
-    #[cfg(test)]
-    pub(crate) fn root(&self) -> Hash {
-        self.root
-    }
+/// Exact pending current/undo changes, including same-value journal touches.
+/// Unlike the semantic net delta, this binds the undo representation published
+/// by the actual journals without visiting untouched historical values.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::state) struct WorldPublicationDelta(WorldNetDelta);
 
+impl WorldNetDelta {
     /// Number of distinct keys/cells whose canonical before/after values differ.
     #[cfg(test)]
     pub(crate) fn changed_values(&self) -> u64 {
@@ -53,6 +54,7 @@ pub(crate) struct WorldDeltaBuilder {
     changed_values: u64,
     fields: u64,
     open_field: bool,
+    retain_noop_touches: bool,
 }
 
 /// Hash one canonical semantic value without allocating its encoded payload.
@@ -77,6 +79,15 @@ impl WorldDeltaBuilder {
             changed_values: 0,
             fields: 0,
             open_field: false,
+            retain_noop_touches: false,
+        }
+    }
+
+    fn for_publication() -> Self {
+        Self {
+            accumulator: Hash::new(PUBLICATION_START_DOMAIN),
+            retain_noop_touches: true,
+            ..Self::new()
         }
     }
 
@@ -154,7 +165,7 @@ impl WorldDeltaBuilder {
         for entry in storage.touched_entries() {
             let before = entry.before.map(&encode).transpose()?;
             let after = entry.after.map(&encode).transpose()?;
-            if before != after {
+            if self.retain_noop_touches || before != after {
                 self.append_change(Some(hash_value(entry.key)?), before, after)?;
             }
         }
@@ -173,7 +184,7 @@ impl WorldDeltaBuilder {
         if let Some(value) = cell.touched_value() {
             let before = encode(value.before)?;
             let after = encode(value.after)?;
-            if before != after {
+            if self.retain_noop_touches || before != after {
                 self.append_change(None, Some(before), Some(after))?;
             }
         }
@@ -311,7 +322,54 @@ macro_rules! append_world_fields {
     };
 }
 
+macro_rules! append_publication_identity {
+    ($world:ident, $expected:ident, $mode:ident, $identities:ident, triggers) => {
+        $world.triggers.append_world_publication_identities(
+            &$expected.triggers,
+            $mode,
+            &mut $identities,
+        )?;
+    };
+    ($world:ident, $expected:ident, $mode:ident, $identities:ident, $field:ident) => {
+        if !$world.$field.belongs_to(&$expected.$field) || $world.$field.mode() != $mode {
+            return Err(concat!(
+                "publication World journal has foreign owner or mode: ",
+                stringify!($field)
+            )
+            .into());
+        }
+        $identities.push($world.$field.publication_identity());
+    };
+}
+
+macro_rules! append_publication_identities {
+    ($world:ident, $expected:ident, $mode:ident, $identities:ident;
+        [$($prefix:ident),* $(,)?] [$($privacy:ident),* $(,)?] [$($suffix:ident),* $(,)?]) => {
+        $(append_publication_identity!($world, $expected, $mode, $identities, $prefix);)*
+        $(append_publication_identity!($world, $expected, $mode, $identities, $privacy);)*
+        $(append_publication_identity!($world, $expected, $mode, $identities, $suffix);)*
+    };
+}
+
 impl WorldBlock<'_> {
+    /// Bind each actual original journal to its expected World owner and mode.
+    /// The fixed field inventory visits no values and exposes no publication power.
+    pub(in crate::state) fn publication_identities(
+        &self,
+        expected: &World,
+        mode: mv::BlockMode,
+    ) -> Result<Vec<mv::BlockPublicationIdentity>, String> {
+        let mut identities = Vec::new();
+        with_world_overlay_fields!(
+            append_publication_identities,
+            self,
+            expected,
+            mode,
+            identities
+        );
+        Ok(identities)
+    }
+
     fn project_world(&self, mut builder: &mut impl WorldProjection) -> Result<(), String> {
         with_world_overlay_fields!(append_world_fields, self, builder);
         Ok(())
@@ -325,6 +383,16 @@ impl WorldBlock<'_> {
         self.project_world(&mut builder)?;
         builder.finish()
     }
+
+    /// Bind every touched preimage and current value, including no-op writes.
+    /// Canonical snapshots retain map undo entries even when values are equal.
+    pub(in crate::state) fn publication_state_delta(
+        &self,
+    ) -> Result<WorldPublicationDelta, String> {
+        let mut builder = WorldDeltaBuilder::for_publication();
+        self.project_world(&mut builder)?;
+        builder.finish().map(WorldPublicationDelta)
+    }
 }
 
 #[cfg(test)]
@@ -332,5 +400,12 @@ impl WorldBlock<'_> {
 mod tests;
 
 #[path = "world_baseline.rs"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod world_baseline;
 pub(in crate::state) use world_baseline::WorldStateBaseline;

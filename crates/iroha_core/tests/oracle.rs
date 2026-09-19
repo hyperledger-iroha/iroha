@@ -270,7 +270,7 @@ fn world_with_provider_role_permission(
 }
 fn header(height: u64) -> BlockHeader {
     let nonzero_height = NonZeroU64::new(height).expect("height must be non-zero");
-    BlockHeader::new(nonzero_height, None, None, None, 0, 0)
+    BlockHeader::new(nonzero_height, None, None, 0, 0)
 }
 fn oracle_state_with_accounts(
     providers: &[AccountId],

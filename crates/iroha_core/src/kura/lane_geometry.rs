@@ -79,7 +79,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::state_path::StatePath;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use norito::codec::{Decode, DecodeAll, Encode};
+use norito::codec::{Decode, Encode};
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 use rustix::fs::{
     AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat,
@@ -476,6 +476,7 @@ pub(super) struct NativeAmxEvidencePhysicalLocation {
     blocks_path: PathBuf,
     merge_path: PathBuf,
     journal_hash: Hash,
+    #[cfg(test)]
     retained_transition: Option<Hash>,
 }
 impl NativeAmxEvidencePhysicalLocation {
@@ -1023,6 +1024,7 @@ fn configured_geometry_path_identity(
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
     Ok(Some(geometry_file_identity(&metadata)))
 }
+#[cfg(all(test, unix))]
 fn preflight_configured_store_tree(
     store_root: &Path,
     root_identity: GeometryFileIdentity,
@@ -1212,70 +1214,6 @@ fn read_preflight_file_bounded_with_identity(
         ));
     }
     Ok((bytes, expected_identity))
-}
-fn preflight_configured_journal_paths(
-    store_root: &Path,
-    root_identity: GeometryFileIdentity,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    let mut binding_sets = Vec::new();
-    if let Some(binding) = journal.configured_primary_binding.as_ref() {
-        binding_sets.push(std::slice::from_ref(binding));
-    }
-    if let Some(checkpoint) = journal.checkpoint.as_ref() {
-        binding_sets.push(checkpoint.bindings.as_slice());
-        binding_sets.push(checkpoint.recovery_bindings.as_slice());
-    }
-    for pending in &journal.pending_archive_gc {
-        binding_sets.push(pending.intent.previous_bindings.as_slice());
-        binding_sets.push(pending.intent.updated_bindings.as_slice());
-    }
-    for record in &journal.records {
-        binding_sets.push(record.previous_bindings.as_slice());
-        binding_sets.push(record.updated_bindings.as_slice());
-    }
-    for bindings in binding_sets {
-        for binding in bindings {
-            preflight_configured_geometry_path(
-                store_root,
-                root_identity,
-                &store_root.join(&binding.blocks_path),
-                true,
-            )?;
-            preflight_configured_geometry_path(
-                store_root,
-                root_identity,
-                &store_root.join(&binding.merge_path),
-                false,
-            )?;
-        }
-    }
-    for intent in journal.records.iter().chain(
-        journal
-            .pending_archive_gc
-            .iter()
-            .map(|pending| &pending.intent),
-    ) {
-        for operation in &intent.operations {
-            for (relative, directory) in [
-                (&operation.archived_blocks_path, true),
-                (&operation.archived_merge_path, false),
-                (&operation.unpublished_blocks_path, true),
-                (&operation.unpublished_merge_path, false),
-            ] {
-                if relative.is_empty() {
-                    continue;
-                }
-                preflight_configured_geometry_path(
-                    store_root,
-                    root_identity,
-                    &store_root.join(relative),
-                    directory,
-                )?;
-            }
-        }
-    }
-    Ok(())
 }
 fn empty_geometry_merge_digest() -> Hash {
     let mut hasher = blake3::Hasher::new();
@@ -2289,24 +2227,6 @@ impl Kura {
                 "configured primary path identity changed across its constructor open",
             )),
         }
-    }
-    /// Reverify or establish the configured-primary block directory identity around an open.
-    pub(super) fn reverify_configured_primary_blocks_open(
-        preflight: &mut StorageOpenPreflight,
-        path: &Path,
-        establish_created: bool,
-    ) -> Result<()> {
-        preflight_configured_store_tree(&preflight.store_root, preflight.root_identity)?;
-        Self::reverify_storage_open_path(preflight, path, true, establish_created)
-    }
-    /// Reverify or establish the configured-primary merge-log identity around an open.
-    pub(super) fn reverify_configured_primary_merge_open(
-        preflight: &mut StorageOpenPreflight,
-        path: &Path,
-        establish_created: bool,
-    ) -> Result<()> {
-        preflight_configured_store_tree(&preflight.store_root, preflight.root_identity)?;
-        Self::reverify_storage_open_path(preflight, path, false, establish_created)
     }
     /// Bind parents created by this constructor's admitted initial lane provisioning.
     pub(super) fn reverify_canonical_storage_parents(
@@ -6510,26 +6430,6 @@ impl Kura {
             &self.resolve_relative_path(archived_merge)?,
             GeometryPairTargetKind::ImmutableRetained,
         )
-    }
-    fn require_absent_or_sealed_geometry_binding_at(
-        &self,
-        binding: &LaneGeometryBinding,
-        blocks: &Path,
-        merge: &Path,
-    ) -> Result<bool> {
-        let blocks_exist = self.validate_path_kind(blocks, true)?;
-        let merge_exists = self.validate_path_kind(merge, false)?;
-        match (blocks_exist, merge_exists) {
-            (false, false) => Ok(false),
-            (true, true) => {
-                self.require_sealed_geometry_pair_at(binding, blocks, merge, blocks, merge)?;
-                Ok(true)
-            }
-            _ => Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "lane geometry block and merge paths are only partially present",
-            )),
-        }
     }
     fn require_complete_geometry_binding_at(
         &self,
@@ -10755,24 +10655,6 @@ impl Kura {
     fn require_lane_marker(&self, binding: &LaneGeometryBinding) -> Result<()> {
         self.require_lane_marker_at(&self.binding_blocks_path(binding), binding)
     }
-    fn lane_marker_matches_at_if_present(
-        &self,
-        blocks: &Path,
-        binding: &LaneGeometryBinding,
-    ) -> Result<Option<bool>> {
-        if !self.validate_path_kind(blocks, true)? {
-            return Ok(None);
-        }
-        let marker = self.read_lane_marker(&blocks.join(MARKER_FILE_NAME))?;
-        Ok(Some(
-            marker.version == MARKER_VERSION
-                && marker.network_id == binding.network_id
-                && marker.dataspace_id == binding.dataspace_id
-                && marker.lane_id == binding.lane_id
-                && marker.incarnation == binding.incarnation
-                && marker.activation_height == binding.activation_height,
-        ))
-    }
     fn require_lane_marker_at(
         &self,
         blocks_path: &Path,
@@ -10921,6 +10803,7 @@ impl Kura {
         Ok((marker.incarnation, marker.activation_height))
     }
     /// Select authenticated physical storage without publishing a State catalog.
+    #[cfg(test)]
     fn selected_canonical_recovery_physical_bindings(&self) -> Result<Vec<LaneGeometryBinding>> {
         let journal = self.read_lane_geometry_journal()?;
         self.selected_canonical_recovery_physical_bindings_in_journal(&journal)
@@ -11020,15 +10903,18 @@ impl Kura {
         let journal_hash = Hash::new(journal.encode());
         Ok(references
             .into_values()
-            .map(
-                |(binding, retained_transition)| NativeAmxEvidencePhysicalLocation {
+            .map(|(binding, retained_transition)| {
+                #[cfg(not(test))]
+                let _ = retained_transition;
+                NativeAmxEvidencePhysicalLocation {
                     blocks_path: self.binding_blocks_path(&binding),
                     merge_path: self.binding_merge_path(&binding),
                     binding,
                     journal_hash,
+                    #[cfg(test)]
                     retained_transition,
-                },
-            )
+                }
+            })
             .collect())
     }
     /// Read-only restart inventory from exact retained journal identities. The
@@ -11437,46 +11323,6 @@ impl Kura {
             }
         }
     }
-    /// Authenticate an original immutable pair retained by a completed transition.
-    /// This read-only test boundary reuses the production journal and pair checks.
-    #[cfg(test)]
-    pub(crate) fn validate_retained_lane_pair_for_test(
-        &self,
-        identity: LaneStorageIdentity,
-        retained_blocks: &Path,
-        retained_merge: &Path,
-    ) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let expected = LaneGeometryBinding::from_identity(identity);
-        if self.relative_geometry_path(retained_blocks)? != expected.blocks_path
-            || self.relative_geometry_path(retained_merge)? != expected.merge_path
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retained test pair paths differ from its exact original identity",
-            ));
-        }
-        let journal = self.read_lane_geometry_journal()?;
-        if !journal
-            .records
-            .iter()
-            .filter(|record| record.phase == LaneGeometryPhase::CatalogPublished)
-            .flat_map(|record| record.operations.iter())
-            .any(|operation| {
-                matches!(
-                    operation.kind,
-                    LaneGeometryOperationKind::Retire | LaneGeometryOperationKind::Replace
-                ) && operation.previous.as_ref() == Some(&expected)
-            })
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retained test pair has no completed geometry journal owner",
-            ));
-        }
-        self.require_retained_lane_storage_entry(&LaneStorageEntry { identity })
-    }
     #[cfg(test)]
     pub(super) fn seal_native_amx_reservation_pair_move_for_test(
         &self,
@@ -11642,7 +11488,7 @@ impl Kura {
     }
     /// Inject marker identity corruption at the original physical object.
     #[cfg(test)]
-    pub(crate) fn substitute_lane_marker_identity_for_test(
+    pub(super) fn substitute_lane_marker_identity_for_test(
         &self,
         entry: &LaneStorageEntry,
         incarnation: Hash,
@@ -12249,98 +12095,6 @@ impl Kura {
             &checkpoint.merge_releases,
             checkpoint.snapshot_height,
         )
-    }
-    fn validate_pending_lane_geometry_gc(&self, journal: &LaneGeometryJournal) -> Result<()> {
-        if journal.pending_archive_gc.is_empty() {
-            if journal
-                .checkpoint
-                .as_ref()
-                .is_some_and(|checkpoint| checkpoint.pending_archive_gc_root.is_some())
-            {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane geometry checkpoint commits a missing pending archive GC set",
-                ));
-            }
-            return Ok(());
-        }
-        let checkpoint = journal.checkpoint.as_ref().ok_or_else(|| {
-            self.geometry_error(
-                ErrorKind::InvalidData,
-                "pending lane geometry GC has no checkpoint",
-            )
-        })?;
-        let retained_ids = journal
-            .records
-            .iter()
-            .map(|record| record.transition_id)
-            .collect::<BTreeSet<_>>();
-        let mut pending_ids = BTreeSet::new();
-        for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
-            let intent = &pending.intent;
-            let standalone = LaneGeometryJournal {
-                version: JOURNAL_VERSION,
-                configured_catalog_hash: None,
-                configured_primary_binding: None,
-                checkpoint: None,
-                pending_archive_gc: Vec::new(),
-                records: vec![intent.clone()],
-            };
-            self.validate_lane_geometry_journal(&standalone)?;
-            if intent.phase != LaneGeometryPhase::CatalogPublished
-                || !pending_ids.insert(intent.transition_id)
-                || retained_ids.contains(&intent.transition_id)
-                || index > 0
-                    && (journal.pending_archive_gc[index - 1].intent.updated_catalog
-                        != intent.previous_catalog
-                        || journal.pending_archive_gc[index - 1]
-                            .intent
-                            .updated_lineage_root
-                            != intent.previous_lineage_root
-                        || journal.pending_archive_gc[index - 1]
-                            .intent
-                            .transition_sequence
-                            >= intent.transition_sequence
-                        || journal.pending_archive_gc[index - 1]
-                            .intent
-                            .transition_height
-                            > intent.transition_height)
-            {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane geometry journal has forged or non-contiguous pending archive GC",
-                ));
-            }
-        }
-        if checkpoint.pending_archive_gc_root
-            != Some(geometry_pending_archive_gc_root(
-                &journal.pending_archive_gc,
-            ))
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "lane geometry checkpoint does not bind its exact pending archive GC set",
-            ));
-        }
-        let last = journal
-            .pending_archive_gc
-            .last()
-            .expect("non-empty pending archive GC");
-        if last.intent.updated_catalog != checkpoint.catalog
-            || last.intent.updated_lineage_root != checkpoint.lineage_root
-            || checkpoint.transition_sequence != Some(last.intent.transition_sequence)
-            || checkpoint.transition_height != Some(last.intent.transition_height)
-            || checkpoint.transition_previous_catalog != Some(last.intent.previous_catalog)
-            || checkpoint.transition_previous_lineage_root
-                != Some(last.intent.previous_lineage_root)
-            || checkpoint.transition_id != Some(last.intent.transition_id)
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "lane geometry pending archive GC does not terminate at its checkpoint",
-            ));
-        }
-        Ok(())
     }
     fn validate_geometry_binding_from_journal(&self, binding: &LaneGeometryBinding) -> Result<()> {
         validate_geometry_binding_structure(&self.store_root, binding)

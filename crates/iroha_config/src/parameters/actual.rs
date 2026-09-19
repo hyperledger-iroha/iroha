@@ -82,7 +82,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
     time::Duration,
 };

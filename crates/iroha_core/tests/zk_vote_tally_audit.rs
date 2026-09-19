@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn vote_tally_proof_verifies_with_registered_vk() {
         let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn vote_tally_schema_hash_guard_rejects_commit_tamper() {
         let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn vote_tally_schema_hash_guard_rejects_root_tamper() {
         let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn vote_tally_schema_hash_guard_rejects_registry_tamper() {
         let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         grant_manage_vk(&mut block);
         let exec = Executor::default();

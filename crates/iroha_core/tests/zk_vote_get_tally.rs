@@ -44,7 +44,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let account = Account::new(owner.clone()).build(&owner);
     let state = State::new_for_testing(World::with([], [account], []), kura, query);
     // Begin block and transaction
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // A typed readback fixture, not a proof-admitted or consensus-finalized election.

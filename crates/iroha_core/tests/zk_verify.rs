@@ -119,7 +119,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     // Build a transaction with proofs carrying a single inline attachment and no instructions
@@ -190,7 +190,7 @@ fn verifyproof_isi_records_proof() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -235,7 +235,7 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     state
         .set_zk(zk_cfg)
         .expect("empty SCCP outbox accepts verifier test configuration");
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -282,7 +282,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
     state
         .set_zk(zk_cfg)
         .expect("empty SCCP outbox accepts verifier test configuration");
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -329,7 +329,7 @@ fn preverify_rejects_missing_vk_reference() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -366,7 +366,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -393,7 +393,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -426,8 +426,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
         let exec = Executor::default();
@@ -464,8 +463,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
         let exec = Executor::default();
@@ -497,7 +495,7 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -526,7 +524,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -573,7 +571,7 @@ fn verifyproof_requires_registered_verifying_key() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -599,7 +597,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -620,7 +618,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -642,7 +640,7 @@ fn verifyproof_rejects_unsupported_backend_before_lookup() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -663,7 +661,7 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -702,8 +700,7 @@ fn verifyproof_enforces_verifying_key_activation_window() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let exec = Executor::default();
@@ -744,7 +741,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -779,7 +776,7 @@ fn verifyproof_rejects_duplicate_proof_record() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();
@@ -816,7 +813,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -866,7 +863,7 @@ fn preverify_rejects_proof_too_big() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let exec = Executor::default();
@@ -918,7 +915,7 @@ fn verifyproof_records_rejected_malformed_halo2_envelope() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let exec = Executor::default();

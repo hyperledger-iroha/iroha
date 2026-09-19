@@ -1,5 +1,7 @@
 //! Mandatory four-validator public-transaction and snapshot-restart qualification.
 //! Requires a prebuilt native daemon; sandbox denials and missing peers always fail.
+//! The native beacon-custody scenario owns public transactions, catalog recovery,
+//! the public doctor check, and signed-snapshot restart on the same four validators.
 use color_eyre::eyre::{self, Result, WrapErr, ensure, eyre};
 use futures::future::try_join_all;
 use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
@@ -10,9 +12,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
 use iroha_model_base::metadata::Metadata;
-use iroha_test_network::{
-    Network, NetworkPeer, init_instruction_registry, read_on_dedicated_thread,
-};
+use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
 use norito::json::{self, Value};
 use std::{
     fs,
@@ -25,8 +25,6 @@ use tokio::time::{Instant, sleep, timeout_at};
 #[cfg(unix)]
 #[path = "support/dataspace_deploy_cli.rs"]
 mod dataspace_deploy_cli;
-#[path = "support/multiroute.rs"]
-mod multiroute;
 #[cfg(unix)]
 #[path = "support/production_beacon_bootstrap.rs"]
 mod production_beacon_bootstrap;
@@ -59,15 +57,20 @@ async fn validator_status_until(
             match builder.build()?.status().get().await {
                 Ok(status) => return Ok(status),
                 Err(iroha::Error::StatusUnavailable {
-                    reason: Some(reason @ (iroha::StatusFailureReason::DeadlineElapsed
-                        | iroha::StatusFailureReason::StateBusy)),
+                    reason:
+                        Some(
+                            reason @ (iroha::StatusFailureReason::DeadlineElapsed
+                            | iroha::StatusFailureReason::StateBusy),
+                        ),
                     retry_after,
                 }) => {
                     if last_retryable.is_none() {
                         eprintln!(
                             "validator status read retry: reason={} remaining={:.3}s",
                             reason.code(),
-                            deadline.saturating_duration_since(Instant::now()).as_secs_f64()
+                            deadline
+                                .saturating_duration_since(Instant::now())
+                                .as_secs_f64()
                         );
                     }
                     last_retryable = Some(reason);
@@ -89,216 +92,6 @@ async fn validator_status_until(
             last_retryable.map_or("none", iroha::StatusFailureReason::code)
         )
     })?
-}
-
-// This fixture uses a fixed loopback HTTP listener, so a bounded status-line
-// probe needs no additional HTTP client dependency or runtime signing context.
-async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> bool {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    let probe_deadline = (Instant::now() + Duration::from_secs(2)).min(deadline);
-    let result = timeout_at(probe_deadline, async {
-        let address = peer.api_address().to_string();
-        let mut stream = tokio::net::TcpStream::connect(&address).await?;
-        stream
-            .write_all(
-                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nAccept: text/plain, application/json\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
-            )
-            .await?;
-        let mut line = String::new();
-        BufReader::new(stream.take(256))
-            .read_line(&mut line)
-            .await?;
-        Ok::<bool, std::io::Error>(
-            line.ends_with("\r\n")
-                && (line.starts_with("HTTP/1.1 200 ") || line.starts_with("HTTP/1.0 200 ")),
-        )
-    })
-    .await;
-    matches!(result, Ok(Ok(true)))
-}
-
-async fn verify_basic_public_doctor(peer: &NetworkPeer) -> Result<()> {
-    let binary = std::env::var_os("TEST_NETWORK_BIN_IROHA")
-        .ok_or_else(|| eyre!("TEST_NETWORK_BIN_IROHA must name the prebuilt native CLI"))?;
-    let root = format!("http://{}", peer.api_address());
-    let deadline = Instant::now() + Duration::from_secs(60);
-    timeout_at(deadline, async {
-        while !validator_admission_ready(peer, deadline).await {
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .wrap_err("validator admission did not become ready for the basic doctor")?;
-    // Exercise the real CLI consumer against the real daemon catalogue before
-    // release compilation. Small mock tool lists cannot qualify this boundary.
-    let output = timeout_at(
-        deadline,
-        tokio::process::Command::new(binary)
-            .env_clear()
-            .args([
-                "--machine",
-                "taira",
-                "doctor",
-                "--scope",
-                "basic",
-                "--public-root",
-                &root,
-                "--json",
-            ])
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .wrap_err("basic public doctor exceeded its fixture deadline")??;
-    ensure!(
-        output.status.success(),
-        "basic public doctor rejected the actual daemon: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let report: Value =
-        json::from_slice(&output.stdout).wrap_err("basic public doctor returned invalid JSON")?;
-    ensure!(
-        report.get("status").and_then(Value::as_str) == Some("ok")
-            && report.get("scope").and_then(Value::as_str) == Some("basic"),
-        "basic public doctor omitted its successful scope"
-    );
-    eprintln!("Taira basic public doctor passed against the actual native daemon");
-    Ok(())
-}
-
-fn snapshot_log_contains_height(peer: &NetworkPeer, message: &str, height: u64) -> Result<bool> {
-    for path in [peer.latest_stdout_log_path(), peer.latest_stderr_log_path()]
-        .into_iter()
-        .flatten()
-    {
-        for line in BufReader::new(fs::File::open(path)?).lines() {
-            let line = line?;
-            if !line.contains(message) {
-                continue;
-            }
-            let Ok(record) = json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if record.get("fields").is_some_and(|fields| {
-                fields.get("message").and_then(Value::as_str) == Some(message)
-                    && fields.get("at_height").and_then(Value::as_u64) == Some(height)
-            }) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn published_snapshot_height(peer: &NetworkPeer) -> Result<Option<u64>> {
-    let root = peer.kura_store_dir().join("snapshot");
-    let pointer = match fs::read_to_string(root.join("current")) {
-        Ok(pointer) => pointer,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let digest = pointer.trim();
-    ensure!(
-        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "snapshot generation pointer is malformed"
-    );
-    let generation = root.join("generations").join(digest);
-    for artifact in [
-        "snapshot.data",
-        "snapshot.sha256",
-        "snapshot.sig",
-        "snapshot.fast.norito",
-        "snapshot.merkle.json",
-    ] {
-        let metadata = fs::metadata(generation.join(artifact))?;
-        ensure!(
-            metadata.is_file() && metadata.len() > 0,
-            "published snapshot is missing its complete signed artifact set"
-        );
-    }
-    let snapshot: Value = json::from_slice(&fs::read(generation.join("snapshot.data"))?)?;
-    let hashes = snapshot
-        .get("block_hashes")
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("published snapshot has no committed block-hash vector"))?;
-    Ok(Some(u64::try_from(hashes.len())?))
-}
-
-fn signed_snapshot_restart_layers<'a>(
-    network: &'a Network,
-    peer: &'a NetworkPeer,
-) -> impl Iterator<Item = std::borrow::Cow<'a, toml::Table>> {
-    // Preserve every shared and node-local layer; only this recovery phase enables writes.
-    let snapshot = toml::Table::from_iter([(
-        "mode".to_owned(),
-        toml::Value::String("read_write".to_owned()),
-    )]);
-    let layer = toml::Table::from_iter([("snapshot".to_owned(), toml::Value::Table(snapshot))]);
-    network
-        .config_layers_for_peer(peer)
-        .chain(std::iter::once(std::borrow::Cow::Owned(layer)))
-}
-
-async fn restart_validator_from_applied_snapshot(
-    network: &Network,
-    applied_height: u64,
-) -> Result<()> {
-    let peer = &network.peers()[0];
-    // Wait for an actual completed generation before asking the harness to stop the process.
-    // Its bounded shutdown may force-kill a slow daemon; this must still exercise cold restore.
-    let snapshot_deadline = Instant::now() + Duration::from_secs(60);
-    timeout_at(snapshot_deadline, async {
-        loop {
-            if let Some(height) = published_snapshot_height(peer)?
-                && height >= applied_height
-                && snapshot_log_contains_height(
-                    peer,
-                    "Successfully created a snapshot of state",
-                    height,
-                )?
-            {
-                return Ok::<(), eyre::Report>(());
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .wrap_err(
-        "validator did not publish a signed snapshot after the exact Applied transaction",
-    )??;
-    let previous_log = peer.latest_stdout_log_path();
-    peer.shutdown().await;
-    // Shutdown may publish a newer complete generation; qualify the one startup will read.
-    let snapshot_height = published_snapshot_height(peer)?
-        .ok_or_else(|| eyre!("validator lost its published snapshot during shutdown"))?;
-    ensure!(
-        snapshot_height >= applied_height,
-        "shutdown snapshot regressed behind the Applied transaction"
-    );
-    let genesis = network.genesis();
-    let restart_deadline = Instant::now() + Duration::from_secs(180);
-    timeout_at(restart_deadline, async {
-        peer.start_checked(signed_snapshot_restart_layers(network, peer), Some(&genesis))
-            .await?;
-        ensure!(peer.latest_stdout_log_path() != previous_log, "restart did not create a new daemon run");
-        loop {
-            if validator_admission_ready(peer, restart_deadline).await {
-                let client = peer.client().client().clone();
-                let status = validator_status_until(&client, restart_deadline).await?;
-                if status.blocks >= snapshot_height
-                    && snapshot_log_contains_height(peer, "Successfully loaded the state from a snapshot", snapshot_height)?
-                {
-                    // An idle chain creates no empty blocks. Readiness permits admission at the preserved committed tip;
-                    // the next exact public transaction proves renewed execution on all four peers.
-                    eprintln!("Taira validator restored its signed snapshot and Torii state: snapshot_height={snapshot_height}, committed_height={}", status.blocks);
-                    return Ok::<(), eyre::Report>(());
-                }
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
-    }).await.wrap_err("validator failed signed-snapshot restore and HTTP readiness")??;
-    Ok(())
 }
 
 #[cfg(test)]

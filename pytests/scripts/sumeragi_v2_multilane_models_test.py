@@ -707,6 +707,10 @@ def copy_reviewed_source_fixture_with_includes(
     reviewed_source = importlib.util.module_from_spec(helper_spec)
     sys.modules[helper_spec.name] = reviewed_source
     helper_spec.loader.exec_module(reviewed_source)
+    # Authenticate the production allowlist before copying any source. Parsing
+    # its mapping alone does not establish the pinned canonical-manifest digest.
+    manifest_errors = reviewed_source._CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS
+    assert not manifest_errors, "\n".join(manifest_errors)
     pending = list(relatives)
     copied: set[Path] = set()
     while pending:
@@ -736,6 +740,28 @@ def copy_reviewed_source_fixture_with_includes(
             assert child is not None
             pending.append(relative.parent.joinpath(*child.parts))
     initialize_git_fixture(tmp_path)
+
+
+def test_reviewed_fixture_rejects_raw_file_hash_as_manifest_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive fixture must not hide a wrong production manifest pin."""
+    module = load_checker()
+    isolated_root = tmp_path / "source"
+    helper = isolated_root / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE
+    inventory = isolated_root / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE
+    helper.parent.mkdir(parents=True)
+    inventory.write_bytes((ROOT_DIR / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE).read_bytes())
+    source = (ROOT_DIR / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE).read_text()
+    raw_digest = hashlib.sha256(inventory.read_bytes()).hexdigest()
+    assert raw_digest != module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
+    assert source.count(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256) == 1
+    helper.write_text(source.replace(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256, raw_digest))
+    monkeypatch.setitem(globals(), "ROOT_DIR", isolated_root)
+    destination = tmp_path / "fixture"
+    with pytest.raises(AssertionError, match="manifest digest must equal"):
+        copy_reviewed_source_fixture_with_includes(destination, module, set())
+    assert not destination.exists(), "unauthenticated inventory must fail before fixture creation"
 
 
 def copy_native_prepublication_fixture(

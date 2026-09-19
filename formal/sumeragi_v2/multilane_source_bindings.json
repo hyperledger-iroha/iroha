@@ -11011,40 +11011,22 @@
           "symbol": "run_autonomous_merge_frontier_fixture",
           "required_tokens": [
             "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n            0",
             "for _ in 0..4 {",
             ".validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)",
             "\"the locally built execution candidate must not be fully reexecuted by the adapter\"",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n            1",
-            "fail_next_native_amx_prepublication_for_tests",
-            "\"pre-WSV Native AMX participant evidence publication\"",
-            "\"failed live Native prepublication must not stage WSV\"",
-            "prepublish_native_amx_participant_application_evidence(",
-            "durable_carrier.as_ref(), None)",
-            "\"live merge prepublication requires its exact staged witness\"",
-            "durable_carrier.as_ref(),\n                Some(&entry),",
-            "live_prepublication.authenticates_state_frontiers",
-            "remove_latest_native_amx_participant_manifest_for_testing",
-            "\"remove only the exact latest Native manifest\"",
-            "remove_merge_carrier_record_for_testing",
-            "read_structural_native_amx_participant_application_receipt(",
-            "\"manifest loss must retain the exact structural Native receipt\"",
-            "read_native_amx_participant_application_receipt(",
-            ".is_none()",
-            "\"the authoritative reader must reject a receipt without its manifest\"",
-            "preflight_native_amx_participant_application_evidence_repair(",
-            "std::slice::from_ref(&native_marker),\n                None,",
-            "\"startup Native repair requires a committed or planned association\"",
-            "std::slice::from_ref(&native_marker),\n                Some(&entry),",
-            "\"planned merge association authorizes exact Native startup repair\"",
-            "plan_lane_application_evidence_repair(",
-            "apply_lane_application_evidence_repair(",
-            "native_carriers: 1",
-            "native_routes: 1",
-            "merge_carriers: 1",
-            "\"startup repair must reproduce the exact retained receipt bytes\"",
-            "\"startup evidence repair must not mutate canonical WSV\"",
-            "assert!(empty_plan.is_empty())"
+            "authenticate_merge_entry_for_height_context(",
+            "if frontier_case != MergeFrontierFixtureCase::SuccessfulApply {",
+            "assert_retired_merge_candidate_rejected(",
+            "assert_eq!(queue.live_lane_reservations(), reservations);",
+            "assert!(queue.lane_reservation_commit_barriers().is_empty());",
+            "assert!(queue.lane_reservation_release_barriers().is_empty());",
+            "assert_eq!(autonomous_balance(), None);",
+            "assert!(!participant_metadata_is_committed());",
+            "assert!(\n                expected_fifo\n                    .iter()\n                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))\n            );",
+            "fixture\n            .kura\n            .durable_autonomous_lane_merge_source(",
+            "assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));",
+            "assert_cold_merge_registry_replay_boundary(",
+            "return;"
           ]
         },
         {
@@ -11256,7 +11238,7 @@
           "required_tokens": [
             "native: Option<lane_decision_batch::NativeExecutionCustody>",
             "let authority = match native",
-            "Some(native) if native.retains_state(&state) && block.execution_context().is_some_and(|context| context.native_lane_decisions.is_some()) =>",
+            "Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>",
             "PrefixSourceAuthority::Native(Box::new(native))",
             "None if state.native_lane_stage.is_none()",
             "state.merge_carrier_entrypoints.is_empty()",
@@ -11342,7 +11324,7 @@
             "state.prepare_carrier_geometry()?",
             "world.try_detach_journals",
             "transactions.prepare_commit()?.detach()",
-            "admission, })"
+            "admission,\n        })"
           ]
         },
         {
@@ -11411,8 +11393,8 @@
           "symbol": "ValidBlock::seal_native_execution_outputs",
           "required_tokens": [
             "verify_native_execution_metadata(block, executions)",
-            "block.validate_output_merkle_cache()",
-            "advertised_policy.as_ref().ok_or_else(",
+            "block\n                .validate_output_merkle_cache()",
+            "advertised_policy\n                .as_ref()\n                .ok_or_else(",
             ".validate()",
             "seal_execution_outputs(block, |state, source, routes|",
             "verify_native_execution_metadata(source, executions)",
@@ -11432,20 +11414,16 @@
           "required_tokens": [
             "executions.len() != routes.len() || executions.len() != block.network_entrypoint_count()",
             "executions.iter().zip(routes)",
-            "source.payload.input.routing_plan()",
+            "source\n                .payload\n                .input\n                .routing_plan()",
             "plan.coordinator_route() != *route",
             ".find(|(_, slot)| slot.route == *route)",
             "source.decisions.get(slot_index)",
             "let commitment = &execution.settlement_commitment",
             "iroha_data_model::nexus::compute_settlement_hash(commitment)",
             "!= execution.settlement_hash",
-            "commitment.receipts.is_empty() && commitment.nexus_fee_receipts.is_empty() && commitment.native_amx_receipts.is_empty()",
-            "commitment.total_local_amount.is_zero()",
-            "commitment.total_xor_due.is_zero()",
-            "commitment.total_xor_after_haircut.is_zero()",
-            "commitment.total_xor_variance.is_zero()",
-            "commitment.swap_metadata.is_some()",
-            "source.payload.descriptor.canonical_hash()",
+            "if !Self::native_settlement_requires_relay(commitment)?",
+            "continue;",
+            "source\n                .payload\n                .descriptor\n                .canonical_hash()",
             "LaneRelayEnvelope::new(",
             "commitment.clone()",
             "decision.manifest.byte_len",
@@ -11505,7 +11483,7 @@
             "height.checked_add(1)",
             "!= Some(frozen.height)",
             "block.header().prev_block_hash() != view.latest_block_hash()",
-            ".map(|qc| qc.subject.block_hash) != view.latest_block_hash()",
+            ".map(|qc| qc.subject.block_hash)\n                    != view.latest_block_hash()",
             "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
             "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
             "committed_nexus_amx_context_hash(state)",
@@ -11513,10 +11491,10 @@
             "frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy",
             "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?",
             "Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?",
-            "Ok(PreparedNativeExecutionControls { state, generation, header: block.header(),",
-            "admissions: block.execution_context()",
-            ".queue_plan_admissions.clone()",
-            "npos, context"
+            "Ok(PreparedNativeExecutionControls {\n                state,\n                generation,\n                header: block.header(),",
+            "admissions: block\n                    .execution_context()",
+            ".queue_plan_admissions\n                    .clone()",
+            "npos,\n                context"
           ]
         },
         {
@@ -11542,10 +11520,10 @@
             "block.header().height().get()",
             "block.npos_consensus_effects()",
             "authenticated_height_context.ok_or_else(",
-            "v2_committed_evidence_prune_keys_from_state(state, height, effects.v2_evidence_admissions.len(),)",
+            "v2_committed_evidence_prune_keys_from_state(\n                    state,\n                    height,\n                    effects.v2_evidence_admissions.len(),\n                )",
             "expected_anchor: header.prev_block_hash().map(|block_hash|",
             "height: height.saturating_sub(1)",
-            "roster: context.roster.iter()",
+            "roster: context\n                    .roster\n                    .iter()",
             "effects: effects.clone()",
             "header"
           ]
@@ -11603,23 +11581,23 @@
             "with_stable_observation(self, ||",
             "if !carrier.is_resultless_proposal()",
             "native_lane_batch_for_execution(&carrier)",
-            "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+            "ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )",
             "self.prepare_lane_decision_batch(&groups)?",
             "if &batch != expected",
             "self.with_native_lane_execution_scope(",
             "begin_exec_witness_capture()",
-            "controls.apply(overlay)",
+            "controls\n                        .apply(overlay)",
             "Ok((recorder, context))",
             "overlay.seal_native_lane_decision_batch(results, batch)",
             "|overlay, executions, (recorder, context)|",
-            "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
-            "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+            "ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )",
+            "ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )",
             "overlay.capture_exec_witness()",
             "verify_execution_output_seal(&carrier)",
             "drop(recorder)",
             "Ok((executions, context))",
             "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
-            "Ok(RecordedNativeLaneBatchV1 { prepared, carrier, context, })"
+            "Ok(RecordedNativeLaneBatchV1 {\n                prepared,\n                carrier,\n                context,\n            })"
           ]
         },
         {
@@ -11667,8 +11645,8 @@
             "self.import_lane_decision_group(&observed, execution)",
             "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
             "!observed.is_current(self)",
-            "state: self, observed, generation,",
-            "input: Arc::new(carrier.clone()), groups"
+            "state: self,\n                observed,\n                generation,",
+            "input: Arc::new(carrier.clone()),\n                groups"
           ]
         },
         {
@@ -11680,10 +11658,10 @@
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ensure_exec_witness_capture_available()",
             "if !self.is_current()",
-            "if carrier != *self.input { return Err(",
+            "if carrier != *self.input {\n            return Err(",
             "drop(self.input)",
             "record_native_lane_decision_batch(carrier, self.groups, context)",
-            "self.generation, self.state.state_view_generation()",
+            "self.generation,\n            self.state.state_view_generation()",
             "recorded.map(Some)"
           ]
         },
@@ -11707,7 +11685,7 @@
           "symbol": "native_lane_batch_for_scratch",
           "required_tokens": [
             "let batch = native_lane_batch_for_execution(carrier)?",
-            ".queue_plan_admissions.is_empty()",
+            ".queue_plan_admissions\n        .is_empty()",
             "carrier.npos_consensus_effects().is_some()",
             "carrier.header().npos_effects_hash().is_some()",
             "return Err(",
@@ -11731,7 +11709,7 @@
             "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
             "self.applied_npos_consensus_effects_hash != seal.npos_effects_hash",
             "self.canonical_wsv_merge_commit_authorization.is_some()",
-            "self.canonical_carrier_commit_metadata_authorization.is_some()",
+            "self\n                .canonical_carrier_commit_metadata_authorization\n                .is_some()",
             "self._curr_block != seal.carrier",
             "return Err("
           ]
@@ -11742,12 +11720,7 @@
           "symbol": "StateBlock::validate_native_output_carrier",
           "required_tokens": [
             "self.validate_native_lane_execution()",
-            "seal.completed_write_set_root.is_none()",
-            "block.header() != seal.carrier",
-            "block.header().npos_effects_hash() != seal.npos_effects_hash",
-            ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash)",
-            "!= Some(seal.batch.as_ref())",
-            "return Err("
+            "self.validate_native_output_source(block)"
           ]
         },
         {
@@ -11764,7 +11737,7 @@
           "kind": "method",
           "symbol": "NativeLaneBatchRecoveryV1::project",
           "required_tokens": [
-            "self.finality.validate_for_header(&block.header())",
+            "self.finality\n            .validate_for_header(&block.header())",
             "block.hash() != self.finality.block_hash",
             "canonical_proposal_wire_hash()",
             "!= self.finality.subject.payload_hash",
@@ -11786,7 +11759,7 @@
             "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ensure_state_access_without_exec_witness()",
-            "let Some((state, body, generation)) = source.preparation_input() else { return Ok(None); };",
+            "let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };",
             "if !body.is_resultless_proposal()",
             "native_lane_batch_for_execution(body)",
             "body.validate_proposal_commitments()",
@@ -11815,7 +11788,7 @@
             "self,",
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ValidBlock::prepare_native_candidate(",
-            "self, context, genesis_account, time_source, block_cadence"
+            "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence"
           ]
         },
         {
@@ -11844,15 +11817,16 @@
           "kind": "method",
           "symbol": "RecordedNativeLaneBatchV1::into_preparation_parts",
           "required_tokens": [
-            "fn into_preparation_parts(self)",
-            "self.prepared.verify_source_binding()",
-            "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+            "fn into_preparation_parts(\n        self,\n    )",
+            "self.prepared\n            .verify_source_binding()",
+            "verify_execution_output_seal(&self.carrier)",
+            "validate_native_output_source(&self.carrier)",
             "let seal = Arc::clone(",
-            "self.prepared.overlay.native_lane_stage.as_ref()",
+            "self.prepared\n                .overlay\n                .native_lane_stage\n                .as_ref()",
             "let PreparedLaneDecisionBatchV1",
-            "overlay, executions, sources",
+            "overlay,\n            executions,\n            sources",
             "= self.prepared",
-            "NativeExecutionCustody { seal, sources, executions, context: self.context"
+            "NativeExecutionCustody {\n                seal,\n                sources,\n                executions,\n                context: self.context"
           ]
         },
         {
@@ -11879,7 +11853,7 @@
             "block: &SignedBlock",
             "policy: &BlockSignaturePolicy",
             "context.leader(block.header().view_change_index())",
-            "context.roster.get(leader_index)",
+            "context\n                .roster\n                .get(leader_index)",
             "let mut signatures = block.signatures()",
             "if signatures.next().is_some() || signature.index() != expected_index",
             "verify_hash(expected_key, block.hash())"
@@ -11912,7 +11886,7 @@
           "kind": "method",
           "symbol": "ValidBlock::validate_execution_context_with_state",
           "required_tokens": [
-            "matches!(&validation_profile, ConsensusValidationProfile::NativePreparation { .. })",
+            "matches!(\n                &validation_profile,\n                ConsensusValidationProfile::NativePreparation { .. }\n            )",
             "native_lane_batch_for_execution(block)",
             "Self::checked_execution_context_header(block)?",
             "Self::validate_execution_context_header(block)?",
@@ -11925,7 +11899,227 @@
           "symbol": "PreparedNativeLaneBatchSourceV1::preparation_input",
           "required_tokens": [
             "Option<(&'state State, &SignedBlock, u64)>",
-            "self.is_current().then_some((self.state, &self.input, self.generation))"
+            "self.is_current()\n            .then_some((self.state, &self.input, self.generation))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_apply_certified_source_rejection.rs",
+          "kind": "fn",
+          "symbol": "assert_retired_merge_candidate_rejected",
+          "required_tokens": [
+            "let before_state = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())",
+            "let before_ledger = fixture.state.merge_ledger.snapshot();",
+            "let before_height = fixture.state.committed_height();",
+            "let before_tree = completed_secondary_tree(&fixture.kura.store_root());",
+            "for _ in 0..2 {",
+            ".validate_candidate(context, body)",
+            ".expect_err(\"MergeQC cannot substitute for the canonical native Decision source\")",
+            "reason.contains(\"ordinary output source contains a competing native owner\")",
+            "assert_eq!(fixture.state.committed_height(), before_height);",
+            "crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),\n            before_state",
+            "assert_eq!(fixture.state.merge_ledger.snapshot(), before_ledger);",
+            "assert_eq!(fixture.state.has_committed_entrypoint(*hash), *committed);",
+            "completed_secondary_tree(&fixture.kura.store_root()),\n            before_tree"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_publication_test_support.rs",
+          "kind": "fn",
+          "symbol": "prepared_native_publication_for_test",
+          "required_tokens": [
+            "let mut executed = carrier.clone();",
+            "ValidBlock::execute_native_block_and_capture_for_test(",
+            "&mut executed, state, &context",
+            "let (committed, witness) =\n        finalize_native_execution_for_test(",
+            "state, executed, &mut overlay, context",
+            "overlay\n        .authorize_execution_output_publication(&committed, &witness)",
+            "overlay\n        .apply_without_execution_with_verified_v2_finality(&committed)",
+            "assert!(\n        overlay\n            .native_output_publication_identity()\n            .unwrap()\n            .is_some()\n    );",
+            "assert!(matches!(\n        overlay.execution_output_plan,\n        Some(super::output_capacity::ExecutionOutputPlanState::Finalized(\n            _\n        ))\n    ));",
+            "(overlay, committed)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_execution_finality_test_support.rs",
+          "kind": "fn",
+          "symbol": "finalize_native_execution_for_test",
+          "required_tokens": [
+            "context.validate()",
+            "assert_eq!(context.network_id, state.network_id);",
+            "assert_eq!(context.height, block.header().height().get());",
+            "context.roster.len(),\n        4",
+            "assert_eq!(validator.power, 1",
+            "let witness = overlay\n        .take_exec_witness()",
+            "let casting = overlay\n        .take_parliament_timed_ovn_casting_bindings()",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(",
+            "LaneFinalityManifestV1::from_result_bearing_block(&block)",
+            "execution_commitment_from_validated_block(&witness, &native, &lanes, &block)",
+            "let preimage = iroha_data_model::block::consensus_v2::Vote {",
+            "let signatures = keys\n        .iter()\n        .take(3)",
+            "signers: vec![0, 1, 2]",
+            "crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())",
+            ".commit_with_verified_v2_artifact(verified, execution_commitment)",
+            ".stage_kagemusha_finality_sidecar(",
+            "&witness,\n            execution_commitment,\n            &casting",
+            ".store_block(committed.clone())",
+            ".store_v2_finality_artifact(&artifact)",
+            "assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));",
+            "assert_eq!(receipt.block_hash(), committed.as_ref().hash());",
+            "(committed, witness)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_execution_finality_test_support.rs",
+          "kind": "fn",
+          "symbol": "promote_native_execution_finality_for_test",
+          "required_tokens": [
+            ".verified_v2_finality_artifact()",
+            ".store_v2_finality_artifact(artifact)",
+            ".promote_kagemusha_finality_sidecar(artifact, &receipt)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "publish_next_native_group_for_test",
+          "required_tokens": [
+            "state\n        .kura\n        .get_block(",
+            "state\n        .kura\n        .v2_finality_artifact(",
+            "build_successor_height_context(",
+            "state\n        .prepare_lane_decision_batch(std::slice::from_ref(group))",
+            "BlockExecutionContextBundle::default().with_native_lane_decisions(batch)",
+            "prepared_native_publication_for_test(state, &carrier, context)",
+            "overlay\n        .commit()",
+            "promote_native_execution_finality_for_test(state, &committed)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "cold_restore_completed_native_history_for_test",
+          "required_tokens": [
+            "for entry in std::fs::read_dir(source)",
+            "if kind.is_dir() {",
+            "copy_durable_tree(&source, &destination);",
+            "assert!(\n                    kind.is_file()",
+            "std::fs::write(&destination, &bytes)",
+            "assert_eq!(std::fs::read(&destination).unwrap(), bytes);",
+            "assert_eq!(\n                    std::fs::read(&source).unwrap(),\n                    bytes",
+            "let cold_root = tempfile::tempdir()",
+            "copy_durable_tree(&state.kura.store_root(), cold_root.path());",
+            "strict_kura_config_for_testing(cold_root.path().to_path_buf())",
+            "Kura::new_with_configured_lane_catalog(",
+            "kura: cold_kura",
+            "lane_manifests: state.lane_manifests.read().clone()",
+            ".into_state_from_json(norito::json::to_value(state).unwrap())",
+            "restored\n        .kura\n        .bind_lane_storage_network(restored.network_id)",
+            "restored\n        .prepare_restored_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)",
+            "restored\n        .restore_kura_lane_segments_from_nexus()",
+            "restored\n        .set_nexus_from_config(nexus)",
+            "restored.install_lane_compliance_engine(state.lane_compliance_engine())",
+            "restored.execution_policy_digest_v1().unwrap()",
+            "state.execution_policy_digest_v1().unwrap()",
+            "crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap()",
+            "crate::snapshot::canonical_state_snapshot_hash(state).unwrap()",
+            "(cold_root, restored)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "assert_completed_native_history_for_test",
+          "required_tokens": [
+            "crate::snapshot::canonical_state_snapshot_hash(state).unwrap()",
+            "state.kura.exact_durable_blocks_count().unwrap()",
+            "blocks.iter().zip(original_groups)",
+            "let expected_wire = signed.encode_wire().unwrap()",
+            "state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n            expected_wire",
+            "block.verified_v2_finality_artifact().unwrap()",
+            "let finality_bytes = std::fs::read(&path).unwrap()",
+            "state\n                .kura\n                .v2_finality_artifact(height.get() as u64)\n                .unwrap()\n                .as_ref(),\n            Some(original_finality)",
+            "NativeLaneBatchCarrierReadV1::Ready(included)",
+            "state\n            .read_finalized_native_lane_batch(height, signed.hash())\n            .unwrap()",
+            "assert_eq!(included.batch().groups, vec![group.to_wire()])",
+            "assert_eq!(\n            state.view().transactions.get(&entrypoint),\n            Some(height)",
+            "assert!(\n            state\n                .replay_finalized_native_lane_batch(&included, &[])\n                .is_err()",
+            "state\n            .preexecute_lane_decision_groups(successor.header(), std::slice::from_ref(group))\n            .err()",
+            "if reason == expected_reason",
+            "assert_eq!(\n            std::fs::read(&path).unwrap(),\n            finality_bytes",
+            "assert_eq!(\n            state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n            expected_wire\n        )",
+            "assert_eq!(\n        state.kura.exact_durable_blocks_count().unwrap(),\n        durable_height\n    )",
+            "assert_eq!(\n        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),\n        before"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "native_completed_history_rejects_reapplication_after_second_economic_commit_impl",
+          "required_tokens": [
+            "native_publication_fixture_for_test(&[\n        NativeEconomicCase::Transfer(25),\n        NativeEconomicCase::Transfer(15),\n    ])",
+            "assert_eq!(original_groups.len(), 2)",
+            "for original in &original_groups {",
+            "publish_next_native_group_for_test(&fixture, current)",
+            "assert_eq!(block.as_ref().network_entrypoint_count(), 1)",
+            "assert!(\n            block\n                .as_ref()\n                .network_output_at(0)\n                .unwrap()\n                .1\n                .result\n                .is_ok()\n        )",
+            "assert!(block.as_ref().output_results().all(|result| result.is_ok()))",
+            "assert_eq!(state.committed_height(), admission_height + committed.len())",
+            "assert!(\n            current_total > total",
+            "assert_completed_native_history_for_test(\n            state,\n            &committed,\n            &original_groups[..committed.len()],\n        )",
+            "assert_eq!(total, Quantity::from(40_u32))",
+            "assert_eq!(\n        state.world.assets.view().get(&fixture.source).unwrap().0,\n        Quantity::from(60_u32)\n    )",
+            "assert_eq!(\n        committed[1].as_ref().header().prev_block_hash(),\n        Some(committed[0].as_ref().hash())\n    )",
+            "state\n            .verified_lane_consensus_contexts()\n            .unwrap()\n            .unwrap()\n            .contexts()\n            .is_empty()",
+            "let (_cold_root, restored) = cold_restore_completed_native_history_for_test(state)",
+            "restored\n            .kura\n            .get_block(admission_height)\n            .unwrap()\n            .encode_wire()\n            .unwrap(),\n        admission_wire",
+            "restored\n            .kura\n            .v2_finality_artifact(admission_height.get() as u64)\n            .unwrap(),\n        admission_finality",
+            "assert_completed_native_history_for_test(&restored, &committed, &original_groups)",
+            "assert!(\n        restored\n            .read_finalized_native_lane_batch(",
+            "committed[0].as_ref().hash(),\n            )\n            .is_err()",
+            "assert_eq!(\n        restored.world.assets.view().get(&fixture.source).unwrap().0,\n        Quantity::from(60_u32)\n    )",
+            "assert_eq!(\n        restored\n            .world\n            .assets\n            .view()\n            .get(&fixture.destination)\n            .unwrap()\n            .0,\n        Quantity::from(40_u32)\n    )",
+            "for change_instance in [false, true] {",
+            "copied.base_state_height = restored.committed_height() as u64;",
+            "copied.base_state_hash = restored.lane_execution_state_hash().unwrap();",
+            "copied.groups[0].payload.descriptor.slots[0].instance_id =",
+            "copied.groups[0].payload.descriptor.slots[0].lane_incarnation =",
+            "assert!(\n            restored\n                .prepare_proposed_native_lane_batch_source(&candidate, &[])\n                .is_err()",
+            "assert_eq!(\n            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),\n            before\n        )",
+            "assert_completed_native_history_for_test(&restored, &committed, &original_groups)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::validate_native_output_source",
+          "required_tokens": [
+            "self.validate_native_lane_stage_membership()",
+            "seal.completed_write_set_root.is_none()",
+            "block.header() != seal.carrier",
+            "block.header().npos_effects_hash() != seal.npos_effects_hash",
+            ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions))\n                != Some(seal.queue_plan_admissions_hash)",
+            "!block.external_entrypoints_slice().is_empty()",
+            "!= Some(seal.batch.as_ref())",
+            "return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_execution_metadata.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::native_settlement_requires_relay",
+          "required_tokens": [
+            "let has_receipts = !commitment.receipts.is_empty()",
+            "|| !commitment.nexus_fee_receipts.is_empty()",
+            "|| !commitment.native_amx_receipts.is_empty()",
+            "if !has_receipts",
+            "!commitment.total_local_amount.is_zero()",
+            "!commitment.total_xor_due.is_zero()",
+            "!commitment.total_xor_after_haircut.is_zero()",
+            "!commitment.total_xor_variance.is_zero()",
+            "commitment.swap_metadata.is_some()",
+            "return Ok(false)",
+            "if commitment.tx_count == 0",
+            "return Err(",
+            "Ok(true)"
           ]
         },
         {

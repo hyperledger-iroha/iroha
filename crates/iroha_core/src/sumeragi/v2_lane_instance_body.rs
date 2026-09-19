@@ -40,6 +40,13 @@ pub(crate) enum LaneBodyWait {
     /// Actual completed body work waits behind an already-issued control operation.
     ControlCompletion,
     /// Read a coherent authenticated current set before launching work.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     CurrentSet(LaneCurrentGate),
     /// Existing global certified-body recovery must settle the retained source.
     FirstCarrierRecovery,
@@ -59,6 +66,13 @@ pub(crate) enum LaneBodyLaunch {
 #[derive(Debug)]
 pub(crate) enum LaneBodyProgress {
     /// A corresponding reducer-issued tagged operation completed.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     Stepped(LaneStepReceipt),
     /// Physical validation completed for an already durable body-sign intent.
     SignReady,
@@ -72,6 +86,13 @@ pub(crate) enum LaneBodyProgress {
     /// A signed proposal failed deterministic input checking before core admission.
     RejectedProposal {
         proposal: LaneProposalV1,
+        #[cfg_attr(
+            test,
+            expect(
+                dead_code,
+                reason = "TODO: consume retained native lane progress through the production driver"
+            )
+        )]
         reason: String,
     },
 }

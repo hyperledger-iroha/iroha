@@ -1855,6 +1855,10 @@ pub(crate) struct PreparedReputationCapture {
     insertion: OwnedReputationInsertion,
     kura: Arc<Kura>,
 }
+#[expect(
+    dead_code,
+    reason = "TODO: connect retained archive reservations to the production carrier publisher"
+)]
 impl PreparedReputationCapture {
     /// Authenticate exact durable finality, then persist the retained bytes with retry progress.
     ///

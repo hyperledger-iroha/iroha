@@ -3218,31 +3218,6 @@ impl ProductionLifecycleOwnerV1 {
             .count();
         (owner_records == 4).then_some((owner_records, apply.ordinal()))
     }
-    /// Open the exact no-WAL-vote storage branch without exposing ledger or
-    /// recovery parts to the adapter startup caller.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::sumeragi) fn open_storage_only_recovered_startup(
-        verified: VerifiedHeightContext,
-        ledger_root: &Path,
-        body_store: V2BodyStore,
-        config: &SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        payload_store: CertifiedServePayloadStoreV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        adapter_startup: ProductionLifecycleAdapterStartupV1,
-    ) -> Result<Self, ProductionLifecycleStartupErrorV1> {
-        Self::open_storage_only_recovered_startup_with_pending_apply(
-            verified,
-            ledger_root,
-            body_store,
-            config,
-            reply_route_source_capacity,
-            payload_store,
-            serve_payloads,
-            adapter_startup,
-            None,
-        )
-    }
     /// Open native interrupted-tip recovery while retaining its exact passive Apply row.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_storage_only_recovered_startup_with_pending_apply(

@@ -3,7 +3,7 @@
 //! The consumed constructor capability binds exact admitted sources before start
 //! hooks. Each actual bounded Network row supplies membership and settlement,
 //! then the same owner executes Pipeline and Time and retains the complete tail.
-//! Full State/witness publication remains a separate, still-closed boundary.
+//! Full State/witness publication requires the canonical global finality owner.
 
 use super::*;
 use crate::state::{

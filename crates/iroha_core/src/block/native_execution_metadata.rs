@@ -83,6 +83,35 @@ impl ValidBlock {
             .map_err(Self::execution_context_error)
     }
 
+    /// Validate whether an actual native commitment has receipt-backed relay work.
+    /// Empty per-source commitments prove absence of fees, regardless of input count.
+    fn native_settlement_requires_relay(
+        commitment: &LaneBlockCommitment,
+    ) -> Result<bool, BlockValidationError> {
+        let has_receipts = !commitment.receipts.is_empty()
+            || !commitment.nexus_fee_receipts.is_empty()
+            || !commitment.native_amx_receipts.is_empty();
+        if !has_receipts {
+            if !commitment.total_local_amount.is_zero()
+                || !commitment.total_xor_due.is_zero()
+                || !commitment.total_xor_after_haircut.is_zero()
+                || !commitment.total_xor_variance.is_zero()
+                || commitment.swap_metadata.is_some()
+            {
+                return Err(Self::execution_context_error(
+                    "Native settlement has unbound economic totals without receipts",
+                ));
+            }
+            return Ok(false);
+        }
+        if commitment.tx_count == 0 {
+            return Err(Self::execution_context_error(
+                "native settlement evidence has no contributing source transaction",
+            ));
+        }
+        Ok(true)
+    }
+
     /// Project actual economic relay effects without draining or applying them again.
     ///
     /// The Native group source/output authenticates receipt-free input execution.
@@ -147,20 +176,7 @@ impl ValidBlock {
                     "Native settlement differs from its executed coordinate or exact commitment",
                 ));
             }
-            if commitment.receipts.is_empty()
-                && commitment.nexus_fee_receipts.is_empty()
-                && commitment.native_amx_receipts.is_empty()
-            {
-                if !commitment.total_local_amount.is_zero()
-                    || !commitment.total_xor_due.is_zero()
-                    || !commitment.total_xor_after_haircut.is_zero()
-                    || !commitment.total_xor_variance.is_zero()
-                    || commitment.swap_metadata.is_some()
-                {
-                    return Err(Self::execution_context_error(
-                        "Native settlement has unbound economic totals without receipts",
-                    ));
-                }
+            if !Self::native_settlement_requires_relay(commitment)? {
                 continue;
             }
             let descriptor_hash = source

@@ -65,7 +65,7 @@ ORDINARY_ORDERED = (
 NATIVE_CONTROL_BINDINGS = (
     (BODY_STORE, "fn", "verify_origin_block_signature", (
         "context: &wire::HeightContext", "block: &SignedBlock", "policy: &BlockSignaturePolicy",
-        "context.leader(block.header().view_change_index())", "context.roster.get(leader_index)",
+        "context.leader(block.header().view_change_index())", "context\n                .roster\n                .get(leader_index)",
         "let mut signatures = block.signatures()", "if signatures.next().is_some() || signature.index() != expected_index",
         "verify_hash(expected_key, block.hash())",
     )),
@@ -79,7 +79,7 @@ NATIVE_CONTROL_BINDINGS = (
         "return Err(Self::execution_context_error(",
     )),
     (CONTROLS, "method", "ValidBlock::validate_execution_context_with_state", (
-        "matches!(&validation_profile, ConsensusValidationProfile::NativePreparation { .. })",
+        "matches!(\n                &validation_profile,\n                ConsensusValidationProfile::NativePreparation { .. }\n            )",
         "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
         "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
     )),
@@ -87,7 +87,7 @@ NATIVE_CONTROL_BINDINGS = (
         "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
         "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ensure_state_access_without_exec_witness()",
-        "let Some((state, body, generation)) = source.preparation_input() else { return Ok(None); };",
+        "let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };",
         "if !body.is_resultless_proposal()", "native_lane_batch_for_execution(body)",
         "body.validate_proposal_commitments()", "frozen.height != body.header().height().get()",
         "frozen.network_id != *state.network_id_ref()", "!= body.header().prev_block_hash()",
@@ -100,11 +100,11 @@ NATIVE_CONTROL_BINDINGS = (
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
-        "ValidBlock::prepare_native_candidate(", "self, context, genesis_account, time_source, block_cadence",
+        "ValidBlock::prepare_native_candidate(", "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::preparation_input", (
         "Option<(&'state State, &SignedBlock, u64)>",
-        "self.is_current().then_some((self.state, &self.input, self.generation))",
+        "self.is_current()\n            .then_some((self.state, &self.input, self.generation))",
     )),
     (NATIVE_STAGE, "struct", "RecordedNativeLaneBatchV1", (
         "prepared: PreparedLaneDecisionBatchV1<'state>", "carrier: iroha_data_model::block::SignedBlock",
@@ -115,10 +115,11 @@ NATIVE_CONTROL_BINDINGS = (
         "executions: Vec<Execution>", "context: crate::sumeragi::v2::VerifiedHeightContext",
     )),
     (NATIVE_STAGE, "method", "RecordedNativeLaneBatchV1::into_preparation_parts", (
-        "fn into_preparation_parts(self)", "self.prepared.verify_source_binding()", "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
-        "let seal = Arc::clone(", "self.prepared.overlay.native_lane_stage.as_ref()",
-        "let PreparedLaneDecisionBatchV1", "overlay, executions, sources", "= self.prepared",
-        "NativeExecutionCustody { seal, sources, executions, context: self.context",
+        "fn into_preparation_parts(\n        self,\n    )", "self.prepared\n            .verify_source_binding()",
+        "verify_execution_output_seal(&self.carrier)", "validate_native_output_source(&self.carrier)",
+        "let seal = Arc::clone(", "self.prepared\n                .overlay\n                .native_lane_stage\n                .as_ref()",
+        "let PreparedLaneDecisionBatchV1", "overlay,\n            executions,\n            sources", "= self.prepared",
+        "NativeExecutionCustody {\n                seal,\n                sources,\n                executions,\n                context: self.context",
     )),
     (NATIVE_STAGE, "method", "NativeExecutionCustody::retains_state", (
         "Arc::ptr_eq(seal, &self.seal)", "self.context.context().height == state._curr_block.height().get()",
@@ -130,7 +131,7 @@ NATIVE_CONTROL_BINDINGS = (
         "source: NativeLaneBatchRecoveryV1", "carrier: SignedBlock",
     )),
     (NATIVE_FINALIZED, "method", "NativeLaneBatchRecoveryV1::project", (
-        "self.finality.validate_for_header(&block.header())", "block.hash() != self.finality.block_hash",
+        "self.finality\n            .validate_for_header(&block.header())", "block.hash() != self.finality.block_hash",
         "canonical_proposal_wire_hash()", "!= self.finality.subject.payload_hash",
         "if block.has_results()", "let executed = block.encode_wire()",
         "let commitment = &self.finality.commit_qc.execution_commitment",
@@ -152,15 +153,15 @@ NATIVE_CONTROL_BINDINGS = (
         "frozen.network_id != *view.network_id()", "frozen.height != block.header().height().get()",
         "height.checked_add(1)", "!= Some(frozen.height)",
         "block.header().prev_block_hash() != view.latest_block_hash()",
-        ".map(|qc| qc.subject.block_hash) != view.latest_block_hash()",
+        ".map(|qc| qc.subject.block_hash)\n                    != view.latest_block_hash()",
         "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
         "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
         "committed_nexus_amx_context_hash(state)", "committed_execution_policy_hash(state)",
         "frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy",
         "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?",
         "Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?",
-        "Ok(PreparedNativeExecutionControls { state, generation, header: block.header(),",
-        "admissions: block.execution_context()", ".queue_plan_admissions.clone()", "npos, context",
+        "Ok(PreparedNativeExecutionControls {\n                state,\n                generation,\n                header: block.header(),",
+        "admissions: block\n                    .execution_context()", ".queue_plan_admissions\n                    .clone()", "npos,\n                context",
     )),
     (CONTROLS, "method", "PreparedNativeExecutionControls::apply", (
         "self,", "validate_native_pristine_control_owner(self.state, self.generation, &self.header)",
@@ -170,9 +171,9 @@ NATIVE_CONTROL_BINDINGS = (
     (CONTROLS, "method", "ValidBlock::prepare_pristine_consensus_effects", (
         "active_runtime_abi_hash(", "&state.world_view()", "block.header().height().get()",
         "block.npos_consensus_effects()", "authenticated_height_context.ok_or_else(",
-        "v2_committed_evidence_prune_keys_from_state(state, height, effects.v2_evidence_admissions.len(),)",
+        "v2_committed_evidence_prune_keys_from_state(\n                    state,\n                    height,\n                    effects.v2_evidence_admissions.len(),\n                )",
         "expected_anchor: header.prev_block_hash().map(|block_hash|",
-        "height: height.saturating_sub(1)", "roster: context.roster.iter()",
+        "height: height.saturating_sub(1)", "roster: context\n                    .roster\n                    .iter()",
         "effects: effects.clone()", "header",
     )),
     (CONTROLS, "method", "PreparedPristineConsensusEffects::apply", (
@@ -201,17 +202,17 @@ NATIVE_CONTROL_BINDINGS = (
         "groups: Vec<VerifiedLaneDecisionGroupV1>", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ensure_exec_witness_capture_available()", "with_stable_observation(self, ||",
         "if !carrier.is_resultless_proposal()", "native_lane_batch_for_execution(&carrier)",
-        "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+        "ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )",
         "self.prepare_lane_decision_batch(&groups)?", "if &batch != expected",
         "self.with_native_lane_execution_scope(", "begin_exec_witness_capture()",
-        "controls.apply(overlay)", "Ok((recorder, context))",
+        "controls\n                        .apply(overlay)", "Ok((recorder, context))",
         "overlay.seal_native_lane_decision_batch(results, batch)",
         "|overlay, executions, (recorder, context)|",
-        "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
-        "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+        "ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )",
+        "ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )",
         "overlay.capture_exec_witness()", "verify_execution_output_seal(&carrier)",
         "drop(recorder)", "Ok((executions, context))", "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
-        "Ok(RecordedNativeLaneBatchV1 { prepared, carrier, context, })",
+        "Ok(RecordedNativeLaneBatchV1 {\n                prepared,\n                carrier,\n                context,\n            })",
     )),
     (NATIVE_KERNEL, "method", "State::with_native_lane_execution_scope", (
         "enter: impl FnOnce(&mut StateBlock<'state>)",
@@ -235,15 +236,15 @@ NATIVE_CONTROL_BINDINGS = (
         "self.import_recovered_lane_decision_group(&observed, execution, input)",
         "self.import_lane_decision_group(&observed, execution)",
         "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
-        "!observed.is_current(self)", "state: self, observed, generation,",
-        "input: Arc::new(carrier.clone()), groups",
+        "!observed.is_current(self)", "state: self,\n                observed,\n                generation,",
+        "input: Arc::new(carrier.clone()),\n                groups",
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::record_execution", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ensure_exec_witness_capture_available()", "if !self.is_current()",
-        "if carrier != *self.input { return Err(", "drop(self.input)",
+        "if carrier != *self.input {\n            return Err(", "drop(self.input)",
         "record_native_lane_decision_batch(carrier, self.groups, context)",
-        "self.generation, self.state.state_view_generation()", "recorded.map(Some)",
+        "self.generation,\n            self.state.state_view_generation()", "recorded.map(Some)",
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::stage_with_start_hooks", (
         "ensure_state_access_without_exec_witness()", "native_lane_batch_for_scratch(&self.input)",
@@ -254,7 +255,7 @@ NATIVE_CONTROL_BINDINGS = (
     )),
     (NATIVE_CARRIER, "fn", "native_lane_batch_for_scratch", (
         "let batch = native_lane_batch_for_execution(carrier)?",
-        ".queue_plan_admissions.is_empty()", "carrier.npos_consensus_effects().is_some()",
+        ".queue_plan_admissions\n        .is_empty()", "carrier.npos_consensus_effects().is_some()",
         "carrier.header().npos_effects_hash().is_some()", "return Err(", "Ok(batch)",
     )),
     (NATIVE_STAGE, "method", "StateBlock::seal_native_lane_decision_batch", (
@@ -265,14 +266,17 @@ NATIVE_CONTROL_BINDINGS = (
         "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
         "self.applied_npos_consensus_effects_hash != seal.npos_effects_hash",
         "self.canonical_wsv_merge_commit_authorization.is_some()",
-        "self.canonical_carrier_commit_metadata_authorization.is_some()",
+        "self\n                .canonical_carrier_commit_metadata_authorization\n                .is_some()",
         "self._curr_block != seal.carrier", "return Err(",
     )),
     (NATIVE_STAGE, "method", "StateBlock::validate_native_output_carrier", (
-        "self.validate_native_lane_execution()", "seal.completed_write_set_root.is_none()",
+        "self.validate_native_lane_execution()", "self.validate_native_output_source(block)",
+    )),
+    (NATIVE_STAGE, "method", "StateBlock::validate_native_output_source", (
+        "self.validate_native_lane_stage_membership()", "seal.completed_write_set_root.is_none()",
         "block.header() != seal.carrier", "block.header().npos_effects_hash() != seal.npos_effects_hash",
-        ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash)",
-        "!= Some(seal.batch.as_ref())", "return Err(",
+        ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions))\n                != Some(seal.queue_plan_admissions_hash)",
+        "!block.external_entrypoints_slice().is_empty()", "!= Some(seal.batch.as_ref())", "return Err(",
     )),
 )
 
@@ -298,8 +302,8 @@ PREPARATION_OWNER_BINDINGS = (
         "Self::validate_advertised_axt_transitions(", "state.axt_authorization_transitioned()",
     )),
     (NATIVE_METADATA, "method", "ValidBlock::seal_native_execution_outputs", (
-        "verify_native_execution_metadata(block, executions)", "block.validate_output_merkle_cache()",
-        "advertised_policy.as_ref().ok_or_else(", ".validate()",
+        "verify_native_execution_metadata(block, executions)", "block\n                .validate_output_merkle_cache()",
+        "advertised_policy\n                .as_ref()\n                .ok_or_else(", ".validate()",
         "seal_execution_outputs(block, |state, source, routes|",
         "verify_native_execution_metadata(source, executions)",
         "Self::finalize_common_execution_metadata(",
@@ -310,18 +314,25 @@ PREPARATION_OWNER_BINDINGS = (
     )),
     (NATIVE_METADATA, "method", "ValidBlock::native_execution_finality_statements", (
         "executions.len() != routes.len() || executions.len() != block.network_entrypoint_count()",
-        "executions.iter().zip(routes)", "source.payload.input.routing_plan()",
+        "executions.iter().zip(routes)", "source\n                .payload\n                .input\n                .routing_plan()",
         "plan.coordinator_route() != *route", ".find(|(_, slot)| slot.route == *route)",
         "source.decisions.get(slot_index)", "let commitment = &execution.settlement_commitment",
         "iroha_data_model::nexus::compute_settlement_hash(commitment)", "!= execution.settlement_hash",
-        "commitment.receipts.is_empty() && commitment.nexus_fee_receipts.is_empty() && commitment.native_amx_receipts.is_empty()",
-        "commitment.total_local_amount.is_zero()", "commitment.total_xor_due.is_zero()",
-        "commitment.total_xor_after_haircut.is_zero()", "commitment.total_xor_variance.is_zero()",
-        "commitment.swap_metadata.is_some()", "source.payload.descriptor.canonical_hash()",
+        "if !Self::native_settlement_requires_relay(commitment)?", "continue;",
+        "source\n                .payload\n                .descriptor\n                .canonical_hash()",
         "LaneRelayEnvelope::new(", "commitment.clone()", "decision.manifest.byte_len",
         "with_lane_block_descriptor_hash(Some(descriptor_hash))",
         "entry.dsid == commitment.dataspace_id", "entry.policy.manifest_root",
         "envelope.lane_finality_statement()", "statements.sort_unstable_by_key(",
+    )),
+    (NATIVE_METADATA, "method", "ValidBlock::native_settlement_requires_relay", (
+        "let has_receipts = !commitment.receipts.is_empty()",
+        "|| !commitment.nexus_fee_receipts.is_empty()",
+        "|| !commitment.native_amx_receipts.is_empty()", "if !has_receipts",
+        "!commitment.total_local_amount.is_zero()", "!commitment.total_xor_due.is_zero()",
+        "!commitment.total_xor_after_haircut.is_zero()", "!commitment.total_xor_variance.is_zero()",
+        "commitment.swap_metadata.is_some()", "return Ok(false)",
+        "if commitment.tx_count == 0", "return Err(", "Ok(true)",
     )),
     (NATIVE_STAGE, "method", "StateBlock::verify_native_execution_metadata", (
         "self.validate_native_output_carrier(block)?", "!self.settlement_accumulator.is_empty()",
@@ -352,7 +363,7 @@ PREPARATION_OWNER_BINDINGS = (
     )),
     (PREFIX, "method", "PrefixPreparation::capture", (
         "native: Option<lane_decision_batch::NativeExecutionCustody>", "let authority = match native",
-        "Some(native) if native.retains_state(&state) && block.execution_context().is_some_and(|context| context.native_lane_decisions.is_some()) =>",
+        "Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>",
         "PrefixSourceAuthority::Native(Box::new(native))",
         "None if state.native_lane_stage.is_none()", "state.merge_carrier_entrypoints.is_empty()",
         "context.native_lane_decisions.is_some()", "state.staged_merge_entry.is_some()",
@@ -392,7 +403,7 @@ PREPARATION_OWNER_BINDINGS = (
         "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
         "let admission;", "source_prefix,", "admit_journals(CarrierJournalInputs {",
         "state: &state", "prefix: &source_prefix", "state.prepare_carrier_geometry()?",
-        "world.try_detach_journals", "transactions.prepare_commit()?.detach()", "admission, })",
+        "world.try_detach_journals", "transactions.prepare_commit()?.detach()", "admission,\n        })",
     )),
     (OUTPUT, "struct", "SealedExecutionOutputs", (
         "proposal:", "wire_hash: Hash", "wire_bytes: u64", "world_delta:", "sources: OwnedExecutionSources",
@@ -866,14 +877,14 @@ def validate_native_preparation_contract(
             "finish_scope(overlay, result, scope)")
     ordered("State::record_native_lane_decision_batch",
             "ensure_exec_witness_capture_available()", "with_stable_observation(self, ||",
-            "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+            "ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )",
             "self.prepare_lane_decision_batch(&groups)?;", "if &batch != expected",
             "self.with_native_lane_execution_scope(", "begin_exec_witness_capture()",
-            "controls.apply(overlay)", "Ok((recorder, context))",
+            "controls\n                        .apply(overlay)", "Ok((recorder, context))",
             "overlay.seal_native_lane_decision_batch(results, batch)",
             "|overlay, executions, (recorder, context)|",
-            "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
-            "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+            "ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )",
+            "ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )",
             "overlay.capture_exec_witness()", "verify_execution_output_seal(&carrier)",
             "drop(recorder);", "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?;")
     ordered("ValidBlock::finalize_native_execution_contexts",
@@ -883,9 +894,9 @@ def validate_native_preparation_contract(
             "finalize_lane_consensus_contexts(block, Some(context.context()))")
     ordered("PreparedNativeLaneBatchSourceV1::record_execution",
             "ensure_exec_witness_capture_available()", "if !self.is_current()",
-            "if carrier != *self.input { return Err(", "drop(self.input);",
+            "if carrier != *self.input {\n            return Err(", "drop(self.input);",
             "record_native_lane_decision_batch(carrier, self.groups, context)",
-            "self.generation, self.state.state_view_generation()", "recorded.map(Some)")
+            "self.generation,\n            self.state.state_view_generation()", "recorded.map(Some)")
     ordered("PreparedNativeLaneBatchSourceV1::stage_with_start_hooks",
             "ensure_state_access_without_exec_witness()", "native_lane_batch_for_scratch(&self.input)",
             "if !self.is_current()", "self.state.lane_execution_state_hash()",
@@ -941,15 +952,26 @@ def validate_native_preparation_contract(
             "if executions.len() != routes.len() || executions.len() != block.network_entrypoint_count() { return Err(",
             "if plan.coordinator_route() != *route { return Err(",
             "if (commitment.lane_id, commitment.dataspace_id, commitment.lane_incarnation, commitment.block_height,) != (slot.route.lane_id, slot.route.dataspace_id, slot.lane_incarnation, slot.lane_height,) || iroha_data_model::nexus::compute_settlement_hash(commitment).map_err(|error| Self::execution_context_error(error.to_string()))? != execution.settlement_hash { return Err(",
-            "if commitment.receipts.is_empty() && commitment.nexus_fee_receipts.is_empty() && commitment.native_amx_receipts.is_empty() { if !commitment.total_local_amount.is_zero() || !commitment.total_xor_due.is_zero() || !commitment.total_xor_after_haircut.is_zero() || !commitment.total_xor_variance.is_zero() || commitment.swap_metadata.is_some() { return Err(",
+            "if !Self::native_settlement_requires_relay(commitment)? { continue; }",
             "LaneRelayEnvelope::new(block.header(), block.header().da_commitments_hash(), commitment.clone(), decision.manifest.byte_len,)",
             "statements.sort_unstable_by_key(|statement| { (statement.lane_id, statement.dataspace_id, statement.lane_incarnation, statement.block_height,) });")
     ordered("ValidBlock::native_execution_finality_statements",
             "let commitment = &execution.settlement_commitment;", "!= execution.settlement_hash",
-            "commitment.receipts.is_empty()", "continue;", "let descriptor_hash =",
+            "Self::native_settlement_requires_relay(commitment)?", "continue;", "let descriptor_hash =",
             "LaneRelayEnvelope::new(", "with_lane_block_descriptor_hash(Some(descriptor_hash))",
             "envelope.manifest_root = policy.entries.iter().find(|entry| entry.dsid == commitment.dataspace_id).map(|entry| entry.policy.manifest_root);",
             "envelope.lane_finality_statement()", "statements.push(statement);")
+    require("ValidBlock::native_settlement_requires_relay",
+            "let has_receipts = !commitment.receipts.is_empty() || !commitment.nexus_fee_receipts.is_empty() || !commitment.native_amx_receipts.is_empty();",
+            "if !has_receipts { if !commitment.total_local_amount.is_zero() || !commitment.total_xor_due.is_zero() || !commitment.total_xor_after_haircut.is_zero() || !commitment.total_xor_variance.is_zero() || commitment.swap_metadata.is_some() { return Err(")
+    ordered("ValidBlock::native_settlement_requires_relay", "if !has_receipts",
+            "return Err(", "return Ok(false);", "if commitment.tx_count == 0",
+            "return Err(", "Ok(true)")
+    ordered("StateBlock::validate_native_output_carrier",
+            "self.validate_native_lane_execution()", "self.validate_native_output_source(block)")
+    require("StateBlock::validate_native_output_source",
+            "self.validate_native_lane_stage_membership()",
+            "if seal.completed_write_set_root.is_none() || block.header() != seal.carrier || block.header().npos_effects_hash() != seal.npos_effects_hash || block.execution_context().map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash) || !block.external_entrypoints_slice().is_empty() || block.execution_context().and_then(|context| context.native_lane_decisions.as_deref()) != Some(seal.batch.as_ref()) { return Err(")
     require("StateBlock::verify_native_execution_metadata",
             "self.validate_native_output_carrier(block)?; if !self.settlement_accumulator.is_empty() { return Err(",
             "if executions.len() != seal.batch.groups.len() || executions.len() != seal.settlement_hashes.len() { return Err(",
@@ -967,8 +989,8 @@ def validate_native_preparation_contract(
             "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
             "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
             "recorded.into_preparation_parts()", "PreparedCarrier::prepare(ValidatedCarrierPreparationInput")
-    ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared.verify_source_binding()",
-            "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+    ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared\n            .verify_source_binding()",
+            "verify_execution_output_seal(&self.carrier)", "validate_native_output_source(&self.carrier)",
             "let seal = Arc::clone(", "= self.prepared", "NativeExecutionCustody")
     require("PreparedCarrier::prepare", "execution_prefix::prepare(input)")
     require("PrefixPreparation::capture",
@@ -992,7 +1014,7 @@ def validate_native_preparation_contract(
     ordered("PreparedCarrier::prepare_journals", "let admission;", "let Self {",
             "admit_journals(CarrierJournalInputs { state: &state, prefix: &source_prefix, })",
             "state.prepare_carrier_geometry()?;", "world.try_detach_journals(", "Ok(PreparedCarrierJournals {")
-    require("StateBlock::seal_execution_outputs", "Ok(SealedExecutionOutputs { sources, world_delta,")
+    require("StateBlock::seal_execution_outputs", "Ok(SealedExecutionOutputs { witness_hash: None, witness_surface: None, sources, world_delta,")
     if "prepare" in items:
         body = items["prepare"]
         capture = body.find(_code("PrefixPreparation::capture(state, &valid, native)?;"))

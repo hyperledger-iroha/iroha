@@ -542,7 +542,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
 }
 state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_healthy_sibling
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let bad_trigger_id: TriggerId = "a_pipeline_failure".parse().unwrap();
@@ -641,7 +641,7 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
 }
 state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let trigger_id: TriggerId = "pipeline_self_replacement".parse().unwrap();
@@ -701,7 +701,7 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
 }
 state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matching
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let replacer_id: TriggerId = "a_pipeline_sibling_replacer".parse().unwrap();

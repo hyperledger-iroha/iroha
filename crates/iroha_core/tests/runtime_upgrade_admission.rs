@@ -71,7 +71,7 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -120,8 +120,7 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -153,8 +152,7 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     );
     stx1.apply();
     block1.commit_empty_block_for_testing().unwrap();
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
@@ -193,7 +191,7 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -237,7 +235,7 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -280,7 +278,7 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -336,8 +334,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
     // Block 1: grant permission and propose upgrade starting at height 5
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -365,8 +362,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     stx1.apply();
     block1.commit_empty_block_for_testing().unwrap();
     // Block 5: activate twice at the same height; the second invocation should be a no-op
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
@@ -405,8 +401,7 @@ fn activation_allows_v1_in_same_block() {
     install_current_lane_manifest_registry(&state);
     let prog_current = minimal_ivm_program(1);
     // Block 1: grant permission and propose upgrade [2, 10)
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -434,8 +429,7 @@ fn activation_allows_v1_in_same_block() {
     stx1.apply();
     block1.commit_empty_block_for_testing().unwrap();
     // Block 2: activate upgrade, then validate a v1 program in the same block
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
@@ -483,7 +477,7 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
         provenance: Vec::new(),
     };
     let id = manifest.id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.runtime_upgrades_mut().insert(
@@ -499,8 +493,7 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
     block.commit_empty_block_for_testing().unwrap();
     // The next block must fail closed before any transaction can execute under
     // an ABI surface that differs from the local binary.
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     match state.try_block(header2) {
         Err(IvmAdmissionError::ManifestAbiHashMismatch(info)) => {
             assert_eq!(info.expected, Hash::prehashed(manifest.abi_hash));
@@ -523,7 +516,7 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);
@@ -575,7 +568,7 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
     state.gov.runtime_upgrade_provenance.signature_threshold = 1;
     state.gov.runtime_upgrade_provenance.trusted_signers =
         BTreeSet::from([trusted.public_key().clone()]);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageRuntimeUpgrades);

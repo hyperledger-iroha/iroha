@@ -1,4 +1,4 @@
-// The sole ordinary metadata finalizer runs inside State's consuming output seal.
+// The common metadata finalizer runs inside State's consuming output seal.
 // It cannot supply output rows, receipt owners or callback completion projections.
 
 impl ValidBlock {
@@ -77,6 +77,64 @@ impl ValidBlock {
         })
     }
 
+    /// Qualify the source-owned native producer, including pristine controls,
+    /// the complete common output tail and its sole witness capture. The fixture
+    /// must retain genuine durable parent finality; the returned overlay still
+    /// requires separate global finality and publication authorization.
+    #[cfg(test)]
+    pub(crate) fn execute_native_block_and_capture_for_test<'state>(
+        block: &mut SignedBlock,
+        state: &'state State,
+        context: &consensus_v2::HeightContext,
+    ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
+        native_lane_batch_for_execution(block).map_err(Self::execution_context_error)?;
+        let parent_height = context.height.checked_sub(1).ok_or_else(|| {
+            Self::execution_context_error("native fixture has no applying parent height")
+        })?;
+        let (parent, receipt) = state
+            .kura()
+            .v2_finality_artifact_with_receipt(parent_height)
+            .map_err(|error| Self::execution_context_error(error.to_string()))?
+            .ok_or_else(|| {
+                Self::execution_context_error("native fixture requires durable parent finality")
+            })?;
+        let proofs = parent
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map_or_else(
+                || parent.validator_set_pops.clone(),
+                |snapshot| snapshot.validator_set_pops.clone(),
+            );
+        let context = crate::sumeragi::v2::VerifiedHeightContext::successor(
+            context.clone(),
+            proofs,
+            &parent,
+            &receipt,
+            &parent.validator_set_pops,
+        )
+        .map_err(|error| Self::execution_context_error(error.to_string()))?;
+        let source = state
+            .prepare_canonical_native_lane_batch_source(block)
+            .map_err(Self::execution_context_error)?;
+        let crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) = source else {
+            return Err(Self::execution_context_error(
+                "native execution requires current complete authenticated first sources",
+            ));
+        };
+        let recorded = source
+            .record_execution(block.clone(), context)
+            .map_err(|error| Self::execution_context_error(error.to_string()))?
+            .ok_or_else(|| {
+                Self::execution_context_error("native source observation changed before execution")
+            })?;
+        let (executed, overlay, _custody) = recorded
+            .into_preparation_parts()
+            .map_err(Self::execution_context_error)?;
+        *block = executed;
+        Ok(overlay)
+    }
+
     /// Shared deterministic metadata runs after actual Network/Pipeline/Time
     /// execution and before the one output seal captures its final World delta.
     fn finalize_common_execution_metadata(
@@ -150,6 +208,41 @@ impl ValidBlock {
             SccpRootValidation::Enforce,
             genesis.as_ref(),
         )
+    }
+
+    /// Execute a fixture and retain its actual witness under the same recorder owner.
+    /// Genesis binds the supplied context to the resulting staged policy before
+    /// lane-context finalization. This grants no publication or finality authority.
+    #[cfg(test)]
+    pub(crate) fn execute_block_outputs_and_capture_for_test(
+        block: &mut SignedBlock,
+        state: &mut StateBlock<'_>,
+        genesis_account: Option<&AccountId>,
+        context: &mut consensus_v2::HeightContext,
+    ) -> Result<(), BlockValidationError> {
+        let genesis = genesis_account
+            .map(|account| authenticate_genesis_block_intents(block, account))
+            .transpose()?;
+        Self::validate_staged_execution_controls(block, state)?;
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        Self::execute_and_record_canonical_outputs(
+            block,
+            state,
+            None,
+            SccpRootValidation::Enforce,
+            genesis.as_ref(),
+        )?;
+        if genesis.is_some() {
+            context.nexus_amx_context_hash =
+                crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);
+            context.execution_policy_hash =
+                crate::sumeragi::staged_genesis_execution_policy_hash(state)
+                    .map_err(|error| Self::execution_context_error(error.to_string()))?;
+        }
+        state
+            .finalize_lane_consensus_contexts(block, Some(context))
+            .and_then(|()| state.capture_exec_witness())
+            .map_err(Self::execution_context_error)
     }
 }
 

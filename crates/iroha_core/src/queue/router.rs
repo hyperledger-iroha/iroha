@@ -92,7 +92,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mv::storage::StorageReadOnly;
-use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,

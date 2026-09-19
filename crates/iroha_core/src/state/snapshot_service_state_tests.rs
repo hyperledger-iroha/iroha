@@ -15,7 +15,7 @@ fn restore(text: &str, world: &mut World) -> Result<(), json::Error> {
 }
 
 pub(crate) fn service_world() -> World {
-    let mut world = World::default();
+    let world = World::default();
     let provider = ProviderId::new([7; 32]);
     let dispute = CapacityDisputeId::new([8; 32]);
     let signer = KeyPair::from_seed(vec![1; 32], iroha_crypto::Algorithm::Ed25519);

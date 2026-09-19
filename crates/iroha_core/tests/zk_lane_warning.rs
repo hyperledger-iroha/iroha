@@ -40,7 +40,6 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
             NonZeroU64::new(5).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         )),

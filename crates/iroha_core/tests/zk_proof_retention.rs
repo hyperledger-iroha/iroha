@@ -73,7 +73,7 @@ fn proof_records_pruned_to_cap_per_backend() {
     state
         .set_zk(zk)
         .expect("empty SCCP outbox accepts retention test configuration");
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let exec = Executor::default();
     let mut stx = block.transaction();
@@ -132,7 +132,7 @@ fn manual_prune_instruction_applies_new_cap() {
     state
         .set_zk(zk)
         .expect("empty SCCP outbox accepts retention test configuration");
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let exec = Executor::default();
     let mut stx = block.transaction();
@@ -175,7 +175,7 @@ fn manual_prune_instruction_applies_new_cap() {
         .set_zk(zk)
         .expect("empty SCCP outbox accepts retention test configuration");
     let prune_header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, 0, 0);
     let mut prune_block = state.block(prune_header);
     let mut stx = prune_block.transaction();
     let prune: InstructionBox =

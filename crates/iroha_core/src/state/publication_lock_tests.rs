@@ -47,6 +47,38 @@ fn waiting(lock: &PublicationMutex) -> mv::ReleaseFuture {
 }
 
 #[test]
+fn fair_unlock_releases_the_physical_mutex_before_waking_publication_retries() {
+    struct CheckUnlocked {
+        lock: Arc<PublicationMutex>,
+        count: AtomicUsize,
+    }
+    impl Wake for CheckUnlocked {
+        fn wake(self: Arc<Self>) {
+            let _guard = self
+                .lock
+                .try_lock()
+                .expect("the actual mutex must unlock before notification");
+            self.count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let lock = Arc::new(PublicationMutex::default());
+    let guard = lock.lock();
+    let mut wait = waiting(&lock);
+    let check = Arc::new(CheckUnlocked {
+        lock: Arc::clone(&lock),
+        count: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&check));
+    let mut context = Context::from_waker(&waker);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    guard.unlock_fair();
+    assert_eq!(check.count.load(Ordering::SeqCst), 1);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert!(lock.try_lock_or_wait().is_ok());
+}
+
+#[test]
 fn every_state_fence_wakes_on_normal_and_aborted_release_without_publication() {
     let state = state();
     let height = state.committed_height();

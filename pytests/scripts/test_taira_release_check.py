@@ -1793,25 +1793,27 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.args[0][:4], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test"])
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
-        with patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")), \
-             patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
-             patch.object(gate, "CONFIG_UNIT_STAGES", ()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")))
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]))
+            stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
+            stack.enter_context(patch.object(gate, "CONFIG_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
@@ -1822,25 +1824,27 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"}
         results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
                    subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
-        with patch.object(gate.subprocess, "check_output", return_value="a" * 40) as git, \
-             patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=results) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
-             patch.object(gate, "CONFIG_UNIT_STAGES", ()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            git = stack.enter_context(patch.object(gate.subprocess, "check_output", return_value="a" * 40))
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
+            stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
+            stack.enter_context(patch.object(gate, "CONFIG_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             gate.run_checks(Path("/mutable"), qualification_scope="full", environment=env, lock_fds=(77,))
         self.assertEqual(git.call_count, 2)
         self.assertTrue(all(call.kwargs["env"]["CARGO_HOME"] == "/isolated" for call in git.call_args_list))
@@ -1858,25 +1862,27 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                    subprocess.CompletedProcess([], 0, "route: test\n", ""),
                    subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
         output = io.StringIO()
-        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=results) as run, \
-             patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
-             patch.object(gate, "CONFIG_UNIT_STAGES", ()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)), \
-             contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
+            stack.enter_context(patch.object(gate, "STAGES", (("CLI", ("cli",)),)))
+            stack.enter_context(patch.object(gate, "CONFIG_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)))
+            stack.enter_context(contextlib.redirect_stdout(output))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             with self.assertRaisesRegex(gate.CheckError, "route.*exit 101"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)

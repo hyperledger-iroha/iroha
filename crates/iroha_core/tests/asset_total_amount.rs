@@ -21,7 +21,6 @@ fn asset_totals_track_multi_account_mint_and_burn() {
         NonZeroU64::new(1).expect("non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -127,7 +126,6 @@ fn asset_totals_drop_when_unregistering_account() {
         NonZeroU64::new(1).expect("non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -163,7 +161,6 @@ fn asset_totals_drop_when_unregistering_account() {
         .expect("commit block 1");
     let header_2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero"),
-        None,
         None,
         None,
         0,
@@ -202,7 +199,6 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     let state = State::new_for_testing(World::default(), kura, query_handle);
     let header_1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
-        None,
         None,
         None,
         0,
@@ -259,7 +255,6 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         NonZeroU64::new(2).expect("non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -304,7 +299,6 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     let state = State::new_for_testing(World::default(), kura, query_handle);
     let header_1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
-        None,
         None,
         None,
         0,
@@ -359,7 +353,6 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         .expect("commit block 1");
     let header_2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("non-zero"),
-        None,
         None,
         None,
         0,

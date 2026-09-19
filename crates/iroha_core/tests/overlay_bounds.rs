@@ -75,7 +75,15 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
     let _ = sb.commit();
     // Expect first tx rejected with NotPermitted("overlay exceeds max instructions: ...") and second approved
     let block = vb.as_ref();
-    let errors = [block.error(0), block.error(1)];
+    let errors = [0, 1].map(|index| {
+        block
+            .network_output_at(index)
+            .expect("validated transaction has an output")
+            .1
+            .result
+            .as_ref()
+            .err()
+    });
     if !errors.iter().any(|e| {
         matches!(
             e,
@@ -141,7 +149,15 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     let _ = sb.commit();
     // Expect first tx rejected with NotPermitted("overlay exceeds max bytes: ...") and second approved
     let block = vb.as_ref();
-    let errors = [block.error(0), block.error(1)];
+    let errors = [0, 1].map(|index| {
+        block
+            .network_output_at(index)
+            .expect("validated transaction has an output")
+            .1
+            .result
+            .as_ref()
+            .err()
+    });
     let expected_rejection = format!("overlay exceeds max bytes: {big_bytes} > {small_bytes}");
     let overlay_errs = errors
         .iter()
@@ -172,7 +188,6 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
     {
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero_ext::nonzero!(1_u64),
-            None,
             None,
             None,
             0,
@@ -228,7 +243,16 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         .unpack(|_| {});
     let _ = sb.commit();
     let block = vb.as_ref();
-    eprintln!("errors ttl: {:?}", [block.error(0), block.error(1)]);
+    let errors = [0, 1].map(|index| {
+        block
+            .network_output_at(index)
+            .expect("validated transaction has an output")
+            .1
+            .result
+            .as_ref()
+            .err()
+    });
+    eprintln!("errors ttl: {errors:?}");
     // TTL enforcement is currently configuration-dependent; ensure at least one tx succeeds.
-    assert!(block.error(1).is_none(), "second tx must be approved");
+    assert!(errors[1].is_none(), "second tx must be approved");
 }

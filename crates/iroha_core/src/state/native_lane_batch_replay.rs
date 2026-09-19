@@ -5,9 +5,12 @@
 //! requires its private Kura seal. A post-closure State cannot replace the prefix.
 //! Scratch replay grants no carrier validity. Source-owned candidate preparation
 //! joins common global checks to the actual Network/Pipeline/Time output owner.
-//! Neither path grants publication or lane Apply.
-//! TODO: complete remaining control/resource owners and the consuming publisher
-//! before joining production validation/Apply; keep native admission disabled.
+//! ValidBlock owns canonical pristine controls and full witness capture; the
+//! retained output owner requires verified finality before publication.
+//! Neither scratch replay nor candidate preparation grants voting or lane Apply.
+//! TODO: complete remaining control/resource owners and connect the consuming
+//! publisher to the sole production validation/Apply path, retiring the old
+//! economic signers before opening native carrier admission.
 
 use super::{
     AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, MergeLedgerCommitError,
@@ -18,7 +21,7 @@ use crate::kura::FinalizedNativeLaneBatchV1;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
-    block::{SignedBlock, lane_decision_batch::LaneDecisionBatchV1},
+    block::{BlockHeader, SignedBlock, lane_decision_batch::LaneDecisionBatchV1},
 };
 use std::sync::Arc;
 
@@ -166,9 +169,8 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     /// Network/Pipeline/Time output ownership, retaining the original verified groups.
     /// A capacity refusal preserves its typed fitting prefix for proposal selection;
     /// it cannot be flattened into a terminal input error.
-    /// This remains disposable and StateBlock::commit rejects the native seal.
-    /// TODO: integrate consuming output sealing, complete State witness and exact publication/Apply authorization
-    /// to the sole ValidBlock consumer before enabling native production inputs.
+    /// Scratch execution remains disposable: its native seal alone never grants
+    /// the complete captured witness or exact durable finality needed to commit.
     pub(crate) fn stage_with_start_hooks(
         self,
     ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
@@ -210,6 +212,112 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
 }
 
 impl State {
+    /// Recover one globally finalized native source and, once its carrier is
+    /// applied, rejoin the exact retained World registry and replay membership.
+    /// Cold recovery authenticates inclusion without publishing future effects.
+    /// No State view or execution writer remains held during Kura I/O.
+    pub(crate) fn read_finalized_native_lane_batch(
+        &self,
+        height: std::num::NonZeroUsize,
+        expected_hash: HashOf<BlockHeader>,
+    ) -> Result<crate::kura::NativeLaneBatchCarrierReadV1, MergeLedgerCommitError> {
+        super::lane_decision_batch::with_stable_observation(self, || {
+            self.read_finalized_native_lane_batch_at_observation(height, expected_hash)
+        })
+    }
+
+    /// Validate one finite captured observation; the outer fence also covers
+    /// failures and changes after the complete local view has been acquired.
+    fn read_finalized_native_lane_batch_at_observation(
+        &self,
+        height: std::num::NonZeroUsize,
+        expected_hash: HashOf<BlockHeader>,
+    ) -> Result<crate::kura::NativeLaneBatchCarrierReadV1, MergeLedgerCommitError> {
+        use super::{
+            QueuePlanAdmissionRegistryMatch, TransactionsReadOnly as _, WorldReadOnly as _,
+        };
+        use mv::storage::StorageReadOnly as _;
+        use std::str::FromStr as _;
+
+        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
+        let generation = self.state_view_generation();
+        if generation % 2 != 0 {
+            return Err(MergeLedgerCommitError::ExecutionObservationChanged);
+        }
+        let read = self
+            .kura
+            .read_finalized_native_lane_batch(height, expected_hash)
+            .map_err(invalid)?;
+        let Some(view) = self
+            .try_view_once()
+            .map_err(|error| invalid(error.to_string()))?
+        else {
+            return Err(MergeLedgerCommitError::ExecutionObservationChanged);
+        };
+        if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
+            return Err(MergeLedgerCommitError::ExecutionObservationChanged);
+        }
+        let finality = match &read {
+            crate::kura::NativeLaneBatchCarrierReadV1::Ready(included) => included.finality(),
+            crate::kura::NativeLaneBatchCarrierReadV1::CanonicalBodyRecoveryRequired(source) => {
+                source.finality()
+            }
+        };
+        if finality.height_context.network_id != self.network_id {
+            return Err(invalid("native history belongs to another network".into()));
+        }
+        if height.get() > view.block_hashes.len() {
+            return Ok(read);
+        }
+        if view.block_hashes.get(height.get() - 1).copied() != Some(expected_hash) {
+            return Err(invalid(
+                "native history differs from the applied carrier".into(),
+            ));
+        }
+        let crate::kura::NativeLaneBatchCarrierReadV1::Ready(included) = &read else {
+            return Ok(read);
+        };
+        let batch = included.batch();
+        let identity = super::lane_decision_batch::native_application_identity(
+            included.carrier_header(),
+            batch.canonical_hash().map_err(invalid)?,
+        );
+        let key = iroha_model_base::state_path::StatePath::from_str(&format!(
+            "native_lane_application_{}",
+            hex::encode(identity.as_ref()),
+        ))
+        .map_err(|error| invalid(error.to_string()))?;
+        let encoded =
+            norito::encode_canonical(&identity).map_err(|error| invalid(error.to_string()))?;
+        if view.world.smart_contract_state().get(&key) != Some(&encoded) {
+            return Err(invalid(
+                "applied native history has no exact application marker".into(),
+            ));
+        }
+        for group in &batch.groups {
+            let input = &group.payload.input;
+            if view.transactions.get(&input.entrypoint.hash()) != Some(height) {
+                return Err(invalid(
+                    "applied native history has no exact carrier membership".into(),
+                ));
+            }
+            if Self::queue_plan_admission_registry_match_in_view(
+                &view,
+                input.entrypoint.hash(),
+                input.certificate.binding.canonical_hash(),
+            )
+            .map_err(invalid)?
+                != QueuePlanAdmissionRegistryMatch::Exact
+            {
+                return Err(invalid(
+                    "applied native source lacks its exact retained admission registry binding"
+                        .into(),
+                ));
+            }
+        }
+        Ok(read)
+    }
+
     /// Authenticate all sources then recompute an included finalized input.
     ///
     /// `self` must be the applying carrier's exact pre-State (normally isolated
@@ -275,6 +383,16 @@ impl State {
         }
         let batch = crate::block::native_lane_batch_for_execution(carrier)?;
         self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, recovered)
+    }
+
+    /// Authenticate native sources for the sole global execution owner. Carrier
+    /// controls are shape-checked here and authenticated separately by ValidBlock.
+    pub(crate) fn prepare_canonical_native_lane_batch_source(
+        &self,
+        carrier: &SignedBlock,
+    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
+        let batch = crate::block::native_lane_batch_for_execution(carrier)?;
+        self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, &[])
     }
 
     /// Sole source authentication kernel. Raw arguments to this

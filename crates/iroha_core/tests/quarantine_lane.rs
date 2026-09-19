@@ -78,7 +78,12 @@ fn quarantine_overflow_rejects_one_tx() {
     let mut approved = 0usize;
     let mut rejected_overflow = 0usize;
     for (idx, _tx) in block.external_transactions().enumerate() {
-        match block.error(idx) {
+        let result = &block
+            .network_output_at(u32::try_from(idx).expect("input index fits u32"))
+            .expect("validated transaction has an output")
+            .1
+            .result;
+        match result.as_ref().err() {
             Some(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(msg),
             )) if msg == "quarantine overflow" => {

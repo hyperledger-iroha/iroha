@@ -7,10 +7,11 @@ struct NativeControlExecutionFixture {
     applying: crate::sumeragi::v2::VerifiedHeightContext,
 }
 
-// Keep the large State constructor in the existing separate heap-owning frame.
+// Finish economic fixture construction before reserving the later admission
+// overlay frame. The same boxed State moves into the second phase.
 #[inline(never)]
 fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixture {
-    let mut economic = native_economic_fixture_with_genesis_layout(
+    let economic = native_economic_fixture_with_genesis_layout(
         &[NativeEconomicCase::Transfer(25)],
         atomic,
         Some(DataAvailabilityLayout {
@@ -22,6 +23,16 @@ fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixtu
             max_chunk_count: 512,
         }),
     );
+    native_control_execution_fixture_from_economic(economic, atomic)
+}
+
+// This continuation owns the original economic fixture; no State is cloned or
+// reconstructed while the actual later admission acquires its writer guards.
+#[inline(never)]
+fn native_control_execution_fixture_from_economic(
+    mut economic: Box<NativeEconomicFixture>,
+    atomic: bool,
+) -> NativeControlExecutionFixture {
     let state = &economic.native.state;
     let original = state.verified_lane_consensus_contexts().unwrap().unwrap();
     let original_contexts = original

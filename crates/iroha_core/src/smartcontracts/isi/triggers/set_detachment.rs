@@ -7,6 +7,14 @@
 //! detachment while that child exists. World/State event and callback owners are
 //! separate and must remain owned by the aggregate carrier handoff.
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
+
 use super::*;
 use mv::storage::Detached as DetachedStorage;
 

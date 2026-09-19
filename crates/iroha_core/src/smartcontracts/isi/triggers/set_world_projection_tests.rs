@@ -17,6 +17,94 @@ fn project(block: &SetBlock<'_>) -> WorldNetDelta {
     builder.finish().expect("complete trigger projection")
 }
 
+#[test]
+fn publication_identities_reject_equal_value_foreign_trigger_journals() {
+    macro_rules! check {
+        ($($field:ident),+ $(,)?) => {$(
+            let expected = Set::default();
+            let foreign = Set::default();
+            let mut original = expected.block();
+            let mut replacement = foreign.block();
+            let mut captured = Vec::new();
+            original.append_world_publication_identities(
+                &expected, mv::BlockMode::Ordinary, &mut captured,
+            ).expect("original trigger journals belong to their State owner");
+            assert_eq!(captured.len(), 10);
+            let original_identity = original.$field.publication_identity();
+            assert_ne!(original_identity, replacement.$field.publication_identity(),
+                "equal trigger values do not identify their journal owner: {}", stringify!($field));
+            let values_before = project(&original);
+            core::mem::swap(&mut original.$field, &mut replacement.$field);
+            assert_eq!(project(&original), values_before,
+                "the adversarial replacement must have exactly equal projected values");
+            assert_ne!(original.$field.publication_identity(), original_identity,
+                "an already captured identity rejects replacement: {}", stringify!($field));
+            let mut first_capture = Vec::new();
+            let error = original.append_world_publication_identities(
+                &expected, mv::BlockMode::Ordinary, &mut first_capture,
+            ).expect_err("foreign journal cannot become the initial publication identity");
+            assert!(error.contains(stringify!($field)), "{error}");
+            assert!(first_capture.is_empty(), "failed capture appends no partial ownership");
+            core::mem::swap(&mut original.$field, &mut replacement.$field);
+            let mut restored = Vec::new();
+            original.append_world_publication_identities(
+                &expected, mv::BlockMode::Ordinary, &mut restored,
+            ).unwrap();
+            assert_eq!(restored, captured, "the actual original owner remains accepted");
+        )+};
+    }
+    check!(
+        data_triggers,
+        pipeline_triggers,
+        time_triggers,
+        by_call_triggers,
+        ids,
+        active_data_trigger_ids,
+        active_pipeline_trigger_ids,
+        active_time_trigger_ids,
+        active_by_call_trigger_ids,
+        contracts,
+    );
+}
+
+#[test]
+fn publication_identities_require_the_original_common_block_mode() {
+    let set = Set::default();
+    let mut identities = Vec::new();
+    {
+        let block = set.block();
+        assert!(
+            block
+                .append_world_publication_identities(&set, mv::BlockMode::Replace, &mut identities,)
+                .is_err()
+        );
+        assert!(identities.is_empty());
+        block
+            .append_world_publication_identities(&set, mv::BlockMode::Ordinary, &mut identities)
+            .unwrap();
+    }
+    let ordinary = identities;
+    let mut replacement = Vec::new();
+    let block = set.block_and_revert();
+    assert!(
+        block
+            .append_world_publication_identities(&set, mv::BlockMode::Ordinary, &mut replacement,)
+            .is_err()
+    );
+    assert!(replacement.is_empty());
+    block
+        .append_world_publication_identities(&set, mv::BlockMode::Replace, &mut replacement)
+        .unwrap();
+    assert_eq!(replacement.len(), 10);
+    assert!(
+        ordinary
+            .iter()
+            .zip(&replacement)
+            .all(|(left, right)| left != right),
+        "replacement mode cannot reuse an ordinary journal identity"
+    );
+}
+
 fn log_instruction() -> InstructionBox {
     Log::new(Level::INFO, "world delta".to_owned()).into()
 }

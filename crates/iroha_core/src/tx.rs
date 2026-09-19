@@ -3195,6 +3195,7 @@ impl StateBlock<'_> {
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
+    #[cfg(test)]
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
     /// Returns the hash and the result of the transaction.
@@ -13240,6 +13241,7 @@ pub mod tests {
         );
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
+            lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -13250,7 +13252,6 @@ pub mod tests {
         // Runtime fee policy is process configuration, not persisted World state.
         // Restore that exact fixture policy without replacing authenticated lane geometry.
         restarted.nexus.write().fees = state.nexus.read().fees.clone();
-        restarted.install_lane_manifests(&state.lane_manifests.read().clone());
         assert!(
             restarted
                 .view()

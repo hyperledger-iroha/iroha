@@ -9,10 +9,7 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
             _tx: &dyn TransactionRoutingView,
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok(RoutingDecision::new(
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-            ))
+            Ok(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         }
     }
     let kura = Kura::blank_kura_for_testing();

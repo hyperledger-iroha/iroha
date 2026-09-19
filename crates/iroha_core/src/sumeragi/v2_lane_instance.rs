@@ -46,14 +46,17 @@ pub(crate) use opening::{
     LaneOpening, LaneOpeningAdoption, LaneOpeningCompletion, LaneOpeningDrain, LaneOpeningDrained,
     LaneOpeningJob,
 };
+#[cfg(test)]
+pub(crate) use persistence::LanePersistenceWait;
 pub(crate) use persistence::{
-    LanePersistenceCompletion, LanePersistenceJob, LanePersistenceLaunch, LanePersistenceWait,
+    LanePersistenceCompletion, LanePersistenceJob, LanePersistenceLaunch,
 };
 pub(crate) use process::{
-    LaneClosedInstance, LanePhysicalCompletion, LanePhysicalPool, LanePhysicalShutdown,
-    LaneProcessLimits, LaneProcessOccupancy, LaneProcessOwner, LaneProcessProgress,
-    LaneWorkerClass,
+    LaneClosedInstance, LanePhysicalPool, LanePhysicalShutdown, LaneProcessLimits,
+    LaneProcessOwner, LaneProcessProgress, LaneWorkerClass,
 };
+#[cfg(test)]
+pub(crate) use process::{LanePhysicalCompletion, LaneProcessOccupancy};
 
 /// A control-boundary contradiction or permanent physical failure.
 #[derive(Debug, thiserror::Error)]
@@ -131,6 +134,13 @@ pub(crate) enum LaneService {
     /// The exact effect is still present in `held_effects`; no completion exists.
     NeedsBodyAdapter,
     /// The exact productive effect remains held behind a named source/route gate.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "TODO: consume retained native lane progress through the production driver"
+        )
+    )]
     BodyWaiting(LaneBodyWait),
 }
 

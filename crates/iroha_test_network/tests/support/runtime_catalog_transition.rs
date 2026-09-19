@@ -1,5 +1,6 @@
 //! A committed catalog expansion must survive full Kura replay before signed-snapshot recovery.
-//! All four peers retain their startup lane configuration, keys, genesis and block history.
+//! The native beacon-custody scenario supplies all four peers with their retained
+//! startup lane configuration, keys, genesis and block history.
 //! Snapshot writes begin only after the retained replay, before geometry compaction is permitted.
 use super::*;
 
@@ -38,15 +39,11 @@ use iroha_model_base::{
     topology::{DataSpaceId, LaneId},
 };
 use iroha_primitives::json::Json;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     sync::{Arc, Mutex},
 };
-
-const ADDED_LANE: LaneId = LaneId::new(3);
-const ADDED_DATASPACE: DataSpaceId = DataSpaceId::new(3);
 
 #[derive(Clone)]
 struct AppliedEvidence {
@@ -75,69 +72,6 @@ struct VerifiedPeerFinality {
 }
 
 impl FixtureFinality {
-    fn from_network(network: &Network) -> Result<Self> {
-        ensure!(
-            network.peers().len() == 4,
-            "finality trust requires all four fixture validators"
-        );
-        let network_id = network.network_id();
-        let genesis_hash = network.genesis().0.hash();
-        let mut validators = BTreeMap::new();
-        let mut peers = BTreeMap::new();
-        for peer in network.peers() {
-            let key = peer
-                .bls_public_key()
-                .ok_or_else(|| eyre!("fixture validator has no BLS identity"))?;
-            let pop = peer
-                .bls_pop()
-                .ok_or_else(|| eyre!("fixture validator has no public BLS proof of possession"))?;
-            ensure!(
-                !pop.is_empty()
-                    && validators
-                        .insert(PeerId::new(key.clone()), pop.to_vec())
-                        .is_none(),
-                "fixture validator identities must be distinct and carry public PoPs"
-            );
-            let identity = peer.network_peer_id();
-            ensure!(
-                peers
-                    .insert(
-                        identity.clone(),
-                        Arc::new(Mutex::new(VerifiedPeerFinality {
-                            network_id,
-                            genesis_hash,
-                            peer: identity,
-                            verifier: None,
-                            proofs: BTreeMap::new(),
-                        }))
-                    )
-                    .is_none(),
-                "fixture transport identities must be distinct"
-            );
-        }
-        // Native protocol v4 gives every validator one vote and sorts by PeerId. These keys
-        // and PoPs come from the generated fixture, never from a fetched finality document.
-        let (roster, validator_pops) = validators
-            .into_iter()
-            .map(|(validator, pop)| {
-                (
-                    ValidatorPower {
-                        validator,
-                        power: 1,
-                    },
-                    pop,
-                )
-            })
-            .unzip();
-        Ok(Self {
-            network_id,
-            genesis_hash,
-            roster,
-            validator_pops,
-            peers,
-        })
-    }
-
     fn validate_fixture_roster(&self, proof: &BridgeFinalityProof) -> Result<()> {
         let artifact = &proof.finality_artifact;
         ensure!(
@@ -235,291 +169,6 @@ impl FixtureFinality {
     }
 }
 
-fn resolution_permission() -> Permission {
-    CanResolveAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(ADDED_DATASPACE),
-    }
-    .into()
-}
-
-fn resolution_delegation_permission() -> Permission {
-    CanDelegateAccountAliasResolution {
-        scope: AccountAliasPermissionScope::Dataspace(ADDED_DATASPACE),
-    }
-    .into()
-}
-
-fn resolution_delegation_role() -> InstructionBox {
-    Register::role(
-        Role::new(
-            "runtime_catalog_resolution_delegate"
-                .parse()
-                .expect("role id"),
-            ALICE_ID.clone(),
-        )
-        .add_permission(resolution_delegation_permission()),
-    )
-    .into()
-}
-
-fn baseline_dataspaces() -> Result<DataSpaceCatalog> {
-    // Exact descriptors from the shared multiroute fixture, including their descriptions.
-    Ok(DataSpaceCatalog::new(vec![
-        DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".into(),
-            description: Some("default dataspace".into()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(1),
-            alias: "ds1".into(),
-            description: Some("alice route dataspace".into()),
-            fault_tolerance: 1,
-        },
-        DataSpaceMetadata {
-            id: DataSpaceId::new(2),
-            alias: "ds2".into(),
-            description: Some("bob route dataspace".into()),
-            fault_tolerance: 1,
-        },
-    ])?)
-}
-
-async fn lifecycle_and_runtime(
-    peer: &NetworkPeer,
-) -> Result<(LaneLifecycleStatusV1, Option<NexusRuntimeCatalogV1>)> {
-    let client = peer.client().client().clone();
-    read_on_dedicated_thread(move || {
-        let status = client.get_lane_lifecycle_status()?;
-        status.validate()?;
-        let parameters = client.get_parameters()?;
-        let runtime = parameters
-            .custom()
-            .get(&NexusRuntimeCatalogV1::parameter_id())
-            .map(NexusRuntimeCatalogV1::from_custom_parameter)
-            .transpose()?
-            .flatten();
-        ensure!(
-            status.runtime_catalog_hash
-                == runtime
-                    .as_ref()
-                    .map(NexusRuntimeCatalogV1::canonical_hash)
-                    .transpose()?,
-            "lifecycle runtime catalog hash differs from authenticated overlay"
-        );
-        Ok((status, runtime))
-    })
-    .await
-}
-
-async fn current_manifest(network: &Network) -> Result<(RuntimeLaneManifestV1, Vec<PeerId>)> {
-    let client = network.peers()[0].client().client().clone();
-    let roster =
-        read_on_dedicated_thread(move || client.get_public_lane_validators(LaneId::new(0))).await?;
-    let items = roster
-        .get("items")
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("live lane-0 roster omitted items"))?;
-    ensure!(
-        items.len() == 4,
-        "manifest must bind exactly the four live validators"
-    );
-    let mut bindings = Vec::new();
-    let mut validators = BTreeSet::new();
-    let mut peers = BTreeSet::new();
-    for item in items {
-        ensure!(
-            item.get("status")
-                .and_then(|value| value.get("type"))
-                .and_then(Value::as_str)
-                == Some("Active"),
-            "manifest source contains an inactive validator"
-        );
-        let validator = item
-            .get("validator")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre!("live roster omitted validator account"))?;
-        let peer = item
-            .get("peer_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre!("live roster omitted consensus peer"))?;
-        let parsed_peer: PeerId = peer.parse()?;
-        ensure!(
-            validators.insert(validator.to_owned()) && peers.insert(parsed_peer),
-            "live roster repeats an identity"
-        );
-        bindings.push(norito::json!({"validator": validator, "peer_id": peer}));
-    }
-    let expected_peers: BTreeSet<_> = network
-        .peers()
-        .iter()
-        .map(|peer| peer.id().clone())
-        .collect();
-    ensure!(
-        peers == expected_peers,
-        "manifest peers differ from the actual running cohort"
-    );
-    Ok((
-        RuntimeLaneManifestV1 {
-            lane_id: ADDED_LANE,
-            manifest: Json::from_norito_value_ref(&norito::json!({
-                "lane": "runtime-committee", "version": 1, "validators": bindings, "quorum": 3,
-            }))?,
-        },
-        peers.into_iter().collect(),
-    ))
-}
-
-async fn exact_applied_height(network: &Network, transaction: &SignedTransaction) -> Result<u64> {
-    let hash = transaction.hash();
-    let expected_hex = hash
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let deadline = Instant::now() + FUNCTIONAL_FINALITY_TIMEOUT;
-    timeout_at(deadline, async {
-        loop {
-            let observations = try_join_all(network.peers().iter().map(|peer| async move {
-                let client = peer.client().client().clone();
-                let status = validator_status_until(&client, deadline).await?;
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                ensure!(
-                    !remaining.is_zero(),
-                    "catalog transaction observation exceeded its deadline"
-                );
-                let mut builder = client.to_builder();
-                builder.torii_request_timeout =
-                    iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
-                let client = builder.build()?;
-                let local = read_on_dedicated_thread(move || {
-                    client.get_transaction_status_response_local(hash)
-                })
-                .await?;
-                Ok::<_, eyre::Report>((status.blocks, local))
-            }))
-            .await?;
-            let heights = observations
-                .iter()
-                .map(|(tip, response)| {
-                    response
-                        .as_ref()
-                        .filter(|response| {
-                            response.hash == expected_hex
-                                && response.scope == "local"
-                                && response.resolved_from == "state"
-                                && response.status.kind == "Applied"
-                        })
-                        .and_then(|response| response.status.block_height)
-                        .filter(|height| *height > 1 && *tip >= *height)
-                })
-                .collect::<Option<Vec<_>>>();
-            if let Some(heights) = heights {
-                ensure!(
-                    heights.iter().all(|height| *height == heights[0]),
-                    "four peers disagree on the applied height"
-                );
-                return Ok(heights[0]);
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .wrap_err("four-peer catalog transaction did not reach exact local Applied")?
-}
-
-async fn canonical_execution(
-    finality: &FixtureFinality,
-    peer: &NetworkPeer,
-    transaction: &SignedTransaction,
-    height: u64,
-    lane: LaneId,
-    dataspace: DataSpaceId,
-    expected_committee: Option<&[PeerId]>,
-) -> Result<Vec<u8>> {
-    let client = peer.client().client().clone();
-    let finality = finality.clone();
-    let peer_identity = peer.network_peer_id();
-    let store = peer.kura_store_dir();
-    let transaction = transaction.clone();
-    let expected_committee = expected_committee.map(<[PeerId]>::to_vec);
-    read_on_dedicated_thread(move || {
-        authenticated_native_execution(
-            &finality,
-            &peer_identity,
-            &client,
-            &store,
-            &transaction,
-            height,
-            RoutingDecision::new(lane, dataspace),
-            expected_committee.as_deref(),
-        )
-    })
-    .await
-}
-
-async fn submit_on_route(
-    network: &Network,
-    finality: &FixtureFinality,
-    instructions: Vec<InstructionBox>,
-    lane: LaneId,
-    dataspace: DataSpaceId,
-    committee: Option<&[PeerId]>,
-) -> Result<AppliedEvidence> {
-    let mut builder = network.client().client().to_builder();
-    builder.transaction_status_timeout = FUNCTIONAL_FINALITY_TIMEOUT;
-    let client = builder.build()?;
-    let account = client.account_client()?;
-    let mut payload = account.prepare_transaction(
-        AccountTransactionDraft::new(
-            instructions,
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-    )?;
-    let quote = account
-        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    ensure!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed payer or gas bound"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    ensure!(
-        account.submit_transaction_and_wait(&transaction).await? == transaction.hash(),
-        "submission changed transaction identity"
-    );
-    let height = exact_applied_height(network, &transaction).await?;
-    let wires = try_join_all(network.peers().iter().map(|peer| {
-        canonical_execution(
-            finality,
-            peer,
-            &transaction,
-            height,
-            lane,
-            dataspace,
-            committee,
-        )
-    }))
-    .await?;
-    ensure!(
-        wires.iter().all(|wire| *wire == wires[0]),
-        "peers disagree on the exact executed block wire"
-    );
-    Ok(AppliedEvidence {
-        transaction,
-        height,
-        lane,
-        dataspace,
-        canonical_block: wires[0].clone(),
-    })
-}
-
 const PERMISSION_FIXTURE_LIMIT: u64 = 500;
 
 fn complete_permission_page(
@@ -604,6 +253,22 @@ fn effective_permissions(
 mod permission_page_tests {
     use super::*;
     use iroha::http::Response;
+
+    const ADDED_DATASPACE: DataSpaceId = DataSpaceId::new(3);
+
+    fn resolution_permission() -> Permission {
+        CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(ADDED_DATASPACE),
+        }
+        .into()
+    }
+
+    fn resolution_delegation_permission() -> Permission {
+        CanDelegateAccountAliasResolution {
+            scope: AccountAliasPermissionScope::Dataspace(ADDED_DATASPACE),
+        }
+        .into()
+    }
 
     fn response(items: Vec<Permission>) -> Response<Vec<u8>> {
         let total = items.len();
@@ -702,98 +367,4 @@ mod permission_page_tests {
                 .contains("count mismatch")
         );
     }
-}
-
-async fn assert_resolution_delegation(network: &Network) -> Result<()> {
-    try_join_all(network.peers().iter().map(|peer| async move {
-        let client = peer.client().client().clone();
-        let permissions =
-            read_on_dedicated_thread(move || effective_permissions(&client, &ALICE_ID)).await?;
-        ensure!(
-            permissions.contains(&resolution_delegation_permission()),
-            "peer lost ALICE's exact dataspace alias-resolution delegation"
-        );
-        Ok::<(), eyre::Report>(())
-    }))
-    .await?;
-    Ok(())
-}
-
-async fn assert_catalog_and_history(
-    network: &Network,
-    finality: &FixtureFinality,
-    before: &LaneLifecycleStatusV1,
-    after: &LaneLifecycleStatusV1,
-    expected_runtime: &NexusRuntimeCatalogV1,
-    history: &[AppliedEvidence],
-    committee: &[PeerId],
-    permission_present: bool,
-) -> Result<()> {
-    assert_resolution_delegation(network).await?;
-    try_join_all(network.peers().iter().map(|peer| async move {
-        let (status, runtime) = lifecycle_and_runtime(peer).await?;
-        ensure!(
-            status == *after && runtime.as_ref() == Some(expected_runtime),
-            "peer lost committed topology or inline manifests"
-        );
-        ensure!(
-            before.lanes.iter().all(|lane| status.lanes.contains(lane))
-                && before
-                    .incarnations
-                    .iter()
-                    .all(|incarnation| status.incarnations.contains(incarnation)),
-            "catalog expansion changed an old lane or incarnation"
-        );
-        let client = peer.client().client().clone();
-        let permissions =
-            read_on_dedicated_thread(move || effective_permissions(&client, &BOB_ID)).await?;
-        ensure!(
-            permissions.contains(&resolution_permission()) == permission_present,
-            "replayed permission state differs from committed history"
-        );
-        for applied in history {
-            let current = canonical_execution(
-                finality,
-                peer,
-                &applied.transaction,
-                applied.height,
-                applied.lane,
-                applied.dataspace,
-                (applied.lane == ADDED_LANE).then_some(committee),
-            )
-            .await?;
-            ensure!(
-                current == applied.canonical_block,
-                "recovery changed a historical executed block"
-            );
-        }
-        Ok::<(), eyre::Report>(())
-    }))
-    .await?;
-    Ok(())
-}
-
-fn replayed_complete_history(peer: &NetworkPeer, minimum_height: u64) -> Result<bool> {
-    for path in [peer.latest_stdout_log_path(), peer.latest_stderr_log_path()]
-        .into_iter()
-        .flatten()
-    {
-        for line in BufReader::new(fs::File::open(path)?).lines() {
-            let line = line?;
-            if !line.contains("Replaying authenticated complete Kura prefix") {
-                continue;
-            }
-            let record: Value = json::from_str(&line)?;
-            let fields = record.get("fields").unwrap_or(&record);
-            if fields.get("start_height").and_then(Value::as_u64) == Some(1)
-                && fields
-                    .get("generic_replay_height")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|height| height >= minimum_height)
-            {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }

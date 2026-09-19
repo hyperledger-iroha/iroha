@@ -90,7 +90,6 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
         NonZeroU64::new(BALLOT_HEIGHT).expect("non-zero ballot height"),
         None,
         None,
-        None,
         0,
         0,
     );

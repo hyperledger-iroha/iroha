@@ -792,7 +792,8 @@ where
         }
     }
 }
-/// Derive access for a transaction whose overlay has already been built.
+#[cfg(test)]
+/// Derive access from a prepared overlay for scheduler regression tests.
 pub(crate) fn derive_for_prepared_overlay_with_source<R>(
     tx: &SignedTransaction,
     state_ro: &R,
@@ -864,6 +865,7 @@ where
         }
     }
 }
+#[cfg(test)]
 fn derive_from_overlay_artifacts<R>(
     overlay: &crate::pipeline::overlay::TxOverlay,
     access_log: Option<&ivm::host::AccessLog>,

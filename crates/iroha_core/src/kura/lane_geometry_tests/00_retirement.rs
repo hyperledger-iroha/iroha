@@ -246,24 +246,6 @@ fn geometry_fixture_merge(
             .expect("complete fixture instance identity"),
     )
 }
-fn open_anchored_geometry_kura(
-    root: &Path,
-    lane_config: &RuntimeLaneConfig,
-    primary_incarnation: Hash,
-) -> Arc<Kura> {
-    let kura = open_kura(root, lane_config);
-    let baseline = kura
-        .configured_lane_catalog_baseline()
-        .expect("read configured fixture catalog")
-        .expect("configured fixture catalog is authenticated");
-    kura.establish_or_verify_configured_primary_geometry_anchor(
-        lane_config.primary(),
-        primary_incarnation,
-        baseline,
-    )
-    .expect("admit the State-owned primary geometry before fixture transitions");
-    kura
-}
 /// Actual journal predecessor for structural storage-only snapshot fixtures.
 fn geometry_fixture_recovery(
     kura: &Kura,

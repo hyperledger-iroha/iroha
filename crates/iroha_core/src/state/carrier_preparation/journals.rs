@@ -28,7 +28,7 @@ use runtime_journals::RuntimeJournals;
 /// Candidate journal admission distinguishes local archive failure from execution.
 /// Archive inability is not a consensus verdict on the authenticated proposal.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CarrierJournalPreparationError<E> {
+pub(in crate::state) enum CarrierJournalPreparationError<E> {
     /// The caller could not retain the complete original candidate journals.
     #[error("candidate journal resource admission failed")]
     JournalAdmission(E),
@@ -99,6 +99,13 @@ pub(crate) struct DetachedCarrierComponents {
 }
 
 /// Deferred effects and original proof owners needed by the consuming publisher.
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "TODO: consume retained journals and effects in the aggregate State publisher"
+    )
+)]
 struct RetainedCarrierEffects {
     header: BlockHeader,
     nexus: iroha_config::parameters::actual::Nexus,
@@ -134,7 +141,7 @@ impl<'state> PreparedCarrier<'state> {
     /// The required admission callback sees the complete original StateBlock and retained execution prefix
     /// before any final journal value is copied. Its returned reservation stays
     /// alive until all journals and deferred effects have been released.
-    pub(crate) fn prepare_journals<Admission, E>(
+    pub(in crate::state) fn prepare_journals<Admission, E>(
         self,
         provider_archive: Option<&Arc<ProviderIngestFinalizedArchiveV1>>,
         reputation_archive: Option<&Arc<ReputationFinalizedArchive>>,

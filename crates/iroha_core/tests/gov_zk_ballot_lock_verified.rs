@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 #[test]
 fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
     let state = closed_registry::state();
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in [
         "halo2/pasta/ipa/vote-ballot",
         "halo2/pasta/ipa/vote-bool-commit-merkle8",

@@ -3,8 +3,9 @@
 //! Proposal bytes contain only source Decisions and the exact applying pre-State.
 //! Actual outputs and prefix roots have private ownership until the common global
 //! result/witness projection; they never feed back into the executing block hash.
-//! TODO: integrate the full suffix/witness and publication/Apply authorization
-//! before accepting native carriers in ValidBlock or State commit.
+//! The canonical global owner consumes these sources through its full suffix,
+//! witness and exact durable finality before State publication. Standalone
+//! scratch execution retains no such publication authority.
 
 use super::{
     MergeLedgerCommitError, State, StateBlock, TransactionEntrypoint, VerifiedLaneDecisionGroupV1,
@@ -49,6 +50,7 @@ pub(super) struct NativeLaneStageSealV1 {
     application_write_set_root: Hash,
     write_set_root: Hash,
     completed_write_set_root: Option<Hash>,
+    settlements: Vec<super::LaneBlockCommitment>,
     fastpq: super::native_lane_fastpq::NativeLaneFastpqSeal,
 }
 
@@ -87,9 +89,15 @@ impl<'state> RecordedNativeLaneBatchV1<'state> {
         self.prepared
             .verify_source_binding()
             .map_err(|error| error.to_string())?;
+        // Common metadata may legitimately extend the native execution prefix.
+        // The complete output/witness seal owns this later cut, while the same
+        // immutable native stage retains its original source and settlements.
         self.prepared
             .overlay
-            .verify_native_execution_metadata(&self.carrier, &self.prepared.executions)?;
+            .verify_execution_output_seal(&self.carrier)?;
+        self.prepared
+            .overlay
+            .validate_native_output_source(&self.carrier)?;
         let seal = Arc::clone(
             self.prepared
                 .overlay
@@ -442,6 +450,43 @@ impl State {
 }
 
 impl StateBlock<'_> {
+    /// Bind the retained source stage across witness, finality and publication.
+    /// This identity preserves the original native prefix cuts without confusing
+    /// them with the complete global metadata/publication State cut.
+    pub(super) fn native_output_publication_identity(
+        &self,
+    ) -> std::result::Result<Option<Hash>, String> {
+        let Some(seal) = self.native_lane_stage.as_ref() else {
+            return Ok(None);
+        };
+        self.validate_native_lane_stage_membership()
+            .map_err(|error| error.to_string())?;
+        let mut membership = seal.membership.iter().copied().collect::<Vec<_>>();
+        membership.sort();
+        let aliases = Hash::new(
+            &norito::encode_canonical(&seal.authenticated_aliases)
+                .map_err(|error| error.to_string())?,
+        );
+        let settlements = Hash::new(
+            &norito::encode_canonical(&seal.settlements).map_err(|error| error.to_string())?,
+        );
+        let bytes = norito::encode_canonical(&(
+            seal.carrier,
+            seal.batch_hash,
+            aliases,
+            membership,
+            seal.application_write_set_root,
+            seal.write_set_root,
+            seal.completed_write_set_root,
+            settlements,
+        ))
+        .map_err(|error| error.to_string())?;
+        Ok(Some(Hash::new_from_chunks(&[
+            b"iroha:native-output-publication-source:v1\0",
+            &bytes,
+        ])))
+    }
+
     /// Check control custody without rereading State while holding its writers.
     /// Only the original unchanged State and pristine constructor cut may consume
     /// these controls; a same-header overlay from another State is insufficient.
@@ -506,7 +551,6 @@ impl StateBlock<'_> {
             ));
         }
         let fastpq = self.seal_native_lane_fastpq_outputs(&results)?;
-        self.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
         let application_write_set_root = self.merge_execution_write_set_root();
         self.stage_lane_decision_application_markers(
             &batch,
@@ -525,6 +569,10 @@ impl StateBlock<'_> {
             application_write_set_root,
             write_set_root,
             completed_write_set_root: None,
+            settlements: results
+                .iter()
+                .map(|result| result.settlement_commitment.clone())
+                .collect(),
             fastpq,
         }));
         self.validate_native_lane_execution()?;
@@ -577,6 +625,7 @@ impl StateBlock<'_> {
                 .canonical_carrier_commit_metadata_authorization
                 .is_some()
             || self._curr_block != seal.carrier
+            || self.applied_npos_consensus_effects_hash != seal.carrier.npos_effects_hash()
             || seal.batch.canonical_hash().map_err(invalid)? != seal.batch_hash
             || Self::native_batch_membership(&seal.batch, &seal.authenticated_aliases)?
                 != seal.membership
@@ -709,6 +758,18 @@ impl StateBlock<'_> {
         block: &iroha_data_model::block::SignedBlock,
     ) -> std::result::Result<(), String> {
         self.validate_native_lane_execution()
+            .map_err(|error| error.to_string())?;
+        self.validate_native_output_source(block)
+    }
+
+    /// Recheck retained immutable native authority after the global metadata
+    /// finalizer. The complete World/event seal, witness and finality own that
+    /// later cut; the earlier native prefix root cannot authorize publication.
+    pub(crate) fn validate_native_output_source(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> std::result::Result<(), String> {
+        self.validate_native_lane_stage_membership()
             .map_err(|error| error.to_string())?;
         let seal = self
             .native_lane_stage

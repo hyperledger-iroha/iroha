@@ -89,7 +89,7 @@ use iroha_data_model::{
         },
         pipeline::{BlockEvent, MergeLedgerEvent, PipelineEventBox},
         time::{ExecutionTime, TimeEvent, TimeEventFilter},
-        trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
+        trigger_completed::TriggerCompletedOutcome,
     },
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
@@ -197,8 +197,9 @@ use iroha_data_model::{
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
+#[cfg(test)]
+use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
 use iroha_executor_data_model::permission::{
-    nft::CanModifyNftMetadata,
     sorafs::CanOperateSorafsRepair,
     trigger::{CanExecuteTrigger, CanRegisterTrigger},
 };
@@ -358,6 +359,10 @@ fn append_merge_executor_delta(
 }
 #[cfg(test)]
 use crate::da::LaneEpoch;
+#[cfg(test)]
+use crate::smartcontracts::triggers::{
+    set::pipeline_trigger_action_matches, specialized::TimeTriggerRetryState,
+};
 use crate::{
     block::BlockValidationError,
     da::{
@@ -382,13 +387,14 @@ mod carrier_metadata_preparation;
 mod carrier_preparation;
 pub(crate) use carrier_preparation::PreparedCarrier;
 mod committed_hash_journal;
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 mod committed_transaction_context;
 mod da_hydration;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 mod output_capacity;
+mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 mod prepared_transfer_transcript;
 mod replay_outputs;
@@ -401,16 +407,53 @@ pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
 };
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect the shared native lane owner to the production runner"
+    )
+)]
 mod lane_admitted_input;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect the shared native lane owner to the production runner"
+    )
+)]
 mod lane_decision_batch;
 pub(crate) use lane_decision_batch::NativeExecutionCustody;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect the shared native lane owner to the production runner"
+    )
+)]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
+pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
+#[cfg(test)]
 pub(crate) use native_lane_batch_replay::{
-    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1, PreparedNativeLaneBatchSourceV1,
+    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
 };
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect the shared native lane owner to the production runner"
+    )
+)]
 mod lane_decision_execution;
 pub(crate) use lane_decision_execution::PreexecutedLaneDecisionGroupV1;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect the shared native lane owner to the production runner"
+    )
+)]
 mod lane_decision_group;
 mod lane_input_body;
 pub(crate) use lane_decision_group::{LaneDecisionGroupPreparationV1, VerifiedLaneDecisionGroupV1};
@@ -428,6 +471,7 @@ pub(crate) use lane_admitted_input::{
     AuthenticatedLaneAdmittedInputSourceV1, FirstLaneAdmittedInputReadV1,
     VerifiedFirstLaneAdmittedInputV1,
 };
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) use lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY;
 pub use native_execution_evidence::{
     NativeExecutionEvidenceLimits, NativeExecutionEvidenceVerifier, NativeLaneContextsEvidenceV1,
@@ -439,6 +483,7 @@ pub use native_execution_evidence::{
     native_lane_manifest_for_testing,
 };
 mod lane_consensus_witness;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) use lane_consensus_commitment::LaneConsensusContextsCommitmentV1;
 pub(crate) use lane_consensus_context::{FrozenLaneConsensusContextV1, LaneConsensusContextsV1};
 pub(crate) use lane_consensus_verified::{VerifiedLaneContext, VerifiedLaneContexts};
@@ -451,7 +496,7 @@ pub use block_proofs::{BlockProofLimits, BlockProofResource};
 use block_proofs::{block_proofs_for_entry_from_kura, executed_block_wire_from_kura};
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
 #[cfg(test)]
@@ -467,8 +512,10 @@ struct ResolvedLaneAuthorityInputs {
 
 use hex;
 use ivm::IVM;
+#[cfg(test)]
+use tiered::TieredSnapshotDiff;
 pub(crate) use tiered::TieredStateBackend;
-use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
+use tiered::{TieredKeyHandle, TieredSnapshotPayload};
 #[cfg(any(test, feature = "bench"))]
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("state fixture key generation should succeed")
@@ -539,13 +586,7 @@ use crate::{
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
-        isi::{
-            triggers::{
-                TRIGGER_ENABLED_METADATA_KEY, trigger_is_enabled,
-                trigger_was_registered_before_block,
-            },
-            world::isi::apply_policy_if_due,
-        },
+        isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
         ivm::cache::{
             CacheStats, IvmCache, PreparedContractCache, PreparedContractCacheStats, ProgramSummary,
         },
@@ -554,10 +595,9 @@ use crate::{
                 DataTriggerMatchSnapshot, ExecutableRef, Set as TriggerSet,
                 SetBlock as TriggerSetBlock, SetReadOnly as TriggerSetReadOnly,
                 SetTransaction as TriggerSetTransaction, SetView as TriggerSetView,
-                data_trigger_action_matches, pipeline_trigger_action_matches,
-                time_trigger_action_is_due,
+                data_trigger_action_matches, time_trigger_action_is_due,
             },
-            specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
+            specialized::{LoadedAction, LoadedActionTrait},
         },
     },
     state::storage_transactions::{
@@ -1511,6 +1551,13 @@ use crate::publication_lock::{PublicationGuard, PublicationMutex};
 mod publication_lock_tests;
 
 mod world_commit;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod world_journals;
 pub(crate) mod world_projection;
 
@@ -1885,9 +1932,23 @@ pub(crate) struct DetachedBlockHashes {
     visible: Vec<HashOf<BlockHeader>>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 #[path = "state/block_hashes_publication.rs"]
 mod block_hashes_publication;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 impl DetachedBlockHashes {
     /// Original ordinary or replacement acquisition mode.
     pub(crate) fn mode(&self) -> mv::BlockMode {
@@ -6687,17 +6748,6 @@ impl WorldBlock<'_> {
             self.governance_locks.insert(referendum_id, locks);
         }
     }
-    /// Return trigger completion events emitted during the current block without
-    /// draining the live event buffer.
-    pub(crate) fn trigger_completions(&self) -> Vec<TriggerCompletedEvent> {
-        self.external_event_buf
-            .iter()
-            .filter_map(|event| match event {
-                EventBox::TriggerCompleted(completed) => Some(completed.clone()),
-                _ => None,
-            })
-            .collect()
-    }
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
@@ -6719,6 +6769,7 @@ impl WorldBlock<'_> {
         self.external_event_buf
             .push(iroha_data_model::events::EventBox::from(pbox));
     }
+    #[cfg(test)]
     fn tiered_snapshot_diff(&self) -> TieredSnapshotDiff {
         let mut diff = TieredSnapshotDiff::default();
         macro_rules! collect_reverts {
@@ -11742,7 +11793,6 @@ mod governance_slash_map_json {
 }
 #[derive(Debug, Clone)]
 pub(crate) struct PipelineParallelism {
-    workers: usize,
     pool: Option<std::sync::Arc<rayon::ThreadPool>>,
 }
 const PIPELINE_AUTO_WORKER_MIN: usize = 2;
@@ -11758,11 +11808,8 @@ fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     }
 }
 impl PipelineParallelism {
-    fn inert(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
-        Self {
-            workers: resolve_pipeline_worker_threads(pipeline.workers),
-            pool: None,
-        }
+    fn inert(_pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
+        Self { pool: None }
     }
     pub(crate) fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
         let workers = resolve_pipeline_worker_threads(pipeline.workers);
@@ -11777,10 +11824,7 @@ impl PipelineParallelism {
         } else {
             None
         };
-        Self { workers, pool }
-    }
-    pub(crate) fn workers(&self) -> usize {
-        self.workers
+        Self { pool }
     }
     pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
@@ -14207,10 +14251,6 @@ impl<'state> StateBlock<'state> {
     ) -> &BTreeMap<LaneId, LaneIncarnationLineage> {
         &self.lane_incarnation_lineage
     }
-    /// Return the block-local autoscale history exactly as commit would publish it.
-    pub(crate) fn autoscale_sample_history_for_snapshot(&self) -> &VecDeque<AutoscaleSampleRecord> {
-        &self.autoscale_sample_history
-    }
     /// Return the exact pending scale-in identity, when this block carries one.
     ///
     /// Callers use this read-only projection to acquire the Queue retirement
@@ -14308,14 +14348,12 @@ impl<'state> StateBlock<'state> {
         );
     }
     #[inline]
-    pub(crate) fn pipeline_worker_threads(&self) -> usize {
-        self.state_ref.pipeline_parallelism.workers()
-    }
-    #[inline]
+    #[cfg(test)]
     pub(crate) fn pipeline_thread_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.state_ref.pipeline_parallelism.pool()
     }
     #[inline]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn stateless_validation_cache(
         &self,
     ) -> &parking_lot::Mutex<StatelessValidationCache> {
@@ -15461,8 +15499,6 @@ pub struct StateView<'state> {
     pub(crate) lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     /// Global activation height for recreated lane incarnations.
     pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
-    /// Canonical per-block inputs retained for Nexus autoscale windows.
-    pub(crate) autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
     /// Lane governance manifest registry snapshot for this view.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Fraud monitoring configuration snapshot for this view.
@@ -18777,6 +18813,7 @@ mod custom_parameter_tests {
 #[derive(Default, Debug, Clone)]
 /// Detached, per-transaction delta for the source-owned transparent-transfer fast path.
 /// Every other mutation falls back to sequential execution.
+#[cfg(test)]
 pub(crate) struct DetachedStateTransactionDelta {
     // SoA: transparent asset-quantity transfers.
     asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
@@ -18797,6 +18834,7 @@ pub(crate) struct DetachedMergeContext {
     /// Dataspace used by the transaction currently being merged.
     pub(crate) current_dataspace_id: Option<iroha_model_base::topology::DataSpaceId>,
 }
+#[cfg(test)]
 impl DetachedStateTransactionDelta {
     pub(crate) fn single_transfer_delta(
         &self,
@@ -18871,10 +18909,6 @@ impl DetachedStateTransactionDelta {
                     !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
                 })
                 .any(|(_, action)| transfer_events.iter().any(|event| action.filter.matches(event)))
-    }
-    /// Return true when fee postprocessing can be replayed after this detached delta.
-    pub(crate) fn supports_detached_fee_postprocessing(&self) -> bool {
-        self.single_transfer_delta().is_some()
     }
     /// Record a source-signed transparent asset-quantity transfer.
     pub(crate) fn transfer_asset(
@@ -28536,6 +28570,7 @@ impl State {
             .map(|(idx, intent)| (intent, idx))
             .collect()
     }
+    #[cfg(test)]
     fn insert_sanitized_pin_intents(
         &self,
         block_height: u64,
@@ -30475,7 +30510,8 @@ impl State {
         state.configure_test_runtime_defaults();
         state
     }
-    fn configure_test_runtime_defaults(&mut self) {
+    /// Apply deterministic test runtime settings after authenticated fixture startup.
+    pub(crate) fn configure_test_runtime_defaults(&mut self) {
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         self.pipeline.dynamic_prepass = true;
@@ -32119,12 +32155,23 @@ impl State {
     ) -> Option<Hash> {
         let _view_generation = self.begin_state_view_write();
         let mut runtime = self.canonical_runtime.block();
+        let previous = runtime
+            .get()
+            .lane_incarnation_lineage
+            .iter()
+            .find(|entry| entry.lane_id == lane_id)?
+            .incarnation;
+        if previous == incarnation {
+            // Generation-only fixture races must preserve the authenticated
+            // current/undo runtime pair when no lineage value changed.
+            return Some(previous);
+        }
         let entry = runtime
             .get_mut()
             .lane_incarnation_lineage
             .iter_mut()
             .find(|entry| entry.lane_id == lane_id)?;
-        let previous = std::mem::replace(&mut entry.incarnation, incarnation);
+        entry.incarnation = incarnation;
         runtime.commit();
         Some(previous)
     }
@@ -32680,7 +32727,7 @@ impl State {
                 incarnations: lane_incarnations,
                 activation_heights: lane_incarnation_activation_heights,
                 lineage: lane_incarnation_lineage,
-                samples: autoscale_sample_history,
+                samples: _,
                 manifests: lane_manifests,
                 privacy: _,
             } = projection;
@@ -32750,7 +32797,6 @@ impl State {
                 lane_incarnations,
                 lane_incarnation_lineage,
                 lane_incarnation_activation_heights,
-                autoscale_sample_history,
                 lane_manifests,
                 fraud_monitoring: self.fraud_monitoring.clone(),
                 zk: self.zk.clone(),
@@ -32949,9 +32995,9 @@ impl State {
             previous_carrier = Some(carrier);
         }
         let hydrated_admission = MergeAdmissionState::from_entries(&hydrated_entries)?;
+        self.validate_recovered_merge_metadata(hydrated_entries.last())?;
         *self.merge_admission.write() = hydrated_admission;
         self.merge_ledger.replace(hydrated_entries);
-        self.refresh_merge_metadata_from_latest_entry();
         Ok(())
     }
     /// Load journals whose recovery was deliberately deferred while Kura was
@@ -45167,32 +45213,36 @@ impl State {
         .map_err(|_| MergeLedgerCommitError::MergeQCAggregateSignatureInvalid)?;
         Ok(())
     }
-    fn refresh_merge_metadata_from_latest_entry(&self) {
-        if let Some(entry) = self.merge_ledger.latest() {
-            self.update_merge_metadata(entry.as_ref());
+    fn validate_recovered_merge_metadata(
+        &self,
+        latest: Option<&MergeLedgerEntry>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        // These query fields belong exclusively to the merge ledger. Native
+        // Decisions preserve them. Validate against the exact latest entry
+        // applied at this State height, without repairing its current/undo cut
+        // while hydrating derived caches from durable history.
+        let roots = self.world.merge_hint_roots.view();
+        let global = self.world.merge_global_state_root.view();
+        let (matches, reason) = if let Some(entry) = latest {
+            (
+                roots.as_slice() == entry.merge_hint_roots().as_slice()
+                    && global.as_ref() == Some(&entry.global_state_root),
+                "restored merge reduction metadata differs from its exact latest applied entry",
+            )
         } else {
-            let should_clear_roots = {
-                let current = self.world.merge_hint_roots.view();
-                !current.is_empty()
-            };
-            if should_clear_roots {
-                let mut block = self.world.merge_hint_roots.block();
-                {
-                    let mut tx = block.transaction();
-                    tx.clear();
-                    tx.apply();
-                }
-                block.commit();
-            }
-            let should_clear_global = {
-                let current = self.world.merge_global_state_root.view();
-                current.is_some()
-            };
-            if should_clear_global {
-                self.replace_merge_global_state_root(None);
-            }
+            (
+                roots.is_empty() && global.is_none(),
+                "empty merge history has noncanonical reduction metadata",
+            )
+        };
+        if !matches {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                reason.to_owned(),
+            ));
         }
+        Ok(())
     }
+    #[cfg(test)]
     fn update_merge_metadata(&self, entry: &MergeLedgerEntry) {
         let entry_merge_hint_roots = entry.merge_hint_roots();
         let should_update_roots = {
@@ -45217,6 +45267,7 @@ impl State {
             self.replace_merge_global_state_root(Some(entry.global_state_root));
         }
     }
+    #[cfg(test)]
     fn replace_merge_global_state_root(&self, new_root: Option<Hash>) {
         let mut block = self.world.merge_global_state_root.block();
         {
@@ -46816,6 +46867,10 @@ impl State {
         publication: &StateViewGenerationWriteGuard<'_>,
     ) {
         let update = &pending.catalog_update;
+        // The MV owner supplies catalog identities; metadata-only projections
+        // read descriptions from this cache. Publish the exact accepted
+        // descriptors before observers inspect the newly committed catalog.
+        self.nexus.write().dataspace_catalog = update.updated_dataspace_catalog.clone();
         self.install_lane_manifests_in_publication(&pending.updated_lane_manifests, publication);
         self.reset_lane_scoped_runtime_state(&update.lanes_to_reset, persist_cursor_journal);
         let active_reset_lanes =
@@ -49476,11 +49531,13 @@ fn lane_topology_diff<'a>(
                 .map(|(previous, current)| (*previous, *current))
         })
         .collect();
+    #[cfg(test)]
     let added = current_map
         .iter()
         .filter(|(id, _)| !previous_map.contains_key(id) && !replaced_lane_ids.contains(id))
         .map(|(_, entry)| *entry)
         .collect();
+    #[cfg(test)]
     let retired = previous_map
         .iter()
         .filter(|(id, _)| !current_map.contains_key(id) && !replaced_lane_ids.contains(id))
@@ -49499,7 +49556,9 @@ fn lane_topology_diff<'a>(
         })
         .collect();
     LaneTopologyDiff {
+        #[cfg(test)]
         added,
+        #[cfg(test)]
         retired,
         replacements,
         relabelled,
@@ -52595,11 +52654,13 @@ impl<'state> StateBlock<'state> {
         self.committed_fragments > 0
     }
     /// Add committed fragments folded into an already-applied transaction overlay.
+    #[cfg(test)]
     pub(crate) fn add_committed_fragments(&mut self, additional: usize) {
         self.committed_fragments = self.committed_fragments.saturating_add(additional);
     }
     /// Record successful routing lanes after their shared transaction overlay is applied.
     /// Rejected entries and dropped overlays must not contribute lanes to this set.
+    #[cfg(test)]
     pub(crate) fn record_applied_batch_lanes(&mut self, lanes: BTreeSet<LaneId>) {
         self.touched_lanes.extend(lanes);
     }
@@ -52963,6 +53024,7 @@ impl<'state> StateBlock<'state> {
                     entry_dataspaces: entry_dsid_bytes,
                     _source_inventory: Some(source_inventory),
                 });
+            self.bind_execution_output_witness(&witness)?;
             self.exec_witness = Some(witness);
         } else {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
@@ -54710,12 +54772,13 @@ impl<'state> StateBlock<'state> {
             )
         }))
     }
-    fn stage_lane_execution_nexus_fee_settlement<'e>(
+    fn stage_lane_execution_nexus_fee_settlement<'e, I>(
         &mut self,
-        executions: impl IntoIterator<
-            Item = (&'e LaneBlockCommitment, HashOf<LaneBlockCommitment>, u64),
-        >,
-    ) -> Result<(), MergeLedgerCommitError> {
+        executions: I,
+    ) -> Result<(), MergeLedgerCommitError>
+    where
+        I: IntoIterator<Item = (&'e LaneBlockCommitment, HashOf<LaneBlockCommitment>, u64)>,
+    {
         if self.nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
             return Ok(());
         }
@@ -55045,19 +55108,16 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        // TODO: replace this refusal only with the sole ValidBlock final witness,
-        // exact native carrier publication authorization and durable Apply gate.
-        // An empty old-merge authorization or authenticated replay flag cannot
-        // grant publication to a native execution prefix.
-        if self.native_lane_stage.is_some() {
-            error!("native stage has no canonical publication authorization yet");
-            return Err(TransactionsBlockError::MergeAdmission);
-        }
-        // TODO: the sole typed producer must resolve this linear plan and bind
-        // all actual outputs before publication. Dropping it is not completion.
-        if self.execution_output_plan.is_some() {
-            error!("execution output reservation has no completed producer seal");
-            return Err(TransactionsBlockError::ExecutionOutputCapacity);
+        if let Err(error) = self.verify_execution_output_publication() {
+            error!(
+                ?error,
+                "execution output publication authorization is invalid"
+            );
+            return Err(if self.native_lane_stage.is_some() {
+                TransactionsBlockError::MergeAdmission
+            } else {
+                TransactionsBlockError::ExecutionOutputCapacity
+            });
         }
         if let Err(error) = self.validate_canonical_runtime_projection() {
             error!(
@@ -55133,6 +55193,10 @@ impl<'state> StateBlock<'state> {
         let merge_runtime_effects = self.merge_execution_runtime_effects();
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
+            // Keep the linear finality/output and native-source owners alive
+            // through publication of every original journal below.
+            execution_output_plan: _publication_owner,
+            native_lane_stage: _native_source_owner,
             state_ref,
             runtime_policy,
             canonical_runtime,
@@ -55977,23 +56041,32 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
         let topology = self.verified_v2_apply_topology(block)?;
-        let (events, authorization) =
-            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
-        authorization.map(|()| events)
+        self.finalize_authorized_execution_outputs(block, |state| {
+            let (events, authorization) = state.apply_without_execution_inner(
+                block,
+                topology,
+                ApplyTopologyAuthority::V2Finality,
+            );
+            authorization.map(|()| events)
+        })
     }
-    /// Apply replayed block effects authenticated by Kura's exact v2 finality artifact.
-    ///
-    /// Replay advances the exact finality-authorized topology and every ordinary
-    /// post-execution state transition.
+    /// Apply replayed effects under the same exact finality and output owner as live Apply.
     #[must_use]
     pub(crate) fn apply_without_execution_with_verified_v2_finality_for_replay(
         &mut self,
         block: &CommittedBlock,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
         let topology = self.verified_v2_apply_topology(block)?;
-        let (events, authorization) =
-            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
-        authorization.map(|()| events)
+        self.finalize_authorized_execution_outputs(block, |state| {
+            state.authenticated_replay_commit = true;
+            state.replay_prevalidation = true;
+            let (events, authorization) = state.apply_without_execution_inner(
+                block,
+                topology,
+                ApplyTopologyAuthority::V2Finality,
+            );
+            authorization.map(|()| events)
+        })
     }
     fn verified_v2_apply_topology(
         &self,
@@ -58386,6 +58459,7 @@ mod tiered_snapshot_diff_tests {
         kura: Arc<Kura>,
     ) -> Result<Box<State>, norito::json::Error> {
         deserialize::KuraSeed {
+            lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura,
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -62160,6 +62234,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     let captured = crate::snapshot::CapturedStateSnapshot::capture(state)
         .wrap_err("failed to capture State for atomic replay prevalidation")?;
     let mut isolated = deserialize::KuraSeed {
+        lane_manifests: state.lane_manifests.read().clone(),
         kura: Arc::clone(kura),
         query_handle: state.query_handle.clone(),
         #[cfg(feature = "telemetry")]
@@ -62190,8 +62265,6 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     isolated.zk = state.zk.clone();
     isolated.gov = state.gov.clone();
     isolated.content = state.content.clone();
-    *isolated.lane_manifests.write() = state.lane_manifests.read().clone();
-    *isolated.lane_privacy_registry.write() = state.lane_privacy_registry.read().clone();
     *isolated.lane_compliance.write() = state.lane_compliance.read().clone();
     *isolated.da_commitments.write() = state.da_commitments.read().clone();
     *isolated.da_confidential_compute.write() = state.da_confidential_compute.read().clone();
@@ -62867,8 +62940,6 @@ fn replay_blocks_from_kura_range_inner(
                 finality.commit_qc.execution_commitment
             ));
         }
-        state_block.authenticated_replay_commit = true;
-        state_block.replay_prevalidation = true;
         if let Some(pending) = state_block.pending_autoscale_lifecycle.as_ref() {
             geometry.push(pending.clone());
         }
@@ -62899,6 +62970,12 @@ fn replay_blocks_from_kura_range_inner(
             });
         }
         log_replayed_signed_sources(height, committed_block.as_ref())?;
+        state_block
+            .authorize_execution_output_publication(&committed_block, &witness)
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| {
+                format!("failed to authorize replayed execution at block #{height}")
+            })?;
         let apply_without_execution_start = Instant::now();
         let _ = state_block
             .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)
@@ -64665,6 +64742,8 @@ impl StateTransaction<'_, '_> {
             self.block_execution_output_plan,
             Some(
                 output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Authorized(_)
+                    | output_capacity::ExecutionOutputPlanState::Finalized(_)
                     | output_capacity::ExecutionOutputPlanState::Captured
             )
         ) || !self.callback_journal.allows_apply()
@@ -64692,6 +64771,8 @@ impl StateTransaction<'_, '_> {
             self.block_execution_output_plan,
             Some(
                 output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Authorized(_)
+                    | output_capacity::ExecutionOutputPlanState::Finalized(_)
                     | output_capacity::ExecutionOutputPlanState::Captured
             )
         ) || !self.callback_journal.allows_apply()
@@ -65077,6 +65158,7 @@ impl StateTransaction<'_, '_> {
         Ok(steps)
     }
     /// Execute one pipeline trigger inside the caller's transaction boundary.
+    #[cfg(test)]
     fn execute_pipeline_trigger(
         &mut self,
         trg_id: &TriggerId,
@@ -66441,7 +66523,6 @@ impl StateTransaction<'_, '_> {
     /// Execute a batch of instructions, staging their state changes.
     ///
     /// Returns the instructions as a single execution step on success, or the error on failure.
-    #[allow(dead_code)]
     fn execute_instructions(
         &mut self,
         instructions: ConstVec<InstructionBox>,
@@ -66452,21 +66533,6 @@ impl StateTransaction<'_, '_> {
             executor.execute_instruction(self, authority, instruction.clone())?;
         }
         Ok(instructions.into())
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
-        match executable {
-            Executable::Instructions(instructions) => {
-                self.execute_instructions(instructions.clone(), authority)
-                    .expect("should be no errors");
-            }
-            Executable::ContractCall(_)
-            | Executable::Batch(_)
-            | Executable::Ivm(_)
-            | Executable::IvmProved(_) => {
-                panic!("stateful IVM executables must replay through Executor::execute_transaction")
-            }
-        }
     }
     fn ensure_permission_summary(&mut self, account: &AccountId) -> &AccountPermissionSummary {
         if self.perm_cache.needs_hydration(account) {
@@ -66523,6 +66589,7 @@ impl StateTransaction<'_, '_> {
         let set = self.cached_exec_trigger_ids(caller);
         set.contains(id)
     }
+    #[cfg(test)]
     fn seed_time_trigger_invocation_call_hash(
         &mut self,
         id: &TriggerId,

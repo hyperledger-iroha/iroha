@@ -130,7 +130,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         core::num::NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -180,7 +179,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         vm.run_with_host(&mut host).unwrap();
         let header = iroha_data_model::block::BlockHeader::new(
             core::num::NonZeroU64::new(2).unwrap(),
-            None,
             None,
             None,
             0,
@@ -306,7 +304,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         core::num::NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -408,7 +405,6 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,

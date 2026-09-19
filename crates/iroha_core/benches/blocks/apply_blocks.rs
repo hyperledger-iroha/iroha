@@ -1,3 +1,4 @@
+//! Benchmark fixture for reexecuting and applying committed blocks.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 pub(crate) mod common;
@@ -95,7 +96,9 @@ impl StateApplyBlocks {
         };
         for (block, i) in blocks.iter().zip(1..) {
             let mut state_block = state.block(block.as_ref().header());
-            let _events = state_block.apply(block, topology.as_ref().to_owned());
+            let _events = state_block
+                .apply_fixture_block(block, topology.as_ref().to_owned(), None)
+                .expect("reexecute and apply benchmark block");
             state_block.commit().unwrap();
             assert_eq!(state.view().height(), base_height + i);
         }

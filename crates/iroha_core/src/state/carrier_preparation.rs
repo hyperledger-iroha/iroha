@@ -20,6 +20,13 @@ use iroha_data_model::block::{
 use std::sync::Arc;
 
 mod execution_prefix;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod journals;
 
 /// A prepared candidate with all execution ownership retained and no Apply API.
