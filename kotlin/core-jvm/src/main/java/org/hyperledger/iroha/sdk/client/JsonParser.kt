@@ -113,8 +113,17 @@ class JsonParser private constructor(private val input: String) {
 
     private fun parseUnicodeEscapeUnit(): Char {
         check(index + 4 <= input.length) { "Invalid unicode escape" }
-        val value = input.substring(index, index + 4).toIntOrNull(16)
-        check(value != null) { "Invalid unicode escape" }
+        var value = 0
+        for (offset in 0 until 4) {
+            // JSON hex digits are ASCII; numeric parsers also accept signs and Unicode digits.
+            val digit = when (val c = input[index + offset]) {
+                in '0'..'9' -> c - '0'
+                in 'a'..'f' -> c - 'a' + 10
+                in 'A'..'F' -> c - 'A' + 10
+                else -> throw IllegalStateException("Invalid unicode escape")
+            }
+            value = (value shl 4) or digit
+        }
         index += 4
         return value.toChar()
     }

@@ -38,6 +38,38 @@ fn ipv6_shorthand_may_replace_exactly_one_segment() {
 }
 
 #[test]
+fn ipv6_segments_require_one_to_four_hex_digits() {
+    for malformed in [
+        "+1:2:3:4:5:6:7:8",
+        "1:2:3:4:5:6:7:+8",
+        "00001:2:3:4:5:6:7:8",
+        "1:2:3:4:5:6:7:00000",
+        "+1::",
+        "::+1",
+        "00000::1",
+        "::00001",
+    ] {
+        assert!(malformed.parse::<std::net::Ipv6Addr>().is_err());
+        assert_eq!(
+            malformed.parse::<Ipv6Addr>(),
+            Err(ParseError::InvalidSegment),
+            "malformed IPv6 segment was accepted: {malformed}"
+        );
+        assert!(
+            format!("[{malformed}]:9019")
+                .parse::<SocketAddrV6>()
+                .is_err()
+        );
+    }
+    for valid in ["1:2:3:4:5:6:7:8", "0001::ABCD", "::0000", "ffff::FFFF"] {
+        assert_eq!(
+            valid.parse::<Ipv6Addr>().expect("valid IPv6"),
+            Ipv6Addr::from(valid.parse::<std::net::Ipv6Addr>().expect("standard IPv6"))
+        );
+    }
+}
+
+#[test]
 fn socket_ipv6_requires_exactly_one_opening_bracket() {
     assert!("2001:db8::]:9019".parse::<SocketAddrV6>().is_err());
     assert!("[[2001:db8::]:9019".parse::<SocketAddrV6>().is_err());

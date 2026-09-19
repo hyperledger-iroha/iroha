@@ -114,7 +114,13 @@ export function canonicalRequestMessage({ method, path, query, body }) {
     );
   }
   const canonicalQuery = canonicalQueryString(query);
-  const bodyBuffer = body === undefined ? Buffer.alloc(0) : Buffer.from(body);
+  // ArrayBuffer views describe bytes, not an array of numeric elements. In
+  // particular, Buffer.from(DataView) is empty and wider typed arrays truncate.
+  const bodyBuffer = body === undefined
+    ? Buffer.alloc(0)
+    : ArrayBuffer.isView(body)
+      ? Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+      : Buffer.from(body);
   const bodyHash = createHash("sha256").update(bodyBuffer).digest("hex");
   return Buffer.from(
     `${methodText.toUpperCase()}\n${pathText}\n${canonicalQuery}\n${bodyHash}`,

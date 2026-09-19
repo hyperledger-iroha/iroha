@@ -213,7 +213,12 @@ fn parse_ipv6_groups(input: &str, output: &mut [u16; 8]) -> Result<usize, ParseE
 
     let mut len = 0;
     for group in input.split(':') {
-        if group.is_empty() {
+        // Integer parsing also accepts a leading `+` and arbitrarily many
+        // leading zeroes, neither of which is valid IPv6 segment syntax.
+        if group.is_empty()
+            || group.len() > 4
+            || !group.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(ParseError::InvalidSegment);
         }
         let word = output.get_mut(len).ok_or(ParseError::TooManySegments)?;
