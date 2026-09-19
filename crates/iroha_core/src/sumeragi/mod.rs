@@ -6795,9 +6795,11 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
         .expect("test fair ingress returns its admitted owner")
 }
 mod admission_capacity;
+mod admission_input;
 pub use admission_capacity::{
     AdmissionCapacityUnavailableV1, AuthenticatedAdmissionCapacityV1, Rs16PayloadGeometryV1,
 };
+pub use admission_input::QueuePlanInputCapacityErrorV1;
 mod startup_recovery;
 pub use startup_recovery::StartupRecovery;
 use startup_recovery::StartupRecoveryPublisher;
@@ -7457,6 +7459,12 @@ impl SumeragiStartArgs {
                 "Sumeragi consensus is restart-required after Kura canonical storage poison"
             ));
         }
+        // Restore diagnostic custody before any ingress/readiness publication.
+        // This reads only finalized original reports; active-height recovery
+        // separately uses the service's authenticated frozen context.
+        evidence::recover_finalized_lifecycle_equivocations(state.as_ref()).map_err(|error| {
+            eyre::eyre!("failed to recover pending equivocation evidence: {error}")
+        })?;
         let block_channel_cap = config.queues.bodies.get();
         let block_byte_cap = config.queues.body_bytes.get();
         let block_source_byte_cap = config.queues.body_source_bytes.get();

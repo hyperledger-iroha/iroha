@@ -4601,7 +4601,10 @@ fn lane_retirement_release_tracks_exact_incarnation_and_retains_early_release() 
     );
     let other_incarnation = Hash::new(b"release-observer-other-incarnation");
     let (mut exact, other) = {
-        let observer = queue.lock_lane_retirement_observer();
+        let observer = queue
+            .lock_lane_retirement_observer()
+            .try_into_cut()
+            .expect("uncontended original Queue owners");
         let exact = observer
             .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
             .expect("healthy queue")
@@ -4658,6 +4661,8 @@ fn lane_retirement_release_tracks_exact_incarnation_and_retains_early_release() 
     assert_eq!(
         queue
             .lock_lane_retirement_observer()
+            .try_into_cut()
+            .expect("uncontended original Queue owners")
             .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation,),
         Ok(None),
     );
@@ -4708,6 +4713,8 @@ fn lane_retirement_fault_wakes_waiters_and_is_not_retryable_contention() {
     let scope = lane_reservation_scope(&state, b"fault-release-owner", b"fault-release-proposal");
     let mut wait = queue
         .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners")
         .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
         .expect("healthy queue")
         .expect("retained ordinary owner")
@@ -4718,7 +4725,10 @@ fn lane_retirement_fault_wakes_waiters_and_is_not_retryable_contention() {
     queue.mark_plan_journal_durability_fault(&std::io::Error::other("injected ambiguity"), None);
     assert!(poll_lane_retirement_release(&mut wait).is_ready());
     assert!(wake_rx.try_recv().is_ok());
-    let observer = queue.lock_lane_retirement_observer();
+    let observer = queue
+        .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners");
     assert_eq!(
         observer.lane_pending_work_release(
             scope.lane_id,
@@ -4769,6 +4779,8 @@ pub(crate) fn lane_retirement_release_fixture_for_test() -> (
         .key();
     let wait = queue
         .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners")
         .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
         .expect("healthy worker fixture queue")
         .expect("exact reservation blocks lane retirement");

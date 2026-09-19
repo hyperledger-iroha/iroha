@@ -23,6 +23,7 @@ if str(FORMAL_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(FORMAL_CHECKER_DIR))
 
 import sumeragi_v2_multilane_authority_recovery_contract as authority_recovery_contract
+import sumeragi_v2_multilane_admission_capacity_contract as admission_capacity_contract
 import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
 import sumeragi_v2_multilane_geometry_evidence_contract as geometry_evidence_contract
 import sumeragi_v2_multilane_historical_geometry_contract as historical_geometry_contract
@@ -2031,7 +2032,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "struct",
         "PublicationMutex",
         (
-            "inner: parking_lot::Mutex<()>,",
+            "inner: parking_lot::Mutex<T>,",
             "released: mv::ReleaseNotification,",
         ),
     ),
@@ -2040,7 +2041,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "struct",
         "PublicationGuard",
         (
-            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>,",
+            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,",
         ),
     ),
     (
@@ -2048,7 +2049,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "struct",
         "PhysicalPublicationGuard",
         (
-            "guard: Option<parking_lot::MutexGuard<'state, ()>>,",
+            "guard: Option<parking_lot::MutexGuard<'state, T>>,",
             "fair: bool,",
         ),
     ),
@@ -2057,7 +2058,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "method",
         "PublicationMutex::wrap",
         (
-            "guard: parking_lot::MutexGuard<'state, ()>",
+            "guard: parking_lot::MutexGuard<'state, T>",
             "inner: self.released.guard(PhysicalPublicationGuard {",
             "guard: Some(guard),",
             "fair: false,",
@@ -2074,7 +2075,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
         "crates/iroha_core/src/publication_lock.rs",
         "method",
-        "PublicationGuard<'_>::unlock_fair",
+        "PublicationGuard<'_, T>::unlock_fair",
         (
             "self.inner.fair = true;",
             "drop(self);",
@@ -2083,7 +2084,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
         "crates/iroha_core/src/publication_lock.rs",
         "method",
-        "PhysicalPublicationGuard<'_>::drop",
+        "PhysicalPublicationGuard<'_, T>::drop",
         (
             "if let Some(guard) = self.guard.take() {",
             "if self.fair {",
@@ -3951,6 +3952,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         *delegated_state_contract.DELEGATED_STATE_SOURCE_RELATIVES,
         *native_preparation_contract.NATIVE_PREPARATION_SOURCE_RELATIVES,
         *native_publication_contract.SOURCE_RELATIVES,
+        *admission_capacity_contract.SOURCE_RELATIVES,
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path("pytests/scripts/sumeragi_v2_multilane_queue_plan_cases.py"),
         Path(
@@ -5770,6 +5772,7 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         root, models, errors, _rust_binding_item,
     )
     native_publication_contract.validate_owners(root, models, errors, _rust_binding_item)
+    admission_capacity_contract.validate_owners(root, models, errors, _rust_binding_item)
     membership_contract.validate_membership_contract(
         root, models, errors, _rust_binding_item,
     )

@@ -88,6 +88,15 @@ pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
     source: LifecycleReplaySourceV1,
 }
 impl LifecycleReplayAuthorityV1 {
+    /// Move only the original diagnostic proof. This is data, not a recovered
+    /// output capability; its caller must independently authenticate the
+    /// frozen context, PoPs and both conflicting signatures before retention.
+    pub(super) fn into_equivocation_proof(self) -> Option<wire::SumeragiV2Equivocation> {
+        match self.source {
+            LifecycleReplaySourceV1::Equivocation(proof) => Some(proof),
+            _ => None,
+        }
+    }
     /// Return whether this canonical authority originated in a live WAL frame.
     pub(super) fn is_live_wal_origin(&self) -> bool {
         matches!(&self.source, LifecycleReplaySourceV1::Wal(_))

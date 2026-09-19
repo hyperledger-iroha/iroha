@@ -86,7 +86,14 @@ impl V2BodyStore {
                 }
                 let rejected = self.persist_rejected_outcome(
                     &durable,
-                    error.rejection_identity().canonical_code(),
+                    error
+                        .rejection_identity()
+                        .ok_or_else(|| {
+                            V2BodyStoreError::LocalValidation(
+                                LocalValidationRefusal::RecoveryRequired(error.to_string()),
+                            )
+                        })?
+                        .canonical_code(),
                     error.to_string(),
                 )?;
                 Ok(rejected.sealed_outcome())

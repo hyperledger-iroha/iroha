@@ -806,6 +806,13 @@ impl LifecycleValidateTaskV1 {
         self.dispatch.matches_dispatch_key(self.key)
     }
 }
+enum LifecycleValidateRetryQueueErrorV1 {
+    Unavailable {
+        task: LifecycleValidateTaskV1,
+        release: mv::ReleaseWait,
+    },
+    InvalidOwner(LifecycleValidateTaskV1),
+}
 /// Exact worker result retained until LedgerV1 terminal publication and reply delivery.
 struct LifecycleCertifiedServeWorkerResultV1 {
     task: LifecycleCertifiedServeTaskV1,
@@ -1114,6 +1121,7 @@ impl V2IoWorkDescriptor {
 /// consensus its suffix, and trusted control the final slot without reordering.
 struct V2IoAdmission {
     queued: AtomicUsize,
+    lifecycle_capacity_release: mv::ReleaseNotification,
     lifecycle_capacity_generation: AtomicU64,
     lifecycle_capacity_generation_exhausted: AtomicBool,
     auxiliary_limit: usize,
@@ -1165,6 +1173,7 @@ impl V2IoAdmission {
             .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
         Ok(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_release: mv::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: auxiliary_capacity,
@@ -1183,6 +1192,7 @@ impl V2IoAdmission {
     fn unbounded_for_tests() -> Arc<Self> {
         Arc::new(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_release: mv::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: usize::MAX,
@@ -1221,6 +1231,9 @@ impl V2IoAdmission {
             previous != 0,
             "Sumeragi v2 I/O admission released an unreserved command"
         );
+        // The checked decrement released an actual admitted command. Notify
+        // its registered runner after publishing the capacity generation.
+        let _released_command = self.lifecycle_capacity_release.guard(());
         if self
             .lifecycle_capacity_generation
             .fetch_update(
@@ -3246,6 +3259,46 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
+    fn retry_lifecycle_validate(
+        &self,
+        task: LifecycleValidateTaskV1,
+    ) -> Result<(), LifecycleValidateRetryQueueErrorV1> {
+        let key = task.key;
+        let mut state = self.lock();
+        if !task.matches_exact()
+            || !state.sender_open
+            || !state.receiver_open
+            || state
+                .lifecycle_validates
+                .get(&key)
+                .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
+            || state
+                .commands
+                .iter()
+                .any(|command| command.lifecycle_validate_key() == Some(key))
+        {
+            return Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(task));
+        }
+        // Observe capacity before its probe under the original queue lock.
+        // The guarded completion already owns this same keyed physical slot.
+        let release = self.admission.lifecycle_capacity_release.observe();
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            return Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release });
+        }
+        state
+            .lifecycle_validates
+            .get_mut(&key)
+            .expect("validated exact retry retains its original index")
+            .state = V2IoWorkState::Queued;
+        state
+            .commands
+            .push_back(V2IoCommand::LifecycleValidate(task));
+        drop(state);
+        self.ready.notify_one();
+        Ok(())
+    }
     fn complete_lifecycle_validate_failure(&self, key: LifecycleValidateDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
@@ -3273,53 +3326,6 @@ impl V2IoCommandQueue {
             );
         }
         tracked.state = V2IoWorkState::CompletionPending;
-        Ok(())
-    }
-    fn retry_lifecycle_validate(
-        &self,
-        task: LifecycleValidateTaskV1,
-        observed_capacity: Option<u64>,
-    ) -> Result<(), (LifecycleValidateTaskV1, Option<u64>, bool)> {
-        let mut state = self.lock();
-        if !state.sender_open
-            || !state.receiver_open
-            || !task.matches_exact()
-            || self.admission.lifecycle_capacity_generation_exhausted()
-            || state
-                .lifecycle_validates
-                .get(&task.key)
-                .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
-            || state
-                .commands
-                .iter()
-                .any(|command| command.lifecycle_validate_key() == Some(task.key))
-        {
-            return Err((task, observed_capacity, true));
-        }
-        let generation = self.admission.lifecycle_capacity_generation();
-        if observed_capacity == Some(generation) {
-            return Err((task, observed_capacity, false));
-        }
-        if observed_capacity.is_some_and(|previous| previous > generation) {
-            return Err((task, observed_capacity, true));
-        }
-        if state.commands.len() >= self.capacity
-            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
-        {
-            return Err((task, Some(generation), false));
-        }
-        // Prepared completion already transferred the physical completion slot
-        // into its armed acknowledgement. Keep the exact command index and row.
-        state
-            .lifecycle_validates
-            .get_mut(&task.key)
-            .expect("checked original Validate owner")
-            .state = V2IoWorkState::Queued;
-        state
-            .commands
-            .push_back(V2IoCommand::LifecycleValidate(task));
-        drop(state);
-        self.ready.notify_all();
         Ok(())
     }
     fn retry_lifecycle_decision_apply<T: LifecycleDecisionApplyRetryTaskV1>(

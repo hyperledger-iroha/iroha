@@ -351,6 +351,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/passive_lane_diagnostic_methods.rs',
         'state/runtime_configuration.rs',
         'state/lane_lifecycle_support.rs',
+        'state/geometry_publication.rs',
         'state/runtime_catalog.rs',
         'state/runtime_catalog_startup.rs',
         'state/runtime_catalog_commit.rs',

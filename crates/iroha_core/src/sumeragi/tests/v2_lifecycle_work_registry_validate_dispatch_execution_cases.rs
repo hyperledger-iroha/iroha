@@ -3068,7 +3068,10 @@ fn pre_timeout_physical_local_validate_completion_fixture(
                 "exact local storage repair fixture".to_owned(),
             )
         } else {
-            LocalValidationRefusal::QueueRelease(release)
+            LocalValidationRefusal::QueueRelease {
+                wait: release,
+                wake: queue.sumeragi_waker(),
+            }
         };
         assert_eq!(
             launched
@@ -4678,15 +4681,73 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         assert!(!output_guard.restart_required());
     }
 }
+#[cfg(feature = "bls")]
+#[test]
+fn local_validation_failure_returns_original_waiting_dispatch_without_rejection() {
+    let WaitingDurableValidateFixture {
+        fixture,
+        _directory,
+        mut store,
+        durable,
+        coordinator,
+        holder,
+        dispatch,
+    } = waiting_durable_validate_fixture(0xDA);
+    let wait = dispatch.wait_token_for_test();
+    let records = coordinator.records.clone();
+    let digest = holder.registry_for_test().entries[&fixture.address].digest;
+    let (error, dispatch) = dispatch
+        .execute(&mut store, |_| {
+            Err::<wire::ExecutionCommitment, _>(
+                crate::sumeragi::v2_apply::V2ApplyError::CanonicalStorageRead(
+                    crate::kura::Error::IO(
+                        std::io::Error::other("canonical local read failed"),
+                        _directory.path().join("canonical-finality.norito"),
+                    ),
+                ),
+            )
+        })
+        .expect_err("local read failure must return the original dispatch");
+    assert!(matches!(error, V2BodyStoreError::LocalValidation(_)));
+    assert_eq!(dispatch.wait_token_for_test(), wait);
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+    assert!(store.validated_recovery_catalog().is_empty());
+    let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+    let executed = dispatch
+        .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
+        .expect("same dispatch must remain executable after local storage recovers");
+    assert_eq!(executed.wait_token_for_test(), wait);
+    assert_eq!(
+        executed
+            .outcome()
+            .validated_receipt()
+            .unwrap()
+            .execution_commitment(),
+        commitment
+    );
+    assert!(executed.outcome().rejection_identity().is_none());
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+}
 
 #[cfg(feature = "bls")]
 #[test]
 fn local_queue_release_retries_original_validate_dispatch_without_replacing_row() {
-    let handle = std::thread::Builder::new().name("local-validate-queue-dispatch".to_owned())
+    let handle = std::thread::Builder::new()
+        .name("local-validate-queue-dispatch".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(local_queue_release_retries_original_validate_dispatch_fixture)
         .expect("spawn real Queue/Validate ownership regression");
-    if let Err(payload) = handle.join() { std::panic::resume_unwind(payload); }
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[cfg(feature = "bls")]

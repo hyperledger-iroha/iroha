@@ -28967,20 +28967,18 @@ pub(super) mod tests {
             0,
         );
         let leader = usize::try_from(adapter.context.leader(0)).expect("leader index");
-        let signature = SignatureOf::try_from_hash(keys[leader].private_key(), header.hash())
-            .expect("sign restart receipt fixture block");
-        let mut block = SignedBlock::presigned(
-            BlockSignature::new(
-                u64::try_from(leader).expect("leader index fits u64"),
-                signature,
-            ),
-            header,
-            vec![transaction],
-        );
-        block.set_execution_context(Some(
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
             BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership.clone()]),
         ));
+        let mut block = builder
+            .try_build_with_signature(
+                u64::try_from(leader).expect("leader index fits u64"),
+                keys[leader].private_key(),
+            )
+            .expect("sign canonical restart receipt fixture block");
         {
             let outputs = crate::execution_output_test_support::structural_network_outputs(
                 &block,

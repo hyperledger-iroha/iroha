@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 675_224
-EXPECTED_ASSET_SHA256 = "b352e0269de7e5f36f42f092b7b4530a56aa8ebd9691c6840f476b15fa8c1274"
+EXPECTED_ASSET_LENGTH = 676_880
+EXPECTED_ASSET_SHA256 = "7b6437bf611e7383b35224e0198c4f5d173b28c494e61134d70ce053dc22fc46"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -254,8 +254,16 @@ BOUNDARY_MUTATIONS = (
     (
         "periodic timer retains its serialized root identity",
         "runtime",
-        "fn freeze_due_clock_owners(",
-        "fn unchecked_freeze_due_clock_owners(",
+        "RuntimeCandidateCausalOrigin::mint_fresh_root(\n"
+        "                self.round_tag,\n"
+        "                CommandClass::Progress,\n"
+        "                RuntimeFreshRootKind::Retransmit,\n"
+        "                PERIODIC_RETRANSMIT_ROOT_IDENTITY,",
+        "RuntimeCandidateCausalOrigin::mint_fresh_root(\n"
+        "                self.round_tag,\n"
+        "                CommandClass::Progress,\n"
+        "                RuntimeFreshRootKind::Retransmit,\n"
+        '                b"foreign-periodic-root",',
     ),
     (
         "certified Fetch retries only changed queue cuts",
@@ -272,8 +280,8 @@ BOUNDARY_MUTATIONS = (
     (
         "certified Fetch cancels its excluded Decision before publication",
         "selector",
-        "durable_registry.cancel_excluded_decision(",
-        "durable_registry.skip_excluded_decision(",
+        "staged.cancel_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
+        "staged.skip_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
     ),
     (
         "activation recovered Decision authentication",

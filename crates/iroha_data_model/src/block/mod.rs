@@ -1366,6 +1366,21 @@ fn decode_framed_versioned_signed_block_inner(
     }
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;
+    // Count under the canonical writer's flags before allocating its payload,
+    // versioned copy and frame. Malformed alternate-layout input must not expand
+    // beyond the already bounded source frame during canonical authentication.
+    let canonical_len = {
+        let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
+        norito::core::encoded_payload_len(&block)
+            .map_err(VersionError::from)?
+            .checked_add(1 + norito::core::Header::SIZE)
+            .ok_or_else(|| VersionError::from(norito::core::Error::LengthMismatch))?
+    };
+    if canonical_len != raw_for_error.len() {
+        return Err(VersionError::from(
+            norito::core::Error::NonCanonicalEncoding,
+        ));
+    }
     let canonical = block
         .canonical_wire()
         .map_err(|error| VersionError::NoritoCodec(error.to_string()))?;
@@ -2602,6 +2617,31 @@ mod tests {
         let decoded =
             decode_framed_signed_block(wire.as_framed()).expect("decode canonical framed genesis");
         assert_eq!(decoded, block);
+    }
+    #[test]
+    fn framed_decode_counts_canonical_size_before_materialization() {
+        let keypair = checked_random_keypair();
+        let block = builder::BlockBuilder::new(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0))
+            .build_with_signature(0, keypair.private_key());
+        let wire = block.encode_wire().unwrap();
+        assert_eq!(decode_framed_signed_block(&wire).unwrap(), block);
+        // Give the actual layered decoder a complete, valid payload but a
+        // smaller claimed original frame. Its canonical output would expand
+        // beyond that source: refuse before constructing comparison buffers.
+        let error = decode_framed_versioned_signed_block_inner(
+            wire[0],
+            &wire[1..],
+            &wire[..wire.len() - 1],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("canonical"), "{error}");
+        let mut wrong_identity = wire.clone();
+        wrong_identity[0] ^= 1;
+        assert!(
+            decode_framed_versioned_signed_block_inner(wire[0], &wire[1..], &wrong_identity,)
+                .is_err(),
+            "equal byte count never substitutes for exact canonical equality"
+        );
     }
     #[test]
     fn set_da_commitments_updates_header_hash() {

@@ -180,19 +180,70 @@ pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
     /// Exact Norito framing failed before any persistence boundary.
     #[error("Native AMX participant evidence artifact framing failed: {0}")]
     ArtifactFraming(#[source] norito::Error),
-    /// Framing or arithmetic violates a deterministic standalone byte bound.
-    #[error("{0}")]
-    Budget(String),
-    /// Valid evidence exceeds this node's configured local storage allowance.
-    /// This is a local readiness condition, never a proposal-validity verdict.
+    /// The exact framed pair violates platform-independent format geometry or
+    /// cannot be represented by the checked local byte-length arithmetic.
+    #[error(transparent)]
+    HardGeometry(#[from] NativeAmxParticipantApplicationEvidenceGeometryError),
+    /// The valid framed pair exceeds this node's immutable configured stable
+    /// capacity. This is not occupied capacity, and no lock release can enlarge it.
     #[error(
-        "Native AMX participant manifest/receipt pair is {required} bytes, exceeding the configured shared stable aggregate byte bound of {limit} bytes"
+        "Native AMX participant manifest/receipt pair is {required_bytes} bytes, exceeding the configured shared stable aggregate byte bound of {configured_bytes} bytes"
     )]
-    LocalCapacity {
-        /// Exact framed pair bytes required by this route.
-        required: u64,
-        /// Operator-configured shared stable byte allowance.
+    LocalStablePairCapacity {
+        /// Exact sum of the canonical framed manifest and receipt lengths.
+        required_bytes: u64,
+        /// This node's configured shared stable capacity for one route.
+        configured_bytes: u64,
+    },
+}
+/// Closed malformed or hard-limit geometry failures for exact Native evidence.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum NativeAmxParticipantApplicationEvidenceGeometryError {
+    /// Canonical manifest framing cannot be empty.
+    #[error("Native AMX participant manifest framing is empty")]
+    EmptyManifest,
+    /// Canonical receipt framing cannot be empty.
+    #[error("Native AMX participant receipt framing is empty")]
+    EmptyReceipt,
+    /// A manifest length cannot be expressed in the canonical u64 byte domain.
+    #[error("Native AMX participant manifest length does not fit u64")]
+    ManifestLengthUnrepresentable,
+    /// A receipt length cannot be expressed in the canonical u64 byte domain.
+    #[error("Native AMX participant receipt length does not fit u64")]
+    ReceiptLengthUnrepresentable,
+    /// The manifest exceeds the fixed standalone format bound.
+    #[error(
+        "Native AMX participant manifest is {bytes} bytes, exceeding the standalone payload budget of {limit} bytes"
+    )]
+    ManifestStandaloneLimit {
+        /// Exact canonical framed manifest length.
+        bytes: u64,
+        /// Fixed standalone format bound.
         limit: u64,
+    },
+    /// The receipt exceeds the fixed standalone format bound.
+    #[error(
+        "Native AMX participant receipt is {bytes} bytes, exceeding the standalone payload budget of {limit} bytes"
+    )]
+    ReceiptStandaloneLimit {
+        /// Exact canonical framed receipt length.
+        bytes: u64,
+        /// Fixed standalone format bound.
+        limit: u64,
+    },
+    /// The canonical combined byte length overflows u64.
+    #[error("Native AMX participant manifest/receipt pair byte length overflowed")]
+    PairLengthOverflow {
+        /// Canonical framed manifest length.
+        manifest_bytes: u64,
+        /// Canonical framed receipt length.
+        receipt_bytes: u64,
+    },
+    /// A representable canonical sum cannot be represented by local usize.
+    #[error("Native AMX participant manifest/receipt pair length {bytes} does not fit usize")]
+    PairLengthUnrepresentable {
+        /// Checked canonical combined byte length.
+        bytes: u64,
     },
 }
 /// Bounded route/incarnation pointer to the latest Native AMX application receipt.
@@ -466,9 +517,11 @@ fn checked_native_amx_participant_application_pair_bytes(
     receipt_bytes: u64,
 ) -> std::result::Result<u64, NativeAmxParticipantApplicationEvidenceByteBudgetError> {
     manifest_bytes.checked_add(receipt_bytes).ok_or_else(|| {
-        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-            "Native AMX participant manifest/receipt pair byte length overflowed".to_owned(),
-        )
+        NativeAmxParticipantApplicationEvidenceGeometryError::PairLengthOverflow {
+            manifest_bytes,
+            receipt_bytes,
+        }
+        .into()
     })
 }
 impl NativeAmxParticipantApplicationPrepublicationIdentity {

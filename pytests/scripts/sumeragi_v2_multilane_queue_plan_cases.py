@@ -1073,8 +1073,8 @@ def queue_plan_publication_source_contract_errors(module, sources: dict[str, str
         "PhysicalPublicationGuard",
         "PublicationMutex::wrap",
         "PublicationMutex::lock",
-        "PublicationGuard<'_>::unlock_fair",
-        "PhysicalPublicationGuard<'_>::drop",
+        "PublicationGuard<'_, T>::unlock_fair",
+        "PhysicalPublicationGuard<'_, T>::drop",
         "persist_classified_queue_plan_admission",
         "try_queue_plan_publication_at_height",
         "wait_for_queue_plan_publication",
@@ -1332,11 +1332,11 @@ def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path:
     ("method", "PublicationMutex::lock", "self.wrap(self.inner.lock())", "self.inner.lock()"),
     ("method", "PublicationMutex::wrap", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
     ("method", "PublicationMutex::wrap", "guard: Some(guard),", "guard: None,"),
-    ("method", "PublicationGuard<'_>::unlock_fair", "self.inner.fair = true;", "self.inner.fair = false;"),
-    ("method", "PhysicalPublicationGuard<'_>::drop", "if self.fair {", "if !self.fair {"),
-    ("method", "PhysicalPublicationGuard<'_>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),
-    ("method", "PhysicalPublicationGuard<'_>::drop", "self.guard.take()", "None"),
-    ("struct", "PublicationGuard", "mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>", "PhysicalPublicationGuard<'state>"),
+    ("method", "PublicationGuard<'_, T>::unlock_fair", "self.inner.fair = true;", "self.inner.fair = false;"),
+    ("method", "PhysicalPublicationGuard<'_, T>::drop", "if self.fair {", "if !self.fair {"),
+    ("method", "PhysicalPublicationGuard<'_, T>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),
+    ("method", "PhysicalPublicationGuard<'_, T>::drop", "self.guard.take()", "None"),
+    ("struct", "PublicationGuard", "mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>", "PhysicalPublicationGuard<'state, T>"),
 ])
 def test_queue_plan_publication_scoped_contract_rejects_release_owner_drift(
     kind: str, symbol: str, old: str, new: str,
@@ -1351,3 +1351,318 @@ def test_queue_plan_publication_scoped_contract_rejects_release_owner_drift(
     sources[relative] = sources[relative].replace(owner, owner.replace(old, new), 1)
     errors = queue_plan_publication_source_contract_errors(module, sources)
     assert any(symbol in error for error in errors), errors
+
+
+from functools import lru_cache as _retained_route_cache
+
+
+@_retained_route_cache(maxsize=1)
+def retained_queue_plan_route_items() -> dict:
+    """Extract the real retained-custody owners once, without changing providers."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    module = load_checker()
+    sources = {}
+    items = {}
+    for relative, kind, symbol, _ in contract.QUEUE_PLAN_RETAINED_ROUTE_BINDINGS:
+        source = sources.setdefault(relative, (ROOT_DIR / relative).read_text())
+        found = module._extract_rust_binding_items(source, kind, symbol)
+        assert len(found) == 1, (relative, symbol, len(found))
+        items[(relative, kind, symbol)] = found[0]
+    return items
+
+
+def test_retained_queue_plan_route_authority_accepts_actual_sources() -> None:
+    """A retained closed claim defers ordinary work under every original owner."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    errors = []
+    contract.validate_retained_queue_plan_route_authority(retained_queue_plan_route_items(), errors)
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("State::queue_plan_pending_route_authority_in_view", "=> return Ok(None)",
+     "=> return Ok(Some(QueuePlanPendingRouteAuthority::Draining))"),
+    ("State::queue_plan_pending_route_authority_in_view", "predecessor != context.predecessor_block_hash", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "record.claim != binding.registry_value()", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "record.priority.carrier_height < context.proposal_height", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "record.priority.carrier_height > height", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "for bound in &context.route_incarnations", "for bound in context.route_incarnations.iter().take(1)"),
+    ("State::queue_plan_pending_route_authority_in_view", "lane.dataspace_id == route.dataspace_id", "true"),
+    ("State::queue_plan_pending_route_authority_in_view", "next_height > drain.intent.close_global_height", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "validate_autoscale_lane_committee_pops(&pin).map_err(str::to_owned)?;", ""),
+    ("State::queue_plan_pending_route_authority_in_view", "record.priority.carrier_height > close", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "close > height", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "drain.commitment.is_some()", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "state.network_id(),", "&NetworkId::default(),"),
+    ("State::queue_plan_pending_route_authority_in_view", "state.lane_incarnation_at_height(route.lane_id, close)", "Some(bound.lane_incarnation)"),
+    ("State::queue_plan_pending_route_authority_in_view", "pin.validator_set != bound.validator_set", "false"),
+    ("State::queue_plan_pending_route_authority_in_view", "state.lane_incarnation_at_height(route.lane_id, next_height)", "Some(bound.lane_incarnation)"),
+    ("Queue::durable_plan_claim_route_authority_in_view", "claim.global_admission_identity.is_some()", "true"),
+    ("Queue::durable_plan_claim_route_authority_in_view", "State::queue_plan_pending_route_authority_in_view(state_view, &binding)", "Ok(Some(QueuePlanPendingRouteAuthority::Draining))"),
+    ("Queue::revalidated_durable_plan_claim_retry_locked", "&existing.admission_context == expected_admission_context", "true"),
+    ("Queue::has_revalidatable_durable_plan_claim_with_state", "Self::durable_plan_claim_route_authority_in_view(&state_view, &claim)", "Ok(QueuePlanPendingRouteAuthority::Active)"),
+    ("Queue::immutable_queued_routing_plan_in_view", "&& claim.routing_plan == plan", "&& true"),
+    ("Queue::immutable_queued_routing_plan_with_view", "authority == QueuePlanPendingRouteAuthority::Active", "true"),
+    ("Queue::reserve_transactions_for_lane_bounded", "Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,", "Ok((routing_plan, QueuePlanPendingRouteAuthority::Draining)) => routing_plan,"),
+    ("Queue::pop_from_queue", "self.restore_popped_hash_locked(hash)", "Ok::<(), String>(())"),
+    ("Queue::bounded_pending_snapshot", "Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }", "Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {},"),
+    ("Queue::push_with_lane_internal_with_state_and_routing", "Ok(Some(canonical_binding)) if canonical_binding == *binding", "Ok(Some(canonical_binding))"),
+    ("Queue::revalidate_pending_transactions", "Ok((plan, _)) => plan,", "Ok((plan, QueuePlanPendingRouteAuthority::Active)) => plan,"),
+    ("Queue::durable_plan_admission_claim_with_state", "context: claim.admission_context,", "context: current_context,"),
+], ids=[
+    "terminal-is-not-pending", "predecessor", "exact-registry", "source-before-rank",
+    "rank-is-committed", "all-atomic-legs", "exact-dataspace", "closed-not-active",
+    "pin-pops", "rank-before-close", "close-is-committed", "drain-not-terminal",
+    "exact-network", "close-incarnation", "immutable-pin", "active-incarnation",
+    "global-owner-required", "canonical-custody-required", "exact-retry-context",
+    "retry-retained-authority", "immutable-plan", "ordinary-pop-projection",
+    "ordinary-reservation-exclusion", "pop-restores-custody", "fifo-defers-draining",
+    "ingress-exact-pending-owner", "refresh-retains-draining", "lookup-keeps-original-context",
+])
+def test_retained_queue_plan_route_authority_rejects_semantic_mutation(
+    symbol: str, old: str, new: str,
+) -> None:
+    """Each mutation changes executable policy while leaving other checks intact."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = retained_queue_plan_route_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(old) == 1, (symbol, old)
+    items[key] = items[key].replace(old, new, 1)
+    errors = []
+    contract.validate_retained_queue_plan_route_authority(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "weakened"])
+def test_retained_queue_plan_route_authority_requires_exact_ledger(tmp_path: Path, mutation: str) -> None:
+    """Canonical pending authority cannot be silently dropped from the declared owner set."""
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    model = next(row for row in models if row["module"] == module.QUEUE_PLAN_STARTUP_REPLAY_MODULE)
+    rows = model["production_symbols"]
+    row, = [row for row in rows if row["symbol"] == "State::queue_plan_pending_route_authority_in_view"]
+    if mutation == "missing":
+        rows.remove(row)
+    elif mutation == "duplicate":
+        rows.append(copy.deepcopy(row))
+    else:
+        row["required_tokens"].pop()
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any("State::queue_plan_pending_route_authority_in_view" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("height != state._curr_block.height().get()", "false"),
+    (".any(|current| current == lane)", ".any(|_| true)"),
+    ("state.lane_incarnations.get(&lane.id).copied() != Some(incarnation)", "false"),
+    ("if height < activation", "if false"),
+    ("&& height > drain.intent.close_global_height", "&& false"),
+    ("drain.intent.close_global_height > committed_height", "false"),
+    ("drain.commitment.is_some()", "false"),
+    ("if members.is_empty()", "if false"),
+    ("for (_, member) in members", "for (_, member) in members.into_iter().take(1)"),
+    ("State::queue_plan_pending_route_authority_in_view(state, &obligation.binding)?", "Some(QueuePlanPendingRouteAuthority::Draining)"),
+    ("!= Some(QueuePlanPendingRouteAuthority::Draining)", "!= Some(QueuePlanPendingRouteAuthority::Active)"),
+    ("!= Some(QueuePlanPendingRouteAuthority::Draining)", "== Some(QueuePlanPendingRouteAuthority::Draining)"),
+    ("State::queue_plan_pending_route_authority_in_view(state, &obligation.binding)?", "State::queue_plan_pending_route_authority_in_view(state, &obligation.binding).unwrap_or(Some(QueuePlanPendingRouteAuthority::Draining))"),
+    ("validate_autoscale_lane_committee_pops(&pin).map_err(str::to_owned)?;", ""),
+], ids=[
+    "staged-header", "staged-catalog", "staged-incarnation", "activation", "closed-branch",
+    "committed-close", "terminal-drain", "pending-required", "every-member", "shared-owner",
+    "draining-only", "refusal-polarity", "propagate-owner-error", "immutable-pin-pops",
+])
+def test_native_opening_retained_route_authority_rejects_semantic_mutation(old: str, new: str) -> None:
+    """Native opening cannot turn retained custody into an unchecked opening authority."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = retained_queue_plan_route_items().copy()
+    key, = [key for key in items if key[2] == "resolve_open_lane_authority"]
+    assert items[key].count(old) == 1, old
+    items[key] = items[key].replace(old, new, 1)
+    errors = []
+    contract.validate_retained_queue_plan_route_authority(items, errors)
+    assert any("resolve_open_lane_authority" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "weakened"])
+def test_native_opening_retained_route_authority_requires_exact_ledger(tmp_path: Path, mutation: str) -> None:
+    """The Native consumer must be declared independently of its State/Queue producers."""
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    model = next(row for row in models if row["module"] == module.QUEUE_PLAN_STARTUP_REPLAY_MODULE)
+    rows = model["production_symbols"]
+    row, = [row for row in rows if row["symbol"] == "resolve_open_lane_authority"]
+    if mutation == "missing":
+        rows.remove(row)
+    elif mutation == "duplicate":
+        rows.append(copy.deepcopy(row))
+    else:
+        row["required_tokens"].pop()
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any("resolve_open_lane_authority" in error for error in errors), errors
+
+
+@_retained_route_cache(maxsize=1)
+def canonical_queue_plan_retry_items() -> dict:
+    """Read exact canonical retry owners without replacing the live providers."""
+    module = load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    sources, items = {}, {}
+    for path, kind, symbol, _ in contract.QUEUE_PLAN_CANONICAL_RETRY_BINDINGS:
+        source = sources.setdefault(path, (ROOT_DIR / path).read_text())
+        owner, = module._extract_rust_binding_items(source, kind, symbol)
+        items[(path, kind, symbol)] = owner
+    return items
+
+
+def test_canonical_queue_plan_retry_accepts_actual_sources() -> None:
+    """Existing canonical inputs remain proof-backed without a new ingress promise."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    errors = []
+    contract.validate_canonical_queue_plan_retry(canonical_queue_plan_retry_items(), errors)
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("State::canonical_queue_plan_admitted_input", "Self::queue_plan_admission_registry_value_in_view(&view, entrypoint_hash)?;", ""),
+    ("State::canonical_queue_plan_admitted_input", "if application == QueuePlanAdmissionApplicationState::PendingStale", "if false"),
+    ("State::canonical_queue_plan_admitted_input", "record.priority.admission_index", "0"),
+    ("State::canonical_queue_plan_admitted_input", "read.finality.height_context.network_id != self.network_id", "false"),
+    ("State::canonical_queue_plan_admitted_input", "read.finality.height != record.priority.carrier_height", "false"),
+    ("State::canonical_queue_plan_admitted_input", "input.certificate().registry_value != record.claim", "false"),
+    ("State::canonical_queue_plan_admitted_input", "input.entrypoint().hash() != entrypoint_hash", "false"),
+    ("State::canonical_queue_plan_admitted_input", "context.queue_plan_admissions.get(index)", "context.queue_plan_admissions.first()"),
+    ("State::canonical_queue_plan_admitted_input", "if observe()?.as_ref() != Some(&(record, carrier_hash))", "if false"),
+    ("State::canonical_queue_plan_admitted_input", "norito::with_decode_limits_scope(limits, || {", "(|| {"),
+    ("Kura::read_first_admission_carrier_under_prune_and_canonical_guards", "retained_block_record_at_without_live_body", "retained_block_record_at"),
+    ("Kura::read_first_admission_carrier_under_prune_and_canonical_guards", "if header != record.block_header", "if false"),
+    ("Kura::read_first_admission_carrier_under_prune_and_canonical_guards", "body.canonical_proposal_wire_hash()? != finality.subject.payload_hash", "false"),
+    ("canonical_queue_plan_submission_response", "Ok(false) => None,", "Ok(false) => Some(transaction_submission_receipt_response(app, entrypoint_hash, None, minimal_response, format)),"),
+    ("canonical_queue_plan_submission_response", "Err(error) => Some(queue_plan_admission_registry_conflict_response(", "Err(error) => Some(transaction_submission_receipt_response("),
+    ("canonical_queue_plan_synced_response", "Ok(QueuePlanAdmissionRegistryMatch::Absent) => return None,", "Ok(QueuePlanAdmissionRegistryMatch::Absent) => {},"),
+    ("canonical_queue_plan_synced_response", "if &input.input().certificate.binding == binding", "if true"),
+    ("canonical_queue_plan_synced_response", "utils::NoritoBody(input.into_input().certificate)", "utils::NoritoBody(newly_signed_certificate)"),
+    ("canonical_queue_plan_synced_response", "tokio::task::block_in_place(", "tokio::task::spawn_blocking("),
+    ("canonical_queue_plan_synced_response", "runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread", "true"),
+    ("canonical_queue_plan_synced_response", ".unwrap_or_else(|| acquire_torii_proxy_memory(app))", ".unwrap_or_else(|| Ok(unreserved_slot))"),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", "if admission_binding.request_id != canonical_request_id", "if false"),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", "validate_queue_plan_binding_for_request(", "validate_binding_structure_only("),
+    ("handler_post_transaction_entrypoint", "routing::accept_transaction_for_ingress(state, transaction, &telemetry)", "Ok(unverified_transaction)"),
+    ("decode_framed_versioned_signed_block_inner", "if canonical_len != raw_for_error.len()", "if false"),
+    ("decode_framed_versioned_signed_block_inner", "if canonical.as_framed() != raw_for_error", "if false"),
+    ("Kura::decode_v2_finality_record_at", "canonical_len != snapshot.bytes.len() ||", "false ||"),
+    ("Kura::decode_canonical_retained_block_record", "&& canonical_len == Some(bytes.len())", "&& true"),
+    ("canonical_admission_read_working_set_bytes", ".try_fold(0usize, usize::checked_add)", ".fold(Some(0usize), |_, _| Some(0))"),
+    ('Kura::read_first_admission_carrier', 'self.read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)', 'self.read_first_admission_carrier_under_prune_and_canonical_guards(height, foreign_hash)'),
+    ('Kura::read_first_admission_carrier', 'let _canonical = self.canonical_chain_lock.lock();', ''),
+    ('Kura::read_first_admission_carrier_under_prune_and_canonical_guards', 'self.ensure_canonical_storage_not_poisoned()?;', 'let _again = self.canonical_chain_lock.lock(); self.ensure_canonical_storage_not_poisoned()?;'),
+    ('canonical_admission_read_decode_limits', '(body, 1usize)', '(body, 0usize)'),
+    ('canonical_admission_read_decode_limits', '(finality, 2)', '(finality, 1)'),
+    ('canonical_admission_read_decode_limits', '(retained, 2)', '(retained, 1)'),
+    ('canonical_admission_read_decode_limits', '.checked_mul(2)?', '.checked_mul(1)?'),
+    ('canonical_admission_read_decode_limits', '(input, 1)', '(input, 0)'),
+    ('canonical_admission_read_decode_limits', 'allocated.checked_add(limits.max_total_allocated_bytes().checked_mul(count)?)?', 'allocated'),
+    ('State::canonical_queue_plan_input_decode_limits', 'crate::native_amx::MAX_NATIVE_AMX_PLAN_LEGS.checked_add(2)?', '2usize'),
+    ('State::canonical_queue_plan_input_decode_limits', 'MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES.checked_mul(4)?', 'MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES'),
+    ('State::canonical_queue_plan_input_decode_limits', 'one_elements.checked_mul(2)?', 'one_elements'),
+    ('State::canonical_queue_plan_input_decode_limits', 'one_allocated.checked_mul(2)?', 'one_allocated'),
+    ('State::canonical_queue_plan_input_read_working_set_bytes', '?.checked_add(state_graph)', '?.checked_add(0)'),
+    ('canonical_admission_read_working_set_bytes', 'let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();', 'let proposal_clone = 0usize;'),
+    ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if false'),
+    ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if tokio::time::Instant::now() < read_deadline'),
+    ('execute_incoming_torii_proxy_request_with_admission_inner', 'proxy_memory.as_ref(),\n                execution_deadline,', 'proxy_memory.as_ref(),\n                tokio::time::Instant::now(),'),
+    ('execute_incoming_torii_proxy_request_with_admission', '.checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)', '.checked_sub(Duration::ZERO)'),
+    ('execute_incoming_torii_proxy_request_with_admission', '            proxy_memory,\n            deadline,', '            proxy_memory,\n            tokio::time::Instant::now(),'),
+], ids=[
+    "orphan-is-not-absence", "stale-pending", "exact-rank", "network", "finality-height",
+    "immutable-claim", "exact-body", "exact-admission-index", "rejoin-after-io", "cumulative-budget",
+    "no-live-cache-read", "retained-header", "proposal-subject", "public-needs-registry",
+    "public-corruption", "peer-needs-registry", "peer-exact-binding", "original-certificate",
+    "no-detached-read", "runtime-custody", "working-set-required", "request-id", "complete-binding",
+    "public-signature-validation", "count-before-materialize", "exact-wire-equality",
+    "finality-encoded-bound", "retained-encoded-bound", "checked-peak",
+    'original-guarded-delegation',
+    'canonical-fence-held',
+    'guarded-no-relock',
+    'body-allowance',
+    'both-finality-reads',
+    'both-retained-reads',
+    'both-sccp-passes',
+    'selected-input-allowance',
+    'cumulative-allocation-sum',
+    'all-state-route-members',
+    'pending-existing-policy',
+    'both-state-element-observations',
+    'both-state-allocation-observations',
+    'state-graph-charged',
+    'full-proposal-clone-charged',
+    'original-deadline-required',
+    'deadline-direction',
+    'original-instant-handoff',
+    'egress-budget-retained',
+    'outer-timeout-same-instant',
+])
+def test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol: str, old: str, new: str) -> None:
+    """Keep each authority and bounded-read predicate live under independent mutations."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = canonical_queue_plan_retry_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(old) == 1, (symbol, old, items[key].count(old))
+    items[key] = items[key].replace(old, new, 1)
+    errors = []
+    contract.validate_canonical_queue_plan_retry(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,first,last", [
+    ("State::canonical_queue_plan_admitted_input", "let Some((record, carrier_hash)) = observe()?", "let result = (|| {"),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", "let accepted_tx = match routing::accept_transaction_for_ingress(", "if let Some(response) = canonical_queue_plan_synced_response("),
+    ("canonical_queue_plan_synced_response", "let reservation = match proxy_memory", "let read = match tokio::runtime::Handle::try_current()"),
+    ("canonical_queue_plan_synced_response", "if tokio::time::Instant::now() >= read_deadline", "let mut response = ("),
+])
+def test_canonical_queue_plan_retry_rejects_owner_reordering(symbol: str, first: str, last: str) -> None:
+    """A copied late check cannot stand in for admission before the physical operation."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = canonical_queue_plan_retry_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    source = items[key]
+    assert source.count(first) == source.count(last) == 1
+    begin, end = source.index(first), source.index(last)
+    assert begin < end
+    # Keep every token in the owner, but move the first interval after its consumer.
+    items[key] = source[:begin] + source[end:] + source[begin:end]
+    errors = []
+    contract.validate_canonical_queue_plan_retry(items, errors)
+    assert any(symbol in error and "order" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "weakened"])
+def test_canonical_queue_plan_retry_requires_exact_ledger(tmp_path: Path, mutation: str) -> None:
+    """The canonical reader cannot disappear from the authenticated owner inventory."""
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    model = next(row for row in models if row["module"] == module.QUEUE_PLAN_STARTUP_REPLAY_MODULE)
+    rows = model["production_symbols"]
+    row, = [row for row in rows if row["symbol"] == "State::canonical_queue_plan_admitted_input"]
+    if mutation == "missing":
+        rows.remove(row)
+    elif mutation == "duplicate":
+        rows.append(copy.deepcopy(row))
+    else:
+        row["required_tokens"].pop()
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any("State::canonical_queue_plan_admitted_input" in error for error in errors), errors

@@ -680,6 +680,11 @@ ReadyValidateSuccessorIdentityV1::SidecarWake { round, subject, .. } => {
 let (dispatch_key, incumbent_dispatch_key, round, subject, apply_is_authorized) = successor
     .preliminary_retransmit_identity(attestation)
     .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+if physical_completion
+    .is_some_and(|completion| incumbent_dispatch_key != Some(completion.dispatch_key()))
+{
+    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+}
 executor
     .arm_live_lifecycle_validate_successor(
         dispatch_key,
@@ -696,20 +701,28 @@ executor
         """
 Some(existing)
     if incumbent_dispatch_key == Some(existing.dispatch_key)
-        && existing.apply_is_authorized
-        && existing.dispatch_key.owner() == candidate.dispatch_key.owner()
-        && existing.dispatch_key.lifecycle_ordinal()
-            == candidate.dispatch_key.lifecycle_ordinal()
-        && existing.dispatch_key.slot() == candidate.dispatch_key.slot()
-        && existing.dispatch_key.digest() != candidate.dispatch_key.digest()
-        && existing.round == candidate.round
-        && existing.subject == candidate.subject =>
+        && existing.can_refine_to(&candidate) =>
 {
     self.live_lifecycle_validate_successor = Some(candidate);
     Ok(())
 }
 """,
         "live reconciliation must replace only the exact apply-authorized incumbent at the same physical Validate address",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_effects_recovered_fetch_and_pipeline_types.rs",
+        """
+fn can_refine_to(&self, candidate: &Self) -> bool {
+    self.dispatch_key != candidate.dispatch_key
+        && self.apply_is_authorized
+        && self.dispatch_key.owner() == candidate.dispatch_key.owner()
+        && self.dispatch_key.lifecycle_ordinal() == candidate.dispatch_key.lifecycle_ordinal()
+        && self.dispatch_key.slot() == candidate.dispatch_key.slot()
+        && self.round == candidate.round
+        && self.subject == candidate.subject
+}
+""",
+        "the extracted refinement owner must preserve authorization, address, round and subject while changing the carrier",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
@@ -719,29 +732,128 @@ V2IoCommand::LifecycleValidate(task) => {
         Err("lifecycle Validate command changed after queue publication".to_owned())
     } else {
         let key = task.key;
-        task.dispatch
-            .execute(
-                body_store.as_mut().expect(
-                    "body store remains live before Retire",
-                ),
-                |body| {
-                    apply_service.validate_candidate(&context, body)
-                },
-            )
-            .map(|result| {
-                V2IoCompletion::LifecycleValidate(Box::new(
-                    GuardedLifecycleValidateWorkerResultV1::new(
-                        key,
-                        result,
-                        Arc::clone(&output_guard),
-                    ),
-                ))
-            })
-            .map_err(|(error, _dispatch)| error.to_string())
+        let result = task.dispatch.execute(
+            body_store.as_mut().expect("body store remains live before Retire"),
+            |body| apply_service.validate_candidate(&context, body),
+        );
+        lifecycle_validate_worker_completion(key, result, Arc::clone(&output_guard))
     }
 }
 """,
         "the worker must execute and return one exact guarded Validate completion",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+let guarded = match result {
+    Ok(executed) => GuardedLifecycleValidateWorkerResultV1::new(key, executed, output_guard),
+    Err((super::v2_body_store::V2BodyStoreError::LocalBusy(dependency), dispatch)) => {
+        GuardedLifecycleValidateWorkerResultV1::local_busy(
+            key, dispatch, dependency, output_guard,
+        )
+    }
+    Err((error, _dispatch)) => return Err(error.to_string()),
+};
+Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
+""",
+        "physical refusal must retain the original dispatch and output guard in its typed completion",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+let release = Some(dependency.wait.clone().wait_for_release());
+Self {
+    key,
+    result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
+        dispatch, dependency, release,
+    }),
+    drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
+}
+""",
+        "local Validate must retain its original physical release observation without a guard",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+pub(in crate::sumeragi) fn retry_local(mut self) -> LifecycleValidateLocalRetryV1 {
+    let Some(LifecycleValidateWorkerResultV1::LocalBusy {
+        dependency, release, ..
+    }) = self.guarded.result.as_mut() else {
+        return LifecycleValidateLocalRetryV1::Executed(self);
+    };
+    if self.guarded.drop_guard.output_guard.restart_required() {
+        return LifecycleValidateLocalRetryV1::RestartRequired;
+    }
+if let Some(future) = release.as_mut() {
+    let mut context = std::task::Context::from_waker(dependency.waker());
+    if std::future::Future::poll(std::pin::Pin::new(future), &mut context).is_pending() {
+        return LifecycleValidateLocalRetryV1::Waiting(self);
+    }
+    *release = None;
+}
+let Self { guarded, queue, physical_completion, } = self;
+let (key, result, mut drop_guard) = (*guarded).into_parts();
+let LifecycleValidateWorkerResultV1::LocalBusy { dispatch, dependency, .. } = result else {
+    unreachable!("only the retained physical wait reaches retry");
+};
+match queue.retry_lifecycle_validate(LifecycleValidateTaskV1 { key, dispatch }) {
+    Ok(()) => {
+        drop_guard.disarm();
+        LifecycleValidateLocalRetryV1::Requeued
+    }
+""",
+        "physical release must precede same-key retry and disarm only after queue publication",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release }) => {
+    let mut release = release.wait_for_release();
+    let mut context = std::task::Context::from_waker(dependency.waker());
+    if std::future::Future::poll(std::pin::Pin::new(&mut release), &mut context).is_ready() {
+        dependency.waker().wake_by_ref();
+    }
+    LifecycleValidateLocalRetryV1::Waiting(Self {
+        guarded: Box::new(GuardedLifecycleValidateWorkerResultV1 {
+            key,
+            result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
+                dispatch: task.dispatch, dependency, release: Some(release),
+            }),
+            drop_guard,
+        }),
+        queue,
+        physical_completion,
+    })
+}
+""",
+        "worker backpressure must retain the same dispatch and register the original release wake",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        """
+let key = task.key;
+let mut state = self.lock();
+if !task.matches_exact() || !state.sender_open || !state.receiver_open
+    || state.lifecycle_validates.get(&key)
+        .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
+    || state.commands.iter().any(|command| command.lifecycle_validate_key() == Some(key))
+{
+    return Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(task));
+}
+let release = self.admission.lifecycle_capacity_release.observe();
+if state.commands.len() >= self.capacity
+    || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+{
+    return Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release });
+}
+state.lifecycle_validates.get_mut(&key)
+    .expect("validated exact retry retains its original index").state = V2IoWorkState::Queued;
+state.commands.push_back(V2IoCommand::LifecycleValidate(task));
+drop(state);
+self.ready.notify_one();
+Ok(())
+""",
+        "physical retry must keep its exact completion-pending index and reserve original command capacity",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -754,13 +866,59 @@ else {
         .close_admission_for_restart();
     return ProductionLifecycleCompletionSelectionV1::RestartRequired;
 };
+let completion = match completion.retry_local() {
+    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Executed(completion) => {
+        completion
+    }
+    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Waiting(completion) => {
+        *pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::Validate(completion));
+        return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting;
+    }
+    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Requeued => {
+        return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued;
+    }
+    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::RestartRequired => {
+        services.lifecycle_output_guard().close_admission_for_restart();
+        return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+    }
+};
 let (dispatch, ack) = completion.into_publication_parts();
+let physical_completion = ack.physical_completion();
 match owner.coordinator.complete_durable_validate_dispatch(
     &mut owner.registry,
     dispatch,
 )
 """,
         "the turn driver must rejoin the guarded completion to its coordinator row",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        """
+PendingLifecycleCompletionV1::Validate(completion) => {
+    self.pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::Validate(completion));
+    let selected = self.settle_parked_lifecycle_validate_completion();
+    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
+        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+            Ok(true) => {
+                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+            }
+            Ok(false) => {}
+            Err(reason) => {
+                iroha_logger::error!(
+                    %reason,
+                    "ordinary Completion physical-wait classification failed closed"
+                );
+                self.close_output_for_restart();
+                return ProductionLifecycleCompletionPreGateV1::Selected(
+                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                );
+            }
+        }
+    }
+    selected
+}
+""",
+        "physical Validate wait must preserve its parked owner and use only the authenticated ordinary completion drain",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -772,7 +930,7 @@ DurableValidateCompletionPublication::PublishedValidated(
     assert!(pending_lifecycle_completion.is_none());
     *pending_lifecycle_completion = Some(
         PendingLifecycleCompletionV1::ReadyValidateSuccessor(
-            ReadyValidateSuccessorV1::from_validated(published),
+            ReadyValidateSuccessorV1::from_validated(published, physical_completion,),
         ),
     );
     ack.acknowledge_after_publication();
@@ -791,7 +949,7 @@ DurableValidateCompletionPublication::PublishedRejected(
     assert!(pending_lifecycle_completion.is_none());
     *pending_lifecycle_completion = Some(
         PendingLifecycleCompletionV1::ReadyValidateSuccessor(
-            ReadyValidateSuccessorV1::from_rejected(published),
+            ReadyValidateSuccessorV1::from_rejected(published, physical_completion,),
         ),
     );
     ack.acknowledge_after_publication();
@@ -844,9 +1002,50 @@ if !sidecar_wake_transition_is_exact(self, &next, identity) {
 let Some(identity) = coordinator.load_validate_sidecar_registration()? else {
     return Ok(None);
 };
+if coordinator.cancelled_validate_sidecar_registration_matches(&identity, registry) {
+    let store = coordinator.ledger_store.as_ref().ok_or_else(|| {
+        LifecycleValidateSidecarRegistrationErrorV1::Persistence(
+            "cancelled lifecycle Validate sidecar has no attached LedgerV1 store"
+                .to_owned(),
+        )
+    })?;
+    clear_registration(store, &identity)?;
+    return Ok(None);
+}
 coordinator.restore_validate_sidecar_wait(&identity, registry)?;
 """,
         "restart must restore an fsynced sidecar wait before Ready selection",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_validate_sidecar.rs",
+        """
+fn cancelled_validate_sidecar_registration_matches(
+    &self,
+    identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+    registry: &LifecycleWorkRegistryHolder,
+) -> bool {
+    let key = identity.dispatch_key;
+    let Some(record) = self.records.get(&key.lifecycle_ordinal()) else {
+        return false;
+    };
+    identity.matches_context(self.active_context)
+        && self.fault.is_none()
+        && self.active_lease.is_none()
+        && record.ordinal == key.lifecycle_ordinal()
+        && record.owner == key.owner()
+        && record.key == identity.lifecycle_key
+        && record.stage == identity.lifecycle_stage
+        && record.work_class == LifecycleWorkClass::Validate
+        && record.state == LifecycleState::Terminal(TerminalOutcome::Cancelled)
+        && record.physical_slots.len() == 1
+        && record.physical_slots.get(&key.slot()) == Some(&key.digest())
+        && self.key_index.get(&record.key) == Some(&record.ordinal)
+        && self.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
+        && !self.ready_index.contains(&record.ordinal)
+        && registry.registry().lacks_validate_sidecar_registration(identity)
+}
+""",
+        "cancelled sidecar cleanup must authenticate the exact terminal row and absent registry custody",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",

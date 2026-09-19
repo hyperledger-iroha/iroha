@@ -1253,26 +1253,68 @@ impl BodyStoreCompletion {
         &self.manifest
     }
 }
+/// One actual physical validation dependency observed before its failed probe.
+///
+/// This process-local observation grants only permission to retry acquisition.
+/// It contains no scheduler identity and is never encoded in a body marker.
+#[derive(Clone, Debug, Error)]
+#[error("local validation resource `{resource}` is busy")]
+pub(crate) struct BodyValidationBusy {
+    /// The physical resource whose acquisition failed.
+    pub(crate) resource: &'static str,
+    /// Original release observation, retaining no storage or State guard.
+    pub(crate) wait: mv::ReleaseWait,
+    /// Wake destination belonging to the original validation service.
+    wake: std::task::Waker,
+}
+impl BodyValidationBusy {
+    /// Join a failed physical probe to its original runner notification.
+    pub(crate) fn new(
+        resource: &'static str,
+        wait: mv::ReleaseWait,
+        wake: std::task::Waker,
+    ) -> Self {
+        Self {
+            resource,
+            wait,
+            wake,
+        }
+    }
+
+    /// Polling may register only this original service's wake destination.
+    pub(crate) fn waker(&self) -> &std::task::Waker {
+        &self.wake
+    }
+}
+
 /// Local validator dependency, never a statement about proposal validity.
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum LocalValidationRefusal {
+    /// An actual mutex must release before the original dispatch retries.
+    #[error(transparent)]
+    PhysicalBusy(BodyValidationBusy),
     /// Exact Queue ownership must release before the original dispatch retries.
     #[error("proposal validation awaits local Queue ownership release")]
-    QueueRelease(mv::ReleaseWait),
+    QueueRelease {
+        /// Release observed while holding the original Queue ownership cut.
+        wait: mv::ReleaseWait,
+        /// Original runner wake destination, also used for worker capacity.
+        wake: std::task::Waker,
+    },
     /// Local evidence or configuration requires repair followed by Strict restart.
     #[error("proposal validation requires local recovery: {0}")]
     RecoveryRequired(String),
 }
 
-/// Validator classification separating local readiness from deterministic invalidity.
+/// Typed classification supplied by deterministic body validators.
+///
+/// A local service/storage failure is not a consensus verdict. Implementations
+/// must explicitly identify deterministic rejection; there is no default which
+/// can accidentally persist local inability as an invalid proposal.
 pub(crate) trait BodyValidationError: std::fmt::Display {
-    /// Return the canonical reducer-level identity of a terminal rejection.
-    ///
-    /// Local dependencies must be returned by `local_refusal` before this
-    /// identity may authorize a durable rejection.
-    fn rejection_identity(&self) -> BodyValidationRejectionIdentity {
-        BodyValidationRejectionIdentity::Rejected
-    }
+    /// Return a canonical identity only for a deterministic body rejection.
+    /// `None` leaves validation undecided and cannot mint marker authority.
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity>;
     /// Preserve producer-specific local refusal without writing a semantic marker.
     fn local_refusal(&self) -> Option<LocalValidationRefusal> {
         None
@@ -1282,8 +1324,18 @@ pub(crate) trait BodyValidationError: std::fmt::Display {
         None
     }
 }
-impl BodyValidationError for String {}
+// String validators exist only in structural fixtures. Production validators
+// must preserve their typed local/semantic distinction through this boundary.
+#[cfg(test)]
+impl BodyValidationError for String {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        Some(BodyValidationRejectionIdentity::Rejected)
+    }
+}
 impl BodyValidationError for LocalValidationRefusal {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        None
+    }
     fn local_refusal(&self) -> Option<LocalValidationRefusal> {
         Some(self.clone())
     }
@@ -3394,7 +3446,16 @@ impl V2BodyStore {
                             SemanticReplayOutcome::DeferredMergeSidecar
                         } else {
                             SemanticReplayOutcome::Rejected {
-                                identity_code: error.rejection_identity().canonical_code(),
+                                identity_code: error
+                                    .rejection_identity()
+                                    .ok_or_else(|| {
+                                        V2BodyStoreError::LocalValidation(
+                                            LocalValidationRefusal::RecoveryRequired(
+                                                error.to_string(),
+                                            ),
+                                        )
+                                    })?
+                                    .canonical_code(),
                                 reason: error.to_string(),
                             }
                         }
@@ -3899,7 +3960,14 @@ impl V2BodyStore {
                         },
                     ));
                 }
-                let identity_code = error.rejection_identity().canonical_code();
+                let identity_code = error
+                    .rejection_identity()
+                    .ok_or_else(|| {
+                        V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(
+                            error.to_string(),
+                        ))
+                    })?
+                    .canonical_code();
                 let rejected =
                     self.persist_rejected_outcome(&durable, identity_code, error.to_string())?;
                 Ok(rejected.sealed_outcome())

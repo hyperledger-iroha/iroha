@@ -91,12 +91,12 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact lifecycle ordinal whose executed Validate carrier became Ready.
         ordinal: u128,
     },
+    /// The original Validate dispatch remains parked on actual local release/capacity.
+    LifecycleValidateLocalWaiting,
+    /// The original local-waiting dispatch re-entered the same keyed worker queue.
+    LifecycleValidateLocalRequeued,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
-    /// The unchanged Validate row waits for an actual local dependency release.
-    LifecycleValidateLocalWaiting,
-    /// The original Validate dispatch was requeued under its unchanged row.
-    LifecycleValidateLocalRequeued,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
     LifecycleValidateSidecarWaiting,
     /// The exact sidecar became durable and woke the same Validate row without a new ordinal.

@@ -1889,3 +1889,214 @@ relocking APIs inside the current lease would introduce circular waits.
 
 Local evidence: `dist/sumeragi-main-work/validation33.json`, exact build/source
 receipts, four runtime summaries, formal shards and the read-only geometry plan.
+
+## 2026-09-19: Queue retirement and original Kura geometry guards
+
+Queue retirement observation now acquires the actual reservation-transition mutex
+without blocking and returns that mutex's release observation on contention. Every
+existing blocking caller and the exact pending coordinator/participant, reservation,
+barrier and incarnation checks retain that physical owner. Kura transition and
+catalog publication consume their original four guards through one implementation;
+canonical recovery and capacity reads remain before geometry/sidecar acquisition,
+and pending GC remains before sidecar acquisition. These primitives have focused
+ownership and storage regressions and retain all existing Queue/geometry tests.
+
+The connected aggregate still must retain the original Queue/State service pair,
+admit the prelude and resources, preserve authenticated drain-history and directory
+custody, acquire component writers before durable geometry publication, and expose
+one State generation. `V2ApplyService` already owns the actual State/Queue pair;
+the next connection must retain that pair through candidate detachment and retry,
+and retain the inner Queue cut while keeping every later State/component probe
+nonblocking. Nonidentity geometry and old participant durability remain
+explicit refusals in the terminal consumer. A released mutex alone does not prove
+that queued work disappeared. Live Validate-to-Apply custody, runner cutover and
+unchanged four/seven-validator qualification remain open; no L1–L6 goal is complete.
+
+Scoped validation and the retained failed fixture attempts are recorded in
+[Queue and geometry publication](../docs/history/2026-09-19/queue-geometry-publication.md).
+
+The pending-hash query now acquires State before borrowing the live Queue entry.
+Its deterministic writer/removal test closes the identified indirect lock cycle;
+it does not make the retirement predicate nonblocking or retain a negative scan.
+Build43 retains the actual push/remove and reservation owners with exact release
+observations. The aggregate must still keep later State writers try-only and
+preserve complete original custody. The earlier build41 passed 23 controls; the
+latest broader results are below. Production cutover and unchanged network
+qualification remain open, as detailed in the dated record.
+
+Build43 extends the observer into a retained cut over the actual enqueue/removal
+and reservation owners. Both probes are try-only, refusal releases all attempted
+guards, and exact failed-mutex release drives retry. All 359 Queue, 150 geometry,
+eight publication-lock, 17 original review, two HTTP and one capacity controls
+pass. Five additional Kura/State ownership controls also pass, for 542 distinct
+runtime results. The cut is not yet retained by the production aggregate; original
+service custody, admitted scan/allocation work and try-only later writers remain
+required.
+
+The admission-capacity outcome must bind ingress promises to a carrier that fits.
+Build43's actual-configuration/assembler regression accepted a 512 KiB block limit
+and 64 KiB headroom, then proved that an approximately 800 KiB genuine complete
+input passing the protocol bound cannot fit. Two refusals retain exact durable
+custody and never reach signing. This is unit evidence, not Torii ingress or daemon
+qualification. Bind complete mandatory framing and signed RS16/native/topic geometry
+to admission before durable receipts, preserving exact retry/recovery authority.
+Acceptance still requires rejection before any durable claim, a fitting positive
+case, foreign/stale owner refusal, complete mandatory-control accounting, and the
+unchanged two-MiB batch/deferred-custody regressions. Torii/Core admission and
+consensus-context owners share this open outcome. Reuse the existing
+`AuthenticatedAdmissionCapacityV1` from authenticated runner recovery, which the
+actual Sumeragi handle already carries into Torii. Reconcile configured carrier
+limits and resource/transport reservations with that signed geometry before
+promising capacity; enforce outstanding promises across restart. Full goal
+closure is unchanged.
+
+
+### Authenticated input capacity, build46
+
+Startup now requires local body resources to cover the signed RS16 envelope;
+active/terminal capacity publication, pending-Kura recovery and candidate selection
+share that requirement. The reproduced smaller-local-carrier case is refused before
+capacity publication; the exact durable input assembles when resources cover the
+unchanged signed layout. Torii's real process handle checks active recovered
+capacity, exact network/binding, worst-quorum native envelope and actual publication/
+republication topic and encrypted queue bounds before new journal promises. Sizing
+holds request memory; loss after quorum remains an indeterminate outcome.
+
+Build46 passes the combined five-crate no-run build and 115 exact runtime controls
+on unchanged 7,058 inputs and binaries. Formal46 passes 77 focused controls and the
+full source-binding gate on 8,136 unchanged inputs. The [dated record](../docs/history/2026-09-19/admission-capacity.md)
+preserves two corrected test-compilation epochs and exact evidence scopes.
+
+The remaining admission outcome is a guaranteed complete GLOBAL opportunity:
+bound mandatory metadata across State policy changes, retain mandatory pulse and
+penalties, and select/defer optional evidence and autonomous anchors without losing
+original custody. A current-round count or the autonomous headroom alone cannot
+promise future fit. Native runtime cutover, original publication custody, full
+workspace checks and unchanged four/seven-validator fault/restart/final-transaction
+qualification remain open. No L1–L6 outcome is closed.
+
+
+### Exact optional-evidence selection and cold custody, build51
+
+The candidate owner now fits canonical optional-evidence prefixes against exact
+proposal bytes/chunks, gives economic/evidence classes alternating height-based
+opportunity independent of view, and preserves mandatory effects and original
+pending custody. Unfit evidence-only work defers without a pulse-only carrier;
+later ordinary work can proceed. Cold startup and active-context construction
+restore completed original lifecycle proofs through authenticated finality/context
+and unchanged evidence admission filters before productive I/O.
+
+Build51 and all 286 selected runtime controls pass on unchanged 7,058 inputs and
+binaries. The full source-binding gate and three final affected controls pass on
+8,136 unchanged inputs. The broader 138-control result belongs to frozen source49,
+before test-only fixture corrections; the [dated record](../docs/history/2026-09-19/carrier-evidence-custody.md)
+preserves exact scopes and failed attempts.
+
+Mandatory-metadata and individual evidence envelopes, pending-pool refill and
+startup scan cost remain open. Autonomous anchors cannot move across global
+heights by trimming. The next publication step must preserve one prepared entry
+from Validate through cache/reproposal and Apply, bound to the service's original
+State/Queue pair with complete capture admission and typed local deferral. Cold
+unfinished recovery rebuilds once; already-applied recovery does not execute.
+The production shared-lane and complete publication cutovers, full workspace tests
+and unchanged four/seven-validator campaigns remain required. L1–L6 remain open.
+
+The capture-admission implementation must first close its input surface:
+`prepare_journals` currently exposes StateBlock and execution prefix, while the
+retained owner also contains the ValidBlock, context, manifest, effects, events,
+tiered snapshot, geometry and archive plans. Events and the possible full cold
+tiered snapshot are already allocated during preparation. Reserve those earlier
+phases at their actual allocation boundaries and retain one aggregate ownership
+chain through capture, decision binding and installation. Installation must cover
+current/undo COW and delayed EBR reclamation, not only detached deltas. Existing
+body-store limits and `MeasuredBytes` are not a complete journal reservation; an
+allocating encoded-size fallback, omitted container nodes or saturating arithmetic
+cannot establish the required admission bound. This is an open implementation
+constraint, not a completed resource guarantee.
+
+
+### Explicit storage failure versus validation verdict, build54
+
+Production BodyValidationError now requires an explicit deterministic rejection
+identity. Local Kura/service errors return before live rejection persistence or
+cold marker promotion; planner storage tags and committed DA hydration provenance
+survive their Apply conversions. Direct candidate cursor rejection and exact
+missing-sidecar deferral retain their existing semantics. The existing storage
+fail-stop/restart boundary remains the reachable recovery action.
+
+Build54 and 470 selected runtime controls pass on unchanged 7,059 captured inputs
+and binaries. The canonical full gate and 14 focused formal controls pass on
+8,137 unchanged inputs. Captures now explicitly include the compiled source-
+contract text asset. The [dated record](../docs/history/2026-09-19/local-validation-verdicts.md)
+preserves detailed scopes and remaining limits.
+
+Queue-local temporary veto, resource/physical waits and complete capture admission
+still require correct shared retirement/drain semantics and actual wake owners;
+a local Queue wait can depend on the same blocked height. Original prepared
+execution must survive Validate/cache/reproposal into Apply; this verdict correction does not implement
+that cutover. L1–L6 and all unchanged-network qualification requirements remain open.
+
+
+### Physical Validate custody and local capacity, build58
+
+Actual Queue/lifecycle mutex contention now retains the original durable Validate
+dispatch, external waiting row, keyed I/O index and output guard. Mutex and worker
+capacity releases notify the original service Queue; the existing ordinary-head
+drain breaks the identified bounded-channel cycle. No logical wake or new ordinal
+is introduced. Fixed Native evidence limits and pending local retirement promises
+are typed non-verdict failures; hard canonical format limits remain rejection.
+Apply retains its blocking check and final veto until original prepared publication
+custody can consume a physical continuation.
+
+Build58, 871 runtime controls, the canonical multilane gate and 49 Python controls
+pass on their unchanged input captures. The [dated record](../docs/history/2026-09-19/physical-validation-waits.md)
+retains detailed selection and failed attempts. The canonical close intent already
+fixes admission closure at C; the next slice
+must distinguish retained, WSV-ranked pre-close inputs from fresh admission and
+drain them through the existing Native Decision owner. Reconcile their original
+Queue custody only from exact Kura terminal receipts before drain voting. A
+QueuePlanSynced f+1 acknowledgement does not guarantee an honest intersection
+with a 2f+1 drain quorum: delayed uncarried inputs need an explicit authenticated
+carry/terminal contract across closure. Never wait for the same blocked height
+to discharge its own promises or treat local Queue emptiness as agreed validity.
+Increasing acknowledgements to 2f+1 alone is insufficient: current coordinator
+receipts need not intersect a participant's pinned drain committee. A durable
+promise/drain fence must cover each affected immutable committee, record promises
+before signing, and retain them until exact canonical terminal evidence. Complete
+the carry/closure protocol for delayed publication and partial acknowledgements;
+otherwise an abandoned partial attempt can itself prevent drain forever.
+The decisive four-validator test must delay pre-close receipt publication through
+closure and restart, preserve every acknowledged input, and finish final work
+without an empty-block dependency. Also qualify distinct pinned route committees
+and a pause between durable admission and attestation; same-roster tests cannot
+establish cross-route promise custody.
+Full workspace, real unchanged four/seven-validator campaigns and L1–L6 remain open.
+
+
+### Shared retained-admission authority, build60
+
+One State projection now authenticates canonical pending route custody for Queue
+refresh, exact retry, body handoff and cold replay, and the existing Native
+closed-lane opening consumer. Closed work retains its original ranked binding,
+predecessor, all atomic route members, incarnation and immutable committee.
+Fresh ingress and ordinary proposal/reservation execution remain closed. This
+removes the identified canonical-close-to-permanent-Queue-fault path without
+converting an uncarried off-chain receipt into canonical pending authority.
+
+The combined build, 1,256 selected runtime controls and canonical multilane gate
+pass. All 117 selected Python controls pass. Captured inputs and binaries stayed
+unchanged within each run. The [dated record](../docs/history/2026-09-19/retained-admission-authority.md)
+preserves precise scope, the four repaired fixture-stack failures and the earlier
+formal token-normalization failure. No assertion or production stack was weakened.
+
+First connect Torii empty-Queue canonical submission retry to exact State pending
+custody before its fresh route preflight; current handoff evidence covers Queue,
+not that network path. Then connect exact terminal reconciliation before drain
+through the original Queue/State/Kura owner. A Queue release can restore FIFO before Kura writes its
+Complete outcome; absent Complete authorization never proves the input had no
+old autonomous owner. Preserve that crash cut, exact group/alias evidence and
+all reservation/selection barriers. Complete per-committee promise custody and
+canonical carry/terminal disposition for late and partial receipts. The actual
+shared-lane execution/publication cutover, prepared Validate-to-Apply ownership,
+full workspace and unchanged four/seven-validator campaigns remain open. L1–L6
+remain open.

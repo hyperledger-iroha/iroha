@@ -34,26 +34,6 @@ impl<T> Drop for PhysicalPublicationGuard<'_, T> {
     }
 }
 
-impl<T> std::ops::Deref for PublicationGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        self.inner
-            .guard
-            .as_deref()
-            .expect("physical publication guard is present until drop")
-    }
-}
-
-impl<T> std::ops::DerefMut for PublicationGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        self.inner
-            .guard
-            .as_deref_mut()
-            .expect("physical publication guard is present until drop")
-    }
-}
-
 impl<T> PublicationGuard<'_, T> {
     /// Preserve QueuePlan's fair unlock before waiting for Kura publication.
     /// The outer release guard signals only after the physical unlock completes.
@@ -63,8 +43,28 @@ impl<T> PublicationGuard<'_, T> {
     }
 }
 
+impl<T> std::ops::Deref for PublicationGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.inner
+            .guard
+            .as_deref()
+            .expect("retained physical guard")
+    }
+}
+
+impl<T> std::ops::DerefMut for PublicationGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.inner
+            .guard
+            .as_deref_mut()
+            .expect("retained physical guard")
+    }
+}
+
 impl<T> PublicationMutex<T> {
-    /// Keep the guarded value and its actual release source in one owner.
+    /// Bind the original protected value and its release observation at creation.
     pub(crate) fn new(value: T) -> Self {
         Self {
             inner: parking_lot::Mutex::new(value),

@@ -805,22 +805,9 @@ impl LifecyclePlannerIoFixture {
                 .take()
                 .expect("the real validator is called exactly once")
         });
-        let guarded = match result {
-            Ok(result) => GuardedLifecycleValidateWorkerResultV1::new(key, result, output_guard),
-            Err((
-                super::super::v2_body_store::V2BodyStoreError::LocalValidation(refusal),
-                dispatch,
-            )) => GuardedLifecycleValidateWorkerResultV1::deferred(
-                key,
-                dispatch,
-                refusal,
-                output_guard,
-            ),
-            Err((error, _)) => panic!("execute held lifecycle Validate: {error}"),
-        };
-        let command_guard = Arc::clone(&guarded.drop_guard.output_guard);
+        let command_guard = Arc::clone(&output_guard);
         let completion = execute_fail_stop_io_command(&command_guard, || {
-            Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
+            lifecycle_validate_worker_completion(key, result, output_guard)
         })
         .expect("typed completion retains its dispatch even when local recovery closes output");
         let V2IoCompletion::LifecycleValidate(guarded) = completion else {
@@ -949,6 +936,26 @@ impl LifecyclePlannerIoFixture {
             V2IoCompletion::AuxiliaryNoop,
         )
         .expect("publish one tracked ordinary completion");
+    }
+    /// Fill the actual bounded completion channel without guessing its limit.
+    pub(in crate::sumeragi) fn fill_auxiliary_completion_capacity_for_test(&self) -> usize {
+        let mut count = 0;
+        loop {
+            match try_send_tracked_completion(
+                &self.completion_tx,
+                &self.admission,
+                V2IoCompletion::AuxiliaryNoop,
+            ) {
+                Ok(()) => count += 1,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    assert!(count > 0, "fixture started with completion capacity");
+                    return count;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    panic!("original receiver remains live")
+                }
+            }
+        }
     }
     /// Execute one lifecycle-owned Sign through the production signing helper.
     pub(in crate::sumeragi) fn execute_one_recovered_lifecycle_sign_fixture(
@@ -1651,6 +1658,47 @@ impl LifecyclePlannerIoFixture {
     }
 }
 
+impl LifecyclePlannerIoFixture {
+    /// Fill actual consensus command slots while one Validate continuation is parked.
+    pub(in crate::sumeragi) fn fill_validate_retry_capacity_for_test(
+        &self,
+        subject: wire::BlockSubject,
+    ) -> usize {
+        let mut count = 0;
+        loop {
+            let command = V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(9_000 + count as u64),
+                subject,
+            };
+            match self
+                .command_rx
+                .queue
+                .try_send_as(V2IoAdmissionClass::Consensus, command)
+            {
+                Ok(()) => count += 1,
+                Err(V2IoTrySendError::Full(_)) => return count,
+                Err(_) => panic!("live exact command queue"),
+            }
+        }
+    }
+    /// Service the admitted body lookups through the actual receiver while Validate waits.
+    pub(in crate::sumeragi) fn drain_validate_retry_capacity_for_test(&self) -> usize {
+        let mut count = 0;
+        while let Ok(command) = self.command_rx.try_recv() {
+            let V2IoCommand::LoadCandidate {
+                acquisition_id,
+                subject,
+            } = command
+            else {
+                panic!("only the bounded test body lookup was admitted");
+            };
+            assert!(load_candidate_body(&self.body_store, acquisition_id, subject).is_ok());
+            count += 1;
+        }
+        count
+    }
+}
+
 /// Drive original dispatch custody through real Queue release and the worker FIFO.
 #[cfg(feature = "bls")]
 pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
@@ -1687,9 +1735,10 @@ pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
     let (error, original) = task
         .dispatch
         .execute(store, |_| {
-            Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::QueueRelease(
-                release.clone(),
-            ))
+            Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::QueueRelease {
+                wait: release.clone(),
+                wake: lane_queue.sumeragi_waker(),
+            })
         })
         .expect_err("local Queue dependency returns the original dispatch");
     let V2BodyStoreError::LocalValidation(refusal) = error else {

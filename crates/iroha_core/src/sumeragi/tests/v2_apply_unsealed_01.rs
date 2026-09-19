@@ -54,19 +54,55 @@ v2_apply_test!(
             Hash::new(b"retirement Queue-veto proposal"),
         );
         assert_eq!(queue.live_lane_reservations(), vec![reservation]);
+        let generation = fixture.state.state_view_generation();
+        let error = fixture
+            .service
+            .try_validate_autoscale_retirement_queue_binding(
+                reservation.lane_id,
+                reservation.dataspace_id,
+                reservation.lane_incarnation,
+            )
+            .expect_err("the original service must retain exact pending work as a local outcome");
+        assert!(matches!(
+            error,
+            V2ApplyError::LocalValidation(
+                super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. }
+            )
+        ));
+        assert_eq!(error.rejection_identity(), None);
+        assert!(
+            matches!(
+                error.local_refusal(),
+                Some(super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. })
+            ),
+            "a completed scan has no physical wake dependency"
+        );
+        assert_eq!(fixture.state.state_view_generation(), generation);
+        drop(
+            fixture
+                .state
+                .try_lock_lane_lifecycle_work_admission()
+                .expect("pending scan released lifecycle"),
+        );
+        drop(
+            queue
+                .try_lock_lane_retirement_observer()
+                .expect("pending scan released Queue"),
+        );
         let queue_retirement_observer = queue.lock_lane_retirement_observer();
         let error = V2ApplyService::validate_autoscale_retirement_queue_binding(
             &queue_retirement_observer,
             reservation.lane_id,
             reservation.dataspace_id,
             reservation.lane_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect_err("the exact reserved route must veto prospective retirement");
         assert!(
             matches!(
                 error,
                 V2ApplyError::LocalValidation(
-                    super::super::v2_body_store::LocalValidationRefusal::QueueRelease(_)
+                    super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. }
                 )
             ),
             "local Queue ownership must never reject the candidate"
@@ -78,6 +114,7 @@ v2_apply_test!(
             reservation.lane_id,
             reservation.dataspace_id,
             unrelated_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect("a reservation from another incarnation must not veto retirement");
         assert_eq!(
@@ -85,6 +122,152 @@ v2_apply_test!(
             vec![reservation],
             "the read-only veto must preserve exact Queue ownership"
         );
+    }
+);
+v2_apply_test!(
+    prospective_retirement_without_binding_skips_held_queue_and_lifecycle,
+    {
+        let fixture = ApplyFixture::new();
+        let generation = fixture.state.state_view_generation();
+        let state_block = fixture.state.block(fixture.body.header());
+        assert!(
+            state_block
+                .pending_autoscale_retirement_binding()
+                .expect("pending identity")
+                .is_none()
+        );
+        assert!(
+            state_block
+                .prospective_autoscale_retirement_binding(&fixture.body)
+                .expect("prospective identity")
+                .is_none()
+        );
+        let observer = fixture.service.queue.lock_lane_retirement_observer();
+        let lifecycle = fixture.state.lock_lane_lifecycle_work_admission();
+        fixture
+            .service
+            .try_validate_prospective_autoscale_retirement_queue(&fixture.body, &state_block)
+            .expect("Validate without retirement must not probe either held mutex");
+        fixture
+            .service
+            .validate_prospective_autoscale_retirement_queue(&fixture.body, &state_block)
+            .expect("Apply without retirement must not acquire either held mutex");
+        drop(lifecycle);
+        drop(observer);
+        drop(state_block);
+        assert_eq!(fixture.state.state_view_generation(), generation);
+        assert!(fixture.service.queue.live_lane_reservations().is_empty());
+    }
+);
+v2_apply_test!(
+    prospective_retirement_busy_retains_exact_release_and_service_wake,
+    {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+
+        let fixture = ApplyFixture::new_with_lane_lifecycle();
+        let lane = install_recreatable_reservation_lane(&fixture);
+        let incarnation = fixture
+            .state
+            .lane_incarnation_at_height(lane.id, 1)
+            .expect("actual active lane incarnation");
+        let generation = fixture.state.state_view_generation();
+        let (wake_sender, wake_receiver) = std::sync::mpsc::sync_channel(1);
+        fixture.service.queue.set_sumeragi_wake(wake_sender);
+        let observe = || {
+            fixture
+                .service
+                .try_validate_autoscale_retirement_queue_binding(
+                    lane.id,
+                    lane.dataspace_id,
+                    incarnation,
+                )
+        };
+        let into_busy = |error: V2ApplyError| {
+            assert_eq!(error.rejection_identity(), None);
+            assert!(!error.requires_restart_recovery());
+            match error {
+                V2ApplyError::LocalValidation(
+                    super::super::v2_body_store::LocalValidationRefusal::PhysicalBusy(busy),
+                ) => busy,
+                unexpected => panic!("expected an original physical dependency, got {unexpected}"),
+            }
+        };
+
+        let observer = fixture.service.queue.lock_lane_retirement_observer();
+        let busy = into_busy(observe().expect_err("held original Queue transition"));
+        assert_eq!(busy.resource, "lane_reservation_transition_lock");
+        drop(observer);
+        // The original lock released before registration; no timer or later commit
+        // is needed, and this future retains no Queue/State guard.
+        let mut release = busy.wait.clone().wait_for_release();
+        assert_eq!(
+            Pin::new(&mut release).poll(&mut Context::from_waker(busy.waker())),
+            Poll::Ready(())
+        );
+        observe().expect("retry the same exact binding after Queue release");
+
+        let lifecycle = fixture.state.lock_lane_lifecycle_work_admission();
+        let busy = into_busy(observe().expect_err("held original State lifecycle"));
+        assert_eq!(busy.resource, "lane_lifecycle_lock");
+        let mut release = busy.wait.clone().wait_for_release();
+        assert_eq!(
+            Pin::new(&mut release).poll(&mut Context::from_waker(busy.waker())),
+            Poll::Pending
+        );
+        // The failed lifecycle attempt already relinquished T. Releasing that
+        // independent owner cannot satisfy this State-owned observation.
+        drop(
+            fixture
+                .service
+                .queue
+                .try_lock_lane_retirement_observer()
+                .expect("failed probe released T"),
+        );
+        assert_eq!(
+            Pin::new(&mut release).poll(&mut Context::from_waker(busy.waker())),
+            Poll::Pending
+        );
+        assert!(matches!(
+            wake_receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        drop(lifecycle);
+        wake_receiver
+            .try_recv()
+            .expect("physical State release wakes the original runner");
+        assert_eq!(
+            Pin::new(&mut release).poll(&mut Context::from_waker(busy.waker())),
+            Poll::Ready(())
+        );
+        observe().expect("same service retries after real lifecycle release");
+        assert_eq!(fixture.state.state_view_generation(), generation);
+        assert!(fixture.service.queue.live_lane_reservations().is_empty());
+    }
+);
+v2_apply_test!(
+    prospective_retirement_zero_incarnation_is_invalid_before_local_probes,
+    {
+        let fixture = ApplyFixture::new_with_lane_lifecycle();
+        let lane = install_recreatable_reservation_lane(&fixture);
+        let observer = fixture.service.queue.lock_lane_retirement_observer();
+        let lifecycle = fixture.state.lock_lane_lifecycle_work_admission();
+        let error = fixture
+            .service
+            .try_validate_autoscale_retirement_queue_binding(
+                lane.id,
+                lane.dataspace_id,
+                Hash::prehashed([0; Hash::LENGTH]),
+            )
+            .expect_err("zero agreed identity is invalid even when local owners are held");
+        assert!(matches!(error, V2ApplyError::Validation(_)));
+        assert!(error.rejection_identity().is_some());
+        assert!(error.local_refusal().is_none());
+        drop(lifecycle);
+        drop(observer);
     }
 );
 v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
@@ -1449,6 +1632,7 @@ v2_apply_test!(
             reservation.lane_id,
             reservation.dataspace_id,
             reservation.lane_incarnation,
+            first_queue.sumeragi_waker(),
         )
         .expect_err("unresolved retired-source Queue custody still blocks retirement");
         assert_eq!(
@@ -2137,6 +2321,7 @@ fn assert_retired_merge_replay_preserves_queue_cut(crash_cut: RetiredMergeQueueC
             keys[0].lane_id,
             keys[0].dataspace_id,
             keys[0].lane_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect_err("production retirement must retain genuine Commit barriers");
     }

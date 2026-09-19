@@ -1448,7 +1448,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation() {
+fn grouped_native_amx_prevote_local_capacity_refusal_preserves_kura_and_wsv() {
     let positive = grouped_native_candidate_fixture(None);
     let positive_state_hash =
         crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref())
@@ -1519,18 +1519,25 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
     let error = negative
         .service
         .validate_candidate(&negative.context, &negative.body)
-        .expect_err("one-byte evidence budget must reject before voting");
+        .expect_err("one-byte local evidence capacity must refuse before voting");
     match &error {
-        crate::sumeragi::v2_apply::V2ApplyError::Validation(message) => {
-            assert!(
-                message.contains("configured shared stable aggregate byte bound")
-                    && message.contains("of 1 bytes"),
-                "unexpected grouped Native byte-budget rejection: {message}"
-            );
+        crate::sumeragi::v2_apply::V2ApplyError::LocalEvidenceCapacity {
+            required_bytes,
+            configured_bytes,
+        } => {
+            assert_eq!(*configured_bytes, 1);
+            assert!(*required_bytes > *configured_bytes);
         }
         other => panic!("unexpected grouped Native pre-vote error: {other}"),
     }
-    assert!(!error.requires_restart_recovery());
+    assert!(error.requires_restart_recovery());
+    assert!(
+        crate::sumeragi::v2_body_store::BodyValidationError::rejection_identity(&error).is_none()
+    );
+    assert!(matches!(
+        crate::sumeragi::v2_body_store::BodyValidationError::local_refusal(&error),
+        Some(crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(_)),
+    ));
     assert_eq!(negative.state.committed_height(), 3);
     assert_eq!(
         negative

@@ -1,3 +1,71 @@
+#[test]
+fn storage_diagnostic_text_cannot_mint_deterministic_rejection_identity() {
+    for local in [
+        V2ApplyError::Kura(crate::kura::Error::IO(
+            std::io::Error::other("exact finality read failed"),
+            std::path::PathBuf::from("finality.norito"),
+        )),
+        V2ApplyError::CanonicalStorageRead(crate::kura::Error::IO(
+            std::io::Error::other("exact finality read failed"),
+            std::path::PathBuf::from("finality.norito"),
+        )),
+    ] {
+        let deterministic = V2ApplyError::Validation(local.to_string());
+        assert_eq!(local.rejection_identity(), None);
+        assert!(deterministic.rejection_identity().is_some());
+        assert!(local.missing_certified_merge_sidecar().is_none());
+        assert!(deterministic.missing_certified_merge_sidecar().is_none());
+    }
+}
+v2_apply_test!(
+    hydration_failure_preserves_local_context_through_candidate_classifier,
+    {
+        let fixture = ApplyFixture::new();
+        let shard = crate::da::shard_cursor::DaShardCursorError::MissingCursor {
+            lane_id: LaneId::SINGLE,
+            shard_id: 0,
+            block_height: 1,
+        };
+        let receipt = crate::da::receipts::DaReceiptCursorError::MissingSequence {
+            lane: LaneId::SINGLE,
+            epoch: 0,
+            expected: 1,
+            observed: 2,
+        };
+        for hydration in [
+            crate::state::DaIndexHydrationError::MissingBlock {
+                height: NonZeroU64::new(1).unwrap(),
+            },
+            crate::state::DaIndexHydrationError::ShardCursor(shard),
+            crate::state::DaIndexHydrationError::ReceiptCursor(receipt),
+        ] {
+            let error = BlockValidationError::from(hydration);
+            assert!(matches!(&error, BlockValidationError::DaIndexHydration(_)));
+            let classified =
+                V2ApplyService::classify_candidate_validation_error(None, &fixture.body, &error);
+            assert!(matches!(&classified, V2ApplyError::LocalCanonicalState(_)));
+            assert_eq!(classified.rejection_identity(), None);
+            assert!(classified.requires_restart_recovery());
+            assert!(classified.missing_certified_merge_sidecar().is_none());
+        }
+        // The same cursor failure produced by validation of the candidate's own
+        // bundle remains deterministic. Only committed-history hydration changes
+        // ownership of the failure; its diagnostic text grants no authority.
+        for candidate_error in [
+            BlockValidationError::DaShardCursor(shard),
+            BlockValidationError::DaReceiptCursor(receipt),
+        ] {
+            let classified = V2ApplyService::classify_candidate_validation_error(
+                None,
+                &fixture.body,
+                &candidate_error,
+            );
+            assert!(matches!(&classified, V2ApplyError::Validation(_)));
+            assert!(classified.rejection_identity().is_some());
+            assert!(!classified.requires_restart_recovery());
+        }
+    }
+);
 v2_apply_test!(
     canonical_overlap_detects_same_transaction_under_substituted_key,
     {
@@ -1147,6 +1215,183 @@ v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {
         "an exact lane retry must preserve the complete canonical Kura wire"
     );
 });
+v2_apply_test!(
+    damaged_finality_does_not_reject_or_promote_exact_candidate_validation,
+    {
+        let fixture = ApplyFixture::new_with_lane_payload(true);
+        let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("capture the exact uncommitted fixture State");
+        let state_generation = fixture.state.state_view_generation();
+        let expected_commitment = fixture.task.validated_receipt().execution_commitment();
+        let mut original_store = fixture.reopen_body_store();
+        fixture.service.fail_after_wsv_checkpoint_for_test();
+        assert!(matches!(
+            fixture.execute(&mut original_store),
+            Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint)
+        ));
+        drop(original_store);
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+        let finality_path = fixture.kura.v2_finality_artifact_path_for_testing(1);
+        let original_finality =
+            std::fs::read(&finality_path).expect("read real persisted finality");
+        let artifact = fixture
+            .kura
+            .v2_finality_artifact(1)
+            .expect("authenticate the Kura-first finality")
+            .expect("the injected crash follows real finality publication");
+        assert_eq!(artifact.commit_qc.execution_commitment, expected_commitment);
+        assert_eq!(artifact.subject, fixture.manifest.subject);
+
+        // A separate store has the same authenticated body, but no validation
+        // marker. The original store retains its real, pre-crash success marker.
+        let fresh_root = tempfile::tempdir().expect("fresh body-store directory");
+        let mut fresh_store = V2BodyStore::open_with_policy(
+            fresh_root.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.genesis_key.public_key().clone()),
+        )
+        .expect("open an unvalidated body store");
+        let durable = fresh_store
+            .store(
+                fixture.manifest.clone(),
+                fixture
+                    .body
+                    .encode_wire()
+                    .expect("canonical signed proposal"),
+            )
+            .expect("persist the same exact proposal without a validation marker");
+        let mut recovered_store = fixture.reopen_body_store();
+        let fresh_before = retained_recovery_files_for_test(fresh_root.path());
+        let recovered_before = retained_recovery_files_for_test(fixture.body_root.path());
+        let recovered_catalog = recovered_store.recovery_catalog().unwrap();
+        assert!(fresh_store.validated_recovery_catalog().is_empty());
+        assert!(recovered_store.validated_recovery_catalog().is_empty());
+
+        let mut damaged_finality = original_finality.clone();
+        *damaged_finality
+            .last_mut()
+            .expect("nonempty actual finality") ^= 1;
+        fixture
+            .kura
+            .overwrite_v2_finality_bytes_for_tests(1, &damaged_finality)
+            .expect("damage actual Kura finality without changing the body");
+        std::fs::File::open(&finality_path)
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        let damaged_kura = retained_recovery_files_for_test(&fixture.kura.store_root());
+
+        // Both production callbacks encounter storage failure. It is neither
+        // deterministic invalidity nor authority to retire a recovered marker.
+        let fresh_error = fixture
+            .service
+            .validate_candidate(&fixture.context, &fixture.body)
+            .expect_err("ordinary validation must authenticate current-height finality");
+        assert!(matches!(fresh_error, V2ApplyError::CanonicalStorageRead(_)));
+        let recovered_error = fixture
+            .service
+            .revalidate_recovered_candidate(&fixture.context, &fixture.body)
+            .expect_err("recovery must authenticate the actual finality record");
+        assert!(matches!(recovered_error, V2ApplyError::Kura(_)));
+        for _ in 0..2 {
+            let fresh_error = fresh_store
+                .execute_durable_validation(durable.clone(), durable.manifest_hash(), |body| {
+                    fixture.service.validate_candidate(&fixture.context, body)
+                })
+                .expect_err("a local read failure cannot become a durable rejection");
+            assert!(matches!(
+                fresh_error,
+                crate::sumeragi::v2_body_store::V2BodyStoreError::LocalValidation(_)
+            ));
+            let recovered_error = recovered_store
+                .revalidate_recovered_markers(|body| {
+                    fixture
+                        .service
+                        .revalidate_recovered_candidate(&fixture.context, body)
+                })
+                .expect_err("a local read failure must leave success markers quarantined");
+            assert!(matches!(
+                recovered_error,
+                crate::sumeragi::v2_body_store::V2BodyStoreError::LocalValidation(_)
+            ));
+            assert!(fresh_store.validated_recovery_catalog().is_empty());
+            assert!(fresh_store.rejected_recovery_catalog().is_empty());
+            assert!(recovered_store.validated_recovery_catalog().is_empty());
+            assert!(recovered_store.rejected_recovery_catalog().is_empty());
+            assert_eq!(
+                recovered_store.recovery_catalog().unwrap(),
+                recovered_catalog
+            );
+            assert_eq!(
+                retained_recovery_files_for_test(fresh_root.path()),
+                fresh_before
+            );
+            assert_eq!(
+                retained_recovery_files_for_test(fixture.body_root.path()),
+                recovered_before
+            );
+            assert_eq!(
+                retained_recovery_files_for_test(&fixture.kura.store_root()),
+                damaged_kura
+            );
+            assert_eq!(fixture.state.committed_height(), 0);
+            assert_eq!(fixture.state.state_view_generation(), state_generation);
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+                state_hash
+            );
+        }
+
+        fixture
+            .kura
+            .overwrite_v2_finality_bytes_for_tests(1, &original_finality)
+            .expect("restore only the exact originally authenticated finality bytes");
+        std::fs::File::open(&finality_path)
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        let validated = fresh_store
+            .execute_durable_validation(durable.clone(), durable.manifest_hash(), |body| {
+                fixture.service.validate_candidate(&fixture.context, body)
+            })
+            .expect("the same proposal succeeds after repairing local storage");
+        assert_eq!(
+            validated
+                .validated_receipt()
+                .unwrap()
+                .execution_commitment(),
+            expected_commitment
+        );
+        recovered_store
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("the original success marker can now recover its exact authority");
+        let recovered = recovered_store.validated_recovery_catalog();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(
+            recovered.values().next().unwrap().execution_commitment(),
+            expected_commitment
+        );
+        assert!(fresh_store.rejected_recovery_catalog().is_empty());
+        assert!(recovered_store.rejected_recovery_catalog().is_empty());
+        assert_eq!(
+            retained_recovery_files_for_test(fixture.body_root.path()),
+            recovered_before,
+            "semantic recovery never rewrites the original success marker"
+        );
+        assert_eq!(std::fs::read(&finality_path).unwrap(), original_finality);
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(fixture.state.state_view_generation(), state_generation);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+            state_hash
+        );
+    }
+);
 v2_apply_test!(
     conflicting_canonical_kura_block_fails_before_wsv_mutation,
     {
