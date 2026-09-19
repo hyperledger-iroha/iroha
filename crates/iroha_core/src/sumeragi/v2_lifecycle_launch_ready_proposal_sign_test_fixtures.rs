@@ -141,6 +141,16 @@ impl LaunchedProductionLifecycleV1 {
         }
     }
 
+    /// Park an actual worker completion in the same sole slot used by the driver.
+    pub(in crate::sumeragi) fn park_validate_completion_for_test(
+        &mut self,
+        completion: PreparedLifecycleValidateCompletionV1,
+    ) {
+        assert!(self.pending_lifecycle_completion.is_none());
+        self.pending_lifecycle_completion =
+            Some(PendingLifecycleCompletionV1::Validate(completion));
+    }
+
     /// Snapshot the serialized runtime without consuming its pending progress owner.
     pub(in crate::sumeragi) fn runtime_queue_snapshot_for_ready_sign_test(
         &self,

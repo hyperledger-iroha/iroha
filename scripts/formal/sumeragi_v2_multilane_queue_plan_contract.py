@@ -86,6 +86,8 @@ def validate_queue_plan_autonomous_only_contract(
                 )
 
     validate_current_queue_plan_selection(binding_items, errors)
+    validate_retained_queue_plan_route_authority(binding_items, errors)
+    validate_canonical_queue_plan_retry(binding_items, errors)
 
     for relative, kind, symbol, tokens in (
         QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS
@@ -618,8 +620,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "self.is_expired_at_with_enqueue_timestamp(",
             "replay_observed_at",
             "!has_durable_reservation_owner",
-            "resolve_routing_plan_for_queue_admission(",
-            "durable_plan_claim_context_revalidates_in_view",
+            "Self::durable_plan_claim_route_authority_in_view(state_view, &claim)",
             "QueueAdmissionPreparationMode::AtomicJournalReplay",
             "transaction_selection_durability_faulted()",
             "self.active_len()",
@@ -1003,7 +1004,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "if state_committed && !has_durable_reservation_owner {",
             "let canonical_pending_handoff = if !state_committed",
             "self.is_expired_at_with_enqueue_timestamp(",
-            "resolve_routing_plan_for_queue_admission(",
+            "Self::durable_plan_claim_route_authority_in_view(state_view, &claim)",
             "prepare_checked_for_enqueue(",
             "if self.transaction_selection_durability_faulted()",
             "let mut projected_active = self.active_len();",
@@ -1755,3 +1756,622 @@ def validate_current_queue_plan_selection(items: dict, errors: list[str]) -> Non
         } Ok(())"""
         if _code(exact) not in _code(claim):
             errors.append("QueuePlan complete journal claim or digest rejection changed")
+
+
+# Retained authority is custody only; ordinary selectors remain closed.
+QUEUE_PLAN_RETAINED_ROUTE_BINDINGS = (('crates/iroha_core/src/state.rs',
+  'method',
+  'State::queue_plan_pending_route_authority_in_view',
+  ('match Self::queue_plan_binding_application_evidence_in_view(state, binding)? {\n'
+   '            QueuePlanBindingApplicationEvidence::Absent\n'
+   '            | QueuePlanBindingApplicationEvidence::AppliedDirect\n'
+   '            | QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias => return Ok(None),\n'
+   '            QueuePlanBindingApplicationEvidence::PendingStale => {\n'
+   '                return Err("retained QueuePlan input has a stale route '
+   'incarnation".to_owned());\n'
+   '            }\n'
+   '            QueuePlanBindingApplicationEvidence::Pending => {}\n'
+   '        }',
+   'let next_height = height\n            .checked_add(1)',
+   'let predecessor = if context.authority_height == 0 {\n'
+   '            None\n'
+   '        } else {\n'
+   '            let index = usize::try_from(context.authority_height - 1)',
+   'let record = Self::decode_exact_queue_plan_admission_registry_record(\n'
+   '            &registry_key,\n'
+   '            state\n'
+   '                .world()\n'
+   '                .smart_contract_state()\n'
+   '                .get(&registry_key)',
+   'if predecessor != context.predecessor_block_hash\n'
+   '            || record.claim != binding.registry_value()\n'
+   '            || record.priority.carrier_height < context.proposal_height\n'
+   '            || record.priority.carrier_height > height\n'
+   '        {\n'
+   '            return Err(',
+   'for bound in &context.route_incarnations {',
+   '.find(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)',
+   'let drain = decode_autoscale_lane_drain_state(lane).map_err(str::to_owned)?;\n'
+   '            if let Some(drain) = drain\n'
+   '                && next_height > drain.intent.close_global_height\n'
+   '            {',
+   'let pin = decode_autoscale_lane_committee(lane)\n'
+   '                    .map_err(str::to_owned)?\n'
+   '                    .ok_or_else(|| "retained QueuePlan drain has no immutable '
+   'pin".to_owned())?;\n'
+   '                validate_autoscale_lane_committee_pops(&pin).map_err(str::to_owned)?;',
+   'if !lane.claims_autoscale_managed()\n'
+   '                    || close > height\n'
+   '                    || record.priority.carrier_height > close\n'
+   '                    || drain.commitment.is_some()\n'
+   '                    || !autoscale_lane_drain_state_matches_context(\n'
+   '                        lane,\n'
+   '                        &drain,\n'
+   '                        state.network_id(),\n'
+   '                        bound.lane_incarnation,\n'
+   '                    )\n'
+   '                    || state.lane_incarnation_at_height(route.lane_id, close)\n'
+   '                        != Some(bound.lane_incarnation)\n'
+   '                    || pin.validator_set != bound.validator_set\n'
+   '                {\n'
+   '                    return Err(',
+   'authority = QueuePlanPendingRouteAuthority::Draining;\n'
+   '            } else if state.lane_incarnation_at_height(route.lane_id, next_height)\n'
+   '                != Some(bound.lane_incarnation)\n'
+   '            {\n'
+   '                return Err(',
+   'Ok(Some(authority))')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::durable_plan_claim_route_authority_in_view',
+  ('let active = resolve_routing_plan_for_queue_admission(\n'
+   '            claim.routing_plan.clone(),\n'
+   '            state_view.nexus(),\n'
+   '            u64::try_from(state_view.height()).unwrap_or(u64::MAX),\n'
+   '        );\n'
+   '        if active.as_ref() == Ok(&claim.routing_plan)\n'
+   '            && Self::durable_plan_claim_context_revalidates_in_view(\n'
+   '                state_view,\n'
+   '                &claim.routing_plan,\n'
+   '                &claim.admission_context,\n'
+   '            )\n'
+   '        {\n'
+   '            return Ok(QueuePlanPendingRouteAuthority::Active);\n'
+   '        }',
+   'if claim.global_admission_identity.is_some() {\n'
+   '            let binding = claim\n'
+   '                .global_admission_binding()\n'
+   '                .map_err(|_| RoutingResolveError::StaleRoutingPlan)?;\n'
+   '            if let Some(authority) =\n'
+   '                State::queue_plan_pending_route_authority_in_view(state_view, &binding)\n'
+   '                    .map_err(|_| RoutingResolveError::StaleRoutingPlan)?\n'
+   '            {\n'
+   '                return Ok(authority);\n'
+   '            }\n'
+   '        }\n'
+   '        Err(active\n'
+   '            .err()\n'
+   '            .unwrap_or(RoutingResolveError::StaleRoutingPlan))')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::revalidated_durable_plan_claim_retry_locked',
+  ('&& &existing.routing_plan == routing_plan\n'
+   '            && &existing.admission_context == expected_admission_context',
+   'if Self::durable_plan_claim_route_authority_in_view(state_view, &existing).is_err() {\n'
+   '            return Err(')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::has_revalidatable_durable_plan_claim_with_state',
+  ('let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();\n'
+   '        let state_view = state.view();',
+   'if tx.has_committed_replay_identity(&state_view) {\n'
+   '            return false;\n'
+   '        }\n'
+   '        let _queue_guard = self.push_remove_lock.lock();',
+   'let current_plan = if immutable_owner {\n'
+   '            self.durable_plan_claims\n'
+   '                .get(&tx_hash)\n'
+   '                .ok_or(RoutingResolveError::StaleRoutingPlan)\n'
+   '                .and_then(|claim| {\n'
+   '                    Self::durable_plan_claim_route_authority_in_view(&state_view, &claim)\n'
+   '                })\n'
+   '                .map(|_| routing_plan.clone())\n'
+   '        } else {\n'
+   '            self.resolve_precomputed_routing_plan_with_view(tx, &state_view, '
+   'routing_plan.clone())\n'
+   '        };',
+   'match self.revalidated_durable_plan_claim_retry_locked(\n'
+   '            tx,\n'
+   '            &state_view,\n'
+   '            &current_plan,\n'
+   '            expected_admission_context,\n'
+   '        ) {\n'
+   '            Ok(Some(_)) => true,\n'
+   '            Ok(None) => false,')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::immutable_queued_routing_plan_in_view',
+  ('let exact_claim = claim.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()\n'
+   '                && claim.signed_transaction_hash\n'
+   '                    == '
+   'crate::tx::exact_signed_transaction_hash(tx.as_accepted().entrypoint())\n'
+   '                && claim.routing_plan == plan;\n'
+   '            if !exact_claim {\n'
+   '                return Err(RoutingResolveError::StaleRoutingPlan);\n'
+   '            }\n'
+   '            Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?',
+   'Ok((plan, authority))')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::immutable_queued_routing_plan_with_view',
+  ('self.immutable_queued_routing_plan_if_available_in_view(',
+   'retained.and_then(|(plan, authority)| {\n'
+   '                (authority == QueuePlanPendingRouteAuthority::Active).then_some(plan)\n'
+   '            })')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::reserve_transactions_for_lane_bounded',
+  ('let routing_plan = match self.immutable_queued_routing_plan_in_view(',
+   'Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,\n'
+   '                Ok((routing_plan, QueuePlanPendingRouteAuthority::Active)) => routing_plan,')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::pop_from_queue',
+  ('let routing_plan = match self.immutable_queued_routing_plan_with_view(',
+   'Ok(None) => {\n'
+   '                    let queue_guard = self.push_remove_lock.lock();\n'
+   '                    let restore_error = self.restore_popped_hash_locked(hash);\n'
+   '                    drop(queue_guard);')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::bounded_pending_snapshot',
+  ('if !open {\n'
+   '                            match State::queue_plan_pending_route_authority_in_view(\n'
+   '                                state_view, &binding,\n'
+   '                            ) {\n'
+   '                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n'
+   '                                    blocked_by_fifo_predecessor = true;\n'
+   '                                    return None;\n'
+   '                                }',)),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::push_with_lane_internal_with_state_and_routing',
+  ('let canonical_pending_handoff = if let Some(binding) = expected_admission_binding {',
+   'Ok(Some(canonical_binding)) if canonical_binding == *binding => {',
+   'State::queue_plan_pending_route_authority_in_view(&state_view, binding)\n'
+   '                            .map_err(|reason| Failure {\n'
+   '                                tx: tx.clone().into(),\n'
+   '                                err: Error::UnresolvedRoute { reason },\n'
+   '                            })?\n'
+   '                            .is_some()')))
+
+
+QUEUE_PLAN_RETAINED_ROUTE_BINDINGS += (('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::revalidate_pending_transactions',
+  ('let routing_plan = match self.immutable_queued_routing_plan_in_view(\n'
+   '                hash,\n'
+   '                tx.as_ref(),\n'
+   '                state_view,\n'
+   '                &routing_nexus,\n'
+   '                block_height,\n'
+   '            ) {\n'
+   '                Ok((plan, _)) => plan,',
+   'if matches!(err, RoutingResolveError::StaleRoutingPlan)\n'
+   '                        || routing_generation_unchanged\n'
+   '                        || self.durable_plan_claims.contains_key(&hash)\n'
+   '                    {\n'
+   '                        corrupt_ownership.push((hash, err));')),
+ ('crates/iroha_core/src/queue.rs',
+  'method',
+  'Queue::durable_plan_admission_claim_with_state',
+  ('&& Self::durable_plan_claim_route_authority_in_view(&state_view, &claim).is_ok();\n'
+   '        if !exact_owner {',
+   'context: claim.admission_context,\n'
+   '            global_admission_identity: claim.global_admission_identity,\n'
+   '            routing_plan: claim.routing_plan,\n'
+   '            entrypoint_hash: claim.entrypoint_hash,\n'
+   '            signed_transaction_hash: claim.signed_transaction_hash,\n'
+   '            enqueue_timestamp_ms: claim.enqueue_timestamp_ms,\n'
+   '            journal_record_digest: claim.journal_record_digest,\n'
+   '        }))')))
+
+
+# Native opening consumes the same retained authority; its staged carrier cut stays exact.
+QUEUE_PLAN_RETAINED_ROUTE_BINDINGS += (('crates/iroha_core/src/state/lane_consensus_authority.rs',
+  'fn',
+  'resolve_open_lane_authority',
+  ('if height == 0\n'
+   '        || height != state._curr_block.height().get()\n'
+   '        || !state\n'
+   '            .nexus\n'
+   '            .lane_catalog\n'
+   '            .lanes()\n'
+   '            .iter()\n'
+   '            .any(|current| current == lane)\n'
+   '        || state.lane_incarnations.get(&lane.id).copied() != Some(incarnation)\n'
+   '        || lane_incarnation_is_zero(incarnation)\n'
+   '    {\n'
+   '        return Err(',
+   'let activation = state\n'
+   '        .lane_incarnation_activation_heights\n'
+   '        .get(&lane.id)\n'
+   '        .and_then(|height| height.checked_add(1))',
+   'if height < activation {\n'
+   '        return Err("lane opening authority precedes incarnation activation".to_owned());\n'
+   '    }',
+   'let drain = decode_autoscale_lane_drain_state(lane).map_err(str::to_owned)?;\n'
+   '    let (committee, pops) = if let Some(drain) = drain\n'
+   '        && height > drain.intent.close_global_height\n'
+   '    {',
+   'let committed_height = u64::try_from(state.height())\n'
+   '            .map_err(|_| "lane opening committed height exceeds u64".to_owned())?;\n'
+   '        if !lane.claims_autoscale_managed()\n'
+   '            || drain.intent.close_global_height > committed_height\n'
+   '            || drain.intent.close_global_height < activation\n'
+   '            || drain.commitment.is_some()\n'
+   '            || !autoscale_lane_drain_state_matches_context(\n'
+   '                lane,\n'
+   '                &drain,\n'
+   '                &state.network_id,\n'
+   '                incarnation,\n'
+   '            )\n'
+   '            || !nexus_autoscale_lane_active_for_authority(\n'
+   '                lane,\n'
+   '                &state.nexus,\n'
+   '                drain.intent.close_global_height,\n'
+   '            )\n'
+   '        {\n'
+   '            return Err(',
+   'let route = QueuePlanPendingObligationRouteV1 {\n'
+   '            version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,\n'
+   '            lane_id: lane.id,\n'
+   '            dataspace_id: lane.dataspace_id,\n'
+   '            lane_incarnation: incarnation,\n'
+   '        };\n'
+   '        let members = State::queue_plan_pending_route_members_from_storage(\n'
+   '            state.world.smart_contract_state(),\n'
+   '            route,\n'
+   '        )\n'
+   '        .map_err(|error| error.to_string())?;\n'
+   '        if members.is_empty() {\n'
+   '            return Err("closed lane opening has no admitted pending work".to_owned());\n'
+   '        }\n'
+   '        for (_, member) in members {',
+   'let obligation =\n'
+   '                State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)\n'
+   '                    .map_err(|error| error.to_string())?;\n'
+   '            if State::queue_plan_pending_route_authority_in_view(state, &obligation.binding)?\n'
+   '                != Some(QueuePlanPendingRouteAuthority::Draining)\n'
+   '            {\n'
+   '                return Err(\n'
+   '                    "closed lane opening requires exact unresolved pre-close '
+   'admissions".to_owned(),\n'
+   '                );\n'
+   '            }',
+   'let pin = decode_autoscale_lane_committee(lane)\n'
+   '            .map_err(str::to_owned)?\n'
+   '            .ok_or_else(|| "closed lane opening has no immutable committee pin".to_owned())?;\n'
+   '        validate_autoscale_lane_committee_pops(&pin).map_err(str::to_owned)?;\n'
+   '        (pin.validator_set, pin.validator_pops)\n'
+   '    } else {',
+   'iroha_data_model::block::consensus_v2::finality::verify_validator_power_roster_pops(\n'
+   '        &roster, &pops,\n'
+   '    )\n'
+   '    .map_err(|error| error.to_string())?;\n'
+   '    Ok((committee, pops))')),)
+
+
+def _merge_retained_queue_plan_bindings(existing: tuple, retained: tuple) -> tuple:
+    """Add exact retained-owner declarations without duplicating existing owners."""
+    result = list(existing)
+    for path, kind, symbol, tokens in retained:
+        matches = [i for i, row in enumerate(result) if row[:3] == (path, kind, symbol)]
+        if matches:
+            assert len(matches) == 1
+            i = matches[0]
+            result[i] = (path, kind, symbol, result[i][3] + tokens)
+        else:
+            result.append((path, kind, symbol, tokens))
+    return tuple(result)
+
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = _merge_retained_queue_plan_bindings(
+    QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS, QUEUE_PLAN_RETAINED_ROUTE_BINDINGS
+)
+
+
+def validate_retained_queue_plan_route_authority(items: dict, errors: list[str]) -> None:
+    """Bind executable close/pin/all-leg predicates and the non-execution projection."""
+    for path, kind, symbol, obligations in QUEUE_PLAN_RETAINED_ROUTE_BINDINGS:
+        item = items.get((path, kind, symbol))
+        if item is None:
+            errors.append(f"{symbol}: missing retained QueuePlan route authority owner")
+            continue
+        code = _code(item)
+        for obligation in obligations:
+            if _code(obligation) not in code:
+                errors.append(f"{symbol}: retained QueuePlan route authority relation changed: {obligation!r}")
+
+
+# Exact canonical retry: existing replicated custody does not reopen admission.
+QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
+  'method',
+  'State::canonical_queue_plan_admitted_input',
+  ('let observe = || -> Result<',
+   'let view = self.view();',
+   'Self::queue_plan_admission_registry_value_in_view(&view, entrypoint_hash)?;',
+   'Self::decode_exact_queue_plan_admission_registry_record(&key, payload)',
+   'Self::queue_plan_registry_owner_application_state_in_view(\n'
+   '                &view,\n'
+   '                network_id_digest,\n'
+   '                entrypoint_hash,\n'
+   '                record.claim.binding_hash,\n'
+   '            )',
+   'if application == QueuePlanAdmissionApplicationState::PendingStale {',
+   'view.block_hashes().get(index).copied().ok_or_else(',
+   'Ok(Some((record, carrier_hash)))',
+   'let Some((record, carrier_hash)) = observe()? else {\n'
+   '                return Ok(None);\n'
+   '            };',
+   '.read_first_admission_carrier(height, carrier_hash)',
+   'if read.finality.height_context.network_id != self.network_id\n'
+   '                    || read.finality.height != record.priority.carrier_height\n'
+   '                    || read.finality.height_context.height != record.priority.carrier_height',
+   'let body = read.body.ok_or_else(',
+   'let index = usize::try_from(record.priority.admission_index)',
+   '.and_then(|context| context.queue_plan_admissions.get(index))',
+   'crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(\n'
+   '                    &self.network_id,\n'
+   '                    bytes,\n'
+   '                )?',
+   'if input.entrypoint().hash() != entrypoint_hash\n'
+   '                    || input.certificate().registry_key != registry_key\n'
+   '                    || input.certificate().registry_value != record.claim',
+   '.proposal_height\n                        > record.priority.carrier_height',
+   'if observe()?.as_ref() != Some(&(record, carrier_hash)) {\n                return Err(',
+   'result.map(Some)',
+   'let limits = crate::kura::canonical_admission_read_decode_limits()',
+   'norito::with_decode_limits_scope(limits, || {')),
+ ('crates/iroha_core/src/kura/lane_admission_source.rs',
+  'method',
+  'Kura::read_first_admission_carrier',
+  ('let _prune = self.prune_lock.lock();',
+   'self.ensure_prune_recovery_not_required()?;',
+   'let _canonical = self.canonical_chain_lock.lock();',
+   'self.ensure_canonical_storage_not_poisoned()?;',
+   '.ok_or(Error::MissingV2FinalityArtifact { height: height_u64 })?',
+   'if header.hash() != expected_hash || finality.block_hash != expected_hash {',
+   'let body = self.read_block_body_under_prune_and_canonical_guards(height)?;',
+   'if let Some(body) = &body\n'
+   '            && (body.header() != header\n'
+   '                || body.canonical_proposal_wire_hash()? != finality.subject.payload_hash)',
+   'Ok(FinalizedAdmissionCarrierReadV1 { finality, body })',
+   '.decode_v2_finality_record_at(&path, &directory)?',
+   'Self::validate_v2_finality_record_at(&path, height_u64, expected_hash, &record)?;',
+   '.retained_block_record_at_without_live_body(&blocks_dir, height_u64, expected_hash)?',
+   'if header != record.block_header {',
+   'Self::validate_v2_finality_wire_bindings(',
+   'self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;',
+   'drop(read_identity);')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'canonical_queue_plan_submission_response',
+  ('if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
+   '        return None;\n'
+   '    }',
+   '.queue_plan_admission_registry_entrypoint_present(entrypoint_hash)',
+   'Ok(false) => None,',
+   'Ok(true) => Some(transaction_submission_receipt_response(',
+   'Err(error) => Some(queue_plan_admission_registry_conflict_response(')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'canonical_queue_plan_synced_response',
+  ('.queue_plan_admission_binding_registry_match(binding)',
+   'Ok(QueuePlanAdmissionRegistryMatch::Absent) => return None,',
+   'Ok(QueuePlanAdmissionRegistryMatch::Exact) => {}',
+   'Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {\n'
+   '            return Some(queue_plan_admission_registry_conflict_response(',
+   'Err(error) => {\n            return Some(queue_plan_admission_registry_conflict_response(',
+   'Ok(Some(input)) if &input.input().certificate.binding == binding => input,',
+   'Ok(_) => {\n            return Some(queue_plan_outcome_unknown_response(',
+   'Err(error) => {\n            return Some(queue_plan_outcome_unknown_response(',
+   'utils::NoritoBody(input.into_input().certificate)',
+   '.canonical_queue_plan_admitted_input(binding.entrypoint_hash)',
+   'let reservation = match proxy_memory',
+   '.unwrap_or_else(|| acquire_torii_proxy_memory(app))',
+   'runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread',
+   'tokio::task::block_in_place(|| {',
+   'Some(hold_torii_proxy_memory_in_response_body(\n'
+   '        response,\n'
+   '        reservation,\n'
+   '    ))')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'submit_signed_transaction_for_ingress_queue_plan_certified',
+  ('durable_plan_admission_claim_with_state',
+   'route_plan_with_state',
+   'execute_torii_transaction_via_proxy',
+   'queue_plan_synced_transport_unavailable',
+   'routing::accept_decoded_signed_transaction_for_ingress(',
+   'if let Some(response) = canonical_queue_plan_submission_response(\n'
+   '        app.as_ref(),\n'
+   '        accepted_tx.entrypoint(),\n'
+   '        transaction_submission_prefers_minimal_response(&headers),\n'
+   '        format,\n'
+   '    ) {\n'
+   '        return Ok(response);\n'
+   '    }',
+   'routing::reject_ingress_if_queue_capacity_saturated(')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'handler_post_transaction_entrypoint',
+  ('routing::accept_transaction_for_ingress(state, transaction, &telemetry)',
+   'if let Some(response) = canonical_queue_plan_submission_response(\n'
+   '        app.as_ref(),\n'
+   '        accepted_tx.entrypoint(),\n'
+   '        transaction_submission_prefers_minimal_response(&headers),\n'
+   '        format,\n'
+   '    ) {\n'
+   '        return Ok(response);\n'
+   '    }',
+   'routing::reject_ingress_if_queue_capacity_saturated(')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'execute_incoming_torii_proxy_request_with_admission_inner',
+  ('queue_plan_service_input_capacity_error(\n'
+   '                app,\n'
+   '                accepted_tx.entrypoint(),\n'
+   '                &admission_binding,\n'
+   '            )',
+   'push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(',
+   'queue_plan_synced_admission_response(',
+   'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {',
+   'let accepted_tx = match routing::accept_transaction_for_ingress(',
+   'if admission_binding.request_id != request_head.request_id {',
+   'if admission_binding.request_id != canonical_request_id {',
+   'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
+   '                &admission_binding,\n'
+   '                app.state.network_id_ref(),\n'
+   '                accepted_tx.entrypoint(),\n'
+   '                &ingress_plan,\n'
+   '            )',
+   '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
+   'if let Some(response) = canonical_queue_plan_synced_response(\n'
+   '                app,\n'
+   '                &admission_binding,\n'
+   '                ingress_plan.coordinator_route(),\n'
+   '                proxy_memory.as_ref(),\n'
+   '            ) {\n'
+   '                return response;\n'
+   '            }')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'transaction_submission_receipt_response',
+  ('let mut response = if minimal_response {',
+   '*response.status_mut() = StatusCode::ACCEPTED;',
+   'TransactionSubmissionReceipt::try_sign(payload, &app.da_receipt_signer)',
+   'insert_transaction_submission_identity_headers(')),
+ ('crates/iroha_core/src/state.rs',
+  'method',
+  'State::canonical_queue_plan_input_read_working_set_bytes',
+  ('crate::kura::canonical_admission_read_working_set_bytes()',)),
+ ('crates/iroha_core/src/kura/lane_admission_source.rs',
+  'fn',
+  'canonical_admission_read_decode_limits',
+  ('norito::canonical_decode_limits(', 'usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?')),
+ ('crates/iroha_core/src/kura/lane_admission_source.rs',
+  'fn',
+  'canonical_admission_read_working_set_bytes',
+  ('usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?',
+   'canonical_admission_read_decode_limits()?.max_total_allocated_bytes()',
+   'MAX_KURA_V2_FINALITY_RECORD_BYTES.checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES)?',
+   'MAX_KURA_V2_FINALITY_RECORD_BYTES\n        .checked_next_power_of_two()?',
+   '.checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES.checked_next_power_of_two()?)?',
+   'norito::canonical_decode_limits(input).max_total_allocated_bytes()',
+   '.try_fold(0usize, usize::checked_add)')),
+ ('crates/iroha_data_model/src/block/mod.rs',
+  'fn',
+  'decode_framed_versioned_signed_block_inner',
+  ('let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;',
+   'norito::core::DecodeFlagsGuard::enter(default_encode_flags())',
+   'norito::core::encoded_payload_len(&block)',
+   '.checked_add(1 + norito::core::Header::SIZE)',
+   'if canonical_len != raw_for_error.len() {',
+   'let canonical = block\n        .canonical_wire()',
+   'if canonical.as_framed() != raw_for_error {')),
+ ('crates/iroha_core/src/kura.rs',
+  'method',
+  'Kura::decode_v2_finality_record_at',
+  ('self.read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?',
+   'norito::core::encoded_payload_len(&record)?',
+   'if canonical_len != snapshot.bytes.len() || record.encode() != snapshot.bytes {')),
+ ('crates/iroha_core/src/kura/retained_finality_replica_authority.rs',
+  'method',
+  'Kura::decode_canonical_retained_block_record',
+  ('norito::core::encoded_payload_len(record).ok()',
+   'record.format_version == RETAINED_BLOCK_RECORD_VERSION',
+   '&& canonical_len == Some(bytes.len())',
+   '&& record.encode() == bytes')),
+ ('crates/iroha_torii/src/torii_fanout_decode_helpers.rs',
+  'fn',
+  'torii_proxy_strict_response_working_set_bytes',
+  ('.checked_add(\n'
+   '                '
+   'iroha_core::state::State::canonical_queue_plan_input_read_working_set_bytes()?,\n'
+   '            )',)))
+
+QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = _merge_retained_queue_plan_bindings(
+    QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS, QUEUE_PLAN_CANONICAL_RETRY_BINDINGS
+)
+
+
+def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
+    """Bind exact source authentication and validation before the no-new-promise retry."""
+    code_items = {}
+    for path, kind, symbol, obligations in QUEUE_PLAN_CANONICAL_RETRY_BINDINGS:
+        item = items.get((path, kind, symbol))
+        if item is None:
+            errors.append(f"{symbol}: missing canonical QueuePlan retry owner")
+            continue
+        code_items[symbol] = _code(item)
+        for obligation in obligations:
+            # This pre-existing diagnostic spelling remains an exact raw ledger
+            # obligation above; it is not an executable authority predicate.
+            if obligation == "queue_plan_synced_transport_unavailable":
+                if obligation not in item:
+                    errors.append(f"{symbol}: canonical QueuePlan diagnostic spelling changed")
+                continue
+            if _code(obligation) not in code_items[symbol]:
+                errors.append(f"{symbol}: canonical QueuePlan retry relation changed: {obligation!r}")
+
+    def ordered(symbol, *relations):
+        code = code_items.get(symbol, "")
+        cursor = 0
+        for relation in relations:
+            normalized = _code(relation)
+            found = code.find(normalized, cursor)
+            if found < 0:
+                errors.append(f"{symbol}: canonical QueuePlan retry order changed: {relation!r}")
+                break
+            cursor = found + len(normalized)
+
+    ordered("State::canonical_queue_plan_admitted_input",
+            "let observe =", "let view = self.view();", "Ok(Some((record, carrier_hash)))", "};",
+            "let Some((record, carrier_hash)) = observe()?", ".read_first_admission_carrier(",
+            "decode_and_validate_lane_admitted_input_v1(",
+            "if observe()?.as_ref() != Some(&(record, carrier_hash))", "result.map(Some)")
+    for symbol, accept in (
+        ("submit_signed_transaction_for_ingress_queue_plan_certified", "accept_decoded_signed_transaction_for_ingress("),
+        ("handler_post_transaction_entrypoint", "accept_transaction_for_ingress("),
+    ):
+        ordered(symbol, accept, "drop(compute_permit);", "canonical_queue_plan_submission_response(",
+                "return Ok(response);", "reject_ingress_if_queue_capacity_saturated(")
+    ordered("execute_incoming_torii_proxy_request_with_admission_inner",
+            "let accepted_tx = match routing::accept_transaction_for_ingress(",
+            "if admission_binding.request_id != request_head.request_id", "if admission_binding.request_id != canonical_request_id",
+            "validate_queue_plan_binding_for_request(", "canonical_queue_plan_synced_response(",
+            "return response;", "queue_plan_service_input_capacity_error(", ".route_plan_with_state(",
+            "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(")
+    ordered("canonical_queue_plan_synced_response", "queue_plan_admission_binding_registry_match(binding)",
+            "canonical_queue_plan_admitted_input(binding.entrypoint_hash)",
+            "if &input.input().certificate.binding == binding", "NoritoBody(input.into_input().certificate)")
+    for symbol in ("canonical_queue_plan_submission_response", "canonical_queue_plan_synced_response"):
+        for forbidden in ("route_plan_with_state(", "push_accepted_transaction", "queue_plan_synced_admission_response("):
+            if forbidden in code_items.get(symbol, ""):
+                errors.append(f"{symbol}: canonical retry creates fresh route/admission authority")
+    if "insert_routing_headers(" in code_items.get("transaction_submission_receipt_response", ""):
+        errors.append("transaction_submission_receipt_response: canonical public receipt invents fresh routing")
+
+    ordered("canonical_queue_plan_synced_response", "let reservation = match proxy_memory",
+            "acquire_torii_proxy_memory(app)", "tokio::task::block_in_place(",
+            "canonical_queue_plan_admitted_input(binding.entrypoint_hash)",
+            "hold_torii_proxy_memory_in_response_body(")
+    ordered("decode_framed_versioned_signed_block_inner", "view.decode::<SignedBlock>()",
+            "encoded_payload_len(&block)", "if canonical_len != raw_for_error.len()",
+            ".canonical_wire()", "if canonical.as_framed() != raw_for_error")
+    for forbidden in ("spawn_blocking(", "tokio::spawn(", "std::thread::spawn("):
+        if forbidden in code_items.get("canonical_queue_plan_synced_response", ""):
+            errors.append("canonical_queue_plan_synced_response: detached canonical read loses physical W custody")
+    if ".get_block(" in code_items.get("Kura::read_first_admission_carrier", ""):
+        errors.append("Kura::read_first_admission_carrier: canonical read materializes an unowned cache body")

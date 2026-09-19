@@ -4532,3 +4532,58 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         assert!(!output_guard.restart_required());
     }
 }
+#[cfg(feature = "bls")]
+#[test]
+fn local_validation_failure_returns_original_waiting_dispatch_without_rejection() {
+    let WaitingDurableValidateFixture {
+        fixture,
+        _directory,
+        mut store,
+        durable,
+        coordinator,
+        holder,
+        dispatch,
+    } = waiting_durable_validate_fixture(0xDA);
+    let wait = dispatch.wait_token_for_test();
+    let records = coordinator.records.clone();
+    let digest = holder.registry_for_test().entries[&fixture.address].digest;
+    let (error, dispatch) = dispatch
+        .execute(&mut store, |_| {
+            Err::<wire::ExecutionCommitment, _>(
+                crate::sumeragi::v2_apply::V2ApplyError::CanonicalStorageRead(
+                    crate::kura::Error::IO(
+                        std::io::Error::other("canonical local read failed"),
+                        _directory.path().join("canonical-finality.norito"),
+                    ),
+                ),
+            )
+        })
+        .expect_err("local read failure must return the original dispatch");
+    assert!(matches!(error, V2BodyStoreError::LocalValidation(_)));
+    assert_eq!(dispatch.wait_token_for_test(), wait);
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+    assert!(store.validated_recovery_catalog().is_empty());
+    let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+    let executed = dispatch
+        .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
+        .expect("same dispatch must remain executable after local storage recovers");
+    assert_eq!(executed.wait_token_for_test(), wait);
+    assert_eq!(
+        executed
+            .outcome()
+            .validated_receipt()
+            .unwrap()
+            .execution_commitment(),
+        commitment
+    );
+    assert!(executed.outcome().rejection_identity().is_none());
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+}

@@ -2124,6 +2124,30 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
             "validate_candidate_context(",
         ),
         (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.penalty_actions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.v2_evidence_admissions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.v2_evidence_admissions.is_empty() && !effects.penalty_actions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "certified_merge_selection_for_npos(\n        npos_consensus_effects.as_ref().is_some_and(|effects| {\n            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()\n        }),\n    )",
+            "certified_merge_selection_for_npos(npos_consensus_effects.is_some())",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
             "!selection.allows_execution() && entry.execution_batch.is_some()",
             "false && entry.execution_batch.is_some()",
             "State::select_pending_certified_merge_entry_for_round",

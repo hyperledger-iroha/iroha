@@ -90,31 +90,8 @@ pub(super) fn resolve_open_lane_authority(
             let obligation =
                 State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)
                     .map_err(|error| error.to_string())?;
-            let registry_key =
-                State::queue_plan_admission_registry_marker_key(&obligation.binding.registry_key())
-                    .map_err(|error| error.to_string())?;
-            let registry_payload = state
-                .world
-                .smart_contract_state()
-                .get(&registry_key)
-                .ok_or_else(|| {
-                    "closed lane pending work lost its ranked registry owner".to_owned()
-                })?;
-            let record = State::decode_exact_queue_plan_admission_registry_record(
-                &registry_key,
-                registry_payload,
-            )
-            .map_err(|error| error.to_string())?;
-            if obligation.binding.admission_context.proposal_height
-                > drain.intent.close_global_height
-                || record.claim != obligation.binding.registry_value()
-                || record.priority.carrier_height
-                    < obligation.binding.admission_context.proposal_height
-                || record.priority.carrier_height > drain.intent.close_global_height
-                || State::queue_plan_binding_application_evidence_in_view(
-                    state,
-                    &obligation.binding,
-                )? != QueuePlanBindingApplicationEvidence::Pending
+            if State::queue_plan_pending_route_authority_in_view(state, &obligation.binding)?
+                != Some(QueuePlanPendingRouteAuthority::Draining)
             {
                 return Err(
                     "closed lane opening requires exact unresolved pre-close admissions".to_owned(),

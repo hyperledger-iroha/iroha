@@ -3616,3 +3616,529 @@ fn consuming_storage_cut_rejects_foreign_context_store_sources_and_qc() {
         Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)
     ));
 }
+
+fn cold_equivocation_output_fixture(
+    fixture: &RecoveryFixture,
+) -> (wire::SumeragiV2Equivocation, LifecycleLedgerRecordV1) {
+    use crate::sumeragi::{
+        v2::AdapterEffect,
+        v2_lifecycle_coordinator::work_registry::PreparedLifecycleAdmissionV1,
+        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
+    };
+    let (AdapterEffect::Broadcast(message), _) = cold_broadcast_output_fixture(fixture, 1) else {
+        panic!("signed vote fixture");
+    };
+    let wire::ConsensusMessageV2Payload::Vote(first) = message.payload else {
+        panic!("signed vote fixture");
+    };
+    let mut second = first.clone();
+    second.subject.block_hash =
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"conflicting cold-restart vote"));
+    second.signature = Signature::new(fixture.keys[0].private_key(), &second.signature_preimage())
+        .payload()
+        .to_vec();
+    let proof = crate::sumeragi::evidence::canonicalize_v2_conflict(
+        &wire::SumeragiV2Equivocation::PhaseVote { first, second },
+    );
+    let effect = AdapterEffect::ReportEquivocation {
+        evidence: fixture
+            .verified
+            .authenticate_recovered_equivocation(&proof)
+            .expect("the actual frozen adapter oracle authenticates both original signed votes"),
+    };
+    let tag = EventTag::new(fixture.verified.context().height, 0, Generation::new(0x47));
+    let ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, 1)],
+    )
+    .expect("bind exact signed report")
+    .pop()
+    .unwrap();
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .unwrap();
+    let prepared = PreparedLifecycleAdmissionV1::direct_signed(
+        fixture.lifecycle_context(),
+        &fixture.verified,
+        effect,
+        pending,
+    )
+    .unwrap_or_else(|_| panic!("admit authenticated original ReportEquivocation"));
+    let candidate = prepared.candidate();
+    let record = LifecycleLedgerRecordV1::new(
+        candidate.key,
+        OwnerId::new(candidate.causal_root, 1),
+        1,
+        candidate.work_class,
+        candidate.stage,
+        None,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority.clone(),
+        DurableContinuation::None,
+    )
+    .expect("exact original Ready report");
+    (proof, record)
+}
+
+fn cold_evidence_state(
+    fixture: &RecoveryFixture,
+    kura: std::sync::Arc<Kura>,
+    horizon: u64,
+) -> Box<crate::state::State> {
+    use iroha_data_model::parameter::{Parameter, Parameters, system::SumeragiNposParameters};
+    let mut parameters = Parameters::default();
+    parameters.set_parameter(Parameter::Custom(
+        SumeragiNposParameters {
+            evidence_horizon_blocks: horizon,
+            ..SumeragiNposParameters::default()
+        }
+        .into_custom_parameter(),
+    ));
+    let mut world = crate::state::World::default();
+    world.parameters = mv::cell::Cell::new(parameters);
+    Box::new(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            world,
+            kura,
+            crate::query::store::LiveQueryStore::start_test(),
+            iroha_model_base::chain::ChainId::from("cold-evidence-lifecycle"),
+            fixture.verified.context().network_id,
+        ),
+    )
+}
+
+/// Persist a real signed three-of-four finality artifact through Kura's normal
+/// writer. The structural executed-body fixture is not a genesis/Apply claim.
+fn cold_evidence_finality(fixture: &RecoveryFixture, kura: &Kura) -> BlockHeader {
+    let block = crate::block::ValidBlock::new_dummy_and_modify_header(
+        fixture.keys[0].private_key(),
+        |header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.set_prev_block_hash(None);
+            header.merkle_root = None;
+        },
+    )
+    .commit_unchecked()
+    .unpack(|_| {});
+    let mut block: SignedBlock = block.into();
+    let outputs =
+        crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
+    let fragments =
+        u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("canonical executed predecessor");
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.hash(),
+        payload_hash: block.canonical_proposal_wire_hash().unwrap(),
+    };
+    let round = wire::ConsensusRound {
+        context_id: fixture.verified.context().id(),
+        height: 1,
+        view: block.header().view_change_index(),
+    };
+    let mut certificate = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"cold evidence parent"),
+            Hash::new(b"cold evidence post"),
+            Hash::new(b"cold evidence writes"),
+            u64::try_from(block.encode_wire().unwrap().len()).unwrap(),
+            block.executed_block_wire_hash().unwrap(),
+        ),
+        signers: vec![0, 1, 2],
+        aggregate_signature: Vec::new(),
+    };
+    // A certificate preimage requires a completed aggregate. Construct the
+    // actual unsigned Commit vote first, then aggregate the genuine shares.
+    let preimage = wire::Vote {
+        round: certificate.round,
+        proposal_round: certificate.proposal_round,
+        phase: certificate.phase,
+        subject: certificate.subject,
+        execution_commitment: certificate.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = fixture.keys[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let header = block.header();
+    kura.store_block(std::sync::Arc::new(block)).unwrap();
+    kura.store_v2_finality_artifact(&wire::finality::V2FinalityArtifact::new(
+        fixture.verified.context().clone(),
+        subject,
+        certificate,
+        fixture.verified.proofs_of_possession().to_vec(),
+    ))
+    .expect("actual BLS-authenticated immutable finality");
+    header
+}
+
+/// Execute the exact recovered Report through real evidence retention and
+/// terminalize/fsync it with the actual lifecycle owner, then drop that owner.
+fn complete_cold_evidence_report(
+    fixture: &RecoveryFixture,
+    state: &crate::state::State,
+) -> (wire::SumeragiV2Equivocation, std::path::PathBuf) {
+    use crate::sumeragi::{
+        evidence,
+        v2::AdapterEffect,
+        v2_lifecycle_coordinator::{
+            LifecycleOutputServiceDispositionV1, open::RecoveredLifecycleOutputSettlementV1,
+        },
+    };
+    let (proof, record) = cold_equivocation_output_fixture(fixture);
+    let root = state
+        .kura()
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (store, empty) = LifecycleLedgerStoreV1::open(&root, fixture.lifecycle_context()).unwrap();
+    let ledger = fixture.ledger(vec![record]);
+    store.persist_exact_successor(&empty, &ledger).unwrap();
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context())
+            .unwrap()
+            .is_empty(),
+        "Ready report stays under its original cold lifecycle owner"
+    );
+    let body_directory = TempDir::new().unwrap();
+    let body_store = fixture.open_store(&body_directory);
+    let payload_directory = TempDir::new().unwrap();
+    let (payload_store, payloads) =
+        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+    let cut = ledger
+        .into_durable_certified_body_pipeline_storage_recovery_cut(
+            fixture.verified.clone(),
+            store,
+            body_store,
+        )
+        .unwrap();
+    let mut owner = cut.open_owner_for_test(payload_store, payloads).unwrap();
+    assert_eq!(
+        owner
+            .settle_next_recovered_lifecycle_output(|effect| {
+                let AdapterEffect::ReportEquivocation { evidence: observed } = effect else {
+                    panic!("exact ReportEquivocation owner");
+                };
+                assert_eq!(observed.to_wire(), proof);
+                assert!(
+                    evidence::retain_sumeragi_v2_equivocation(
+                        state,
+                        fixture.verified.context(),
+                        fixture.verified.proofs_of_possession(),
+                        observed.to_wire(),
+                    )
+                    .unwrap()
+                );
+                Ok::<_, String>(LifecycleOutputServiceDispositionV1::Accepted)
+            })
+            .unwrap(),
+        RecoveredLifecycleOutputSettlementV1::Completed
+    );
+    assert!(!owner.has_recovered_lifecycle_outputs());
+    assert!(owner.coordinator.ready_index.is_empty());
+    let terminal = owner
+        .coordinator
+        .ledger_store
+        .as_ref()
+        .unwrap()
+        .load()
+        .unwrap();
+    assert_eq!(
+        terminal.records()[0].terminal(),
+        Some(Some(TerminalOutcome::Advanced))
+    );
+    assert_eq!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context()).unwrap(),
+        vec![proof.clone()]
+    );
+    (proof, root)
+}
+
+#[test]
+fn completed_equivocation_recovers_into_new_state_without_reopening_lifecycle() {
+    use crate::sumeragi::evidence;
+    use mv::storage::StorageReadOnly as _;
+    let fixture = RecoveryFixture::new("cold-completed-evidence", 0x51);
+    let kura = Kura::blank_kura_for_testing();
+    let original = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    let (proof, root) = complete_cold_evidence_report(&fixture, &original);
+    let parent = cold_evidence_finality(&fixture, &kura);
+    assert_eq!(original.sumeragi_v2_pending_evidence.lock().len(), 1);
+    drop(original);
+    let cold = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    cold.append_committed_block_header_for_tests(parent);
+    assert!(cold.sumeragi_v2_pending_evidence.lock().is_empty());
+    let before = snapshot_files(&root);
+    let generation = cold.state_view_generation();
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&cold).unwrap(),
+        1
+    );
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&cold).unwrap(),
+        0,
+        "repeated cold projection is a canonical duplicate"
+    );
+    assert_eq!(
+        evidence::recover_context_lifecycle_equivocations(
+            &cold,
+            fixture.verified.context(),
+            fixture.verified.proofs_of_possession(),
+        )
+        .unwrap(),
+        0,
+        "active owner restoration shares the same exact pending key"
+    );
+    let selected = evidence::pending_v2_evidence_admissions(&cold, 2);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        selected[0],
+        evidence::canonicalize_v2_equivocation_evidence(
+            &iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence {
+                context: fixture.verified.context().clone(),
+                proofs_of_possession: fixture.verified.proofs_of_possession().to_vec(),
+                conflict: proof,
+            },
+        )
+    );
+    evidence::validate_v2_evidence_admissions(&cold, 2, &selected).unwrap();
+    assert!(cold.world.consensus_evidence.view().iter().next().is_none());
+    assert_eq!(cold.state_view_generation(), generation);
+    assert_eq!(
+        snapshot_files(&root),
+        before,
+        "read-only restore preserves terminal ledger and namespace"
+    );
+}
+
+#[test]
+fn completed_equivocation_cold_restore_skips_committed_expired_and_unanchored() {
+    use crate::sumeragi::evidence;
+    use iroha_data_model::block::consensus::{
+        Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+    };
+    let fixture = RecoveryFixture::new("cold-filtered-evidence", 0x61);
+    let kura = Kura::blank_kura_for_testing();
+    let original = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    let (proof, root) = complete_cold_evidence_report(&fixture, &original);
+    drop(original);
+    let missing = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    // A structural frontier is insufficient: only the actual finality writer
+    // below can authenticate the historical proof's frozen context.
+    let mut parent = crate::block::ValidBlock::new_dummy_and_modify_header(
+        fixture.keys[0].private_key(),
+        |header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.set_prev_block_hash(None);
+        },
+    )
+    .as_ref()
+    .header();
+    missing.append_committed_block_header_for_tests(parent);
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&missing).unwrap(),
+        0
+    );
+    assert!(missing.sumeragi_v2_pending_evidence.lock().is_empty());
+    drop(missing);
+    parent = cold_evidence_finality(&fixture, &kura);
+    let committed = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    committed.append_committed_block_header_for_tests(parent);
+    let payload =
+        evidence::canonicalize_v2_equivocation_evidence(&SumeragiV2EquivocationEvidence {
+            context: fixture.verified.context().clone(),
+            proofs_of_possession: fixture.verified.proofs_of_possession().to_vec(),
+            conflict: proof,
+        });
+    let key = evidence::v2_evidence_admission_key(&payload);
+    let mut records = committed.world.consensus_evidence.block();
+    records.insert(
+        key,
+        EvidenceRecord {
+            evidence: Evidence {
+                equivocation: payload,
+            },
+            recorded_at_height: 2,
+            recorded_at_view: 0,
+            recorded_at_ms: 20,
+            penalty_status: EvidencePenaltyStatus::Pending,
+        },
+    );
+    records.commit();
+    let mut committed_header = parent;
+    committed_header.set_height(NonZeroU64::new(2).unwrap());
+    committed_header.set_prev_block_hash(Some(parent.hash()));
+    committed.append_committed_block_header_for_tests(committed_header);
+    let before = snapshot_files(&root);
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&committed).unwrap(),
+        0
+    );
+    assert!(committed.sumeragi_v2_pending_evidence.lock().is_empty());
+    drop(committed);
+    let expired = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 1);
+    expired.append_committed_block_header_for_tests(parent);
+    let mut next = parent;
+    next.set_height(NonZeroU64::new(2).unwrap());
+    next.set_prev_block_hash(Some(parent.hash()));
+    expired.append_committed_block_header_for_tests(next);
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&expired).unwrap(),
+        0
+    );
+    assert_eq!(
+        evidence::recover_context_lifecycle_equivocations(
+            &expired,
+            fixture.verified.context(),
+            fixture.verified.proofs_of_possession(),
+        )
+        .unwrap(),
+        0,
+        "even an active-context caller cannot bypass current WSV expiry"
+    );
+    assert!(expired.sumeragi_v2_pending_evidence.lock().is_empty());
+    assert_eq!(snapshot_files(&root), before);
+}
+
+#[test]
+fn completed_equivocation_recovery_is_read_only_and_rejects_corrupted_or_foreign_ledger() {
+    use crate::sumeragi::evidence;
+    let fixture = RecoveryFixture::new("cold-evidence-integrity", 0x71);
+    let kura = Kura::blank_kura_for_testing();
+    let original = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    let (_, root) = complete_cold_evidence_report(&fixture, &original);
+    let parent = cold_evidence_finality(&fixture, &kura);
+    drop(original);
+    let cold = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    cold.append_committed_block_header_for_tests(parent);
+    let path = root.join(LEDGER_FILE);
+    let original_bytes = fs::read(&path).unwrap();
+    fs::write(
+        root.join(LEDGER_TEMPORARY_FILE),
+        b"unpublished owned temporary",
+    )
+    .unwrap();
+    let mut corrupted = original_bytes.clone();
+    *corrupted.last_mut().unwrap() ^= 1;
+    fs::write(&path, &corrupted).unwrap();
+    let before = snapshot_files(&root);
+    assert!(evidence::recover_finalized_lifecycle_equivocations(&cold).is_err());
+    assert!(cold.sumeragi_v2_pending_evidence.lock().is_empty());
+    assert_eq!(
+        snapshot_files(&root),
+        before,
+        "failure cannot clean up or replace original files"
+    );
+    fs::write(&path, &original_bytes).unwrap();
+    let before_crypto = snapshot_files(&root);
+    let mut invalid_pops = fixture.verified.proofs_of_possession().to_vec();
+    invalid_pops[0][0] ^= 1;
+    assert!(
+        evidence::recover_context_lifecycle_equivocations(
+            &cold,
+            fixture.verified.context(),
+            &invalid_pops,
+        )
+        .is_err(),
+        "a valid checksummed terminal row cannot replace cryptographic authentication"
+    );
+    assert!(cold.sumeragi_v2_pending_evidence.lock().is_empty());
+    assert_eq!(snapshot_files(&root), before_crypto);
+    let foreign = RecoveryFixture::new("foreign-evidence-context", 0x72);
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, foreign.verified.context()).is_err()
+    );
+    let before = snapshot_files(&root);
+    assert_eq!(
+        evidence::recover_finalized_lifecycle_equivocations(&cold).unwrap(),
+        1
+    );
+    assert_eq!(
+        snapshot_files(&root),
+        before,
+        "success also leaves crash temporaries untouched"
+    );
+    let missing = root.join("never-created");
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&missing, fixture.verified.context())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!missing.exists(), "passive absence creates no namespace");
+}
+
+#[cfg(unix)]
+#[test]
+fn completed_equivocation_passive_reader_rejects_link_substitution() {
+    let fixture = RecoveryFixture::new("cold-evidence-links", 0x81);
+    let kura = Kura::blank_kura_for_testing();
+    let original = cold_evidence_state(&fixture, std::sync::Arc::clone(&kura), 10);
+    let (proof, root) = complete_cold_evidence_report(&fixture, &original);
+    let path = root.join(LEDGER_FILE);
+    let retained = root.join("retained-original");
+    let bytes = fs::read(&path).unwrap();
+    fs::rename(&path, &retained).unwrap();
+    std::os::unix::fs::symlink(&retained, &path).unwrap();
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context()).is_err()
+    );
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&retained).unwrap(), bytes);
+    fs::remove_file(&path).unwrap();
+    fs::hard_link(&retained, &path).unwrap();
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context()).is_err()
+    );
+    assert_eq!(fs::read(&retained).unwrap(), bytes);
+    fs::remove_file(&path).unwrap();
+    fs::rename(&retained, &path).unwrap();
+    assert_eq!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context()).unwrap(),
+        vec![proof]
+    );
+    let moved = root.with_extension("retained");
+    fs::rename(&root, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &root).unwrap();
+    assert!(
+        LifecycleLedgerV1::read_completed_equivocations(&root, fixture.verified.context()).is_err()
+    );
+    assert!(
+        fs::symlink_metadata(&root)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(moved.join(LEDGER_FILE)).unwrap(), bytes);
+}

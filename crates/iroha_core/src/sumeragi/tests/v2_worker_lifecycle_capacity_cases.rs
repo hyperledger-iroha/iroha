@@ -799,24 +799,24 @@ impl LifecyclePlannerIoFixture {
         assert!(task.matches_exact());
         let key = task.key;
         let mut callbacks = 0usize;
-        let result = task
-            .dispatch
-            .execute(&mut self.body_store, |_| {
-                callbacks = callbacks.saturating_add(1);
-                validation
-                    .take()
-                    .expect("the real validator is called exactly once")
-            })
-            .unwrap_or_else(|(error, _)| panic!("execute held lifecycle Validate: {error}"));
+        let result = task.dispatch.execute(&mut self.body_store, |_| {
+            callbacks = callbacks.saturating_add(1);
+            validation
+                .take()
+                .expect("the real validator is called exactly once")
+        });
+        let completion = lifecycle_validate_worker_completion(key, result, output_guard)
+            .expect("execute held lifecycle Validate or retain its actual local dependency");
+        let V2IoCompletion::LifecycleValidate(guarded) = &completion else {
+            panic!("exact Validate completion");
+        };
         self.command_rx
-            .complete_lifecycle_validate(key, &result)
+            .complete_lifecycle_validate_result(key, guarded.result())
             .expect("move exact lifecycle Validate tracker to CompletionPending");
         try_send_tracked_completion_with_lifecycle_ordinal(
             &self.completion_tx,
             &self.admission,
-            V2IoCompletion::LifecycleValidate(Box::new(
-                GuardedLifecycleValidateWorkerResultV1::new(key, result, output_guard),
-            )),
+            completion,
             Some(key.lifecycle_ordinal()),
         )
         .expect("publish one guarded lifecycle Validate completion");
@@ -934,6 +934,26 @@ impl LifecyclePlannerIoFixture {
             V2IoCompletion::AuxiliaryNoop,
         )
         .expect("publish one tracked ordinary completion");
+    }
+    /// Fill the actual bounded completion channel without guessing its limit.
+    pub(in crate::sumeragi) fn fill_auxiliary_completion_capacity_for_test(&self) -> usize {
+        let mut count = 0;
+        loop {
+            match try_send_tracked_completion(
+                &self.completion_tx,
+                &self.admission,
+                V2IoCompletion::AuxiliaryNoop,
+            ) {
+                Ok(()) => count += 1,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    assert!(count > 0, "fixture started with completion capacity");
+                    return count;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    panic!("original receiver remains live")
+                }
+            }
+        }
     }
     /// Execute one lifecycle-owned Sign through the production signing helper.
     pub(in crate::sumeragi) fn execute_one_recovered_lifecycle_sign_fixture(
@@ -1633,5 +1653,46 @@ impl LifecyclePlannerIoFixture {
             Some(key.lifecycle_ordinal()),
         )
         .expect("publish exactly one guarded recovered Fetch persistence result");
+    }
+}
+
+impl LifecyclePlannerIoFixture {
+    /// Fill actual consensus command slots while one Validate continuation is parked.
+    pub(in crate::sumeragi) fn fill_validate_retry_capacity_for_test(
+        &self,
+        subject: wire::BlockSubject,
+    ) -> usize {
+        let mut count = 0;
+        loop {
+            let command = V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(9_000 + count as u64),
+                subject,
+            };
+            match self
+                .command_rx
+                .queue
+                .try_send_as(V2IoAdmissionClass::Consensus, command)
+            {
+                Ok(()) => count += 1,
+                Err(V2IoTrySendError::Full(_)) => return count,
+                Err(_) => panic!("live exact command queue"),
+            }
+        }
+    }
+    /// Service the admitted body lookups through the actual receiver while Validate waits.
+    pub(in crate::sumeragi) fn drain_validate_retry_capacity_for_test(&self) -> usize {
+        let mut count = 0;
+        while let Ok(command) = self.command_rx.try_recv() {
+            let V2IoCommand::LoadCandidate {
+                acquisition_id,
+                subject,
+            } = command
+            else {
+                panic!("only the bounded test body lookup was admitted");
+            };
+            assert!(load_candidate_body(&self.body_store, acquisition_id, subject).is_ok());
+            count += 1;
+        }
+        count
     }
 }

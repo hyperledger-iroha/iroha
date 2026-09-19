@@ -8,6 +8,7 @@
 
 use std::sync::OnceLock;
 
+use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_data_model::{NetworkId, block::consensus_v2 as wire};
 
 use super::v2::VerifiedHeightContext;
@@ -65,7 +66,8 @@ impl AuthenticatedAdmissionCapacityV1 {
     /// encoder will receive. An entrypoint length or certificate length alone
     /// cannot establish full global/native carrier feasibility. This function
     /// makes no claim that a body exists, is valid, or has enough storage owners.
-    /// Local operational candidate/frame limits remain additional restrictions.
+    /// Local frame and aggregate storage limits remain additional restrictions;
+    /// startup requires local body capacity to cover the whole signed envelope.
     ///
     /// # Errors
     /// Rejects a foreign network, empty/oversized body, invalid signed geometry,
@@ -127,9 +129,12 @@ impl Rs16PayloadGeometryV1 {
 /// Repeated initialization is a lifecycle error even when its bytes match; no
 /// later height can replace this process-wide capacity projection. The current
 /// context and State remain the independent owners of ongoing live authority.
+/// `config` is the actual configuration's validated `v2_config` projection. Its
+/// physical body allocations must cover the signed envelope before publication.
 pub(super) fn publish_authenticated_capacity(
     slot: &OnceLock<AuthenticatedAdmissionCapacityV1>,
     verified: &VerifiedHeightContext,
+    config: &SumeragiV2Config,
 ) -> Result<(), String> {
     let context = verified.context();
     let capacity = AuthenticatedAdmissionCapacityV1 {
@@ -139,17 +144,65 @@ pub(super) fn publish_authenticated_capacity(
     };
     // Reuse the same exact geometry kernel as the native and global DA codec.
     capacity.check_payload_size(&capacity.network_id, capacity.layout.max_payload_size_bytes)?;
+    require_local_payload_capacity(capacity.layout, config)?;
     slot.set(capacity)
         .map_err(|_| "authenticated admission capacity was already published".to_owned())
+}
+
+/// Require local resources for the entire signed payload envelope.
+///
+/// The actual configuration validator derives ready-body and isolated source
+/// allocations from the configured body capacity. A smaller local candidate
+/// limit cannot redefine the signed protocol envelope. Check the retained
+/// allocation projection as well, so an inconsistent projection cannot publish
+/// admission capacity or construct a candidate consumer.
+pub(super) fn require_local_payload_capacity(
+    layout: wire::DataAvailabilityLayout,
+    config: &SumeragiV2Config,
+) -> Result<(), String> {
+    let required = layout.max_payload_size_bytes;
+    if required == 0 {
+        return Err("signed RS16 payload capacity must be non-zero".to_owned());
+    }
+    for (owner, available) in [
+        ("configured block payload", config.limits.max_payload_bytes),
+        ("ready-body allocation", config.limits.ready_body_bytes),
+        (
+            "per-source body allocation",
+            config.limits.body_source_bytes,
+        ),
+    ] {
+        if available < required {
+            return Err(format!(
+                "local {owner} capacity {available} is below signed RS16 payload capacity {required}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "bls"))]
 mod tests {
     use super::*;
+    use iroha_config::parameters::actual::Sumeragi;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_model_base::peer::PeerId;
+    use std::{num::NonZeroUsize, time::Duration};
 
     fn verified_context() -> VerifiedHeightContext {
+        verified_context_with_layout(wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 64,
+            data_shards: 2,
+            parity_shards: 1,
+            max_payload_size_bytes: 256,
+            max_chunk_count: 6,
+        })
+    }
+
+    fn verified_context_with_layout(
+        da_layout: wire::DataAvailabilityLayout,
+    ) -> VerifiedHeightContext {
         let mut keys = (1_u8..=4)
             .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
             .collect::<Vec<_>>();
@@ -182,14 +235,7 @@ mod tests {
             kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus"),
             execution_policy_hash: Hash::new(b"policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 64,
-                data_shards: 2,
-                parity_shards: 1,
-                max_payload_size_bytes: 256,
-                max_chunk_count: 6,
-            },
+            da_layout,
             leader_seed: [9; 32],
         };
         let pops = keys
@@ -197,6 +243,14 @@ mod tests {
             .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
             .collect();
         VerifiedHeightContext::genesis(context, pops).unwrap()
+    }
+
+    fn actual_config(payload_bytes: usize) -> SumeragiV2Config {
+        let mut actual = Sumeragi::default();
+        actual.block.max_payload_bytes = NonZeroUsize::new(payload_bytes).unwrap();
+        actual
+            .v2_config(Duration::from_secs(1), wire::ConsensusMode::Permissioned)
+            .expect("actual local resource configuration is valid")
     }
 
     #[test]
@@ -207,12 +261,15 @@ mod tests {
             Err(AdmissionCapacityUnavailableV1::Pending)
         );
         let verified = verified_context();
-        publish_authenticated_capacity(&handle.admission_capacity, &verified).unwrap();
+        let config = actual_config(Sumeragi::default().block.max_payload_bytes.get());
+        publish_authenticated_capacity(&handle.admission_capacity, &verified, &config).unwrap();
         let capacity = handle.authenticated_admission_capacity().unwrap();
         assert_eq!(capacity.layout(), verified.context().da_layout);
         assert_eq!(capacity.network_id(), verified.context().network_id);
         assert_eq!(capacity.protocol_version(), wire::PROTOCOL_VERSION);
-        assert!(publish_authenticated_capacity(&handle.admission_capacity, &verified).is_err());
+        assert!(
+            publish_authenticated_capacity(&handle.admission_capacity, &verified, &config).is_err()
+        );
         assert_eq!(handle.authenticated_admission_capacity().unwrap(), capacity);
         assert_eq!(
             super::super::SumeragiHandle::emergency_fast_disabled()
@@ -230,7 +287,8 @@ mod tests {
     fn authenticated_capacity_counts_exact_rs16_stripes_and_rejects_wrong_network() {
         let verified = verified_context();
         let slot = OnceLock::new();
-        publish_authenticated_capacity(&slot, &verified).unwrap();
+        let config = actual_config(Sumeragi::default().block.max_payload_bytes.get());
+        publish_authenticated_capacity(&slot, &verified, &config).unwrap();
         let capacity = slot.get().unwrap();
         for length in [1_u64, 127, 128, 129, 255, 256] {
             let geometry = capacity
@@ -259,5 +317,69 @@ mod tests {
         let foreign =
             NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
         assert!(capacity.check_payload_size(&foreign, 1).is_err());
+    }
+
+    #[test]
+    fn recovered_capacity_requires_local_body_capacity_before_once_publication() {
+        let verified = verified_context_with_layout(wire::recommended_data_availability_layout());
+        let signed_max = usize::try_from(verified.context().da_layout.max_payload_size_bytes)
+            .expect("recommended signed capacity fits the host");
+        for local_bytes in [signed_max - 1, signed_max, signed_max + 1] {
+            let config = actual_config(local_bytes);
+            let slot = OnceLock::new();
+            let result = publish_authenticated_capacity(&slot, &verified, &config);
+            if local_bytes < signed_max {
+                let error = result.expect_err("local capacity cannot narrow signed semantics");
+                assert!(error.contains("configured block payload"), "{error}");
+                assert!(
+                    slot.get().is_none(),
+                    "refusal must not publish readiness capacity"
+                );
+                publish_authenticated_capacity(&slot, &verified, &actual_config(signed_max))
+                    .expect("the same empty slot can admit a supported configuration");
+            } else {
+                result.expect("equal or greater local resource capacity supports the context");
+            }
+            assert_eq!(slot.get().unwrap().layout(), verified.context().da_layout);
+            assert_eq!(config.limits.max_payload_bytes, local_bytes as u64);
+        }
+    }
+
+    #[test]
+    fn recommended_signed_capacity_is_covered_by_actual_default_allocations() {
+        let actual = Sumeragi::default();
+        let config = actual
+            .v2_config(Duration::from_secs(1), wire::ConsensusMode::Permissioned)
+            .expect("default resource configuration");
+        let verified = verified_context_with_layout(wire::recommended_data_availability_layout());
+        let signed_max = verified.context().da_layout.max_payload_size_bytes;
+        assert!(config.limits.max_payload_bytes >= signed_max);
+        assert!(config.limits.ready_body_bytes >= signed_max);
+        assert!(config.limits.body_source_bytes >= signed_max);
+        let slot = OnceLock::new();
+        publish_authenticated_capacity(&slot, &verified, &config).unwrap();
+        assert_eq!(slot.get().unwrap().layout(), verified.context().da_layout);
+    }
+
+    #[test]
+    fn recovered_capacity_rejects_inconsistent_physical_allocations_without_publication() {
+        let verified = verified_context_with_layout(wire::recommended_data_availability_layout());
+        let signed_max = verified.context().da_layout.max_payload_size_bytes;
+        let config = actual_config(usize::try_from(signed_max).unwrap());
+        for source_allocation in [false, true] {
+            let mut inconsistent = config.clone();
+            let owner = if source_allocation {
+                inconsistent.limits.body_source_bytes = signed_max - 1;
+                "per-source body allocation"
+            } else {
+                inconsistent.limits.ready_body_bytes = signed_max - 1;
+                "ready-body allocation"
+            };
+            let slot = OnceLock::new();
+            let error = publish_authenticated_capacity(&slot, &verified, &inconsistent)
+                .expect_err("no consumer may receive an underallocated signed envelope");
+            assert!(error.contains(owner), "{error}");
+            assert!(slot.get().is_none());
+        }
     }
 }

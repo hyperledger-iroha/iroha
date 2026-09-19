@@ -30184,7 +30184,8 @@ state_test! { sync da_pin_intents_hydrate_from_kura_block_log
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+    let_row! { world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []) };
+    let mut state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
             lane_catalog: catalog,
@@ -30207,6 +30208,33 @@ state_test! { sync da_pin_intents_hydrate_from_kura_block_log
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push(signed_block.hash());
     block_hashes.commit_for_tests();
+    // A restored pin cache is derived from authoritative World indexes. Model
+    // the World half of this committed fixture through the actual pure tail;
+    // do not publish its deferred cache effects before the hydration under test.
+    // This component fixture does not claim carrier finality or State publication.
+    let pending = PendingDaPinIntentBundle {
+        block_height: signed_block.header().height().get(),
+        intents: signed_block.da_pin_intents().unwrap().intents.clone(),
+        quota_writes: BTreeMap::new(),
+    };
+    let nexus = state.nexus_snapshot();
+    let mut world = state.world.block();
+    let effects = super::world_commit::PreparedWorldCommit::prepare_overlay(
+        &mut world,
+        pending.block_height,
+        &nexus,
+        &state.lane_incarnation_activation_heights_snapshot(),
+        Some(&pending),
+        None,
+    )
+    .expect("prepare the signed pin's exact authoritative World indexes");
+    assert_eq!(world.da_pin_intents_by_ticket.len(), 1);
+    assert_eq!(world.da_pin_intents_by_manifest.len(), 1);
+    assert_eq!(world.da_pin_intents_by_lane_epoch.len(), 1);
+    assert_eq!(world.da_pin_intents_by_alias.len(), 1);
+    world.commit();
+    drop(effects);
+    assert!(state.da_pin_intents.read().all_sorted().next().is_none(), "derived pin cache starts cold");
     let store = state.da_pin_intents();
     let collected: Vec<_> = store.all_sorted().cloned().collect();
     assert_eq!(collected.len(), 1);
@@ -31961,13 +31989,61 @@ state_test! { sync da_shard_cursor_advance_sets_zero_lag
     assert_eq!(lag, 0);
 }
 state_test! { sync confidential_compute_receipts_hydrate_from_kura
-    let (mut state, kura) = blank_test_state_with_kura();
+    use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
     let_row! { catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: LaneId::new(0), alias: "confidential-lane".to_string(), storage: LaneStorageProfile::SplitReplica, confidential_compute: Some(ConfidentialComputePolicy::new( ConfidentialComputeMechanism::Encryption, NonZeroU32::new(7).expect("non-zero key version"), BTreeSet::new(), )), ..LaneConfig::default() }], ) .expect("catalog") };
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-        nexus.lane_catalog = catalog;
-    }
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let kura_config = strict_kura_config_for_testing(PathBuf::new());
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &lane_config,
+        &catalog,
+    )
+    .expect("configured confidential lane Kura");
+    let_row! { mut state = State::try_new(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    ).expect("empty configured State") };
+    // Install the exact privacy policy before a canonical view can observe
+    // commitment-only geometry. This is the same startup order as manifest
+    // installation followed by the configured pre-genesis Nexus boundary.
+    let lane = &catalog.lanes()[0];
+    let_row! { status = LaneManifestStatus {
+        lane: lane.id,
+        alias: lane.alias.clone(),
+        dataspace: lane.dataspace_id,
+        visibility: lane.visibility,
+        storage: lane.storage,
+        governance: lane.governance.clone(),
+        manifest_path: Some(PathBuf::from("/tmp/confidential-hydration.manifest.json")),
+        governance_rules: None,
+        privacy_commitments: vec![LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(7),
+            MerkleCommitment::from_root_bytes([0xA5; 32], 12),
+        )],
+    } };
+    let manifests = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([
+        (lane.id, status),
+    ])));
+    manifests.validate_active_coverage_for_catalog(&catalog)
+        .expect("exact confidential lane privacy coverage");
+    state.install_lane_manifests(&manifests);
+    state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
+        lane_catalog: catalog.clone(),
+        lane_config,
+        ..Default::default()
+    });
+    state.configure_test_runtime_defaults();
+    assert_eq!(state.nexus_snapshot().lane_catalog, catalog);
+    assert_eq!(
+        state.nexus_snapshot().lane_config.entry(LaneId::SINGLE)
+            .and_then(|entry| entry.confidential_compute.as_ref())
+            .map(|policy| policy.key_version.get()),
+        Some(7),
+        "hydration reads the actual canonical confidential policy"
+    );
     let_row! { record = iroha_data_model::da::commitment::DaCommitmentRecord::new( LaneId::new(0), 1, 0, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) };
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();

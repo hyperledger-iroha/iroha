@@ -202,3 +202,42 @@ def test_delegated_carrier_budget_and_publication_reject_semantic_mutation(fixtu
     errors = validate(fixture)
     assert any("missing executable relation" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [('composed_external_events', 'self.external_event_count,', '0,'),
+ ('composed_external_events', 'seal.external_event_count,', '0,'),
+ ('composed_external_events',
+  'seal.external_event_bytes.as_deref()',
+  'self.external_event_bytes.as_deref()'),
+ ('composed_write_set_root', '|seal| seal.write_set_root', '|_seal| self.write_set_root'),
+ ('apply_verified_merge_beacon_pulse',
+  'actual_events.as_deref() != authorization.external_event_bytes.as_deref()',
+  'false'),
+ ('apply_verified_merge_beacon_pulse',
+  'merge_beacon_parent_surface(&self.world) != parent_surface',
+  'false'),
+ ('apply_verified_merge_beacon_pulse',
+  'capability: crate::block::valid::VerifiedMergeBeaconPulse',
+  'capability: crate::block::valid::UnverifiedMergeBeaconPulse'),
+ ('apply_verified_merge_beacon_pulse',
+  'external_event_count: self.world.external_event_buf.len()',
+  'external_event_count: 0'),
+ ('validate_staged_merge_execution_authorization',
+  '.get(..composed_event_count)',
+  '.get(..authorization.external_event_count)'),
+ ('validate_staged_merge_execution_authorization',
+  'autonomous_event_prefix_bytes.as_deref() != composed_event_bytes',
+  'false'),
+ ('mint_canonical_carrier_commit_metadata_authorization',
+  'authorization.composed_external_events().0',
+  'authorization.external_event_bytes.as_deref()'),
+ ('commit_inner',
+  'authorization.composed_external_events().0',
+  'authorization.external_event_bytes.as_deref()')])
+def test_delegated_composed_events_reject_semantic_mutation(fixture, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.delegated_state_contract.STATE,
+                              f"fn {symbol}(", old, new)
+    errors = validate(fixture)
+    assert any("missing executable relation" in e for e in errors), errors
+    assert not any("digest" in e for e in errors), errors

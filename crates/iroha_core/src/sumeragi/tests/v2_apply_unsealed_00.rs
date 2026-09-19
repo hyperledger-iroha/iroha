@@ -127,12 +127,35 @@ fn native_amx_prevote_byte_failures_have_precommit_error_classification() {
     ));
     assert!(!construction.requires_restart_recovery());
     let budget = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
-        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-            "configured Native AMX artifact pair is oversized".to_owned(),
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::HardGeometry(
+            crate::kura::NativeAmxParticipantApplicationEvidenceGeometryError::ManifestStandaloneLimit {
+                bytes: 11,
+                limit: 10,
+            },
         ),
     );
     assert!(matches!(&budget, V2ApplyError::Validation(_)));
     assert!(!budget.requires_restart_recovery());
+    assert!(budget.rejection_identity().is_some());
+    let local = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+            required_bytes: 11,
+            configured_bytes: 10,
+        },
+    );
+    assert!(matches!(
+        &local,
+        V2ApplyError::LocalEvidenceCapacity {
+            required_bytes: 11,
+            configured_bytes: 10
+        }
+    ));
+    assert!(local.requires_restart_recovery());
+    assert!(local.rejection_identity().is_none());
+    assert!(
+        local.local_busy().is_none(),
+        "fixed configuration has no release event"
+    );
 }
 struct ApplyFixture {
     context: wire::HeightContext,

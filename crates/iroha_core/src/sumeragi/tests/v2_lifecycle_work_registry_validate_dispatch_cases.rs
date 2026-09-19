@@ -870,6 +870,12 @@ impl std::fmt::Display for DetachedValidationError {
 
 #[cfg(feature = "bls")]
 impl BodyValidationError for DetachedValidationError {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        match self {
+            Self::Invalid(_) => Some(BodyValidationRejectionIdentity::Rejected),
+            Self::MissingMergeSidecar(_) => None,
+        }
+    }
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {
             Self::MissingMergeSidecar(reference) => Some(reference),
@@ -1802,8 +1808,8 @@ fn ready_validate_successor_fence_preserves_monotonic_source_bound_ownership() {
             );
             let ordinal = successor.lifecycle_ordinal();
             let original_record = coordinator.records[&ordinal].clone();
-            let original_digest = ready.holder.registry_for_test().entries[&ready.fixture.address]
-                .digest;
+            let original_digest =
+                ready.holder.registry_for_test().entries[&ready.fixture.address].digest;
             assert!(successor.reducer_fence_wait().is_none());
             let retained = successor
                 .retain_on_reducer_fence(incumbent)

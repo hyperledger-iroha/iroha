@@ -31,6 +31,258 @@ mod lane_retirement_observer {
     }
 
     #[test]
+    fn cut_waits_on_exact_inner_owner_and_releases_every_attempted_guard() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let other = Queue::test(config_factory(), &time_source);
+        for field in ["push_remove_lock", "lane_reservations"] {
+            let mutation = (field == "push_remove_lock").then(|| queue.push_remove_lock.lock());
+            let reservations =
+                (field == "lane_reservations").then(|| queue.lane_reservations.lock());
+            let busy = queue
+                .try_lock_lane_retirement_observer()
+                .expect("outer available")
+                .try_into_cut()
+                .err()
+                .expect("the actual inner owner is held");
+            assert_eq!(busy.field, field);
+            // Refusal cannot retain T, or P when R was the contended mutex.
+            drop(
+                queue
+                    .lane_reservation_transition_lock
+                    .try_lock()
+                    .expect("outer released"),
+            );
+            if field == "lane_reservations" {
+                drop(
+                    queue
+                        .push_remove_lock
+                        .try_lock()
+                        .expect("mutation attempt released"),
+                );
+            }
+            let count = Arc::new(WakeCount::default());
+            let mut wait = busy.wait.wait_for_release();
+            assert!(
+                poll(&mut wait, &count).is_pending(),
+                "an earlier guard release is not this wait"
+            );
+            drop(other.push_remove_lock.lock());
+            drop(other.lane_reservations.lock());
+            assert_eq!(count.0.load(Ordering::SeqCst), 0);
+            drop(mutation);
+            drop(reservations);
+            assert_eq!(count.0.load(Ordering::SeqCst), 1);
+            assert!(poll(&mut wait, &count).is_ready());
+
+            let cut = queue
+                .try_lock_lane_retirement_observer()
+                .expect("retry outer")
+                .try_into_cut()
+                .expect("retry inner owners");
+            assert!(queue.push_remove_lock.try_lock().is_none());
+            assert!(queue.lane_reservations.try_lock().is_none());
+            assert!(queue.lane_reservation_transition_lock.try_lock().is_none());
+            drop(cut);
+        }
+    }
+
+    #[test]
+    fn cut_release_before_registration_and_unwind_wake_original_inner_waiters() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        for unwind in [false, true] {
+            let cut = queue
+                .try_lock_lane_retirement_observer()
+                .expect("outer")
+                .try_into_cut()
+                .expect("inner owners");
+            let mutation_wait = queue
+                .push_remove_lock
+                .try_lock_or_wait()
+                .err()
+                .expect("P held");
+            let reservation_wait = queue
+                .lane_reservations
+                .try_lock_or_wait()
+                .err()
+                .expect("R held");
+            let transition_wait = waiting(&queue);
+            assert_ne!(mutation_wait, reservation_wait);
+            assert_ne!(reservation_wait, transition_wait);
+            if unwind {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let _cut = cut;
+                        panic!("abort retained Queue cut");
+                    }))
+                    .is_err()
+                );
+            } else {
+                drop(cut);
+            }
+            // A successor cannot steal the release observed by the failed attempt.
+            let successor = queue
+                .try_lock_lane_retirement_observer()
+                .expect("successor outer")
+                .try_into_cut()
+                .expect("successor owners");
+            let count = Arc::new(WakeCount::default());
+            for wait in [mutation_wait, reservation_wait, transition_wait] {
+                assert!(poll(&mut wait.wait_for_release(), &count).is_ready());
+            }
+            let mut successor_wait = queue
+                .lane_reservations
+                .try_lock_or_wait()
+                .err()
+                .expect("successor holds R")
+                .wait_for_release();
+            assert!(poll(&mut successor_wait, &count).is_pending());
+            drop(successor);
+            assert!(poll(&mut successor_wait, &count).is_ready());
+        }
+        assert!(!queue.transaction_selection_durability_faulted());
+    }
+
+    #[test]
+    fn retained_cut_excludes_enqueue_from_an_already_captured_state_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let hash = tx.hash_as_entrypoint();
+        let incarnation = Hash::new(b"retained-empty-queue-cut");
+        let (captured_tx, captured_rx) = std::sync::mpsc::sync_channel(1);
+        let (proceed_tx, proceed_rx) = std::sync::mpsc::sync_channel(1);
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let (captured, observed_pending, mutation_held, while_held, result) =
+            std::thread::scope(|scope| {
+                let worker_queue = &queue;
+                let worker_state = &state;
+                let worker = scope.spawn(move || {
+                    // State views retain thread-local EBR readers. Capture and
+                    // consume this original view on the same worker thread.
+                    let view = worker_state.view();
+                    let _ = captured_tx.send(());
+                    if proceed_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                        return None;
+                    }
+                    let result = worker_queue.push(tx, view);
+                    let _ = done_tx.send(());
+                    Some(result)
+                });
+                let captured = captured_rx.recv_timeout(Duration::from_secs(5));
+                let cut = queue
+                    .try_lock_lane_retirement_observer()
+                    .ok()
+                    .and_then(|observer| observer.try_into_cut().ok());
+                let observed_pending = cut.as_ref().map(|cut| {
+                    cut.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation)
+                });
+                let mutation_held = queue.push_remove_lock.try_lock().is_none();
+                let _ = proceed_tx.send(());
+                let while_held = done_rx.try_recv();
+                // Release physical owners and channels before assertions/joins,
+                // including if acquisition or the capture acknowledgement failed.
+                drop(cut);
+                drop(proceed_tx);
+                drop(captured_rx);
+                drop(done_rx);
+                (
+                    captured,
+                    observed_pending,
+                    mutation_held,
+                    while_held,
+                    worker.join(),
+                )
+            });
+        assert_eq!(captured, Ok(()));
+        assert_eq!(
+            observed_pending,
+            Some(false),
+            "original cut acquired after the view capture"
+        );
+        assert!(mutation_held);
+        assert!(matches!(
+            while_held,
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        result
+            .expect("enqueue worker")
+            .expect("worker released to enqueue")
+            .expect("captured-view enqueue after release");
+        let retry = queue
+            .try_lock_lane_retirement_observer()
+            .expect("retry outer")
+            .try_into_cut()
+            .expect("retry owners");
+        assert!(retry.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation));
+        assert!(queue.contains_entrypoint_hash(hash));
+        assert_eq!(queue.active_len(), 1);
+    }
+
+    #[test]
+    fn cut_preserves_exact_reservation_barriers_and_fail_stop() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("durable Queue fixture");
+        install_test_reservation_journal(&queue, &dir);
+        push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            accepted_queue_plan_tx_by_someone(&time_source),
+        );
+        let scope = lane_reservation_scope(&state, b"cut-owner", b"cut-proposal");
+        let other = Hash::new(b"cut-recreated-incarnation");
+        let key = *queue
+            .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
+            .expect("durable reservation")[0]
+            .key();
+        for barrier in [false, true] {
+            if barrier {
+                let _transition = queue.lane_reservation_transition_lock.lock();
+                queue
+                    .lane_reservation_journal
+                    .lock()
+                    .as_mut()
+                    .expect("journal")
+                    .commit(key)
+                    .expect("durable commit barrier");
+                let mut reservations = queue.lane_reservations.lock();
+                reservations.live_by_entrypoint.remove(&key.entrypoint_hash);
+                reservations.commit_barriers.push(key);
+            }
+            let cut = queue
+                .try_lock_lane_retirement_observer()
+                .expect("outer")
+                .try_into_cut()
+                .expect("inner owners");
+            assert!(cut.lane_has_pending_work(
+                scope.lane_id,
+                scope.dataspace_id,
+                scope.lane_incarnation
+            ));
+            assert!(!cut.lane_has_pending_work(scope.lane_id, scope.dataspace_id, other));
+            assert!(cut.lane_has_pending_work(
+                scope.lane_id,
+                scope.dataspace_id,
+                Hash::prehashed([0; Hash::LENGTH])
+            ));
+            if barrier {
+                queue
+                    .lane_reservation_durability_fault
+                    .store(true, Ordering::Release);
+                assert!(cut.lane_has_pending_work(LaneId::new(77), DataSpaceId::new(77), other));
+            }
+        }
+    }
+
+    #[test]
     fn blocking_and_try_observers_wake_on_normal_and_aborted_release() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
@@ -155,6 +407,7 @@ mod lane_retirement_observer {
             let observer = queue
                 .try_lock_lane_retirement_observer()
                 .expect("observe FIFO");
+            assert!(!observer.durability_faulted());
             assert!(observer.lane_has_pending_work(
                 scope.lane_id,
                 scope.dataspace_id,
@@ -189,6 +442,7 @@ mod lane_retirement_observer {
             let observer = queue
                 .try_lock_lane_retirement_observer()
                 .expect("observe reservation");
+            assert!(!observer.durability_faulted());
             assert!(observer.lane_has_pending_work(
                 scope.lane_id,
                 scope.dataspace_id,
@@ -219,6 +473,7 @@ mod lane_retirement_observer {
             let observer = queue
                 .try_lock_lane_retirement_observer()
                 .expect("observe barrier");
+            assert!(!observer.durability_faulted());
             assert!(observer.lane_has_pending_work(
                 scope.lane_id,
                 scope.dataspace_id,
@@ -236,6 +491,7 @@ mod lane_retirement_observer {
         let observer = queue
             .try_lock_lane_retirement_observer()
             .expect("observe fault");
+        assert!(observer.durability_faulted());
         assert!(observer.lane_has_pending_work(
             LaneId::new(88),
             DataSpaceId::new(88),

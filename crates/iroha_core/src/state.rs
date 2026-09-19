@@ -3642,6 +3642,14 @@ pub(crate) enum QueuePlanBindingApplicationEvidence {
     /// A distinct committed signed identity terminally resolved this carrier.
     AppliedViaSignedAlias,
 }
+/// Current route authority of an exact canonically ranked pending input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueuePlanPendingRouteAuthority {
+    /// Every route remains open to ordinary admission.
+    Active,
+    /// At least one route may finish only its authenticated pre-close work.
+    Draining,
+}
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingQueuePlanAdmissionDisposition {
@@ -27800,6 +27808,16 @@ impl State {
     pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> PublicationGuard<'_> {
         self.lane_lifecycle_lock.lock()
     }
+    /// Probe the same lifecycle fence without retaining a guard on contention.
+    ///
+    /// Callers must first acquire the Queue reservation-transition fence when
+    /// both owners are needed. On refusal, release all other guards before
+    /// waiting on this exact mutex observation; a wake requires a fresh probe.
+    pub(crate) fn try_lock_lane_lifecycle_work_admission(
+        &self,
+    ) -> Result<PublicationGuard<'_>, mv::ReleaseWait> {
+        self.lane_lifecycle_lock.try_lock_or_wait()
+    }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
         loop {
             let generation_before = self.state_view_generation();
@@ -40380,6 +40398,154 @@ impl State {
         }
         Ok(true)
     }
+    /// Fixed single-slot memory envelope for a cold canonical complete-input read.
+    ///
+    /// Includes the enforced cumulative Norito decoder graph budget, maximum
+    /// historical carrier wire, proposal clone and counted authentication buffers.
+    /// The caller must retain this charge until the synchronous read and returned
+    /// input/certificate have physically finished, including cancellation.
+    /// Returns `None` when the target cannot represent the protocol envelope.
+    #[must_use]
+    pub fn canonical_queue_plan_input_read_working_set_bytes() -> Option<usize> {
+        crate::kura::canonical_admission_read_working_set_bytes()
+    }
+    /// Recover the complete input from its exact canonical first-admission carrier.
+    ///
+    /// The immutable registry position and committed carrier hash are observed
+    /// together. Every State guard is released before the authenticated Kura
+    /// read, and the same registry, history and coherent application state are
+    /// checked again afterwards. This is an existing canonical input, not a new
+    /// local journal claim or permission to admit work on its routes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or changed State evidence, unavailable or
+    /// damaged historical finality/body, or an input differing from the exact
+    /// registry owner. Authenticated body eviction requires existing canonical
+    /// body recovery and never falls back to fresh admission. Only genuine
+    /// registry absence returns `Ok(None)`.
+    pub fn canonical_queue_plan_admitted_input(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::ValidatedLaneAdmittedInputV1>, String> {
+        let limits = crate::kura::canonical_admission_read_decode_limits()
+            .ok_or_else(|| "canonical QueuePlan input read budget overflows".to_owned())?;
+        norito::with_decode_limits_scope(limits, || {
+            if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0) {
+                return Err("canonical QueuePlan input lookup contains a zero identity".to_owned());
+            }
+            let network_id_digest =
+                crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+                network_id_digest,
+                entrypoint_hash,
+            };
+            let key = Self::queue_plan_admission_registry_marker_key(&registry_key)
+                .map_err(|error| error.to_string())?;
+            let observe = || -> Result<
+            Option<(
+                queue_plan_priority::QueuePlanAdmissionRegistryRecordV1,
+                HashOf<BlockHeader>,
+            )>,
+            String,
+        > {
+            let view = self.view();
+            let Some(payload) = view.world().smart_contract_state().get(&key) else {
+                // An orphaned obligation is corruption, not a fresh-admission
+                // opportunity. Reuse the canonical absence check.
+                Self::queue_plan_admission_registry_value_in_view(&view, entrypoint_hash)?;
+                return Ok(None);
+            };
+            let record = Self::decode_exact_queue_plan_admission_registry_record(&key, payload)
+                .map_err(|error| error.to_string())?;
+            let application = Self::queue_plan_registry_owner_application_state_in_view(
+                &view,
+                network_id_digest,
+                entrypoint_hash,
+                record.claim.binding_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            if application == QueuePlanAdmissionApplicationState::PendingStale {
+                return Err("canonical QueuePlan input has a stale pending owner".to_owned());
+            }
+            let index = usize::try_from(record.priority.carrier_height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .ok_or_else(|| "canonical QueuePlan input has an invalid carrier height".to_owned())?;
+            let carrier_hash = view.block_hashes().get(index).copied().ok_or_else(|| {
+                "canonical QueuePlan first carrier is absent from State history".to_owned()
+            })?;
+            Ok(Some((record, carrier_hash)))
+        };
+            let Some((record, carrier_hash)) = observe()? else {
+                return Ok(None);
+            };
+            let height = usize::try_from(record.priority.carrier_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| {
+                    "canonical QueuePlan input has an invalid carrier height".to_owned()
+                })?;
+            #[cfg(test)]
+            lane_consensus_verified::io_observer::notify();
+            let result = (|| {
+                let read = self
+                    .kura
+                    .read_first_admission_carrier(height, carrier_hash)
+                    .map_err(|error| error.to_string())?;
+                if read.finality.height_context.network_id != self.network_id
+                    || read.finality.height != record.priority.carrier_height
+                    || read.finality.height_context.height != record.priority.carrier_height
+                {
+                    return Err(
+                    "canonical QueuePlan first-carrier finality differs from its registry source"
+                        .to_owned(),
+                );
+                }
+                let body = read.body.ok_or_else(|| {
+                    "canonical QueuePlan first-carrier body requires authenticated recovery"
+                        .to_owned()
+                })?;
+                let index = usize::try_from(record.priority.admission_index)
+                    .map_err(|error| error.to_string())?;
+                let bytes = body
+                    .execution_context()
+                    .and_then(|context| context.queue_plan_admissions.get(index))
+                    .ok_or_else(|| {
+                        "canonical QueuePlan admission index is absent from its first carrier"
+                            .to_owned()
+                    })?;
+                let input = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                    &self.network_id,
+                    bytes,
+                )?;
+                if input.entrypoint().hash() != entrypoint_hash
+                    || input.certificate().registry_key != registry_key
+                    || input.certificate().registry_value != record.claim
+                    || input
+                        .certificate()
+                        .certificate
+                        .binding
+                        .admission_context
+                        .proposal_height
+                        > record.priority.carrier_height
+                {
+                    return Err(
+                        "canonical QueuePlan first-carrier input differs from its registry owner"
+                            .to_owned(),
+                    );
+                }
+                Ok(input)
+            })();
+            if observe()?.as_ref() != Some(&(record, carrier_hash)) {
+                return Err(
+                    "canonical QueuePlan registry source changed during carrier read".to_owned(),
+                );
+            }
+            result.map(Some)
+        })
+    }
     /// Return the exact active QueuePlan binding which still owns application
     /// of one entrypoint.
     ///
@@ -40629,6 +40795,112 @@ impl State {
                 Err("QueuePlan retained obligation lost every exact route member".to_owned())
             }
         }
+    }
+    /// Authenticate retained pending custody independently of fresh route admission.
+    ///
+    /// A close never rebases an accepted input onto a new context. Every closed
+    /// leg must retain its original incarnation, ranked pre-close admission and
+    /// immutable committee. This projection grants neither fresh admission nor
+    /// an ordinary reservation on a closed route.
+    pub(crate) fn queue_plan_pending_route_authority_in_view(
+        state: &impl StateReadOnlyWithTransactions,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    ) -> Result<Option<QueuePlanPendingRouteAuthority>, String> {
+        match Self::queue_plan_binding_application_evidence_in_view(state, binding)? {
+            QueuePlanBindingApplicationEvidence::Absent
+            | QueuePlanBindingApplicationEvidence::AppliedDirect
+            | QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias => return Ok(None),
+            QueuePlanBindingApplicationEvidence::PendingStale => {
+                return Err("retained QueuePlan input has a stale route incarnation".to_owned());
+            }
+            QueuePlanBindingApplicationEvidence::Pending => {}
+        }
+        let height = u64::try_from(state.height())
+            .map_err(|_| "retained QueuePlan height exceeds u64".to_owned())?;
+        let next_height = height
+            .checked_add(1)
+            .ok_or_else(|| "retained QueuePlan proposal height overflows".to_owned())?;
+        let context = &binding.admission_context;
+        let predecessor = if context.authority_height == 0 {
+            None
+        } else {
+            let index = usize::try_from(context.authority_height - 1)
+                .map_err(|_| "retained QueuePlan predecessor index overflows".to_owned())?;
+            Some(
+                *state
+                    .block_hashes()
+                    .get(index)
+                    .ok_or_else(|| "retained QueuePlan predecessor is missing".to_owned())?,
+            )
+        };
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())
+            .map_err(|error| error.to_string())?;
+        let record = Self::decode_exact_queue_plan_admission_registry_record(
+            &registry_key,
+            state
+                .world()
+                .smart_contract_state()
+                .get(&registry_key)
+                .ok_or_else(|| "retained QueuePlan ranked owner is missing".to_owned())?,
+        )
+        .map_err(|error| error.to_string())?;
+        if predecessor != context.predecessor_block_hash
+            || record.claim != binding.registry_value()
+            || record.priority.carrier_height < context.proposal_height
+            || record.priority.carrier_height > height
+        {
+            return Err(
+                "retained QueuePlan rank or predecessor differs from canonical history".to_owned(),
+            );
+        }
+        let mut authority = QueuePlanPendingRouteAuthority::Active;
+        for bound in &context.route_incarnations {
+            let route = bound.leg.route;
+            let lane = state
+                .nexus()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)
+                .ok_or_else(|| "retained QueuePlan route is absent".to_owned())?;
+            let drain = decode_autoscale_lane_drain_state(lane).map_err(str::to_owned)?;
+            if let Some(drain) = drain
+                && next_height > drain.intent.close_global_height
+            {
+                let close = drain.intent.close_global_height;
+                let pin = decode_autoscale_lane_committee(lane)
+                    .map_err(str::to_owned)?
+                    .ok_or_else(|| "retained QueuePlan drain has no immutable pin".to_owned())?;
+                validate_autoscale_lane_committee_pops(&pin).map_err(str::to_owned)?;
+                if !lane.claims_autoscale_managed()
+                    || close > height
+                    || record.priority.carrier_height > close
+                    || drain.commitment.is_some()
+                    || !autoscale_lane_drain_state_matches_context(
+                        lane,
+                        &drain,
+                        state.network_id(),
+                        bound.lane_incarnation,
+                    )
+                    || state.lane_incarnation_at_height(route.lane_id, close)
+                        != Some(bound.lane_incarnation)
+                    || pin.validator_set != bound.validator_set
+                {
+                    return Err(
+                        "retained QueuePlan input differs from its pre-close drain authority"
+                            .to_owned(),
+                    );
+                }
+                authority = QueuePlanPendingRouteAuthority::Draining;
+            } else if state.lane_incarnation_at_height(route.lane_id, next_height)
+                != Some(bound.lane_incarnation)
+            {
+                return Err(
+                    "retained QueuePlan input differs from its active incarnation".to_owned(),
+                );
+            }
+        }
+        Ok(Some(authority))
     }
     /// Compare one structurally valid, exact-network-bound QueuePlan admission binding
     /// with its immutable WSV registry projection.
@@ -44923,6 +45195,89 @@ impl State {
         })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
+        })
+    }
+    /// Stage a complete-input admission carrier for a component test fixture.
+    ///
+    /// Uses the real pristine QueuePlan control validator and State commit path,
+    /// including exact first-admission ranks, pending route markers and empty
+    /// transaction membership. This helper executes no Network work and creates
+    /// no lane opening witness, finality or consensus publication authority.
+    /// The caller must independently persist the exact body and authenticated
+    /// finality before canonical source readers can return its inputs.
+    ///
+    /// # Errors
+    ///
+    /// Rejects anything except a result-bearing, next-parent admission-only
+    /// carrier, invalid complete controls, or a refused State commit.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn commit_queue_plan_admission_carrier_for_testing(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let invalid =
+            |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
+        let context = block
+            .execution_context()
+            .ok_or_else(|| invalid("admission fixture carrier has no complete controls"))?;
+        if context.queue_plan_admissions.is_empty()
+            || *context
+                != iroha_data_model::block::BlockExecutionContextBundle::default()
+                    .with_queue_plan_admissions(context.queue_plan_admissions.clone())
+            || block.network_entrypoint_count() != 0
+            || !block.has_results()
+            || !block.execution_outputs().is_empty()
+            || block.da_commitments().is_some()
+            || block.da_proof_policies().is_some()
+            || block.da_pin_intents().is_some()
+            || block.npos_consensus_effects().is_some()
+        {
+            return Err(invalid(
+                "admission fixture carrier contains unsupported execution work",
+            ));
+        }
+        block
+            .validate_proposal_commitments()
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        block
+            .validate_execution_result_structure()
+            .map_err(|error| invalid(&error.to_string()))?;
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            block.header().height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "admission fixture runtime ABI is incompatible: {error:?}"
+            ))
+        })?;
+        let mut overlay = self.block_with_pristine_stage(block.header(), |overlay| {
+            overlay.stage_queue_plan_admissions_for_carrier(&context.queue_plan_admissions)
+        })?;
+        let next_height = u64::try_from(overlay.height())
+            .ok()
+            .and_then(|height| height.checked_add(1))
+            .ok_or_else(|| invalid("admission fixture successor height overflows"))?;
+        if block.header().height().get() != next_height
+            || block.header().prev_block_hash() != overlay.block_hashes().last().copied()
+        {
+            return Err(invalid(
+                "admission fixture carrier differs from the exact State predecessor",
+            ));
+        }
+        overlay
+            .stage_autoscale_sample_record_for_count(block, 0)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        let height =
+            block.header().height().try_into().map_err(|_| {
+                invalid("admission fixture height does not fit transaction storage")
+            })?;
+        overlay.transactions.insert_block(HashSet::new(), height);
+        overlay.block_hashes.push(block.hash());
+        overlay.commit().map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "admission fixture State commit failed: {error}"
+            ))
         })
     }
     /// Append a merge-ledger entry directly for unit tests.

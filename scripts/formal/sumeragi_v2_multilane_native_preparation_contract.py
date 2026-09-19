@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from sumeragi_v2_multilane_geometry_evidence_contract import _code
+from sumeragi_v2_multilane_reviewed_rust_source import _mask_rust_comments
 
 MODEL = "SumeragiV2NativeApplicationEvidence"
 APPLY = "crates/iroha_core/src/sumeragi/v2_apply.rs"
@@ -506,20 +507,20 @@ TERMINAL_OWNER_BINDINGS = (
         "self.journals.checkpoint", "drop(lease)", "stage_kagemusha_finality_sidecar(",
         "self.finality.artifact().height", "self.finality.artifact().block_hash",
         "self.journals.source_prefix.witness()", "self.journals.execution_prefix",
-        "self.journals.source_prefix.parliament_timed_ovn_casting_bindings().unwrap_or(&[])",
-        "promote_kagemusha_finality_sidecar(self.finality.artifact(), self.checkpoint.finality_receipt(),)",
+        "self.journals\n                    .source_prefix\n                    .parliament_timed_ovn_casting_bindings()\n                    .unwrap_or(&[])",
+        "promote_kagemusha_finality_sidecar(\n                self.finality.artifact(),\n                self.checkpoint.finality_receipt(),\n            )",
     )),
     (WITNESS_LEASE, "method", "KuraPublicationLease::reauthenticate_execution_witness", (
         "self.kura.kagemusha_finality_sidecar_path(finality.height)",
-        "let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else { return Err(",
+        "let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else {\n            return Err(",
         "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?",
         "self.kura.regular_sidecar_metadata(&path, &directory)?",
         "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())",
     )),
     (PREFIX, "method", "ValidatedExecutionPrefix::retains_carrier", (
         "self.sealed.proposal() == block.hash()", "self.sealed.sources().proposal() == block.hash()",
-        "PrefixSourceAuthority::Ordinary => { !self.sealed.sources().is_native() && !block.execution_context().is_some_and(|bundle| bundle.native_lane_decisions.is_some()) }",
-        "PrefixSourceAuthority::Native(native) => { self.sealed.sources().is_native() && native.retains_carrier(block, context) }",
+        "PrefixSourceAuthority::Ordinary => {\n                    !self.sealed.sources().is_native()\n                        && !block\n                            .execution_context()\n                            .is_some_and(|bundle| bundle.native_lane_decisions.is_some())\n                }",
+        "PrefixSourceAuthority::Native(native) => {\n                    self.sealed.sources().is_native() && native.retains_carrier(block, context)\n                }",
     )),
     (NATIVE_STAGE, "method", "NativeExecutionCustody::retains_carrier", (
         "self.context.context() == context", "self.seal.completed_write_set_root.is_some()",
@@ -532,7 +533,7 @@ TERMINAL_OWNER_BINDINGS = (
         "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
         "self.journals.checkpoint", "drop(lease)", "self.checkpoint.finality_receipt()",
         "self.journals.provider_capture.as_mut()", "self.journals.reputation_capture.as_mut()",
-        "provider.publish(receipt)", "reputation.publish(receipt)",
+        "provider\n                .publish(receipt)", "reputation\n                .publish(receipt)",
     )),
     (PHYSICAL_CARRIER, "fn", "try_prepare_physical", (
         "admit: impl FnOnce(&Self, &State)", "admit(&original, target)",
@@ -540,24 +541,24 @@ TERMINAL_OWNER_BINDINGS = (
         "target.kura.try_publication_lease()", "kura.reauthenticate_checkpoint(",
         "kura.reauthenticate_execution_witness(original.finality.artifact())",
         "StateFences::try_acquire(target)", "journals.try_map_components(",
-        "Ok(PhysicallyPreparedCarrier { target, decision: retain!(journals), installation, })",
+        "Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n                installation,\n            })",
     )),
     (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::is_identity_transition", (
         "self._header == header", "self._pending.is_none()", "self._certified_frontiers.is_empty()",
         "self._previous_runtime_catalog == self._accepted_runtime_catalog",
         "self._predecessor.lanes == self._successor.lanes",
         "self._predecessor.lane_count == self._successor.lane_count",
-        "self._predecessor.lane_incarnation_lineage == self._successor.lane_incarnation_lineage",
+        "self._predecessor.lane_incarnation_lineage\n                == self._successor.lane_incarnation_lineage",
         "self._predecessor.owner_policy == self._successor.owner_policy",
-        "self._predecessor.autoscale_last_transition_height == self._successor.autoscale_last_transition_height",
+        "self._predecessor.autoscale_last_transition_height\n                == self._successor.autoscale_last_transition_height",
     )),
     (PHYSICAL_CARRIER, "method", "CarrierFences::release_for_completion", (
         "drop(write)", "drop(lifecycle)", "drop(kura)", "commit",
     )),
     (TERMINAL_CARRIER, "method", "PhysicallyPreparedCarrier::publish", (
-        "journals.effects.replay_prevalidation", "journals.source_prefix.retains_carrier(journals.valid.as_ref(), &journals.context)",
+        "journals.effects.replay_prevalidation", "journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)",
         "journals.effects.header != journals.valid.as_ref().header()", "journals.staged_legacy_source()",
-        "journals.geometry.is_identity_transition(journals.effects.header)",
+        "journals\n            .geometry\n            .is_identity_transition(journals.effects.header)",
         "journals.effects.pending_autoscale_lifecycle.is_some()", "journals.native_amx_manifest.entries().is_empty()",
         "return Err((self.abort(), error))", "target.begin_state_view_write()",
         "transactions.publish()", "runtime.publish()", "world.publish()", "world_effects.publish(target)",
@@ -569,7 +570,7 @@ TERMINAL_OWNER_BINDINGS = (
         "tiered_snapshot.publish(target, false)", "target.enforce_nexus_storage_budget(height)",
         "target.persist_query_index_status(height, Some(effects.header.hash()))",
         "publication_events.append(&mut extra_events)", "drop(commit)", "Ok(PublishedCarrier {",
-        "source: source_prefix", "admission, binding, installation",
+        "source: source_prefix", "admission,\n            binding,\n            installation",
     )),
 )
 PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
@@ -584,9 +585,13 @@ GUARDED_GEOMETRY = "crates/iroha_core/src/kura/lane_geometry/guarded_publication
 QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (QUEUE_OWNER, "struct", "Queue", (
         "lane_reservation_transition_lock: PublicationMutex,",
+        "push_remove_lock: PublicationMutex,",
+        "lane_reservations: PublicationMutex<LaneQueueReservationStore>,",
     )),
     (QUEUE_OWNER, "method", "Queue::from_config_with_router_limits_and_catalogs", (
         "lane_reservation_transition_lock: PublicationMutex::default(),",
+        "push_remove_lock: PublicationMutex::default(),",
+        "lane_reservations: PublicationMutex::new(LaneQueueReservationStore::default()),",
     )),
     (QUEUE_OWNER, "struct", "QueueLaneRetirementObserver", (
         "queue: &'queue Queue", "_reservation_transition_guard: PublicationGuard<'queue>",
@@ -597,34 +602,72 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (QUEUE_OWNER, "method", "Queue::try_lock_lane_retirement_observer", (
         "Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait>",
         "let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;",
-        "Ok(QueueLaneRetirementObserver { queue: self, _reservation_transition_guard: guard, })",
+        "Ok(QueueLaneRetirementObserver {\n            queue: self,\n            _reservation_transition_guard: guard,\n        })",
     )),
     (QUEUE_OWNER, "method", "QueueLaneRetirementObserver::lane_has_pending_work", (
-        "self.queue.lane_has_pending_work_under_retirement_observer(lane_id, dataspace_id, lane_incarnation,)",
+        "self.queue.lane_has_pending_work_under_retirement_observer(\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )",
     )),
     (QUEUE_OWNER, "method", "Queue::lane_has_pending_work_under_retirement_observer", (
         "hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted()",
         "let _queue_guard = self.push_remove_lock.lock();",
-        "if self.transaction_selection_durability_faulted() { return true; }",
+        "if self.transaction_selection_durability_faulted() {\n            return true;\n        }",
         "let reservations = self.lane_reservations.lock();",
-        "key.lane_id == lane_id && key.dataspace_id == dataspace_id && key.lane_incarnation == lane_incarnation",
-        "reservations.live_by_entrypoint.values().any(|record| exact_reservation(&record.key))",
+        "let owned = Self::lane_retirement_reservation_snapshot(\n            &reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        );",
+        "drop(reservations);", "let Some(owned) = owned else {\n            return true;\n        };",
+        "self.lane_has_pending_route_work(&owned, lane_id, dataspace_id)",
+    )),
+    (QUEUE_OWNER, "method", "Queue::lane_retirement_reservation_snapshot", (
+        "reservations: &LaneQueueReservationStore", "Option<HashSet<EntrypointHash>>",
+        "key.lane_id == lane_id\n                && key.dataspace_id == dataspace_id\n                && key.lane_incarnation == lane_incarnation",
+        "let reservation_owned_hashes = reservations\n            .live_by_entrypoint\n            .keys()\n            .copied()",
+        ".chain(\n                reservations\n                    .commit_barriers\n                    .iter()\n                    .map(|key| key.entrypoint_hash),\n            )",
+        ".chain(\n                reservations\n                    .completed_releases\n                    .iter()\n                    .flat_map(|completion| {\n                        completion\n                            .ordered_records\n                            .iter()\n                            .map(|record| record.key.entrypoint_hash)\n                    }),\n            )",
+        "reservations\n            .live_by_entrypoint\n            .values()\n            .any(|record| exact_reservation(&record.key))",
         "reservations.commit_barriers.iter().any(exact_reservation)",
-        "reservations.release_barriers.iter().any(|barrier| { barrier.lane_id == lane_id && barrier.dataspace_id == dataspace_id && barrier.lane_incarnation == lane_incarnation })",
-        "reservations.completed_releases.iter().any(|completion| { completion.barrier.lane_id == lane_id && completion.barrier.dataspace_id == dataspace_id && completion.barrier.lane_incarnation == lane_incarnation })",
-        "drop(reservations);", "!reservation_owned_hashes.contains(entry.key())",
+        "reservations.release_barriers.iter().any(|barrier| {\n                barrier.lane_id == lane_id\n                    && barrier.dataspace_id == dataspace_id\n                    && barrier.lane_incarnation == lane_incarnation\n            })",
+        "reservations.completed_releases.iter().any(|completion| {\n                completion.barrier.lane_id == lane_id\n                    && completion.barrier.dataspace_id == dataspace_id\n                    && completion.barrier.lane_incarnation == lane_incarnation\n            })",
+        "{\n            return None;\n        }\n        Some(reservation_owned_hashes)",
+    )),
+    (QUEUE_OWNER, "method", "Queue::lane_has_pending_route_work", (
+        "reservation_owned_hashes: &HashSet<EntrypointHash>",
+        "self.routing_plans.iter().any(|entry| {\n            !reservation_owned_hashes.contains(entry.key())",
         "self.txs.contains_key(entry.key())", "entry.value().legs().into_iter().any(|leg|",
         "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id",
     )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementObserver::try_into_cut", (
+        "fn try_into_cut(\n        self,\n    ) -> Result<QueueLaneRetirementCut<'queue>, QueueRetirementBusy>",
+        "let mutation = self\n            .queue\n            .push_remove_lock\n            .try_lock_or_wait()\n            .map_err(|wait|",
+        "field: \"push_remove_lock\",\n                wait",
+        "let reservations = self\n            .queue\n            .lane_reservations\n            .try_lock_or_wait()\n            .map_err(|wait|",
+        "field: \"lane_reservations\",\n                wait",
+        "Ok(QueueLaneRetirementCut {\n            reservations,\n            _mutation: mutation,\n            observer: self,\n        })",
+    )),
+    (QUEUE_OWNER, "struct", "QueueRetirementBusy", (
+        "pub(crate) field: &'static str", "pub(crate) wait: mv::ReleaseWait",
+    )),
+    (QUEUE_OWNER, "struct", "QueueLaneRetirementCut", (
+        "reservations: PublicationGuard<'queue, LaneQueueReservationStore>",
+        "_mutation: PublicationGuard<'queue>", "observer: QueueLaneRetirementObserver<'queue>",
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementCut::lane_has_pending_work", (
+        "let queue = self.observer.queue;",
+        "if hash_is_zero(lane_incarnation) || queue.transaction_selection_durability_faulted() {\n            return true;\n        }",
+        "let Some(owned) = Queue::lane_retirement_reservation_snapshot(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        ) else {\n            return true;\n        };",
+        "queue.lane_has_pending_route_work(&owned, lane_id, dataspace_id)",
+    )),
     (PUBLICATION_MUTEX, "struct", "PublicationMutex", (
-        "inner: parking_lot::Mutex<()>", "released: mv::ReleaseNotification",
+        "inner: parking_lot::Mutex<T>", "released: mv::ReleaseNotification",
     )),
     (PUBLICATION_MUTEX, "struct", "PublicationGuard", (
-        "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>",
+        "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>",
+    )),
+    (PUBLICATION_MUTEX, "method", "PublicationMutex::new", (
+        "fn new(value: T) -> Self", "inner: parking_lot::Mutex::new(value)",
+        "released: mv::ReleaseNotification::default()",
     )),
     (PUBLICATION_MUTEX, "method", "PublicationMutex::wrap", (
-        "guard: parking_lot::MutexGuard<'state, ()>",
-        "self.released.guard(PhysicalPublicationGuard { guard: Some(guard), fair: false, })",
+        "guard: parking_lot::MutexGuard<'state, T>",
+        "self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            })",
     )),
     (PUBLICATION_MUTEX, "method", "PublicationMutex::lock", (
         "self.wrap(self.inner.lock())",
@@ -635,9 +678,9 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (PUBLICATION_MUTEX, "method", "PublicationMutex::try_lock_or_wait", (
         "let wait = self.released.observe();", "self.try_lock().ok_or(wait)",
     )),
-    (PUBLICATION_MUTEX, "method", "PhysicalPublicationGuard<'_>::drop", (
+    (PUBLICATION_MUTEX, "method", "PhysicalPublicationGuard<'_, T>::drop", (
         "if let Some(guard) = self.guard.take()", "if self.fair",
-        "parking_lot::MutexGuard::unlock_fair(guard);", "else { drop(guard); }",
+        "parking_lot::MutexGuard::unlock_fair(guard);", "else {\n                drop(guard);\n            }",
     )),
     (WITNESS_LEASE, "struct", "KuraPublicationLease", (
         "kura: &'kura Kura", "_sidecar: PublicationGuard<'kura>",
@@ -648,7 +691,7 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "pub(super) fn from_geometry_guards(", "kura: &'kura Kura",
         "sidecar: PublicationGuard<'kura>", "geometry: PublicationGuard<'kura>",
         "canonical: PublicationGuard<'kura>", "prune: PublicationGuard<'kura>",
-        "Self { kura, _sidecar: sidecar, _geometry: geometry, _canonical: canonical, _prune: prune, }",
+        "Self {\n            kura,\n            _sidecar: sidecar,\n            _geometry: geometry,\n            _canonical: canonical,\n            _prune: prune,\n        }",
     )),
     (WITNESS_LEASE, "method", "KuraPublicationLease::kura_under_publication_guards", (
         "pub(super) fn kura_under_publication_guards(&self) -> &'kura Kura", "self.kura",
@@ -661,10 +704,10 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "let _geometry_guard = self.lane_geometry_lock.lock();",
         "let mut journal = self.read_lane_geometry_journal()?;",
         "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
-        "KuraPublicationLease::from_geometry_guards(self, self.sidecar_lock.lock(), _geometry_guard, _canonical_chain_guard, _prune_guard,)",
+        "KuraPublicationLease::from_geometry_guards(\n            self,\n            self.sidecar_lock.lock(),\n            _geometry_guard,\n            _canonical_chain_guard,\n            _prune_guard,\n        )",
         "lease.apply_prepared_lane_geometry(guarded_publication::PreparedLaneGeometryTransition {",
-        "certified_retirements, transition_height, namespace_receipts, pending_canonical_bytes,",
-        "previous_bindings, updated_bindings, previous_catalog, updated_catalog, journal_was_present, journal",
+        "certified_retirements,\n            transition_height,\n            namespace_receipts,\n            pending_canonical_bytes,",
+        "previous_bindings,\n            updated_bindings,\n            previous_catalog,\n            updated_catalog,\n            journal_was_present,\n            journal",
     )),
     (GEOMETRY_OWNER, "method", "Kura::mark_lane_geometry_catalog_published_with_lineage_root", (
         "let _prune_guard = self.prune_lock.lock();", "self.ensure_prune_recovery_not_required()?;",
@@ -672,18 +715,18 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "self.resolve_canonical_storage_before_mutation()?;", "let _geometry_guard = self.lane_geometry_lock.lock();",
         "let mut journal = self.read_lane_geometry_journal()?;",
         "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
-        "KuraPublicationLease::from_geometry_guards(self, self.sidecar_lock.lock(), _geometry_guard, _canonical_chain_guard, _prune_guard,)",
-        "lease.publish_prepared_lane_geometry_catalog(guarded_publication::PreparedLaneGeometryCatalog { bindings, fingerprint, lineage_root, configured_baseline, journal, },)",
+        "KuraPublicationLease::from_geometry_guards(\n            self,\n            self.sidecar_lock.lock(),\n            _geometry_guard,\n            _canonical_chain_guard,\n            _prune_guard,\n        )",
+        "lease.publish_prepared_lane_geometry_catalog(\n            guarded_publication::PreparedLaneGeometryCatalog {\n                bindings,\n                fingerprint,\n                lineage_root,\n                configured_baseline,\n                journal,\n            },\n        )",
     )),
     (GUARDED_GEOMETRY, "method", "KuraPublicationLease::apply_prepared_lane_geometry", (
         "pub(in crate::kura::lane_geometry) fn apply_prepared_lane_geometry(",
         "let kura = self.kura_under_publication_guards();", "PreparedLaneGeometryTransition {",
-        "certified_retirements, transition_height, mut namespace_receipts, pending_canonical_bytes,",
-        "updated_catalog, journal_was_present, mut journal, } = prepared;",
+        "certified_retirements,\n            transition_height,\n            mut namespace_receipts,\n            pending_canonical_bytes,",
+        "updated_catalog,\n            journal_was_present,\n            mut journal,\n        } = prepared;",
         "record.previous_catalog == previous_catalog", "record.previous_lineage_root == previous_lineage_root",
         "record.updated_catalog == updated_catalog", "record.updated_lineage_root == updated_lineage_root",
         "existing.previous_bindings != previous_bindings", "existing.updated_bindings != updated_bindings",
-        "kura.ensure_lane_retirement_admissible_locked(pending_canonical_bytes, &retiring, &certified_retirements,)?;",
+        "kura.ensure_lane_retirement_admissible_locked(\n                pending_canonical_bytes,\n                &retiring,\n                &certified_retirements,\n            )?;",
         "PreparedGeometryJournalTransition::prepare(kura, journal, record_index)?",
         "prepared.persist(kura, LaneGeometryPhase::Intent)?;",
         "GeometryEvidencePolicy::FreshJournalIntent", "GeometryEvidencePolicy::AllowJournalIntentProvisioning",
@@ -696,13 +739,13 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (GUARDED_GEOMETRY, "method", "KuraPublicationLease::publish_prepared_lane_geometry_catalog", (
         "pub(in crate::kura::lane_geometry) fn publish_prepared_lane_geometry_catalog(",
         "let kura = self.kura_under_publication_guards();",
-        "PreparedLaneGeometryCatalog { bindings, fingerprint, lineage_root, configured_baseline, mut journal, } = prepared;",
+        "PreparedLaneGeometryCatalog {\n            bindings,\n            fingerprint,\n            lineage_root,\n            configured_baseline,\n            mut journal,\n        } = prepared;",
         "let prior_journal_bytes = kura.read_geometry_file_bytes(&journal_path)?;",
         "record.updated_catalog != fingerprint", "record.updated_lineage_root != lineage_root",
         "record.updated_bindings != bindings", "journal.records[index].phase = LaneGeometryPhase::CatalogPublished;",
         "kura.validate_lane_geometry_journal(&journal)?;", "let published_journal_bytes = journal.encode();",
-        "kura.atomic_write_geometry_file(&journal_path, &publication_temp, &published_journal_bytes,)",
-        "kura.restore_lane_geometry_journal_file(prior_journal_bytes.as_deref(), &published_journal_bytes, publication_temp_preexisted,)",
+        "kura.atomic_write_geometry_file(\n            &journal_path,\n            &publication_temp,\n            &published_journal_bytes,\n        )",
+        "kura.restore_lane_geometry_journal_file(\n                prior_journal_bytes.as_deref(),\n                &published_journal_bytes,\n                publication_temp_preexisted,\n            )",
         "Error::LaneGeometryPublicationRestoreFailed", "return Err(publication_error);",
     )),
 )
@@ -731,6 +774,7 @@ def validate_native_preparation_contract(
         *PREPARATION_OWNER_BINDINGS,
     )
     items = {}
+    raw_items = {}
     for path, kind, symbol, tokens in bindings:
         matches = [r for r in rows if isinstance(r, dict)
                    and (r.get("path"), r.get("kind"), r.get("symbol")) == (path, kind, symbol)]
@@ -740,6 +784,7 @@ def validate_native_preparation_contract(
             errors.append(f"Native preparation reviewed tokens changed for {symbol}")
         item = rust_binding_item(root, path, kind, symbol, "Native preparation", errors)
         if item is not None:
+            raw_items[symbol] = item
             items[symbol] = _code(item)
             for token in tokens:
                 if _code(token) not in items[symbol]:
@@ -772,8 +817,59 @@ def validate_native_preparation_contract(
             "hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted()",
             "let _queue_guard = self.push_remove_lock.lock();",
             "if self.transaction_selection_durability_faulted() { return true; }",
-            "let reservations = self.lane_reservations.lock();", "drop(reservations);",
-            "!reservation_owned_hashes.contains(entry.key())", "self.txs.contains_key(entry.key())")
+            "let reservations = self.lane_reservations.lock();",
+            "Self::lane_retirement_reservation_snapshot(&reservations, lane_id, dataspace_id, lane_incarnation,)",
+            "drop(reservations);", "let Some(owned) = owned else { return true; };",
+            "self.lane_has_pending_route_work(&owned, lane_id, dataspace_id)")
+    ordered("Queue::lane_retirement_reservation_snapshot",
+            "let reservation_owned_hashes =", "if reservations", "return None;",
+            "Some(reservation_owned_hashes)")
+    ordered("Queue::lane_has_pending_route_work",
+            "!reservation_owned_hashes.contains(entry.key())", "self.txs.contains_key(entry.key())",
+            "entry.value().legs().into_iter().any(|leg|")
+    ordered("QueueLaneRetirementObserver::try_into_cut",
+            "let mutation = self.queue.push_remove_lock.try_lock_or_wait()",
+            "let reservations = self.queue.lane_reservations.try_lock_or_wait()",
+            "Ok(QueueLaneRetirementCut { reservations, _mutation: mutation, observer: self, })")
+    require("QueueRetirementBusy", "struct QueueRetirementBusy { pub(crate) field: &'static str, pub(crate) wait: mv::ReleaseWait, }")
+    ordered("QueueLaneRetirementCut",
+            "reservations: PublicationGuard<'queue, LaneQueueReservationStore>",
+            "_mutation: PublicationGuard<'queue>", "observer: QueueLaneRetirementObserver<'queue>")
+    ordered("QueueLaneRetirementCut::lane_has_pending_work",
+            "hash_is_zero(lane_incarnation) || queue.transaction_selection_durability_faulted()",
+            "Queue::lane_retirement_reservation_snapshot(&self.reservations, lane_id, dataspace_id, lane_incarnation,)",
+            "queue.lane_has_pending_route_work(&owned, lane_id, dataspace_id)")
+    cut_probe = items.get("QueueLaneRetirementObserver::try_into_cut", "")
+    # Both fallible probes must return their own pre-probe event with `?`.
+    # Rust then drops the original consumed observer and every earlier guard.
+    for field in ("push_remove_lock", "lane_reservations"):
+        probe = _code(f'self.queue.{field}.try_lock_or_wait().map_err(|wait| QueueRetirementBusy {{ field: "{field}", wait, }})?;')
+        if cut_probe and probe not in cut_probe:
+            errors.append(f"Native preparation retained Queue cut loses exact {field} refusal/release relation")
+    # String masking remains mandatory for ordinary executable relations.
+    # For the failed-lock diagnostic identity only, find the actual producer
+    # expression in offset-preserving masked code, then read that literal from
+    # the original item. A comment or unrelated same-label expression cannot
+    # satisfy the failed mutex's exact label relation.
+    raw_cut_probe = raw_items.get("QueueLaneRetirementObserver::try_into_cut", "")
+    masked_cut_probe = _mask_rust_comments(raw_cut_probe)
+    for field in ("push_remove_lock", "lane_reservations"):
+        expression = (
+            rf"self\s*\.\s*queue\s*\.\s*{field}\s*\.\s*try_lock_or_wait\s*\(\s*\)"
+            r"\s*\.\s*map_err\s*\(\s*\|wait\|\s*QueueRetirementBusy\s*\{\s*field\s*:"
+            r"(?P<label>\s*),\s*wait\s*,?\s*\}\s*\)\s*\?\s*;"
+        )
+        matches = list(re.finditer(expression, masked_cut_probe))
+        if raw_cut_probe and (len(matches) != 1 or
+                raw_cut_probe[matches[0].start("label"):matches[0].end("label")].strip() != f'"{field}"'):
+            errors.append(f"Native preparation retained Queue cut loses exact {field} label in refusal/release relation")
+    if cut_probe and cut_probe.count(_code(".try_lock_or_wait()")) != 2:
+        errors.append("Native preparation retained Queue cut must probe exactly its two inner owners")
+    for symbol in ("QueueLaneRetirementObserver::try_into_cut", "QueueLaneRetirementCut::lane_has_pending_work"):
+        item = items.get(symbol, "")
+        if any(_code(forbidden) in item for forbidden in
+               (".lock()", ".await", "mem::forget", "ManuallyDrop", "drop(self", "drop(mutation", "drop(reservations")):
+            errors.append(f"Native preparation {symbol} blocks or escapes retained Queue ownership")
     ordered("KuraPublicationLease", "_sidecar: PublicationGuard<'kura>",
             "_geometry: PublicationGuard<'kura>", "_canonical: PublicationGuard<'kura>",
             "_prune: PublicationGuard<'kura>")

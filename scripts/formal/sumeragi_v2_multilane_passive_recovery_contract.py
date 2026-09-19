@@ -17,7 +17,248 @@ PASSIVE_RECOVERY_TEST_RELATIVE = Path(
 NATIVE_MODULE = "SumeragiV2NativeApplicationEvidence"
 AUTONOMOUS_MODULE = "SumeragiV2AutonomousReservationCarrier"
 
+# Passive completed diagnostics retain proof data only; none of these owners
+# reconstructs a Ready row or authorizes a new consensus output.
+COMPLETED_EQUIVOCATION_BINDINGS = (
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'recover_finalized_lifecycle_equivocations',
+        (
+            'let view = state.view()',
+            'configured_v2_evidence_horizon(view.world())',
+            '.checked_add(1)',
+            'Some(horizon) if horizon != 0 => proposal_height.saturating_sub(horizon).max(1)',
+            'for height in first_height..=height',
+            '.v2_finality_artifact(height)',
+            'recover_context_lifecycle_equivocations(',
+            '&finality.height_context',
+            '&finality.validator_set_pops',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'recover_context_lifecycle_equivocations',
+        (
+            'if &context.network_id != state.network_id_ref()',
+            'state\n        .kura()\n        .sumeragi_v2_storage_root()',
+            '.join(hex::encode(context.id().0.as_ref()))',
+            'LifecycleLedgerV1::read_completed_equivocations(',
+            'for proof in proofs',
+            'retain_sumeragi_v2_equivocation(state, context, proofs_of_possession, proof)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'retain_sumeragi_v2_equivocation',
+        (
+            'context: context.clone()',
+            'proofs_of_possession: proofs_of_possession.to_vec()',
+            'conflict,',
+            'if v2_evidence_encoded_len(&payload) > MAX_V2_EVIDENCE_ADMISSION_BYTES',
+            'validate_v2_equivocation(&payload)?',
+            'if &payload.context.network_id != state.network_id_ref()',
+            'canonicalize_v2_equivocation_evidence(&payload)',
+            'Ok(retain_validated_local_evidence(state, canonical))',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'retain_validated_local_evidence',
+        (
+            'let snapshot = v2_committed_evidence_snapshot(view.world())',
+            'snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded',
+            'if subject_height > next_height',
+            'next_height.max(after_subject_height)',
+            '!evidence_within_configured_horizon(earliest_admission_height, horizon, Some(subject_height))',
+            'committed_key == &key',
+            'Some(&offender_roster)',
+            'pending.contains_key(&key)',
+            'existing.offender_roster == offender_roster',
+            'pending.len() >= MAX_V2_COMMITTED_EVIDENCE_RECORDS',
+            'bytes > MAX_V2_LOCAL_EVIDENCE_BYTES',
+            'pending.insert(',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs',
+        'method',
+        'LifecycleLedgerV1::read_completed_equivocations',
+        (
+            'let context = projection::lifecycle_context(height_context)',
+            'LifecycleLedgerStoreV1::read_existing(root, context)?',
+            'for record in ledger.records',
+            'record.work_class() != Some(LifecycleWorkClass::EquivocationReport)',
+            'record.terminal() != Some(Some(TerminalOutcome::Advanced))',
+            'record.reconstruction_source() != record.owner().causal_root().digest()',
+            'record.durable_payload() != Some(DurablePayloadReference::None)',
+            'record.continuation() != Some(DurableContinuation::None)',
+            'record.owner().first_admission_ordinal() != record.ordinal()',
+            '.into_equivocation_proof()',
+            'proofs.push(proof)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs',
+        'method',
+        'LifecycleReplayAuthorityV1::into_equivocation_proof',
+        (
+            'fn into_equivocation_proof(self)',
+            'match self.source',
+            'LifecycleReplaySourceV1::Equivocation(proof) => Some(proof)',
+            '_ => None',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs',
+        'method',
+        'LifecycleLedgerStoreV1::read_existing',
+        (
+            'fs::symlink_metadata(root)',
+            'error.kind() == std::io::ErrorKind::NotFound => return Ok(None)',
+            'BoundLifecycleLedgerDirectory::bind(root, false)?',
+            'let guard = directory.lock()?',
+            '.read_bounded_locked(LEDGER_FILE, MAX_LEDGER_FRAME_BYTES)?',
+            'decode_frame(&bytes, MAX_LEDGER_FRAME_BYTES)?',
+            'if ledger.context() != context',
+            'ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?',
+            'Ok(Some(ledger))',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs',
+        'method',
+        'BoundLifecycleLedgerDirectory::bind',
+        (
+            'bind_lifecycle_directory_path(path, create)?',
+            'validate_lifecycle_directory_metadata(&metadata, path)?',
+            'identity: LifecycleStorageIdentity::from_metadata(&metadata)',
+            'directory,',
+            'operation_lock: std::sync::Mutex::new(())',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs',
+        'method',
+        'BoundLifecycleLedgerDirectory::read_bounded_locked',
+        (
+            'self.inspect_leaf(name, maximum)?',
+            'self.open_leaf(name, leaf)?',
+            '.take(maximum.saturating_add(1))',
+            'observed != leaf.length || observed > maximum',
+            'self.verify_open_leaf(&file, name, leaf)?',
+            'self.verify_linked()?',
+            'Ok(Some(bytes))',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/mod.rs',
+        'method',
+        'SumeragiStartArgs::start',
+        (
+            'evidence::recover_finalized_lifecycle_equivocations(state.as_ref())',
+            'FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(',
+            'SumeragiWorker',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs',
+        'method',
+        'ProductionV2Services::start_with_apply_service',
+        (
+            '!state.matches_kura_instance(&kura)',
+            '!apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)',
+            'Self::start_inner(',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs',
+        'method',
+        'ProductionV2Services::start_inner',
+        (
+            'Self::freeze_timeout_certificate_targets(',
+            'super::evidence::recover_context_lifecycle_equivocations(',
+            '            state.as_ref(),\n            &context,\n            &validator_set_pops,\n        )?;',
+            'let io = V2IoHandle::spawn(',
+        ),
+    ),
+)
+
 PASSIVE_RECOVERY_MODEL_BINDINGS = (
+    *COMPLETED_EQUIVOCATION_BINDINGS,
+    # Exact route pointer -> authenticated record/current pair; no repair.
+    ('SumeragiV2AutonomousReservationCarrier',
+     'crates/iroha_core/src/kura.rs',
+     'fn',
+     'latest_autonomous_lane_block_artifacts_snapshot',
+     ('read_autonomous_lane_route_latest_attempt_locked',
+      'read_autonomous_lane_block_attempt_record_with_current_locked',
+      'record.retirement.is_some',
+      'recovered.sort_by_key',
+      'recovered.truncate(limit)',
+      'pointer.network_id != expected_network_id',
+      'epoch_for_height(pointer.proposal_height)',
+      '                    &entry,\n'
+      '                    lane_id,\n'
+      '                    pointer.lane_block_height,\n'
+      '                    pointer.proposal_height,\n'
+      '                    expected_network_id,\n'
+      '                    expected_epoch,\n'
+      '                    None,',
+      'let Some((record, current)) = record? else',
+      'recovered.push((artifact, current))')),
+    ('SumeragiV2AutonomousReservationCarrier',
+     'crates/iroha_core/src/kura.rs',
+     'fn',
+     'read_autonomous_lane_block_attempt_record_with_current_locked',
+     ('Result<Option<(AutonomousLaneBlockDurableRecord, LaneBlockProposalV1)>>',
+      'Self::decode_autonomous_lane_attempt_frame(',
+      'if pointer.lane_id != lane_id\n'
+      '                || pointer.lane_block_height != lane_block_height\n'
+      '                || pointer.proposal_height != proposal_height',
+      '.read_autonomous_lane_block_attempt_artifact_with_current_locked(\n'
+      '                    entry,\n'
+      '                    &pointer,\n'
+      '                    expected_network_id,\n'
+      '                    expected_epoch,',
+      'pending_canonical_bytes.map_or(\n'
+      '                        AutonomousLaneBlockViewStateReadMode::MainOnly,',
+      'Some(DecodedAutonomousLaneAttemptRead { read, artifact })')),
+    ('SumeragiV2AutonomousReservationCarrier',
+     'crates/iroha_core/src/kura.rs',
+     'fn',
+     'read_autonomous_lane_block_attempt_artifact_with_current_locked',
+     ('if pointer.network_id != expected_network_id || pointer.epoch != expected_epoch',
+      'decoded.read.bytes == read.bytes',
+      'Self::stable_sidecar_metadata_unchanged(',
+      'if !pointer.matches_payload(&artifact.executable_payload)',
+      'self.require_active_lane_artifact(entry, descriptor)?;',
+      '.read_autonomous_lane_block_view_state_with_current_locked(\n'
+      '                &artifact.executable_payload,\n'
+      '                &view_state_path,\n'
+      '                view_state_mode,',
+      'Some((state, current))',
+      '(state.retirement, current)',
+      'Self::validate_autonomous_lane_block_artifact(\n'
+      '                    &artifact,\n'
+      '                    expected_network_id,\n'
+      '                    expected_epoch,',
+      '            current_proposal,\n        ))')),
     (
         NATIVE_MODULE,
         "crates/iroha_core/src/state.rs",
@@ -429,6 +670,94 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
 
 PASSIVE_RECOVERY_ORDERED_CHECKS = (
     (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'recover_finalized_lifecycle_equivocations',
+        (
+            'let view = state.view()',
+            'for height in first_height..=height',
+            '.v2_finality_artifact(height)',
+            'recover_context_lifecycle_equivocations(',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'recover_context_lifecycle_equivocations',
+        (
+            'if &context.network_id != state.network_id_ref()',
+            'LifecycleLedgerV1::read_completed_equivocations(',
+            'retain_sumeragi_v2_equivocation(state, context, proofs_of_possession, proof)',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'retain_sumeragi_v2_equivocation',
+        (
+            'validate_v2_equivocation(&payload)?',
+            'canonicalize_v2_equivocation_evidence(&payload)',
+            'retain_validated_local_evidence(state, canonical)',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs',
+        'method',
+        'LifecycleLedgerV1::read_completed_equivocations',
+        (
+            'LifecycleLedgerStoreV1::read_existing(root, context)?',
+            'record.terminal() != Some(Some(TerminalOutcome::Advanced))',
+            '.into_equivocation_proof()',
+            'proofs.push(proof)',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs',
+        'method',
+        'LifecycleLedgerStoreV1::read_existing',
+        (
+            'BoundLifecycleLedgerDirectory::bind(root, false)?',
+            'let guard = directory.lock()?',
+            '.read_bounded_locked(LEDGER_FILE, MAX_LEDGER_FRAME_BYTES)?',
+            'decode_frame(&bytes, MAX_LEDGER_FRAME_BYTES)?',
+            'if ledger.context() != context',
+            'ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?',
+            'Ok(Some(ledger))',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/mod.rs',
+        'method',
+        'SumeragiStartArgs::start',
+        (
+            'evidence::recover_finalized_lifecycle_equivocations(state.as_ref())',
+            'FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(',
+            'SumeragiWorker',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs',
+        'method',
+        'ProductionV2Services::start_with_apply_service',
+        (
+            '!state.matches_kura_instance(&kura)',
+            '!apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)',
+            'Self::start_inner(',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs',
+        'method',
+        'ProductionV2Services::start_inner',
+        (
+            'Self::freeze_timeout_certificate_targets(',
+            'super::evidence::recover_context_lifecycle_equivocations(',
+            '            state.as_ref(),\n            &context,\n            &validator_set_pops,\n        )?;',
+            'let io = V2IoHandle::spawn(',
+        ),
+    ),
+
+    (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
         "V2LaneWorkAdapter::service_next_historical_recovery_at_with_archive_targets",
@@ -541,6 +870,43 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
 
 PASSIVE_RECOVERY_FORBIDDEN_CHECKS = (
     (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'recover_finalized_lifecycle_equivocations',
+        (
+            'sumeragi_v2_context',
+            'context_store',
+            'persist(',
+            'remove_file(',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs',
+        'method',
+        'LifecycleLedgerV1::read_completed_equivocations',
+        (
+            'PendingRuntimeEffectBinding',
+            'InitialLifecycleState::Ready',
+            '.persist(',
+            'finish_terminal(',
+            '::open(',
+        ),
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs',
+        'method',
+        'LifecycleLedgerStoreV1::read_existing',
+        (
+            'open_or_create(',
+            'load_with_frame_presence',
+            'remove_stale_temporary_locked(',
+            'remove_file(',
+            'create_dir',
+            '.persist(',
+        ),
+    ),
+
+    (
         "crates/iroha_core/src/state/passive_lane_diagnostic_methods.rs",
         "fn",
         "durable_lane_diagnostic_execution_status",
@@ -595,6 +961,26 @@ PASSIVE_RECOVERY_FORBIDDEN_CHECKS = (
 
 PASSIVE_RECOVERY_INCLUDE_RELATIONS = (
     (
+        'crates/iroha_core/src/sumeragi/mod.rs',
+        'pub(crate) mod evidence;',
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs',
+        '#[path = "v2_lifecycle_ledger.rs"]\nmod ledger;',
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs',
+        '#[path = "v2_lifecycle_replay_authority.rs"]\n#[cfg_attr(not(test), allow(dead_code))]\nmod replay_authority;',
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs',
+        'include!("v2_lifecycle_ledger_store.rs");',
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_worker.rs',
+        'include!("v2_worker_services_impl.rs");',
+    ),
+    (
         "crates/iroha_core/src/kura.rs",
         'include!("kura/autonomous_application_evidence.rs");',
     ),
@@ -613,6 +999,22 @@ PASSIVE_RECOVERY_INCLUDE_RELATIONS = (
 )
 
 PASSIVE_RECOVERY_RAW_TEST_CHECKS = (
+    (
+        'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs',
+        'completed_equivocation_recovers_into_new_state_without_reopening_lifecycle',
+        (
+            'complete_cold_evidence_report(&fixture, &original)',
+            'cold_evidence_finality(&fixture, &kura)',
+            'drop(original)',
+            'let cold = cold_evidence_state(',
+            'assert!(cold.sumeragi_v2_pending_evidence.lock().is_empty())',
+            'evidence::recover_finalized_lifecycle_equivocations(&cold).unwrap()',
+            'evidence::validate_v2_evidence_admissions(&cold, 2, &selected).unwrap()',
+            'assert!(cold.world.consensus_evidence.view().iter().next().is_none())',
+            'assert_eq!(cold.state_view_generation(), generation)',
+            'snapshot_files(&root),\n        before,',
+        ),
+    ),
     (
         "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_native_diagnostic_tests.rs",
         "assert_passive_state_diagnostics",

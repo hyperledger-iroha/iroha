@@ -1412,6 +1412,14 @@ impl ProductionV2Services {
             max_peers_per_fanout,
             &timeout_certificate_targets,
         )?;
+        // Terminal diagnostics do not enter the Ready-output scheduler again.
+        // Rebuild their bounded local custody before starting worker I/O, using
+        // this service's already validated context and complete roster PoPs.
+        super::evidence::recover_context_lifecycle_equivocations(
+            state.as_ref(),
+            &context,
+            &validator_set_pops,
+        )?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();

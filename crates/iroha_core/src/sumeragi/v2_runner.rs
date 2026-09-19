@@ -1036,9 +1036,11 @@ fn run_inner(
                     .into(),
                 );
             }
+            let shared_config = config.v2_config(block_cadence, terminal_context.mode)?;
             super::admission_capacity::publish_authenticated_capacity(
                 &admission_capacity,
                 terminal.verified_context(),
+                &shared_config,
             )
             .map_err(V2RunnerError::Service)?;
             // Terminal recovery authorizes writers only after exact final validation.
@@ -1064,9 +1066,11 @@ fn run_inner(
         recovered_successor_activation,
         staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let shared_config = config.v2_config(block_cadence, verified_context.context().mode)?;
     super::admission_capacity::publish_authenticated_capacity(
         &admission_capacity,
         &verified_context,
+        &shared_config,
     )
     .map_err(V2RunnerError::Service)?;
     let local_peer = common_config.peer.id().clone();
@@ -2772,12 +2776,12 @@ fn candidate_limits(
     context: &wire::HeightContext,
     config: &SumeragiV2Config,
 ) -> Result<CandidateLimits, V2RunnerError> {
+    super::admission_capacity::require_local_payload_capacity(context.da_layout, config)
+        .map_err(V2RunnerError::Service)?;
     let max_transactions = NonZeroUsize::new(usize::try_from(config.limits.max_transactions)?)
         .ok_or(V2RunnerError::InvalidLimits)?;
     let context_payload = usize::try_from(context.da_layout.max_payload_size_bytes)?;
-    let configured_payload = usize::try_from(config.limits.max_payload_bytes)?;
-    let max_payload = NonZeroUsize::new(context_payload.min(configured_payload))
-        .ok_or(V2RunnerError::InvalidLimits)?;
+    let max_payload = NonZeroUsize::new(context_payload).ok_or(V2RunnerError::InvalidLimits)?;
     CandidateLimits::new(
         max_transactions,
         max_payload,
@@ -2824,6 +2828,33 @@ fn candidate_attachments(
             .attach_candidate_effects(view, &mut effects)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    // The same height-derived opportunity used by the exact carrier fitter
+    // applies to certified execution. Defer optional evidence only for an
+    // actual eligible merge; mandatory penalties still require ControlOnly.
+    let preferred_merge_entry =
+        if super::v2_candidate::candidate_economic_work_first(context.height)
+            && effects.penalty_actions.is_empty()
+            && queue_plan_admissions.is_empty()
+        {
+            state
+                .select_pending_certified_merge_entry_for_round(
+                    round_header,
+                    expected_merge_epoch,
+                    PendingCertifiedMergeSelection::Any,
+                    context.mode,
+                )
+                .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+                .filter(|(_, entry, _)| entry.execution_batch.is_some())
+        } else {
+            None
+        };
+    if preferred_merge_entry.is_some() {
+        effects.v2_evidence_admissions.clear();
+    }
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -2842,11 +2873,9 @@ fn candidate_attachments(
             "prioritizing deterministic NPoS effects before a certified execution carrier"
         );
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let selected_merge_entry = if queue_plan_admissions.is_empty() {
+    let selected_merge_entry = if preferred_merge_entry.is_some() {
+        preferred_merge_entry
+    } else if queue_plan_admissions.is_empty() {
         state
             .select_pending_certified_merge_entry_for_round(
                 round_header,

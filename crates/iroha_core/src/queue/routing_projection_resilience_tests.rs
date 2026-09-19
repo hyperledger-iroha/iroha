@@ -100,6 +100,49 @@ async fn push_records_teu_from_ivm_metadata() {
         .expect("TEU info missing for IVM transaction");
     assert_eq!(info.teu, max_cycles);
 }
+/// Seed structural predecessor history for ordinary routing/event execution.
+///
+/// The actual canonical body, State hash/membership and runtime sample agree,
+/// and DA/Time readers use that body. This fixture does not execute genesis or
+/// claim its finality; only the following queued Network work is executed.
+#[inline(never)]
+fn committed_queue_event_predecessor(state: &State) -> Arc<SignedBlock> {
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(state.kura().blocks_count(), 0);
+    let parent = Arc::new(
+        iroha_data_model::block::builder::BlockBuilder::new(
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0),
+        )
+        .build_with_signature(0, ALICE_KEYPAIR.private_key()),
+    );
+    let wire = parent.encode_wire().expect("encode canonical predecessor");
+    state
+        .kura()
+        .store_block(Arc::clone(&parent))
+        .expect("persist actual predecessor body");
+    let mut metadata = state.block(parent.header());
+    metadata
+        .evaluate_nexus_autoscale(&parent, 0)
+        .expect("stage exact empty predecessor runtime sample");
+    metadata
+        .commit_empty_block_for_testing()
+        .expect("commit structural predecessor metadata");
+    // The metadata overlay first hydrated the empty WSV prefix. Rebuild through
+    // the real reader now that the exact stored predecessor is committed.
+    state
+        .rewind_da_indexes_to_height(1)
+        .expect("rebuild DA indexes from the actual committed predecessor");
+    let stored = state
+        .block_by_height(nonzero!(1_usize))
+        .expect("canonical State predecessor is available from Kura");
+    assert_eq!(stored.header(), parent.header());
+    assert_eq!(stored.hash(), parent.hash());
+    assert_eq!(stored.encode_wire().unwrap(), wire);
+    assert_eq!(state.latest_block_hash_fast(), Some(parent.hash()));
+    assert_eq!(state.committed_height(), 1);
+    stored
+}
+
 #[tokio::test]
 async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
     struct TaggedRouter {
@@ -121,13 +164,10 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
         test_nexus_for_routes(&[(expected_lane, expected_dataspace)]),
         LiveQueryStore::start_test(),
     );
-    // This regression executes ordinary queued work after an explicit committed-index fixture.
-    // It does not authenticate genesis or publish the candidate's State effects.
-    seed_committed_height_for_queue_test(&state, 1);
-    let parent_height = u64::try_from(state.committed_height()).expect("fixture height fits u64");
-    let parent_hash = state
-        .latest_block_hash_fast()
-        .expect("seeded exact predecessor");
+    let parent = committed_queue_event_predecessor(&state);
+    let parent_height = parent.header().height().get();
+    let parent_hash = parent.hash();
+    let parent_wire = parent.encode_wire().unwrap();
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test_with_router_for_routes(
@@ -188,7 +228,7 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
             .collect(),
     );
     let new_block = BlockBuilder::new(transactions)
-        .chain_with_parent_hash(0, parent_height, parent_hash)
+        .chain(0, Some(&parent))
         .with_execution_context(Some(execution_context))
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
@@ -216,6 +256,16 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
     );
     assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
     assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.kura().blocks_count(), 1);
+    assert_eq!(
+        state
+            .block_by_height(nonzero!(1_usize))
+            .unwrap()
+            .encode_wire()
+            .unwrap(),
+        parent_wire,
+        "candidate execution cannot change its stored predecessor"
+    );
 }
 #[test]
 fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
@@ -228,13 +278,10 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         ]),
         LiveQueryStore::start_test(),
     );
-    // This regression executes ordinary queued work after an explicit committed-index fixture.
-    // It does not authenticate genesis or publish the candidate's State effects.
-    seed_committed_height_for_queue_test(&state, 1);
-    let parent_height = u64::try_from(state.committed_height()).expect("fixture height fits u64");
-    let parent_hash = state
-        .latest_block_hash_fast()
-        .expect("seeded exact predecessor");
+    let parent = committed_queue_event_predecessor(&state);
+    let parent_height = parent.header().height().get();
+    let parent_hash = parent.hash();
+    let parent_wire = parent.encode_wire().unwrap();
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
@@ -285,7 +332,7 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         ExternalExecutionContext::new(hash, guard.routing().lane_id, guard.routing().dataspace_id),
     ]);
     let new_block = BlockBuilder::new(transactions)
-        .chain_with_parent_hash(0, parent_height, parent_hash)
+        .chain(0, Some(&parent))
         .with_execution_context(Some(execution_context))
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
@@ -319,6 +366,16 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
     );
     assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
     assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.kura().blocks_count(), 1);
+    assert_eq!(
+        state
+            .block_by_height(nonzero!(1_usize))
+            .unwrap()
+            .encode_wire()
+            .unwrap(),
+        parent_wire,
+        "candidate execution cannot change its stored predecessor"
+    );
 }
 #[test]
 fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {

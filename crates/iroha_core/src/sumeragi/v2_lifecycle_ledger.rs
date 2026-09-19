@@ -1040,6 +1040,48 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
         self.matches_candidate(&candidate).then_some(candidate)
     }
 }
+impl LifecycleLedgerV1 {
+    /// Recover original completed report data without reopening a lifecycle
+    /// row or minting output/retry authority. Every returned proof still needs
+    /// full cryptographic validation against an independently trusted context.
+    pub(in crate::sumeragi) fn read_completed_equivocations(
+        root: &Path,
+        height_context: &wire::HeightContext,
+    ) -> Result<Vec<wire::SumeragiV2Equivocation>, LifecycleLedgerError> {
+        let context = projection::lifecycle_context(height_context);
+        let Some(ledger) = LifecycleLedgerStoreV1::read_existing(root, context)? else {
+            return Ok(Vec::new());
+        };
+        let mut proofs = Vec::new();
+        for record in ledger.records {
+            if record.work_class() != Some(LifecycleWorkClass::EquivocationReport)
+                || record.terminal() != Some(Some(TerminalOutcome::Advanced))
+            {
+                continue;
+            }
+            if record.reconstruction_source() != record.owner().causal_root().digest()
+                || record.durable_payload() != Some(DurablePayloadReference::None)
+                || record.continuation() != Some(DurableContinuation::None)
+                || record.owner().first_admission_ordinal() != record.ordinal()
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "completed equivocation report lost its exact independent source".to_owned(),
+                ));
+            }
+            let proof = record
+                .replay_authority
+                .into_equivocation_proof()
+                .ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "completed equivocation report lacks its original proof".to_owned(),
+                    )
+                })?;
+            proofs.push(proof);
+        }
+        Ok(proofs)
+    }
+}
+
 impl LifecycleLedgerRecordV1 {
     /// Authenticate an exact terminal-row claim against its retained source and
     /// the actual closed WAL frontier without exposing the replay envelope.

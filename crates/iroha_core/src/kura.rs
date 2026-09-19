@@ -5187,56 +5187,48 @@ impl Kura {
         receipt_bytes: usize,
         standalone_limit: u64,
     ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
+        use NativeAmxParticipantApplicationEvidenceGeometryError as Geometry;
+
         if manifest_bytes == 0 {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                    "Native AMX participant manifest framing is empty".to_owned(),
-                ),
-            );
+            return Err(Geometry::EmptyManifest.into());
         }
         if receipt_bytes == 0 {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                    "Native AMX participant receipt framing is empty".to_owned(),
-                ),
-            );
+            return Err(Geometry::EmptyReceipt.into());
         }
-        let manifest_bytes_u64 = u64::try_from(manifest_bytes).map_err(|_| {
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                "Native AMX participant manifest length does not fit u64".to_owned(),
-            )
-        })?;
-        let receipt_bytes_u64 = u64::try_from(receipt_bytes).map_err(|_| {
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                "Native AMX participant receipt length does not fit u64".to_owned(),
-            )
-        })?;
+        let manifest_bytes_u64 =
+            u64::try_from(manifest_bytes).map_err(|_| Geometry::ManifestLengthUnrepresentable)?;
+        let receipt_bytes_u64 =
+            u64::try_from(receipt_bytes).map_err(|_| Geometry::ReceiptLengthUnrepresentable)?;
         if manifest_bytes_u64 > standalone_limit {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant manifest is {manifest_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
-                )),
-            );
+            return Err(Geometry::ManifestStandaloneLimit {
+                bytes: manifest_bytes_u64,
+                limit: standalone_limit,
+            }
+            .into());
         }
         if receipt_bytes_u64 > standalone_limit {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant receipt is {receipt_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
-                )),
-            );
+            return Err(Geometry::ReceiptStandaloneLimit {
+                bytes: receipt_bytes_u64,
+                limit: standalone_limit,
+            }
+            .into());
         }
         let pair_bytes = checked_native_amx_participant_application_pair_bytes(
             manifest_bytes_u64,
             receipt_bytes_u64,
         )?;
-        if !self
-            .native_amx_participant_evidence_pair_fits_stable_bytes(manifest_bytes, receipt_bytes)
-        {
+        // Preserve the original local addressability check independently of
+        // the configured stable bound; arithmetic failure is never capacity debt.
+        manifest_bytes
+            .checked_add(receipt_bytes)
+            .ok_or(Geometry::PairLengthUnrepresentable { bytes: pair_bytes })?;
+        let configured_bytes = self.native_amx_participant_evidence_file_bytes();
+        if pair_bytes > configured_bytes {
             return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant manifest/receipt pair is {pair_bytes} bytes, exceeding the configured shared stable aggregate byte bound of {} bytes",
-                    self.native_amx_participant_evidence_file_bytes()
-                )),
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+                    required_bytes: pair_bytes,
+                    configured_bytes,
+                },
             );
         }
         Ok(())
@@ -15631,7 +15623,12 @@ impl Kura {
         };
         let mut cursor = snapshot.bytes.as_slice();
         let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
+        let canonical_len = {
+            let _flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::encoded_payload_len(&record)?
+        };
+        if canonical_len != snapshot.bytes.len() || record.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -42539,6 +42536,9 @@ include!("kura/indexed_sidecar_io.rs");
 include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
+pub(crate) use lane_admission_source::{
+    canonical_admission_read_decode_limits, canonical_admission_read_working_set_bytes,
+};
 #[path = "kura/native_lane_batch_source.rs"]
 #[cfg_attr(
     not(test),

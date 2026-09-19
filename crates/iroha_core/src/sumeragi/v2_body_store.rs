@@ -1253,24 +1253,66 @@ impl BodyStoreCompletion {
         &self.manifest
     }
 }
+/// One actual physical validation dependency observed before its failed probe.
+///
+/// This process-local observation grants only permission to retry acquisition.
+/// It contains no scheduler identity and is never encoded in a body marker.
+#[derive(Clone, Debug, Error)]
+#[error("local validation resource `{resource}` is busy")]
+pub(crate) struct BodyValidationBusy {
+    /// The physical resource whose acquisition failed.
+    pub(crate) resource: &'static str,
+    /// Original release observation, retaining no storage or State guard.
+    pub(crate) wait: mv::ReleaseWait,
+    /// Wake destination belonging to the original validation service.
+    wake: std::task::Waker,
+}
+impl BodyValidationBusy {
+    /// Join a failed physical probe to its original runner notification.
+    pub(crate) fn new(
+        resource: &'static str,
+        wait: mv::ReleaseWait,
+        wake: std::task::Waker,
+    ) -> Self {
+        Self {
+            resource,
+            wait,
+            wake,
+        }
+    }
+
+    /// Polling may register only this original service's wake destination.
+    pub(crate) fn waker(&self) -> &std::task::Waker {
+        &self.wake
+    }
+}
+
 /// Typed classification supplied by deterministic body validators.
 ///
-/// Only a missing, compact-reference-bound merge sidecar is recoverable. Every
-/// other semantic error remains a terminal rejection of the exact body.
+/// A local service/storage failure is not a consensus verdict. Implementations
+/// must explicitly identify deterministic rejection; there is no default which
+/// can accidentally persist local inability as an invalid proposal.
 pub(crate) trait BodyValidationError: std::fmt::Display {
-    /// Return the canonical reducer-level identity of a terminal rejection.
-    ///
-    /// Every current non-sidecar failure has identical `valid: false`
-    /// semantics, so the safe default is the one closed rejection identity.
-    fn rejection_identity(&self) -> BodyValidationRejectionIdentity {
-        BodyValidationRejectionIdentity::Rejected
+    /// Return a canonical identity only for a deterministic body rejection.
+    /// `None` leaves validation undecided and cannot mint marker authority.
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity>;
+    /// Return an actual physical release dependency, never a semantic drain hint.
+    fn local_busy(&self) -> Option<&BodyValidationBusy> {
+        None
     }
     /// Return the exact missing sidecar reference when validation should defer.
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         None
     }
 }
-impl BodyValidationError for String {}
+// String validators exist only in structural fixtures. Production validators
+// must preserve their typed local/semantic distinction through this boundary.
+#[cfg(test)]
+impl BodyValidationError for String {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        Some(BodyValidationRejectionIdentity::Rejected)
+    }
+}
 /// Authority whose single block signature must cover an exact proposal body.
 ///
 /// Height-one genesis is signed by the configured genesis authority rather
@@ -3357,10 +3399,15 @@ impl V2BodyStore {
                     Err(error) if error.missing_certified_merge_sidecar().is_some() => {
                         SemanticReplayOutcome::DeferredMergeSidecar
                     }
-                    Err(error) => SemanticReplayOutcome::Rejected {
-                        identity_code: error.rejection_identity().canonical_code(),
-                        reason: error.to_string(),
-                    },
+                    Err(error) => {
+                        let identity = error
+                            .rejection_identity()
+                            .ok_or_else(|| V2BodyStoreError::LocalValidation(error.to_string()))?;
+                        SemanticReplayOutcome::Rejected {
+                            identity_code: identity.canonical_code(),
+                            reason: error.to_string(),
+                        }
+                    }
                 };
                 replayed.insert(key.1, outcome.clone());
                 outcome
@@ -3847,7 +3894,13 @@ impl V2BodyStore {
                         },
                     ));
                 }
-                let identity_code = error.rejection_identity().canonical_code();
+                if let Some(busy) = error.local_busy() {
+                    return Err(V2BodyStoreError::LocalBusy(busy.clone()));
+                }
+                let identity_code = error
+                    .rejection_identity()
+                    .ok_or_else(|| V2BodyStoreError::LocalValidation(error.to_string()))?
+                    .canonical_code();
                 let rejected =
                     self.persist_rejected_outcome(&durable, identity_code, error.to_string())?;
                 Ok(rejected.sealed_outcome())
@@ -4801,6 +4854,14 @@ fn read_validation_outcome_marker(
 /// Exact-body persistence or validation failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2BodyStoreError {
+    /// An actual local mutex refused acquisition; retain its observation and
+    /// the original validation request until that resource releases.
+    #[error(transparent)]
+    LocalBusy(BodyValidationBusy),
+    /// The validator could not establish a semantic outcome because a local
+    /// dependency failed. No success/rejection marker may be written or promoted.
+    #[error("local Sumeragi v2 validation failed without a body verdict: {0}")]
+    LocalValidation(String),
     /// Filesystem operation failed.
     #[error("Sumeragi v2 body-store I/O failed at {path}: {source}")]
     Io {

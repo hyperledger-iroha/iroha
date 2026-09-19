@@ -1,6 +1,8 @@
 // Native opening authority and admission-backed closed-lane regressions.
 
-fn closed_lane_opening_authority_fixture() -> (
+fn closed_lane_opening_authority_fixture(
+    atomic: bool,
+) -> (
     State,
     Vec<KeyPair>,
     crate::torii_proxy::QueuePlanAdmissionBindingV1,
@@ -13,12 +15,21 @@ fn closed_lane_opening_authority_fixture() -> (
         autoscale_elastic_catalog_lane_with_committee_for_test(lane_id, 1, &validators),
     );
     install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE, lane_id], &validators);
+    let closing_route = crate::queue::RoutingDecision::new(lane_id, DataSpaceId::UNIVERSAL);
+    let plan = if atomic {
+        crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![crate::queue::RouteLeg::new(
+                closing_route,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        )
+    } else {
+        crate::queue::RoutingPlan::single(closing_route)
+    };
     let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
         &state,
-        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-            lane_id,
-            DataSpaceId::UNIVERSAL,
-        )),
+        plan,
         &validators,
         parent.header().height().get(),
         0x71,
@@ -180,8 +191,8 @@ state_test! { sync lane_opening_authority_uses_completed_pending_manifest_projec
     ).unwrap().0, expected);
 }
 
-state_test! { sync lane_opening_authority_finishes_preclose_admissions_without_reopening_ingress
-    let (state, _, binding, close) = closed_lane_opening_authority_fixture();
+state_test! { large_stack lane_opening_authority_finishes_preclose_admissions_without_reopening_ingress
+    let (state, _, binding, close) = closed_lane_opening_authority_fixture(false);
     let carrier = empty_global_block_after(Some(&close));
     let height = carrier.header().height().get();
     let mut overlay = state.block(carrier.header());
@@ -246,7 +257,7 @@ state_test! { sync lane_opening_authority_finishes_preclose_admissions_without_r
 }
 
 state_test! { sync lane_opening_authority_rejects_any_postclose_member_and_empty_drain
-    let (state, validators, mut late_binding, close) = closed_lane_opening_authority_fixture();
+    let (state, validators, mut late_binding, close) = closed_lane_opening_authority_fixture(false);
     late_binding.admission_context.authority_height = close.header().height().get();
     late_binding.admission_context.proposal_height = close.header().height().get() + 1;
     late_binding.admission_context.predecessor_block_hash = Some(close.hash());
@@ -282,4 +293,210 @@ state_test! { sync lane_opening_authority_rejects_any_postclose_member_and_empty
     assert!(lane_consensus_authority::resolve_open_lane_authority(
         &overlay, &lane, incarnation, height,
     ).is_err(), "no pending member can open a closed route");
+}
+
+state_test! { sync queue_plan_pending_route_authority_distinguishes_active_absent_and_applied
+    let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
+    let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE, DataSpaceId::UNIVERSAL,
+        )),
+        &validators, parent.header().height().get(), 0x81,
+    );
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        None,
+    ), "an authenticated certificate without canonical pending custody grants no continuation");
+    let admission_carrier = lane_context_admission_carrier_for_test(&parent, &certificate);
+    let opening = lane_opening_context_for_state_test(&state);
+    {
+        let mut admission = state.block_with_queue_plan_admissions(
+            admission_carrier.header(), &[certificate],
+        ).unwrap();
+        admission.finalize_lane_consensus_contexts(&admission_carrier, Some(&opening)).unwrap();
+        admission.stage_autoscale_sample_record_for_count(&admission_carrier, 0).unwrap();
+        admission.block_hashes.push(admission_carrier.hash());
+        insert_empty_transaction_block_for_state_commit(&mut admission, &admission_carrier);
+        admission.commit().expect("commit actual ranked admission carrier");
+    }
+    state.kura.store_block(Arc::new(admission_carrier.clone())).unwrap();
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Active),
+    ));
+    let carrier = empty_global_block_after(Some(&admission_carrier));
+    let mut overlay = state.block(carrier.header());
+    assert!(State::resolve_queue_plan_pending_obligation_in_storage(
+        &mut overlay.world.smart_contract_state, binding.network_id_digest,
+        binding.entrypoint_hash,
+    ).unwrap());
+    overlay.transactions.insert_block_with_single_tx(
+        binding.entrypoint_hash,
+        NonZeroUsize::new(usize::try_from(carrier.header().height().get()).unwrap()).unwrap(),
+    );
+    assert_eq!(
+        State::queue_plan_binding_application_evidence_in_view(&overlay, &binding).unwrap(),
+        QueuePlanBindingApplicationEvidence::AppliedDirect,
+    );
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&overlay, &binding).unwrap(),
+        None,
+    ), "terminal application must not grant another pending execution");
+    drop(overlay);
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Active),
+    ), "the inspection and aborted terminal overlay publish nothing");
+}
+
+state_test! { large_stack queue_plan_pending_route_authority_keeps_closed_owner_under_immutable_pin
+    let (state, _, binding, close) = closed_lane_opening_authority_fixture(false);
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ));
+    let carrier = empty_global_block_after(Some(&close));
+    let mut overlay = state.block(carrier.header());
+    let lane = overlay.nexus.lane_catalog.lanes().iter()
+        .find(|lane| lane.id == LaneId::new(1)).unwrap().clone();
+    assert!(overlay.resolve_lane_committee_at_height(
+        LaneAuthorityRoute::new(lane.id, lane.dataspace_id), carrier.header().height().get(),
+    ).is_err(), "fresh admission remains closed");
+    let pin = decode_autoscale_lane_committee(&lane).unwrap().unwrap();
+    for peer in &pin.validator_set {
+        overlay.world.consensus_keys.remove(derive_validator_key_id(peer.public_key()));
+        overlay.world.consensus_keys_by_pk.remove(peer.public_key().to_string());
+    }
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&overlay, &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ), "accepted work retains the original pin after live-key churn");
+    assert_eq!(State::queue_plan_pending_binding_in_view(
+        &overlay, binding.entrypoint_hash,
+    ).unwrap(), Some(binding.clone()));
+    drop(overlay);
+    assert_eq!(state.latest_block_hash_fast(), Some(close.hash()));
+}
+
+state_test! { sync queue_plan_pending_route_authority_rejects_rank_and_marker_corruption
+    let (state, _, binding, close) = closed_lane_opening_authority_fixture(false);
+    let carrier = empty_global_block_after(Some(&close));
+    let mut overlay = state.block(carrier.header());
+    let key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()).unwrap();
+    let original = overlay.world.smart_contract_state.get(&key).unwrap().clone();
+    let source_height = binding.admission_context.proposal_height;
+    assert!(source_height > 1);
+    for invalid_rank in [source_height - 1, close.header().height().get() + 1] {
+        overlay.world.smart_contract_state.insert(key.clone(),
+            State::queue_plan_admission_registry_marker_payload(&binding.registry_value(),
+                QueuePlanAdmissionPriorityV1::new(invalid_rank, 0).unwrap(),
+            ).unwrap());
+        assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+            "rank {invalid_rank} must not precede the signed source or follow the close");
+    }
+    overlay.world.smart_contract_state.insert(key.clone(), vec![0xFF]);
+    assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+        "corrupt ranked custody is not absence");
+    overlay.world.smart_contract_state.remove(key.clone());
+    assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+        "pending obligation and route members cannot survive a missing registry owner");
+    overlay.world.smart_contract_state.insert(key, original);
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&overlay, &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ));
+}
+
+state_test! { large_stack queue_plan_pending_route_authority_rejects_drain_identity_pin_and_commitment
+    let (state, _, binding, close) = closed_lane_opening_authority_fixture(false);
+    let carrier = empty_global_block_after(Some(&close));
+    let mut overlay = state.block(carrier.header());
+    let catalog = overlay.nexus.lane_catalog.clone();
+    let lane = catalog.lanes().iter().find(|lane| lane.id == LaneId::new(1)).unwrap();
+    let original_drain = decode_autoscale_lane_drain_state(lane).unwrap().unwrap();
+    let mut foreign_network = original_drain.clone();
+    foreign_network.intent.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign pending-route network")),
+    );
+    let mut foreign_incarnation = original_drain.clone();
+    foreign_incarnation.intent.lane_incarnation = Hash::new(b"foreign pending-route incarnation");
+    foreign_incarnation.intent.initial_frontier.lane_incarnation =
+        foreign_incarnation.intent.lane_incarnation;
+    let mut completed = original_drain.clone();
+    completed.commitment = Some(iroha_data_model::merge::LaneDrainCommitmentV1 {
+        version: iroha_data_model::merge::LaneDrainCommitmentV1::VERSION,
+        certificate_hash: HashOf::from_untyped_unchecked(Hash::new(b"already-carried drain certificate")),
+        merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"already-carried drain entry")),
+        carrier_height: carrier.header().height().get(),
+        frontier: original_drain.intent.initial_frontier,
+    });
+    for changed in [foreign_network, foreign_incarnation, completed] {
+        let mut lanes = catalog.lanes().to_vec();
+        let target = lanes.iter_mut().find(|lane| lane.id == LaneId::new(1)).unwrap();
+        target.metadata.insert(AUTOSCALE_META_DRAIN_STATE.to_owned(),
+            encode_autoscale_lane_drain_state(&changed).unwrap());
+        assert!(decode_autoscale_lane_drain_state(target).unwrap().is_some(),
+            "negative metadata remains structurally well formed");
+        overlay.nexus.lane_catalog = LaneCatalog::new(catalog.lane_count(), lanes).unwrap();
+        assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+            "wrong drain identity or an already certified drain cannot authorize pending work");
+    }
+    let mut lanes = catalog.lanes().to_vec();
+    let target = lanes.iter_mut().find(|lane| lane.id == LaneId::new(1)).unwrap();
+    attach_synthetic_autoscale_committee_for_test(target);
+    let foreign_pin = decode_autoscale_lane_committee(target).unwrap().unwrap();
+    assert_ne!(foreign_pin.validator_set, binding.admission_context.route_incarnations[0].validator_set);
+    let mut changed = original_drain;
+    changed.intent.validator_set_hash_version = foreign_pin.validator_set_hash_version;
+    changed.intent.validator_set_hash = foreign_pin.validator_set_hash;
+    changed.intent.validator_set = foreign_pin.validator_set;
+    changed.intent.validator_count = foreign_pin.validator_count;
+    changed.intent.min_quorum = foreign_pin.min_quorum;
+    target.metadata.insert(AUTOSCALE_META_DRAIN_STATE.to_owned(),
+        encode_autoscale_lane_drain_state(&changed).unwrap());
+    assert!(decode_autoscale_lane_drain_state(target).unwrap().is_some());
+    overlay.nexus.lane_catalog = LaneCatalog::new(catalog.lane_count(), lanes).unwrap();
+    assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+        "a coherent replacement pin/drain pair cannot replace the original admission committee");
+    overlay.nexus.lane_catalog = catalog;
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&overlay, &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ));
+}
+
+state_test! { large_stack queue_plan_pending_route_authority_checks_every_atomic_leg
+    let (state, _, binding, close) = closed_lane_opening_authority_fixture(true);
+    assert_eq!(binding.admission_context.route_incarnations.len(), 2);
+    assert_eq!(binding.admission_context.route_incarnations[0].leg.route.lane_id, LaneId::SINGLE);
+    assert_eq!(binding.admission_context.route_incarnations[1].leg.route.lane_id, LaneId::new(1));
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ), "an active coordinator cannot hide its draining participant");
+    let carrier = empty_global_block_after(Some(&close));
+    let mut overlay = state.block(carrier.header());
+    for route in &binding.admission_context.route_incarnations {
+        let lane_id = route.leg.route.lane_id;
+        let original = overlay.lane_incarnations[&lane_id];
+        overlay.lane_incarnations.insert(lane_id, Hash::new(b"recreated atomic member"));
+        assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+            "every active or draining participant must retain the exact incarnation");
+        overlay.lane_incarnations.insert(lane_id, original);
+    }
+    let obligation = State::queue_plan_pending_obligation_from_binding(&binding).unwrap();
+    for route in &obligation.routes {
+        let member = State::queue_plan_pending_route_member_from_obligation(&obligation, *route).unwrap();
+        let key = State::queue_plan_pending_route_member_marker_key(*route, member.member_identity).unwrap();
+        let original = overlay.world.smart_contract_state.get(&key).unwrap().clone();
+        overlay.world.smart_contract_state.remove(key.clone());
+        assert!(State::queue_plan_pending_route_authority_in_view(&overlay, &binding).is_err(),
+            "a partial atomic pending index cannot authorize either leg");
+        overlay.world.smart_contract_state.insert(key, original);
+    }
+    assert!(matches!(
+        State::queue_plan_pending_route_authority_in_view(&overlay, &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining),
+    ));
 }

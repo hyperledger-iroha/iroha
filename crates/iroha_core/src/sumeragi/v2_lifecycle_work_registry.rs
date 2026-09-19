@@ -5171,6 +5171,7 @@ mod tests {
     include!("tests/v2_lifecycle_work_registry_02.rs");
     include!("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs");
     include!("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs");
+    include!("tests/v2_lifecycle_validate_local_wait_cases.rs");
     include!("tests/v2_lifecycle_work_registry_validate_sidecar_cases.rs");
     include!("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs");
     include!("tests/v2_lifecycle_work_registry_exact_registry_cases.rs");

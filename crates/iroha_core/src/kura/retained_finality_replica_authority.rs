@@ -397,7 +397,14 @@ impl Kura {
         KuraRetainedBlockRecord::decode_all(&mut input)
             .ok()
             .filter(|record| {
-                record.format_version == RETAINED_BLOCK_RECORD_VERSION && record.encode() == bytes
+                let canonical_len = {
+                    let _flags =
+                        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                    norito::core::encoded_payload_len(record).ok()
+                };
+                record.format_version == RETAINED_BLOCK_RECORD_VERSION
+                    && canonical_len == Some(bytes.len())
+                    && record.encode() == bytes
             })
             .ok_or_else(|| {
                 Error::IO(

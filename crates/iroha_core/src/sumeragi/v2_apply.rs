@@ -12,7 +12,7 @@ use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
     v2::VerifiedHeightContext,
-    v2_body_store::{BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
+    v2_body_store::{BodyValidationBusy, BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
     v2_core::{
         CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
         IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
@@ -4013,9 +4013,16 @@ impl V2ApplyService {
             | NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming(_) => {
                 V2ApplyError::ExecutionCommitment(error.to_string())
             }
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_) => {
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::HardGeometry(_) => {
                 V2ApplyError::Validation(error.to_string())
             }
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+                required_bytes,
+                configured_bytes,
+            } => V2ApplyError::LocalEvidenceCapacity {
+                required_bytes: *required_bytes,
+                configured_bytes: *configured_bytes,
+            },
         }
     }
     fn classify_candidate_validation_error(
@@ -4023,6 +4030,9 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::DaIndexHydration(reason) = error {
+            return V2ApplyError::LocalCanonicalState(reason.clone());
+        }
         if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
             return match merge_reference {
                 Some(reference) if reference.entry_hash == *entry_hash => {
@@ -4112,7 +4122,7 @@ impl V2ApplyService {
             &routes,
             &hashes,
         )
-        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        .map_err(V2ApplyError::from)?;
         if expected.unavailable_indices.is_empty()
             && expected.ownerships == bundle.lane_payload_ownerships
         {
@@ -4133,7 +4143,7 @@ impl V2ApplyService {
             &routes,
             &hashes,
         )
-        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        .map_err(V2ApplyError::from)?;
         if recovered.unavailable_indices.is_empty()
             && recovered.ownerships == bundle.lane_payload_ownerships
         {
@@ -4950,13 +4960,13 @@ impl V2ApplyService {
             )?;
         Ok(())
     }
-    fn validate_prospective_autoscale_retirement_queue(
-        &self,
+    fn prospective_autoscale_retirement_queue_binding(
         block: &SignedBlock,
         state_block: &crate::state::StateBlock<'_>,
-    ) -> Result<(), V2ApplyError> {
-        let queue_retirement_observer = self.queue.lock_lane_retirement_observer();
-        let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, V2ApplyError> {
+        // The overlay owns its original canonical predecessor. Derive the
+        // retirement identity before touching node-local Queue owners; an
+        // ordinary candidate must not wait on unrelated retirement contention.
         let pending_binding = state_block
             .pending_autoscale_retirement_binding()
             .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
@@ -4966,15 +4976,112 @@ impl V2ApplyService {
                 .prospective_autoscale_retirement_binding(block)
                 .map_err(|error| V2ApplyError::Validation(error.to_string()))?,
         };
-        let Some((lane_id, dataspace_id, lane_incarnation)) = binding else {
+        Ok(binding)
+    }
+    fn try_validate_prospective_autoscale_retirement_queue(
+        &self,
+        block: &SignedBlock,
+        state_block: &crate::state::StateBlock<'_>,
+    ) -> Result<(), V2ApplyError> {
+        let Some((lane_id, dataspace_id, lane_incarnation)) =
+            Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
+        else {
             return Ok(());
         };
-        Self::validate_autoscale_retirement_queue_binding(
-            &queue_retirement_observer,
+        self.try_validate_autoscale_retirement_queue_binding(
             lane_id,
             dataspace_id,
             lane_incarnation,
         )
+    }
+    fn validate_prospective_autoscale_retirement_queue(
+        &self,
+        block: &SignedBlock,
+        state_block: &crate::state::StateBlock<'_>,
+    ) -> Result<(), V2ApplyError> {
+        let Some((lane_id, dataspace_id, lane_incarnation)) =
+            Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
+        else {
+            return Ok(());
+        };
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        // Apply has no retained LocalBusy continuation yet. Keep its original
+        // blocking order and final veto until the prepared publication owner
+        // can retain the decided execution across physical contention.
+        // TODO: connect Apply to that consuming owner before using try probes here.
+        let observer = self.queue.lock_lane_retirement_observer();
+        let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
+        Self::validate_autoscale_retirement_queue_binding(
+            &observer,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+    fn validate_autoscale_retirement_incarnation(
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        if lane_incarnation == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(V2ApplyError::Validation(
+                "autoscale retirement requires a nonzero lane incarnation".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    fn try_validate_autoscale_retirement_queue_binding(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        let busy = |resource, wait| {
+            V2ApplyError::LocalValidationBusy(BodyValidationBusy::new(
+                resource,
+                wait,
+                self.queue.sumeragi_waker(),
+            ))
+        };
+        // Declaration order releases lifecycle before the retained Queue cut
+        // on a scan failure or unwind. No guard crosses an async wait.
+        let queue_retirement_cut;
+        let lifecycle_guard;
+        let observer = self
+            .queue
+            .try_lock_lane_retirement_observer()
+            .map_err(|wait| busy("lane_reservation_transition_lock", wait))?;
+        if observer.durability_faulted() {
+            return Err(V2ApplyError::LocalCanonicalState(
+                "Queue retirement observation requires durability recovery".to_owned(),
+            ));
+        }
+        lifecycle_guard = self
+            .state
+            .try_lock_lane_lifecycle_work_admission()
+            .map_err(|wait| busy("lane_lifecycle_lock", wait))?;
+        queue_retirement_cut = observer
+            .try_into_cut()
+            .map_err(|error| busy(error.field, error.wait))?;
+        let pending =
+            queue_retirement_cut.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation);
+        // Faults are sticky and may be published independently of the Queue
+        // mutation cut. Do not mistake one for a semantic drain dependency.
+        let result = if self.queue.transaction_selection_durability_faulted() {
+            Err(V2ApplyError::LocalCanonicalState(
+                "Queue retirement observation requires durability recovery".to_owned(),
+            ))
+        } else if pending {
+            Err(V2ApplyError::LocalRetirementPending {
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            })
+        } else {
+            Ok(())
+        };
+        drop(lifecycle_guard);
+        drop(queue_retirement_cut);
+        result
     }
     fn validate_autoscale_retirement_queue_binding(
         queue_retirement_observer: &QueueLaneRetirementObserver<'_>,
@@ -4982,14 +5089,23 @@ impl V2ApplyService {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> Result<(), V2ApplyError> {
-        if queue_retirement_observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
-        {
-            return Err(V2ApplyError::Validation(format!(
-                "autoscale retirement for lane {} dataspace {} incarnation {} is blocked by local Queue ownership",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                hex::encode(lane_incarnation.as_ref()),
-            )));
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        let pending = queue_retirement_observer.lane_has_pending_work(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        );
+        if queue_retirement_observer.durability_faulted() {
+            return Err(V2ApplyError::LocalCanonicalState(
+                "Queue retirement observation requires durability recovery".to_owned(),
+            ));
+        }
+        if pending {
+            return Err(V2ApplyError::LocalRetirementPending {
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            });
         }
         Ok(())
     }
@@ -5032,7 +5148,10 @@ impl V2ApplyService {
             )
         })?;
         debug_assert_eq!(prepared.context(), context);
-        self.validate_prospective_autoscale_retirement_queue(prepared.block(), prepared.state())?;
+        self.try_validate_prospective_autoscale_retirement_queue(
+            prepared.block(),
+            prepared.state(),
+        )?;
         self.kura
             .validate_native_amx_participant_application_evidence_byte_budget(
                 prepared.native_amx_manifest(),

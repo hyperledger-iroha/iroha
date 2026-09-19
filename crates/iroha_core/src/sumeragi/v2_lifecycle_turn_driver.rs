@@ -91,6 +91,10 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact lifecycle ordinal whose executed Validate carrier became Ready.
         ordinal: u128,
     },
+    /// The original Validate dispatch remains parked on actual local release/capacity.
+    LifecycleValidateLocalWaiting,
+    /// The original local-waiting dispatch re-entered the same keyed worker queue.
+    LifecycleValidateLocalRequeued,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
@@ -186,6 +190,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::ApplyTerminalDirectBroadcastDeferred
             | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateLocalWaiting
+            | Self::LifecycleValidateLocalRequeued
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
             | Self::LifecycleValidateSidecarSuperseded
@@ -1237,6 +1243,25 @@ impl LaunchedProductionLifecycleV1 {
                 .close_admission_for_restart();
             return ProductionLifecycleCompletionSelectionV1::RestartRequired;
         };
+        let completion = match completion.retry_local() {
+            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Executed(completion) => {
+                completion
+            }
+            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Waiting(completion) => {
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::Validate(completion));
+                return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting;
+            }
+            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Requeued => {
+                return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued;
+            }
+            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::RestartRequired => {
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+            }
+        };
         let (dispatch, ack) = completion.into_publication_parts();
         let physical_completion = ack.physical_completion();
         match owner.coordinator.complete_durable_validate_dispatch(
@@ -1561,7 +1586,33 @@ impl LaunchedProductionLifecycleV1 {
                 PendingLifecycleCompletionV1::Validate(completion) => {
                     self.pending_lifecycle_completion =
                         Some(PendingLifecycleCompletionV1::Validate(completion));
-                    self.settle_parked_lifecycle_validate_completion()
+                    let selected = self.settle_parked_lifecycle_validate_completion();
+                    if matches!(
+                        selected,
+                        ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+                    ) {
+                        // Keep the original Validate parked, but let the normal
+                        // one-item ordinary drain release a full completion
+                        // channel. Otherwise the worker cannot receive/free a
+                        // command slot needed by this same physical retry.
+                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+                            Ok(true) => {
+                                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                            }
+                            Ok(false) => {}
+                            Err(reason) => {
+                                iroha_logger::error!(
+                                    %reason,
+                                    "ordinary Completion physical-wait classification failed closed"
+                                );
+                                self.close_output_for_restart();
+                                return ProductionLifecycleCompletionPreGateV1::Selected(
+                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                                );
+                            }
+                        }
+                    }
+                    selected
                 }
                 PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
                     .settle_ready_validate_successor(published, runner.debt()),

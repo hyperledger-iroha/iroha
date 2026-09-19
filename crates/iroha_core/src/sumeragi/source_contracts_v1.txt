@@ -2625,7 +2625,7 @@ required|coordinator_export|pub(in crate::sumeragi) use work_registry|coordinato
 required|coordinator_export|DurableValidateDispatch|coordinator lost the reviewed Validate dispatch re-export
 required|worker_dispatch|struct LifecycleValidateTaskV1|worker lost the exact lifecycle Validate command
 required|worker_dispatch|dispatch: DurableValidateDispatch|worker command lost its move-only registry dispatch
-required|worker_dispatch|task.dispatch\n                                                .execute(|worker lost the sole exact Validate execution path
+required|worker_dispatch|task.dispatch.execute(|worker lost the sole exact Validate execution path
 required|worker_dispatch|struct LifecycleValidateCapacityReservationV1|worker lost pre-claim Validate capacity ownership
 order|scheduler_dispatch|6|.attest_ready_validate_demand(|services.capture_lifecycle_completion_capacity_census(probes)|self.coordinator.plan_turn(inputs)|.select_validate(ordinal)|.begin_durable_validate_dispatch(|reservation.commit(dispatch)|Validate attestation, capacity freeze, claim, dispatch sealing, and queue publication must remain ordered
 forbidden|caller|begin_durable_validate_dispatch|durable Validate wait dispatch escaped its closed caller surface: begin_durable_validate_dispatch
@@ -2635,7 +2635,13 @@ required|scheduler|.begin_durable_validate_dispatch(&mut self.registry, lease, &
 required|scheduler|reservation.commit(dispatch)|scheduler omitted exact Validate FIFO publication
 required|worker_path|V2IoCommand::LifecycleValidate(task)|worker omitted typed Validate dispatch execution
 required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|worker omitted typed Validate completion publication
-required|worker_path|.complete_lifecycle_validate(|worker omitted exact completion-key retention
+required|worker_path|.complete_lifecycle_validate_result(|worker omitted exact completion-key retention
+required|worker_path|lifecycle_validate_worker_completion(key, result, Arc::clone(&output_guard))|worker must preserve typed local contention under the original output guard
+required|worker_path|Err((super::v2_body_store::V2BodyStoreError::LocalBusy(dependency), dispatch))|local contention must retain its move-only original dispatch
+required|worker_path|self.admission.lifecycle_capacity_release.observe()|Validate retry must observe original capacity before probing it
+required|worker_path|let _released_command = self.lifecycle_capacity_release.guard(());|actual command release must notify registered physical retry owners
+required|worker_path|dependency.waker().wake_by_ref()|capacity release before registration must schedule a bounded retry
+required|turn_driver|completion.retry_local()|physical waits must resolve before semantic publication
 required|turn_driver|PendingLifecycleCompletionV1::take_validate(|turn driver omitted guarded Validate completion ownership
 required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted atomic Waiting-to-Ready publication
 end
@@ -3597,6 +3603,7 @@ case|durable_validation_surface_has_no_scheduler_identity_or_ordinal
 region|surface|body_store|after|// DURABLE_BODY_VALIDATION_SURFACE_BEGIN|before|// DURABLE_BODY_VALIDATION_SURFACE_END
 region|api|body_store|after|// DURABLE_BODY_VALIDATION_API_BEGIN|before|// DURABLE_BODY_VALIDATION_API_END
 region|error|body_store|after|pub(crate) trait BodyValidationError|before|pub(crate) enum BlockSignaturePolicy
+region|replay|body_store|after|pub(crate) fn revalidate_recovered_markers|before|/// Retire restart vote authority
 forbidden|surface|EffectWorkId|new durable validation surface must not contain {forbidden}
 forbidden|api|EffectWorkId|new durable validation surface must not contain {forbidden}
 forbidden|surface|BodyValidationTask|new durable validation surface must not contain {forbidden}
@@ -3615,7 +3622,10 @@ required|surface|enum DurableBodyValidationOutcomeBody|durable validation outcom
 required|surface|enum BodyValidationRejectionIdentity|body validation rejection identity is missing
 required|surface|identity: BodyValidationRejectionIdentity|durable rejection must retain its identity
 required|surface|pub(crate) const fn rejection_identity|durable rejection identity accessor is missing
-required|api|error.rejection_identity().canonical_code()|validation API lost canonical rejection classification
+required|api|.rejection_identity()|validation API lost explicit rejection classification
+order|api|3|error.local_busy()|V2BodyStoreError::LocalBusy(busy.clone())|let identity_code = error|actual physical contention must retain its release dependency before rejection classification
+order|api|3|let identity_code = error|V2BodyStoreError::LocalValidation(error.to_string())|self.persist_rejected_outcome(|local validation failure must return before rejection persistence
+order|replay|3|.rejection_identity()|V2BodyStoreError::LocalValidation(error.to_string())|self.validated.extend(promoted_validated)|local replay failure must return before any marker promotion
 required|api|persist_rejected_outcome|validation API lost durable rejected-outcome persistence
 required|api|self.reusable_validated_commitment_for_exact_body(&durable, &envelope)?|live locked-body validation lost its exact authenticated reuse seam
 required|api|round.view < durable.round().view|live validation reuse stopped requiring a strictly earlier proposal view
@@ -3627,7 +3637,8 @@ required|api|self.persist_validated_receipt(&durable, execution_commitment)?|liv
 forbidden|api|pending_revalidation|quarantined restart markers must not authorize live validation reuse
 forbidden|api|retired_revalidation|retired restart markers must not authorize live validation reuse
 required|error|fn rejection_identity(&self)|body validation error classification lost rejection identity
-required|error|BodyValidationRejectionIdentity::Rejected|body validation error classification lost rejected identity
+required|error|fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity>;|production error classification must be explicit with no default rejection
+required|error|#[cfg(test)]\nimpl BodyValidationError for String|untyped validator errors must remain test-only
 end
 case|combined_recovered_sign_staging_is_two_child_affine_and_inert
 region|fetch_prepare|registry|after|pub(super) fn prepare_recovered_decision_fetch_store_successor|before|impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>

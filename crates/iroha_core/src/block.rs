@@ -2832,13 +2832,10 @@ pub enum BlockValidationError {
 }
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
-        match error {
-            crate::state::DaIndexHydrationError::ShardCursor(error) => Self::DaShardCursor(error),
-            crate::state::DaIndexHydrationError::ReceiptCursor(error) => {
-                Self::DaReceiptCursor(error)
-            }
-            other => Self::DaIndexHydration(other.to_string()),
-        }
+        // These errors arise while replaying already committed local history,
+        // including its cursors. Preserve that context so the v2 validator does
+        // not mistake local reconstruction failure for a malformed candidate.
+        Self::DaIndexHydration(error.to_string())
     }
 }
 /// Error during signature verification

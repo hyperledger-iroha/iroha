@@ -422,8 +422,8 @@ def test_terminal_carrier_requires_its_actual_durable_execution_witness(fixture,
     ("QUEUE_OWNER", "struct QueueLaneRetirementObserver", "_reservation_transition_guard: PublicationGuard<'queue>", "_reservation_transition_guard: parking_lot::MutexGuard<'queue, ()>"),
     ("QUEUE_OWNER", "fn try_lock_lane_retirement_observer", "self.lane_reservation_transition_lock.try_lock_or_wait()?", "other.lane_reservation_transition_lock.try_lock_or_wait()?"),
     ("QUEUE_OWNER", "fn try_lock_lane_retirement_observer", "_reservation_transition_guard: guard,", "_reservation_transition_guard: other_guard,"),
-    ("QUEUE_OWNER", "fn lane_has_pending_work_under_retirement_observer", "key.lane_incarnation == lane_incarnation", "true"),
-    ("QUEUE_OWNER", "fn lane_has_pending_work_under_retirement_observer", "!reservation_owned_hashes.contains(entry.key())", "true"),
+    ("QUEUE_OWNER", "fn lane_retirement_reservation_snapshot", "key.lane_incarnation == lane_incarnation", "true"),
+    ("QUEUE_OWNER", "fn lane_has_pending_route_work", "!reservation_owned_hashes.contains(entry.key())", "true"),
     ("PUBLICATION_MUTEX", "fn wrap", "self.released.guard(PhysicalPublicationGuard", "self.released.poisoning_guard(PhysicalPublicationGuard"),
     ("PUBLICATION_MUTEX", "fn try_lock_or_wait", "self.released.observe()", "other.released.observe()"),
     ("WITNESS_LEASE", "fn from_geometry_guards", "_canonical: canonical,", "_canonical: prune,"),
@@ -482,3 +482,69 @@ def test_geometry_capacity_and_gc_remain_before_sidecar_transfer(fixture):
                               capacity + "\n        lease.apply_prepared_lane_geometry(")
     errors = validate(fixture)
     assert any("reorders executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("pub struct Queue {", "push_remove_lock: PublicationMutex,", "push_remove_lock: parking_lot::Mutex<()>,"),
+    ("pub struct Queue {", "lane_reservations: PublicationMutex<LaneQueueReservationStore>,", "lane_reservations: parking_lot::Mutex<LaneQueueReservationStore>,"),
+    ("fn from_config_with_router_limits_and_catalogs", "lane_reservations: PublicationMutex::new(LaneQueueReservationStore::default()),", "lane_reservations: other_store,"),
+    ("fn try_into_cut", "self,", "&self,"),
+    ("fn try_into_cut", ".push_remove_lock", ".lane_reservation_transition_lock"),
+    ("fn try_into_cut", ".lane_reservations", ".other_lane_reservations"),
+    ("fn try_into_cut", 'field: "push_remove_lock",', 'field: "lane_reservations",'),
+    ("fn try_into_cut", 'field: "lane_reservations",', 'field: "push_remove_lock",'),
+    ("fn try_into_cut", "wait,", "wait: other_wait,"),
+    ("fn try_into_cut", "})?;", '}).expect("invalid refusal") ;'),
+    ("fn try_into_cut", "_mutation: mutation,", "_mutation: other_mutation,"),
+    ("fn try_into_cut", "observer: self,", "observer: other_observer,"),
+    ("struct QueueRetirementBusy", "pub(crate) wait: mv::ReleaseWait,", "pub(crate) wait: mv::ReleaseWait, retained: PublicationGuard<'static>,"),
+    ("impl QueueLaneRetirementCut<'_>", "queue.transaction_selection_durability_faulted()", "false"),
+    ("impl QueueLaneRetirementCut<'_>", "&self.reservations,", "&other_reservations,"),
+    ("impl QueueLaneRetirementCut<'_>", "return true;", "return false;"),
+    ("fn lane_retirement_reservation_snapshot", "return None;", "return Some(HashSet::new());"),
+    ("fn lane_retirement_reservation_snapshot", "completion.barrier.lane_incarnation == lane_incarnation", "true"),
+    ("fn lane_retirement_reservation_snapshot", ".map(|record| record.key.entrypoint_hash)", ".map(|record| other_hash)"),
+    ("fn lane_has_pending_route_work", "self.txs.contains_key(entry.key())", "true"),
+    ("fn lane_has_pending_route_work", "entry.value().legs().into_iter().any(|leg|", "entry.value().coordinator_only().into_iter().any(|leg|"),
+])
+def test_retained_queue_cut_rejects_owner_predicate_and_wait_substitution(fixture, anchor, old, new):
+    """A real cut keeps exact guards, conservative predicates and the failed owner's event."""
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.QUEUE_OWNER, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "refusal/release relation" in error
+               for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["acquisition_order", "field_release_order", "blocking_predicate", "early_guard_drop"])
+def test_retained_queue_cut_requires_nonblocking_acquisition_and_reverse_release(fixture, mutation):
+    """Token presence cannot replace the actual try-only probe and held-guard ordering."""
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.QUEUE_OWNER
+    source = path.read_text()
+    if mutation == "acquisition_order":
+        start = source.index("        let mutation =", source.index("fn try_into_cut"))
+        middle = source.index("        let reservations =", start)
+        end = source.index("        Ok(QueueLaneRetirementCut", middle)
+        source = source[:start] + source[middle:end] + source[start:middle] + source[end:]
+    elif mutation == "field_release_order":
+        first = "    reservations: PublicationGuard<'queue, LaneQueueReservationStore>,\n"
+        second = "    _mutation: PublicationGuard<'queue>,\n"
+        assert source.count(first + second) == 1
+        source = source.replace(first + second, second + first, 1)
+    elif mutation == "blocking_predicate":
+        anchor = "impl QueueLaneRetirementCut<'_>"
+        prefix, suffix = source.split(anchor, 1)
+        original = "        let queue = self.observer.queue;"
+        assert original in suffix
+        source = prefix + anchor + suffix.replace(original, original + "\n        let _again = queue.push_remove_lock.lock();", 1)
+    else:
+        original = "        Ok(QueueLaneRetirementCut {"
+        assert source.count(original) == 1
+        source = source.replace(original, "        drop(mutation);\n" + original, 1)
+    path.write_text(source)
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error or "blocks or escapes retained Queue ownership" in error
+               for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors

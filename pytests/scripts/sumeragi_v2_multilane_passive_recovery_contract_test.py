@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SUPPORT_PATH = Path(__file__).with_name("sumeragi_v2_multilane_models_test.py")
 
@@ -367,3 +369,192 @@ def test_passive_recovery_contract_rejects_externalized_quiet_tick_regression_dr
         and "CanonicalBlockPending" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [('latest_autonomous_lane_block_artifacts_snapshot',
+  '                    expected_epoch,\n                    None,',
+  '                    expected_epoch,\n                    Some(0),'),
+ ('latest_autonomous_lane_block_artifacts_snapshot',
+  'recovered.push((artifact, current))',
+  'recovered.push((artifact, other_current))'),
+ ('read_autonomous_lane_block_attempt_record_with_current_locked',
+  'pointer.proposal_height != proposal_height',
+  'pointer.proposal_height == proposal_height'),
+ ('read_autonomous_lane_block_attempt_record_with_current_locked',
+  'AutonomousLaneBlockViewStateReadMode::MainOnly',
+  'AutonomousLaneBlockViewStateReadMode::Unchecked'),
+ ('read_autonomous_lane_block_attempt_artifact_with_current_locked',
+  'pointer.network_id != expected_network_id || pointer.epoch != expected_epoch',
+  'pointer.network_id != expected_network_id && pointer.epoch != expected_epoch'),
+ ('read_autonomous_lane_block_attempt_artifact_with_current_locked',
+  '!pointer.matches_payload(&artifact.executable_payload)',
+  'false'),
+ ('read_autonomous_lane_block_attempt_artifact_with_current_locked',
+  '(state.retirement, current)',
+  '(state.retirement, other_current)')])
+def test_passive_latest_snapshot_rejects_pair_custody_substitution(tmp_path, symbol, old, new):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    support.replace_once_after(path, f"fn {symbol}", old, new)
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error and "missing source-bound token" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "relative,anchor,old,new,symbol",
+    (
+        ("evidence.rs", "fn recover_finalized_lifecycle_equivocations(",
+         ".v2_finality_artifact(height)", ".structural_context_record(height)",
+         "recover_finalized_lifecycle_equivocations"),
+        ("evidence.rs", "fn recover_finalized_lifecycle_equivocations(",
+         "for height in first_height..=height", "for height in first_height..height",
+         "recover_finalized_lifecycle_equivocations"),
+        ("evidence.rs", "fn recover_finalized_lifecycle_equivocations(",
+         "proposal_height.saturating_sub(horizon).max(1)", "height.saturating_sub(horizon).max(1)",
+         "recover_finalized_lifecycle_equivocations"),
+        ("evidence.rs", "fn recover_context_lifecycle_equivocations(",
+         "if &context.network_id != state.network_id_ref()", "if &context.network_id == state.network_id_ref()",
+         "recover_context_lifecycle_equivocations"),
+        ("evidence.rs", "fn recover_context_lifecycle_equivocations(",
+         "retain_sumeragi_v2_equivocation(state, context, proofs_of_possession, proof)",
+         "retain_sumeragi_v2_equivocation(state, context, &[], proof)",
+         "recover_context_lifecycle_equivocations"),
+        ("evidence.rs", "fn retain_sumeragi_v2_equivocation(",
+         "validate_v2_equivocation(&payload)?;", "let _ = validate_v2_equivocation(&payload);",
+         "retain_sumeragi_v2_equivocation"),
+        ("evidence.rs", "fn retain_validated_local_evidence(",
+         "!evidence_within_configured_horizon(earliest_admission_height, horizon, Some(subject_height))",
+         "evidence_within_configured_horizon(earliest_admission_height, horizon, Some(subject_height))",
+         "retain_validated_local_evidence"),
+        ("evidence.rs", "fn retain_validated_local_evidence(",
+         "committed_key == &key", "committed_key != &key",
+         "retain_validated_local_evidence"),
+        ("v2_lifecycle_ledger.rs", "fn read_completed_equivocations(",
+         "record.terminal() != Some(Some(TerminalOutcome::Advanced))",
+         "record.terminal() != Some(None)", "read_completed_equivocations"),
+        ("v2_lifecycle_ledger.rs", "fn read_completed_equivocations(",
+         "record.terminal() != Some(Some(TerminalOutcome::Advanced))",
+         "record.terminal() != Some(Some(TerminalOutcome::Cancelled))", "read_completed_equivocations"),
+        ("v2_lifecycle_ledger.rs", "fn read_completed_equivocations(",
+         "record.owner().first_admission_ordinal() != record.ordinal()",
+         "record.owner().first_admission_ordinal() == record.ordinal()", "read_completed_equivocations"),
+        ("v2_lifecycle_ledger.rs", "fn read_completed_equivocations(",
+         "record.reconstruction_source() != record.owner().causal_root().digest()",
+         "record.reconstruction_source() == record.owner().causal_root().digest()", "read_completed_equivocations"),
+        ("v2_lifecycle_ledger_store.rs", "fn read_existing(",
+         "BoundLifecycleLedgerDirectory::bind(root, false)?",
+         "BoundLifecycleLedgerDirectory::bind(root, true)?", "read_existing"),
+        ("v2_lifecycle_ledger_store.rs", "fn read_existing(",
+         "let guard = directory.lock()?;",
+         "let guard = directory.lock()?; guard.directory.remove_stale_temporary_locked(LEDGER_TEMPORARY_FILE, MAX_LEDGER_FRAME_BYTES)?;",
+         "read_existing"),
+        ("v2_lifecycle_ledger_store.rs", "fn read_existing(",
+         "if ledger.context() != context", "if ledger.context() == context", "read_existing"),
+        ("v2_lifecycle_ledger_store.rs", "fn read_existing(",
+         "ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;",
+         "let _ = ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT);", "read_existing"),
+        ("v2_lifecycle_ledger_store.rs", "fn read_bounded_locked(",
+         "self.verify_open_leaf(&file, name, leaf)?;",
+         "let _ = self.verify_open_leaf(&file, name, leaf);", "read_bounded_locked"),
+        ("v2_worker_services_impl.rs", "fn start_with_apply_service(",
+         "!state.matches_kura_instance(&kura)", "state.matches_kura_instance(&kura)",
+         "start_with_apply_service"),
+    ),
+    ids=(
+        "no-structural-context-authority", "include-applied-tip", "current-horizon",
+        "same-network", "original-pops", "reject-invalid-signature", "expiry",
+        "committed-key", "never-reopen-ready", "never-revive-cancelled",
+        "exact-independent-owner", "exact-causal-root", "never-create-ledger",
+        "never-clean-temporary", "exact-frame-context", "reject-malformed-frame",
+        "retain-exact-open-file", "same-kura-service",
+    ),
+)
+def test_completed_equivocation_recovery_rejects_semantic_mutation(
+    tmp_path: Path, relative: str, anchor: str, old: str, new: str, symbol: str,
+) -> None:
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    support.replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi" / relative, anchor, old, new,
+    )
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "relative,anchor,first,second,symbol",
+    (
+        ("mod.rs", "impl SumeragiStartArgs {",
+         "evidence::recover_finalized_lifecycle_equivocations(state.as_ref())",
+         "FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(",
+         "SumeragiStartArgs::start"),
+        ("v2_worker_services_impl.rs", "fn start_inner(",
+         "super::evidence::recover_context_lifecycle_equivocations(",
+         "let io = V2IoHandle::spawn(", "ProductionV2Services::start_inner"),
+    ),
+    ids=("recover-before-ingress", "recover-before-worker-spawn"),
+)
+def test_completed_equivocation_recovery_rejects_reordered_startup(
+    tmp_path: Path, relative: str, anchor: str, first: str, second: str, symbol: str,
+) -> None:
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    support.swap_ordered_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi" / relative, anchor, first, second,
+    )
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error and "missing or reorders" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "relative,token",
+    (
+        (
+            'crates/iroha_core/src/sumeragi/mod.rs',
+            'pub(crate) mod evidence;',
+        ),
+        (
+            'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs',
+            '#[path = "v2_lifecycle_ledger.rs"]\nmod ledger;',
+        ),
+        (
+            'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs',
+            '#[path = "v2_lifecycle_replay_authority.rs"]\n#[cfg_attr(not(test), allow(dead_code))]\nmod replay_authority;',
+        ),
+        (
+            'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs',
+            'include!("v2_lifecycle_ledger_store.rs");',
+        ),
+        (
+            'crates/iroha_core/src/sumeragi/v2_worker.rs',
+            'include!("v2_worker_services_impl.rs");',
+        ),
+    ),
+)
+def test_completed_equivocation_recovery_rejects_unbound_provider(
+    tmp_path: Path, relative: str, token: str,
+) -> None:
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    support.replace_once(tmp_path / relative, token, token.replace(";", "_unreviewed;"))
+    errors = validate_fixture(tmp_path, module, models)
+    assert any("passive provider include" in error for error in errors), errors
+
+
+def test_completed_equivocation_recovery_requires_real_cold_control(tmp_path: Path) -> None:
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    support.replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
+        "fn completed_equivocation_recovers_into_new_state_without_reopening_lifecycle()",
+        "drop(original)", "retain(original)",
+    )
+    errors = validate_fixture(tmp_path, module, models)
+    assert any("focused control" in error and "drop(original)" in error for error in errors), errors
