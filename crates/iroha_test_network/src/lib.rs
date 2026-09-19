@@ -839,12 +839,17 @@ const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAG
 const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
+/// Locate the build checkout without requiring it to exist on this host.
+fn compiled_repo_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("test network crate must be under the workspace crates directory")
+        .to_path_buf()
+}
 /// Utility to get the root of the repository
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .canonicalize()
-        .unwrap()
+    compiled_repo_path().canonicalize().unwrap()
 }
 const DEFAULT_RANS_TABLES: &[u8] = include_bytes!("../../../codec/rans/tables/rans_seed0.toml");
 fn tempdir_in() -> Option<impl AsRef<Path>> {
@@ -1905,7 +1910,7 @@ fn validate_release_program_candidate(
 pub fn resolve_release_prebuilt_binary(
     kind: ReleasePrebuiltBinary,
 ) -> color_eyre::Result<Option<PathBuf>> {
-    let Some(contract) = release_program_contract(&repo_root())? else {
+    let Some(contract) = release_program_contract(&compiled_repo_path())? else {
         return Ok(None);
     };
     validate_release_program_candidate(
@@ -1923,7 +1928,7 @@ pub fn revalidate_release_prebuilt_binary(
     kind: ReleasePrebuiltBinary,
     candidate: impl AsRef<Path>,
 ) -> color_eyre::Result<Option<PathBuf>> {
-    let Some(contract) = release_program_contract(&repo_root())? else {
+    let Some(contract) = release_program_contract(&compiled_repo_path())? else {
         return Ok(None);
     };
     validate_release_program_candidate(&contract, kind, candidate).map(Some)
@@ -2695,7 +2700,7 @@ impl Program {
     /// # Errors
     /// If the path is not found (and build did not help).
     fn resolve_internal(&self, skip_build_override: Option<bool>) -> color_eyre::Result<PathBuf> {
-        self.resolve_internal_in_repo(skip_build_override, &repo_root())
+        self.resolve_internal_in_repo(skip_build_override, &compiled_repo_path())
     }
 
     fn resolve_internal_in_repo(
@@ -2750,6 +2755,15 @@ impl Program {
                 None => Ok(candidate),
             };
         }
+        // Explicit absolute prebuilt paths do not need the build checkout. Discovery
+        // and freshness checks still require the real source repository.
+        let canonical_repo = repo.canonicalize().wrap_err_with(|| {
+            eyre!(
+                "Could not access repository {} to discover or build `{name}`; provide an absolute `{env}` for a prebuilt diagnostic binary",
+                repo.display()
+            )
+        })?;
+        let repo = canonical_repo.as_path();
         // Fast path via cache (only when no override is present)
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
@@ -16037,6 +16051,112 @@ mod tests {
         let bytes = norito::to_bytes(&instruction_box).expect("encode");
         let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, instruction_box);
+    }
+    #[test]
+    fn program_absolute_prebuilt_override_does_not_require_checkout() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        let binary = env::current_exe().expect("current prebuilt test binary");
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        let resolved = Program::Iroha
+            .resolve_internal_in_repo(Some(true), &missing_repo)
+            .expect("absolute diagnostic binary must not need its build checkout");
+        assert_eq!(
+            resolved,
+            binary.canonicalize().expect("canonical test binary")
+        );
+        assert!(release_program_contract(&missing_repo).unwrap().is_none());
+        assert!(
+            resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha)
+                .expect("inactive release lookup must not need a checkout")
+                .is_none()
+        );
+        assert!(
+            revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha, &binary)
+                .expect("inactive release revalidation must not need a checkout")
+                .is_none()
+        );
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_discovery_requires_checkout_with_context() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_binary = EnvVarGuard::cleared(PROGRAM_IROHA_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        for skip_build in [true, false] {
+            let error = Program::Iroha
+                .resolve_internal_in_repo(Some(skip_build), &missing_repo)
+                .expect_err("discovery and builds must require the real checkout");
+            let message = error.to_string();
+            assert!(message.contains("Could not access repository"), "{message}");
+            assert!(message.contains(PROGRAM_IROHA_ENV), "{message}");
+            assert!(
+                message.contains(&missing_repo.display().to_string()),
+                "{message}"
+            );
+        }
+        let _relative = EnvVarRestore::set(PROGRAM_IROHA_ENV, "target/release/iroha");
+        assert!(
+            Program::Iroha
+                .resolve_internal_in_repo(Some(true), &missing_repo)
+                .is_err(),
+            "a relative override must not become relative to an unrelated working directory"
+        );
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_absolute_prebuilt_override_rejects_partial_release_identity() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        let binary = env::current_exe().expect("current prebuilt test binary");
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        for (present, required) in [
+            (
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+                IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+            ),
+            (
+                IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+            ),
+        ] {
+            let _partial = EnvVarRestore::set(present, "a".repeat(64));
+            let error = Program::Iroha
+                .resolve_internal_in_repo(Some(true), &missing_repo)
+                .expect_err("an absolute override must not bypass a partial release identity");
+            assert!(error.to_string().contains(required), "{error}");
+        }
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_absolute_prebuilt_override_requires_active_release_checkout() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+        let binary = fixture
+            .target
+            .join(ReleasePrebuiltBinary::Iroha.relative_path());
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        let missing_repo = fixture.repo.join("missing-checkout");
+        let error = Program::Iroha
+            .resolve_internal_in_repo(Some(true), &missing_repo)
+            .expect_err("an active release contract must authenticate its real repository");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to canonicalize repository root for release artifact isolation"),
+            "{error}"
+        );
+        assert!(!missing_repo.exists());
     }
     #[test]
     fn program_resolve_uses_env_override_without_build() {

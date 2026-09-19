@@ -471,6 +471,15 @@ opt-level = 3
 [profile.test.package.halo2curves-axiom]
 opt-level = 3
 
+# Pasta owns the concrete field and curve operations reexported by halo2curves.
+# Optimizing the reexporting crate alone leaves its upstream arithmetic at O0.
+# Preserve assertions and overflow checks in both local runnable profiles.
+[profile.dev.package.pasta_curves]
+opt-level = 3
+
+[profile.test.package.pasta_curves]
+opt-level = 3
+
 [profile.dev.package.norito]
 opt-level = 3
 

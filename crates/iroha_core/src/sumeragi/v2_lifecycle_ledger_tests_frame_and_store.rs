@@ -1,13 +1,16 @@
 /// Decode and validate a retained incident frame without opening or mutating its store.
 #[test]
-#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME and IROHA_LIFECYCLE_INCIDENT_ORDINAL"]
+#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME; optional ORDINAL focuses one row"]
 fn inspect_retained_lifecycle_ledger_frame() {
     let path = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_FRAME")
         .expect("provide the retained lifecycle frame path");
-    let ordinal = std::env::var("IROHA_LIFECYCLE_INCIDENT_ORDINAL")
-        .expect("provide the exact retained lifecycle ordinal")
-        .parse::<u128>()
-        .expect("the retained lifecycle ordinal is an unsigned integer");
+    let ordinal = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_ORDINAL").map(|value| {
+        value
+            .into_string()
+            .expect("the retained lifecycle ordinal is valid Unicode")
+            .parse::<u128>()
+            .expect("the retained lifecycle ordinal is an unsigned integer")
+    });
     let mut bytes = Vec::new();
     File::open(path)
         .expect("open retained frame read-only")
@@ -26,18 +29,30 @@ fn inspect_retained_lifecycle_ledger_frame() {
         ledger.high_water(),
         ledger.records().len()
     );
-    let selected = ledger
-        .records()
-        .iter()
-        .find(|record| record.ordinal() == ordinal)
-        .expect("the retained ledger contains the requested ordinal");
+    let selected = ordinal.map(|ordinal| {
+        ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == ordinal)
+            .expect("the retained ledger contains the requested ordinal")
+    });
     for record in ledger.records().iter().filter(|record| {
-        record.owner() == selected.owner()
-            || record
-                .continuation()
-                .and_then(DurableContinuation::successor_parts)
-                .is_some_and(|(_, successor)| successor == ordinal)
-            || record.ordinal() == ordinal.saturating_add(1)
+        selected.map_or_else(
+            || {
+                record.work_class() == Some(LifecycleWorkClass::Apply)
+                    && record.stage().map(LifecycleStage::kind)
+                        == Some(LifecycleStageKind::ApplyDecision)
+                    && record.terminal() == Some(None)
+            },
+            |selected| {
+                record.owner() == selected.owner()
+                    || record
+                        .continuation()
+                        .and_then(DurableContinuation::successor_parts)
+                        .is_some_and(|(_, successor)| successor == selected.ordinal())
+                    || record.ordinal() == selected.ordinal().saturating_add(1)
+            },
+        )
     }) {
         let key = record.key().expect("validated record has a lifecycle key");
         println!(
@@ -56,6 +71,16 @@ fn inspect_retained_lifecycle_ledger_frame() {
             record.terminal(),
             record.continuation(),
         );
+        if let Some(DurablePayloadReference::BodyFrame(frame)) = record.durable_payload() {
+            println!(
+                "body_frame context={} round={:?} subject={} manifest={} frame={}",
+                hex::encode(frame.context.as_bytes()),
+                frame.round,
+                hex::encode(frame.subject.as_bytes()),
+                hex::encode(frame.manifest.as_bytes()),
+                hex::encode(frame.frame.as_bytes()),
+            );
+        }
         println!(
             "{}",
             record.replay_authority.public_incident_metadata_for_test()
@@ -2156,7 +2181,6 @@ fn opaque_or_noncanonical_certified_serve_references_are_rejected() {
         Err(LifecycleLedgerError::InvalidLedger(_))
     ));
 }
-
 
 impl LifecycleLedgerRecordV1 {
     /// Change only owner coordinates for the PendingKura wrong-authority regression.
