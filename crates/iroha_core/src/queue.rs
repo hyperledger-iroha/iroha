@@ -40,6 +40,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
+    publication_lock::{PublicationGuard, PublicationMutex},
     state::{
         QueuePlanAdmissionRegistryMatch, QueuePlanBindingApplicationEvidence, State, StateReadOnly,
         StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
@@ -3990,7 +3991,7 @@ pub struct Queue {
     ///
     /// A waiting reservation operation therefore cannot hold `push_remove_lock` while another
     /// operation is completing a storage barrier.
-    lane_reservation_transition_lock: parking_lot::Mutex<()>,
+    lane_reservation_transition_lock: PublicationMutex,
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
@@ -4092,7 +4093,7 @@ impl fmt::Debug for Queue {
 /// `reservation transition -> lifecycle -> queue ownership`.
 pub(crate) struct QueueLaneRetirementObserver<'queue> {
     queue: &'queue Queue,
-    _reservation_transition_guard: parking_lot::MutexGuard<'queue, ()>,
+    _reservation_transition_guard: PublicationGuard<'queue>,
 }
 impl QueueLaneRetirementObserver<'_> {
     /// Return whether the exact lane incarnation still owns or may receive
@@ -10153,6 +10154,24 @@ impl Queue {
             _reservation_transition_guard: self.lane_reservation_transition_lock.lock(),
         }
     }
+    /// Probe the actual Queue retirement fence without waiting.
+    ///
+    /// On contention, the observation belongs to this exact transition mutex
+    /// and becomes ready only after an original guard releases. It retains no
+    /// physical guard and grants no drain or State-publication authority.
+    /// Callers must release later-acquired fences before awaiting it, then
+    /// reacquire this observer before any State lifecycle fence and recheck
+    /// the pending-work predicate. A Queue must come from the caller's original
+    /// State/Queue service owner; empty contents do not establish that binding.
+    pub(crate) fn try_lock_lane_retirement_observer(
+        &self,
+    ) -> Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait> {
+        let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;
+        Ok(QueueLaneRetirementObserver {
+            queue: self,
+            _reservation_transition_guard: guard,
+        })
+    }
     fn lane_has_pending_work_under_retirement_observer(
         &self,
         lane_id: LaneId,
@@ -13866,7 +13885,7 @@ impl Queue {
                 nexus_revalidation_lock: parking_lot::Mutex::new(()),
                 durability_transitions: parking_lot::Mutex::new(HashSet::new()),
                 durability_transition_done: parking_lot::Condvar::new(),
-                lane_reservation_transition_lock: parking_lot::Mutex::new(()),
+                lane_reservation_transition_lock: PublicationMutex::default(),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
@@ -23062,10 +23081,14 @@ pub mod tests {
             additions: vec![lane_b.clone()],
             retire: Vec::new(),
         };
-        state.nexus.get_mut().routing_policy.default_lane = lane_b.id;
         queue
             .apply_lane_lifecycle(&mut state, &plan)
             .expect("plan applied");
+        let mut published_nexus = state.nexus_snapshot();
+        published_nexus.routing_policy.default_lane = lane_b.id;
+        state
+            .set_nexus(published_nexus)
+            .expect("publish default-lane policy");
         let routing = queue.routing_plans.get(&tx_hash).expect("routing plan");
         assert_eq!(
             routing.coordinator_route().lane_id,
@@ -23185,8 +23208,8 @@ pub mod tests {
             state.lane_incarnation(retired_lane).is_some(),
             "repair fixture must keep exact incarnation coverage for every catalog lane"
         );
+        let mut nexus = state.nexus_snapshot();
         {
-            let nexus = state.nexus.get_mut();
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
             lanes
                 .iter_mut()
@@ -23200,7 +23223,6 @@ pub mod tests {
                 LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
             nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         }
-        let nexus = state.nexus_snapshot();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
             nexus.routing_policy.clone(),
@@ -23430,7 +23452,7 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::default()
         );
-        state.set_nexus(nexus.clone()).expect("set Nexus config");
+        install_test_nexus_configuration(&mut state, nexus.clone());
         assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
         assert_eq!(
             queue
@@ -23535,6 +23557,8 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.last_transition_height = 2;
         }
+        // This synthetic future-lane fixture has an explicit canonical runtime owner.
+        state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
@@ -23659,6 +23683,8 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.last_transition_height = 7;
         }
+        // This synthetic future-lane fixture has an explicit canonical runtime owner.
+        state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 6);
         let committed_nexus = state.nexus_snapshot();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -23740,6 +23766,7 @@ pub mod tests {
             nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
+        state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 3);
         let initial_nexus = state.nexus_snapshot();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -23782,18 +23809,12 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
         );
-        let survivor_catalog = LaneCatalog::new(
-            nonzero!(3_u32),
-            vec![LaneConfig::default(), initial_lane_2.clone()],
-        )
-        .expect("scale-in autoscale lane catalog");
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.lane_catalog = survivor_catalog;
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-            nexus.autoscale.last_transition_height = 4;
-        }
+        state
+            .apply_autoscale_lane_lifecycle_for_tests(&LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![LaneId::new(1)],
+            })
+            .expect("publish the exact retired incarnation through lifecycle ownership");
         let committed_nexus = state.nexus_snapshot();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
         assert_eq!(queue.active_len(), 0);
@@ -23972,7 +23993,13 @@ pub mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         queue.install_test_router_metadata_for_nexus(&nexus);
-        *state.nexus.write() = nexus;
+        if autoscale_lane.is_some() {
+            nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+            *state.nexus.write() = nexus;
+            state.reseed_static_lane_incarnations_for_tests();
+        } else {
+            install_test_nexus_configuration(&mut state, nexus);
+        }
 
         let policy_metadata_key =
             Name::from_str("target_upgrade_id").expect("static target policy metadata key");
@@ -29083,9 +29110,7 @@ pub mod tests {
             dataspace: Some(current_dataspace),
             matcher: matcher.clone(),
         }];
-        state
-            .set_nexus(current_nexus.clone())
-            .expect("apply current Nexus dataspace rebind state");
+        install_test_nexus_configuration(&mut state, current_nexus.clone());
         let mut stale_nexus = current_nexus;
         stale_nexus.lane_catalog = stale_lane_catalog.clone();
         stale_nexus.lane_config =
@@ -29221,6 +29246,7 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 2);
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -29261,19 +29287,12 @@ pub mod tests {
             )
             .expect("persist stale-elastic-plan fixture");
         drop(queue);
-        {
-            let nexus = state.nexus.get_mut();
-            let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes.push(LaneConfig {
-                id: LaneId::new(2),
-                alias: "manual-lane-inside-elastic-range".to_owned(),
-                ..LaneConfig::default()
-            });
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(3_u32), lanes).expect("corrupted lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
+        state
+            .apply_autoscale_lane_lifecycle_for_tests(&LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![LaneId::new(1)],
+            })
+            .expect("retire the journal's original lane without changing its admitted plan");
         let replay_queue = Queue::test(config_factory(), &time_source);
         assert_eq!(
             replay_queue
@@ -29284,7 +29303,7 @@ pub mod tests {
         assert_eq!(
             replay_queue
                 .route_plan_with_state(&tx, &state)
-                .expect("corrupted elastic range should still resolve to base lane")
+                .expect("retired elastic route should resolve new work to the base lane")
                 .coordinator_route(),
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
@@ -29493,7 +29512,9 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.configured_dataspace_catalog = dataspace_catalog.clone();
         }
+        state.reseed_static_lane_incarnations_for_tests();
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
@@ -30920,6 +30941,27 @@ pub mod tests {
     include!("queue/kagemusha_top_up_admission_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
     include!("queue/config_factory_test_support.rs");
+    /// Install a fresh fixture through the same canonical startup boundary as a node.
+    fn install_test_nexus_configuration(state: &mut State, mut nexus: Nexus) {
+        assert_eq!(
+            state.committed_height(),
+            0,
+            "fixture configuration precedes genesis"
+        );
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        let expected_lanes = nexus.lane_catalog.clone();
+        let expected_dataspaces = nexus.dataspace_catalog.clone();
+        state
+            .set_nexus_from_config(nexus)
+            .expect("install the fixture's exact canonical startup configuration");
+        let installed = state.nexus_snapshot();
+        assert_eq!(installed.lane_catalog, expected_lanes);
+        assert_eq!(installed.dataspace_catalog, expected_dataspaces);
+        assert_eq!(installed.configured_lane_catalog, expected_lanes);
+        assert_eq!(installed.configured_dataspace_catalog, expected_dataspaces);
+    }
     fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
         let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
         let mut nexus = state.nexus_snapshot();
@@ -30931,10 +30973,8 @@ pub mod tests {
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
-        // Keep the state snapshot aligned with the queue so route activity checks
-        // do not replace the explicit test router.
-        *state.nexus.write() = nexus;
-        state.reseed_static_lane_incarnations_for_tests();
+        // The route check reads canonical State, not a mutable Nexus cache.
+        install_test_nexus_configuration(state, nexus);
     }
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
@@ -30976,6 +31016,7 @@ pub mod tests {
     include!("queue/expiry_tracking_tests.rs");
     include!("queue/inflight_tracking_tests.rs");
     include!("queue/lane_reservation_tests.rs");
+    include!("queue/lane_retirement_observer_tests.rs");
     include!("queue/lane_reservation_terminal_fault_tests.rs");
     include!("queue/reservation_recovery_tests.rs");
 }

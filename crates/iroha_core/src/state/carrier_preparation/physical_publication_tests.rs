@@ -51,13 +51,13 @@ fn decided<A, B>(
     decision.attach_checkpoint(checkpoint)
 }
 
-fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
+pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
     let (state, proposal, topology, context) = fixture();
     let decision = decided(&state, proposal, &topology, &context, (), ());
     (state, decision)
 }
 
-fn acquire<'target, A, B>(
+pub(super) fn acquire<'target, A, B>(
     decision: CheckpointDecision<A, B>,
     state: &'target State,
 ) -> PhysicallyPreparedCarrier<'target, A, B, ()> {

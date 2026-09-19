@@ -134,7 +134,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state.set_nexus(nexus).expect("set Nexus config");
+    install_test_nexus_configuration(&mut state, nexus);
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let first_hash = first_tx.as_ref().hash_as_entrypoint();
@@ -205,7 +205,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     let first_teu = Queue::compute_teu_weight(&first_tx);
     assert!(first_teu > 0, "expected positive TEU weight");
     {
-        let nexus = state.nexus.get_mut();
+        let mut nexus = state.nexus_snapshot();
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -223,6 +223,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
             LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        install_test_nexus_configuration(&mut state, nexus);
     }
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -534,9 +535,7 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     nexus.dataspace_catalog = state_dataspace_catalog;
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state
-        .set_nexus(nexus)
-        .expect("apply telemetry test Nexus state");
+    install_test_nexus_configuration(&mut state, nexus);
     let state = Arc::new(state);
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
@@ -658,9 +657,7 @@ fn queue_backlog_reports_available_lane_headroom() {
     nexus.dataspace_catalog = state_dataspace_catalog;
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state
-        .set_nexus(nexus)
-        .expect("apply backlog test Nexus state");
+    install_test_nexus_configuration(&mut state, nexus);
     let state = Arc::new(state);
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,

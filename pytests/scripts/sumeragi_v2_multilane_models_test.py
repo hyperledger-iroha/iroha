@@ -36,6 +36,55 @@ def load_checker():
     return module
 
 
+@pytest.mark.parametrize("parameters", [
+    "Config { capacity, nested: Nested { limit } }: Config",
+    "(Config { capacity }, [first, second]): (Config, [usize; 2])",
+    "Config { capacity }: Config, callback: fn([u8; { LIMIT }]) -> ()",
+    "Config { capacity }: Config, borrowed: &'a &'b Config",
+    'Config /* { ignored } */ { capacity }: Config, label: Label<"{(">',
+    'Config { capacity }: Config, label: Label<r###"{)]}"###>',
+    "Config { capacity }: Config, label: Label<'{'>",
+])
+def test_rust_item_parser_binds_body_after_destructured_parameters(parameters):
+    checker = load_checker()
+    source = f"""impl Owner {{
+    pub fn construct({parameters}) -> Self {{
+        let original_owner = PublicationMutex::default();
+        Self {{ original_owner }}
+    }}
+    fn sibling() {{ unrelated_owner(); }}
+}}
+"""
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Owner::construct",
+    )
+    assert item.rstrip().endswith("Self { original_owner }\n    }")
+    assert "PublicationMutex::default()" in item
+    assert "unrelated_owner" not in item
+
+
+@pytest.mark.parametrize("declaration", [
+    "fn absent(Config { capacity }: Config);",
+    "fn absent(Config { capacity }: Config, broken: [T));",
+    "fn absent(Config { capacity: Nested { limit } }: Config",
+])
+def test_rust_item_parser_does_not_borrow_sibling_after_missing_body(declaration):
+    checker = load_checker()
+    source = declaration + "\nfn sibling() { unrelated_owner(); }\n"
+    assert checker._extract_rust_binding_items(source, "fn", "absent") == ()
+
+
+def test_rust_item_parser_binds_actual_queue_constructor_body():
+    checker = load_checker()
+    source = (ROOT_DIR / "crates/iroha_core/src/queue.rs").read_text()
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Queue::from_config_with_router_limits_and_catalogs",
+    )
+    assert "Config {" in item
+    assert "lane_reservation_transition_lock: PublicationMutex::default()," in item
+    assert "Self {" in item
+
+
 def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:

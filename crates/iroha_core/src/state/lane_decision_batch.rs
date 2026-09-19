@@ -147,6 +147,36 @@ impl NativeExecutionCustody {
         &self.context
     }
 
+    /// Rejoin immutable Native custody after State journals have been detached.
+    pub(in crate::state) fn retains_carrier(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        self.context.context() == context
+            && self.seal.completed_write_set_root.is_some()
+            && self.seal.carrier == block.header()
+            && block.header().npos_effects_hash() == self.seal.npos_effects_hash
+            && block
+                .execution_context()
+                .map(|bundle| HashOf::new(&bundle.queue_plan_admissions))
+                == Some(self.seal.queue_plan_admissions_hash)
+            && block.external_entrypoints_slice().is_empty()
+            && block
+                .execution_context()
+                .and_then(|bundle| bundle.native_lane_decisions.as_deref())
+                == Some(self.seal.batch.as_ref())
+            && self.sources.len() == self.seal.batch.groups.len()
+            && self.executions.len() == self.sources.len()
+            && self
+                .sources
+                .iter()
+                .zip(&self.seal.batch.groups)
+                .all(|(source, wire)| {
+                    source.body().payload() == &wire.payload && source.decisions() == wire.decisions
+                })
+    }
+
     pub(in crate::state) fn retains_state(&self, state: &StateBlock<'_>) -> bool {
         state
             .native_lane_stage

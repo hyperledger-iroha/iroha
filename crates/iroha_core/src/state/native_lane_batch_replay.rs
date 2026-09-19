@@ -3,10 +3,11 @@
 //! Live proposal replay requires finalized first admissions and native Decisions,
 //! not finality of the proposed applying carrier. Historical inclusion additionally
 //! requires its private Kura seal. A post-closure State cannot replace the prefix.
-//! Neither entry point grants carrier validity, publication or lane Apply.
-//! The common producer owns actual Network/Pipeline/Time output retention.
-//! TODO: integrate remaining controls/State witness with the sole ValidBlock
-//! replay/Apply consumer; keep production native carrier admission disabled.
+//! Scratch replay grants no carrier validity. Source-owned candidate preparation
+//! joins common global checks to the actual Network/Pipeline/Time output owner.
+//! Neither path grants publication or lane Apply.
+//! TODO: complete remaining control/resource owners and the consuming publisher
+//! before joining production validation/Apply; keep native admission disabled.
 
 use super::{
     AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, MergeLedgerCommitError,

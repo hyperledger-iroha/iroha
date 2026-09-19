@@ -19,6 +19,26 @@ pub(super) struct PreparedCarrierGeometry {
     _certified_frontiers: BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
 }
 
+impl PreparedCarrierGeometry {
+    /// Identity-only geometry has no namespace transition to persist. A pending
+    /// lifecycle must retain its real geometry/Queue owner before publication.
+    /// TODO: consume the captured pending transition through the guarded Kura
+    /// geometry publisher; never treat its absence of permission as completion.
+    pub(super) fn is_identity_transition(&self, header: BlockHeader) -> bool {
+        self._header == header
+            && self._pending.is_none()
+            && self._certified_frontiers.is_empty()
+            && self._previous_runtime_catalog == self._accepted_runtime_catalog
+            && self._predecessor.lanes == self._successor.lanes
+            && self._predecessor.lane_count == self._successor.lane_count
+            && self._predecessor.lane_incarnation_lineage
+                == self._successor.lane_incarnation_lineage
+            && self._predecessor.owner_policy == self._successor.owner_policy
+            && self._predecessor.autoscale_last_transition_height
+                == self._successor.autoscale_last_transition_height
+    }
+}
+
 impl StateBlock<'_> {
     /// Capture original predecessor/successor identity without consulting live caches.
     ///

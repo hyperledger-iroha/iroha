@@ -29,6 +29,10 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Kura(KuraPublicationPreparationError),
     /// The retained durable checkpoint/finality no longer matches its original owner.
     Checkpoint(crate::kura::Error),
+    /// The original execution witness could not be persisted or reauthenticated.
+    ExecutionWitness(crate::kura::Error),
+    /// Retained archive persistence failed before the final joint lease.
+    Archive(super::archive_publication::CarrierArchivePublicationError),
     /// The named original State fence must release before another attempt.
     Fence {
         /// State lock which prevented acquisition.
@@ -79,7 +83,28 @@ struct CarrierFences<'target> {
     _kura: KuraPublicationLease<'target>,
 }
 
-/// All original component writers and State/Kura fences, with no publication API.
+impl<'target> CarrierFences<'target> {
+    /// Keep serialization of Apply while releasing every physical writer/fence
+    /// needed by derived persistence and cache readers after visibility changes.
+    fn release_for_completion(self) -> PublicationGuard<'target> {
+        let Self {
+            _state: state,
+            _kura: kura,
+        } = self;
+        let StateFences {
+            _write: write,
+            _lifecycle: lifecycle,
+            _commit: commit,
+        } = state;
+        drop(write);
+        drop(lifecycle);
+        drop(kura);
+        commit
+    }
+}
+
+/// All original component writers and State/Kura fences, with no independent
+/// authority to publish outside the complete carrier consumer.
 /// The full carrier owns this group before its capture and binding reservations.
 pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierComponents<'target> {
     world: PreparedWorld<'target, (), ()>,
@@ -118,7 +143,8 @@ impl AcquiredCarrierComponents<'_> {
 
 /// A complete decided carrier holding every original storage writer together.
 ///
-/// TODO: consume only through the complete source/durability/geometry publisher.
+/// The private terminal consumer refuses outstanding geometry and participant
+/// durability work. TODO: complete those owners and production resource admission.
 /// Acquiring these writers neither advances State visibility nor grants finality,
 /// retirement or Kura permission. No physical guard may cross an async wait.
 #[must_use = "keep the complete carrier until authorized publication or abort"]
@@ -128,6 +154,7 @@ pub(in crate::state::carrier_preparation::journals) struct PhysicallyPreparedCar
     BindingAdmission,
     Installation,
 > {
+    target: &'target State,
     decision: DecisionBoundCarrierJournals<
         Admission,
         BindingAdmission,
@@ -151,7 +178,8 @@ impl<Admission, BindingAdmission>
     ///
     /// The required callback covers all component staging/COW copies, retained
     /// readers, publication identities, durable body/finality/checkpoint decoding
-    /// and verification, and acquisition/abort bookkeeping. There
+    /// and verification, original execution-witness staging/promotion and final
+    /// proof authentication, and acquisition/abort bookkeeping. There
     /// is no implicit production capacity policy. A failed attempt returns the
     /// exact block, verified artifact, journals, effects and prior reservations.
     pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<
@@ -169,7 +197,7 @@ impl<Admission, BindingAdmission>
         // Shadow the original after declaring installation: even an unwind in
         // an early probe drops every retained original before its reservation.
         let installation;
-        let original = self;
+        let mut original = self;
         installation = match admit(&original, target) {
             Ok(guard) => guard,
             Err(error) => {
@@ -179,6 +207,36 @@ impl<Admission, BindingAdmission>
         if !target.matches_kura_instance(&original.journals.kura) {
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
+        }
+        if let Err(error) = original.publish_execution_witness() {
+            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;
+            let error = match error {
+                CarrierExecutionWitnessPublicationError::Kura(error) => {
+                    CarrierPhysicalPreparationError::Kura(error)
+                }
+                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {
+                    CarrierPhysicalPreparationError::Checkpoint(error)
+                }
+                CarrierExecutionWitnessPublicationError::Witness(error) => {
+                    CarrierPhysicalPreparationError::ExecutionWitness(error)
+                }
+            };
+            drop(installation);
+            return Err((original, error));
+        }
+        if let Err(error) = original.publish_archives() {
+            use super::archive_publication::CarrierArchivePublicationError;
+            let error = match error {
+                CarrierArchivePublicationError::Kura(error) => {
+                    CarrierPhysicalPreparationError::Kura(error)
+                }
+                CarrierArchivePublicationError::Checkpoint(error) => {
+                    CarrierPhysicalPreparationError::Checkpoint(error)
+                }
+                error => CarrierPhysicalPreparationError::Archive(error),
+            };
+            drop(installation);
+            return Err((original, error));
         }
         // Borrow the exact target's Arc, never a self-referential field inside
         // the retained carrier. Identity equality above joins that same owner.
@@ -200,6 +258,14 @@ impl<Admission, BindingAdmission>
             drop(kura);
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::Checkpoint(error)));
+        }
+        if let Err(error) = kura.reauthenticate_execution_witness(original.finality.artifact()) {
+            drop(kura);
+            drop(installation);
+            return Err((
+                original,
+                CarrierPhysicalPreparationError::ExecutionWitness(error),
+            ));
         }
         let state = match StateFences::try_acquire(target) {
             Ok(fences) => fences,
@@ -327,6 +393,7 @@ impl<Admission, BindingAdmission>
         }
         match prepared {
             Ok(journals) => Ok(PhysicallyPreparedCarrier {
+                target,
                 decision: retain!(journals),
                 installation,
             }),
@@ -354,6 +421,7 @@ impl<Admission, BindingAdmission, Installation>
         let installation;
         let binding_admission;
         let Self {
+            target: _,
             decision,
             installation: original_installation,
         } = self;
@@ -383,6 +451,9 @@ impl<Admission, BindingAdmission, Installation>
         }
     }
 }
+
+#[path = "publication.rs"]
+mod publication;
 
 #[cfg(test)]
 #[path = "physical_publication_tests.rs"]

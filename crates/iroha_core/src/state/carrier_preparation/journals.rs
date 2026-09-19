@@ -5,8 +5,9 @@
 //! Block hashes likewise move into an owned journal and release their read guard.
 //! World and runtime journals are captured after one complete resource admission.
 //! Archive plans retain original logical reservations and filesystem owners.
-//! TODO: join complete geometry/resource admission and exact QC/Kura/Native
-//! authorization before exposing the sole consuming publication operation.
+//! The private terminal consumer joins exact QC/Kura/Native custody and refuses
+//! outstanding namespace/participant obligations. TODO: complete those geometry
+//! and durability owners plus aggregate resource admission before live cutover.
 
 use super::super::*;
 use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};
@@ -113,6 +114,10 @@ struct RetainedCarrierEffects {
     merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,
     #[cfg(feature = "telemetry")]
+    committed_parliament_attempt_counts: Option<ParliamentAttemptCountsV1>,
+    #[cfg(feature = "telemetry")]
+    committed_citizens_total: Option<u64>,
+    #[cfg(feature = "telemetry")]
     pending_parliament_telemetry_events: Vec<(
         iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
         Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,
@@ -170,6 +175,17 @@ impl<'state> PreparedCarrier<'state> {
             .map(|archive| archive.prepare_candidate_capture(state.as_ref(), &state.state_ref.kura))
             .transpose()?;
         let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state);
+        #[cfg(feature = "telemetry")]
+        let committed_parliament_attempt_counts = state
+            .world
+            .parliament_attempt_counts
+            .is_dirty()
+            .then(|| *state.world.parliament_attempt_counts.get());
+        #[cfg(feature = "telemetry")]
+        let committed_citizens_total =
+            state.world.citizens.is_dirty().then(|| {
+                u64::try_from(state.world.citizens.len()).expect("citizen count fits u64")
+            });
         let StateBlock {
             state_ref,
             runtime_policy,
@@ -247,6 +263,10 @@ impl<'state> PreparedCarrier<'state> {
                 canonical_carrier_commit_metadata_authorization,
                 merge_carrier_entrypoints,
                 pending_public_lane_slash_observability,
+                #[cfg(feature = "telemetry")]
+                committed_parliament_attempt_counts,
+                #[cfg(feature = "telemetry")]
+                committed_citizens_total,
                 #[cfg(feature = "telemetry")]
                 pending_parliament_telemetry_events,
                 authenticated_replay_commit,

@@ -78,6 +78,34 @@ impl Kura {
     }
 }
 
+impl<'kura> KuraPublicationLease<'kura> {
+    /// Transfer the original geometry prelude's guards into the common boundary.
+    ///
+    /// The caller has already resolved canonical recovery, captured capacity under
+    /// prune/canonical and completed authorized GC before acquiring sidecar. No
+    /// fence is released or reacquired. This constructor is private to Kura.
+    pub(super) fn from_geometry_guards(
+        kura: &'kura Kura,
+        sidecar: PublicationGuard<'kura>,
+        geometry: PublicationGuard<'kura>,
+        canonical: PublicationGuard<'kura>,
+        prune: PublicationGuard<'kura>,
+    ) -> Self {
+        Self {
+            kura,
+            _sidecar: sidecar,
+            _geometry: geometry,
+            _canonical: canonical,
+            _prune: prune,
+        }
+    }
+
+    /// Access the original storage owner only inside already-guarded Kura code.
+    pub(super) fn kura_under_publication_guards(&self) -> &'kura Kura {
+        self.kura
+    }
+}
+
 impl KuraPublicationLease<'_> {
     /// Rejoin exact durable finality/checkpoint under this original held boundary.
     ///
@@ -93,6 +121,37 @@ impl KuraPublicationLease<'_> {
     ) -> super::Result<()> {
         self.kura
             .reauthenticate_checkpoint_under_publication_guards(receipt, finality, state_hash)
+    }
+
+    /// Require the final witness projection under the original publication fences.
+    ///
+    /// The caller has already joined exact durable body/finality/checkpoint on
+    /// this lease. Missing or staged-only material grants no permission. This
+    /// bounded reader acquires no publication lock, verifies every retained
+    /// witness root and the exact finality artifact, then rejoins read identity.
+    pub(crate) fn reauthenticate_execution_witness(
+        &self,
+        finality: &super::V2FinalityArtifact,
+    ) -> super::Result<()> {
+        let path = self.kura.kagemusha_finality_sidecar_path(finality.height);
+        let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "State publication requires its final execution witness sidecar".to_owned(),
+            ));
+        };
+        Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;
+        let directory = self.kura.kagemusha_finality_sidecar_dir();
+        let current = self.kura.regular_sidecar_metadata(&path, &directory)?;
+        if !current
+            .as_ref()
+            .is_some_and(|current| Kura::stable_sidecar_metadata_unchanged(&read.metadata, current))
+        {
+            return Err(Error::KagemushaFinalitySidecar(
+                "final execution witness sidecar changed during publication authentication"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 

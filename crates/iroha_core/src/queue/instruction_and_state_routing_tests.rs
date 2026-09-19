@@ -372,7 +372,7 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = fresh.lane_id;
     nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-    *state.nexus.get_mut() = nexus;
+    install_test_nexus_configuration(&mut state, nexus);
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue.routing_policy.read().default_lane,

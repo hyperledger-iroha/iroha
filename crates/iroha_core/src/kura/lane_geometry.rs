@@ -99,6 +99,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
+mod guarded_publication;
 mod historical_evidence;
 mod instance_recovery;
 mod native_evidence;
@@ -2928,7 +2929,7 @@ impl Kura {
         replaced_lane_ids: &BTreeSet<LaneId>,
         certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
         transition_height: Option<u64>,
-        mut namespace_receipts: Option<&mut Vec<StartupReplayNamespaceCreation>>,
+        namespace_receipts: Option<&mut Vec<StartupReplayNamespaceCreation>>,
     ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             *self.lane_storage_entries.lock() = self.lane_storage_entries_from_geometry(
@@ -2967,301 +2968,34 @@ impl Kura {
             self.validate_path_kind(&self.lane_geometry_journal_path(), false)?;
         let mut journal = self.read_lane_geometry_journal()?;
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
-        let current_applied_count = journal
-            .records
-            .iter()
-            .position(|record| record.phase == LaneGeometryPhase::RolledBack)
-            .unwrap_or(journal.records.len());
-        let uncertain_index = journal.records.iter().position(|record| {
-            matches!(
-                record.phase,
-                LaneGeometryPhase::Intent | LaneGeometryPhase::FilesApplied
-            )
-        });
-        let requested_transition_height = transition_height;
-        let record_matches = |index: usize, height: Option<u64>| {
-            journal.records.get(index).is_some_and(|record| {
-                height.is_none_or(|height| record.transition_height == height)
-                    && record.previous_catalog == previous_catalog
-                    && record.previous_lineage_root == previous_lineage_root
-                    && record.updated_catalog == updated_catalog
-                    && record.updated_lineage_root == updated_lineage_root
-            })
-        };
-        let frontier_retry = uncertain_index
-            .filter(|index| record_matches(*index, requested_transition_height))
-            .or_else(|| {
-                (current_applied_count < journal.records.len()
-                    && record_matches(current_applied_count, requested_transition_height))
-                .then_some(current_applied_count)
-            });
-        let published_retry = current_applied_count.checked_sub(1).filter(|index| {
-            let record = &journal.records[*index];
-            record.phase == LaneGeometryPhase::CatalogPublished
-                && record_matches(*index, requested_transition_height)
-        });
-        let retained_retry = frontier_retry.or(published_retry).or_else(|| {
-            let mut matches = journal
-                .records
-                .iter()
-                .enumerate()
-                .filter_map(|(index, record)| {
-                    (requested_transition_height.is_some_and(|height| {
-                        record.transition_height == height
-                            && record.previous_catalog == previous_catalog
-                            && record.previous_lineage_root == previous_lineage_root
-                            && record.updated_catalog == updated_catalog
-                            && record.updated_lineage_root == updated_lineage_root
-                    }))
-                    .then_some(index)
-                });
-            let candidate = matches.next()?;
-            matches.next().is_none().then_some(candidate)
-        });
-        let transition_height = match requested_transition_height {
-            Some(height) => height,
-            None => {
-                if let Some(index) = retained_retry {
-                    journal.records[index].transition_height
-                } else if let Some(last) = journal.records.last() {
-                    last.transition_height.checked_add(1).ok_or_else(|| {
-                        self.geometry_error(
-                            ErrorKind::InvalidData,
-                            "lane geometry transition height overflow",
-                        )
-                    })?
-                } else if let Some(checkpoint) = journal.checkpoint.as_ref() {
-                    checkpoint.snapshot_height.checked_add(1).ok_or_else(|| {
-                        self.geometry_error(
-                            ErrorKind::InvalidData,
-                            "lane geometry transition height overflow after checkpoint",
-                        )
-                    })?
-                } else {
-                    0
-                }
-            }
-        };
-        let existing_index = retained_retry
-            .filter(|index| journal.records[*index].transition_height == transition_height);
-        if previous_catalog == updated_catalog
-            && previous_lineage_root == updated_lineage_root
-            && existing_index.is_none()
-        {
-            let _sidecar_guard = self.sidecar_lock.lock();
-            if requested_transition_height.is_none() {
-                self.reconcile_lane_geometry_history(
-                    &mut journal,
-                    previous_catalog,
-                    previous_lineage_root,
-                )?;
-            } else {
-                self.reconcile_lane_geometry_history_to_count(
-                    &mut journal,
-                    previous_catalog,
-                    previous_lineage_root,
-                    current_applied_count,
-                )?;
-            }
-            self.ensure_authoritative_lane_markers_with_receipts(
-                previous,
-                previous_incarnations,
-                previous_activation_heights,
-                namespace_receipts.as_deref_mut(),
-            )?;
-            *self.lane_storage_entries.lock() = self.lane_storage_entries_from_geometry(
-                updated,
-                updated_incarnations,
-                updated_activation_heights,
-            )?;
-            return if journal_was_present || journal != LaneGeometryJournal::default() {
-                self.write_lane_geometry_journal(&journal)
-            } else {
-                Ok(())
-            };
-        }
-        if let Some(published_index) = published_retry
-            && existing_index == Some(published_index)
-            && published_index + 1 == current_applied_count
-        {
-            let _sidecar_guard = self.sidecar_lock.lock();
-            self.apply_geometry_operations_forward(
-                &journal.records[published_index].operations,
-                GeometryEvidencePolicy::RequireDurableEvidence,
-            )?;
-            self.ensure_authoritative_lane_markers_with_receipts(
-                updated,
-                updated_incarnations,
-                updated_activation_heights,
-                namespace_receipts.as_deref_mut(),
-            )?;
-            *self.lane_storage_entries.lock() = self.lane_storage_entries_from_geometry(
-                updated,
-                updated_incarnations,
-                updated_activation_heights,
-            )?;
-            return Ok(());
-        }
-        let desired_previous_count = existing_index.unwrap_or(current_applied_count);
-        if existing_index.is_none() && current_applied_count != journal.records.len() {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "lane geometry cannot branch across a retained rolled-back transition",
-            ));
-        }
-        let _sidecar_guard = self.sidecar_lock.lock();
-        self.reconcile_lane_geometry_history_to_count(
-            &mut journal,
-            previous_catalog,
-            previous_lineage_root,
-            desired_previous_count,
-        )?;
-        self.ensure_authoritative_lane_markers_with_receipts(
-            previous,
-            previous_incarnations,
-            previous_activation_heights,
-            namespace_receipts.as_deref_mut(),
-        )?;
-        if let Some(existing_index) = existing_index {
-            let existing = &journal.records[existing_index];
-            if existing.previous_catalog != previous_catalog
-                || existing.previous_lineage_root != previous_lineage_root
-                || existing.updated_catalog != updated_catalog
-                || existing.updated_lineage_root != updated_lineage_root
-                || existing.previous_bindings != previous_bindings
-                || existing.updated_bindings != updated_bindings
-            {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane geometry transition id collides with a different exact identity",
-                ));
-            }
-            let operations = journal.records[existing_index].operations.clone();
-            let retiring = self.geometry_retirement_identities(previous, &operations)?;
-            self.ensure_lane_retirement_admissible_locked(
-                pending_canonical_bytes,
-                &retiring,
-                &certified_retirements,
-            )?;
-            let mut prepared =
-                PreparedGeometryJournalTransition::prepare(self, journal, existing_index)?;
-            // Keep the retained terminal phase until the replay finishes. Downgrading a
-            // `RolledBack` record to `Intent` would let a crash erase the fact that subsequent
-            // recovery must authenticate existing storage rather than provision an empty pair.
-            self.apply_geometry_operations_forward(
-                prepared.operations(),
-                GeometryEvidencePolicy::RequireDurableEvidence,
-            )?;
-            prepared.persist(self, LaneGeometryPhase::FilesApplied)?;
-            self.ensure_authoritative_lane_markers_with_receipts(
-                updated,
-                updated_incarnations,
-                updated_activation_heights,
-                namespace_receipts.as_deref_mut(),
-            )?;
-            *self.lane_storage_entries.lock() = self.lane_storage_entries_from_geometry(
-                updated,
-                updated_incarnations,
-                updated_activation_heights,
-            )?;
-            return Ok(());
-        }
-        let last_sequence = journal
-            .records
-            .iter()
-            .map(|record| record.transition_sequence)
-            .chain(
-                journal
-                    .pending_archive_gc
-                    .iter()
-                    .map(|pending| pending.intent.transition_sequence),
-            )
-            .chain(
-                journal
-                    .checkpoint
-                    .iter()
-                    .filter_map(|checkpoint| checkpoint.transition_sequence),
-            )
-            .max();
-        let transition_sequence = match last_sequence {
-            Some(sequence) => sequence.checked_add(1).ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane geometry transition sequence overflow",
-                )
-            })?,
-            None => 0,
-        };
-        let transition_id = geometry_transition_id(
-            transition_sequence,
-            transition_height,
-            previous_catalog,
-            previous_lineage_root,
-            updated_catalog,
-            updated_lineage_root,
+        let lease = super::publication_lease::KuraPublicationLease::from_geometry_guards(
+            self,
+            self.sidecar_lock.lock(),
+            _geometry_guard,
+            _canonical_chain_guard,
+            _prune_guard,
         );
-        let operations = self.build_geometry_operations(
-            transition_id,
-            &previous_bindings,
-            &updated_bindings,
-            replaced_lane_ids,
-        )?;
-        let retiring = self.geometry_retirement_identities(previous, &operations)?;
-        self.ensure_lane_retirement_admissible_locked(
-            pending_canonical_bytes,
-            &retiring,
-            &certified_retirements,
-        )?;
-        let intent = LaneGeometryIntent {
-            transition_id,
-            transition_sequence,
-            transition_height,
-            previous_catalog,
+        lease.apply_prepared_lane_geometry(guarded_publication::PreparedLaneGeometryTransition {
+            previous,
+            updated,
+            previous_incarnations,
+            updated_incarnations,
+            previous_activation_heights,
+            updated_activation_heights,
             previous_lineage_root,
-            updated_catalog,
             updated_lineage_root,
+            replaced_lane_ids,
+            certified_retirements,
+            transition_height,
+            namespace_receipts,
+            pending_canonical_bytes,
             previous_bindings,
             updated_bindings,
-            phase: LaneGeometryPhase::Intent,
-            operations,
-        };
-        journal.records.push(intent);
-        let record_index = journal.records.len() - 1;
-        let mut prepared = PreparedGeometryJournalTransition::prepare(self, journal, record_index)?;
-        prepared.persist(self, LaneGeometryPhase::Intent)?;
-        if let Err(error) = self.apply_geometry_operations_forward(
-            prepared.operations(),
-            GeometryEvidencePolicy::FreshJournalIntent,
-        ) {
-            if let Err(rollback_error) = self.apply_geometry_operations_rollback(
-                prepared.operations(),
-                GeometryEvidencePolicy::AllowJournalIntentProvisioning,
-            ) {
-                let ambiguous = Error::IO(
-                    std::io::Error::other(format!(
-                        "lane geometry apply failed ({error}); rollback failed ({rollback_error})"
-                    )),
-                    self.lane_geometry_journal_path(),
-                );
-                self.poison_canonical_storage("lane geometry apply rollback", &ambiguous);
-                return Err(Error::CanonicalStoragePoisoned);
-            }
-            prepared.persist(self, LaneGeometryPhase::RolledBack)?;
-            return Err(error);
-        }
-        prepared.persist(self, LaneGeometryPhase::FilesApplied)?;
-        self.ensure_authoritative_lane_markers_with_receipts(
-            updated,
-            updated_incarnations,
-            updated_activation_heights,
-            namespace_receipts.as_deref_mut(),
-        )?;
-        *self.lane_storage_entries.lock() = self.lane_storage_entries_from_geometry(
-            updated,
-            updated_incarnations,
-            updated_activation_heights,
-        )?;
-        Ok(())
+            previous_catalog,
+            updated_catalog,
+            journal_was_present,
+            journal,
+        })
     }
     /// Mark the transition targeting the authoritative catalog as published.
     #[cfg(test)]
@@ -3337,145 +3071,22 @@ impl Kura {
             self.require_lane_marker(primary_binding)?;
         }
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
-        let journal_path = self.lane_geometry_journal_path();
-        let publication_temp = self.store_root.join(JOURNAL_TEMP_FILE_NAME);
-        let prior_journal_bytes = self.read_geometry_file_bytes(&journal_path)?;
-        let publication_temp_preexisted = self.validate_path_kind(&publication_temp, false)?;
-        let uncertain = journal.records.iter().position(|record| {
-            matches!(
-                record.phase,
-                LaneGeometryPhase::Intent | LaneGeometryPhase::FilesApplied
-            )
-        });
-        if let Some(index) = uncertain {
-            let record = &journal.records[index];
-            if record.updated_catalog != fingerprint
-                || record.updated_lineage_root != lineage_root
-                || record.updated_bindings != bindings
-            {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "catalog publication does not match the uncertain geometry identity",
-                ));
-            }
-            journal.records[index].phase = LaneGeometryPhase::CatalogPublished;
-        } else if !journal.records.is_empty() {
-            let applied_count = journal
-                .records
-                .iter()
-                .position(|record| record.phase == LaneGeometryPhase::RolledBack)
-                .unwrap_or(journal.records.len());
-            let current_matches = if applied_count == 0 {
-                let record = &journal.records[0];
-                record.previous_catalog == fingerprint
-                    && record.previous_lineage_root == lineage_root
-                    && record.previous_bindings == bindings
-            } else {
-                let record = &journal.records[applied_count - 1];
-                record.updated_catalog == fingerprint
-                    && record.updated_lineage_root == lineage_root
-                    && record.updated_bindings == bindings
-            };
-            if !current_matches {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "catalog publication does not match the durable geometry frontier identity",
-                ));
-            }
-        } else if journal.checkpoint.as_ref().is_some_and(|checkpoint| {
-            checkpoint.catalog != fingerprint
-                || checkpoint.lineage_root != lineage_root
-                || checkpoint.bindings != bindings
-        }) {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "catalog publication does not match the compacted geometry identity",
-            ));
-        }
-        if let Some(attempted) = configured_baseline {
-            match journal.configured_catalog_hash {
-                Some(expected) if expected == attempted => {}
-                None => {
-                    return Err(self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "configured catalog publication has no authenticated startup baseline",
-                    ));
-                }
-                Some(expected) => {
-                    return Err(self.geometry_error_owned(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
-                        ),
-                    ));
-                }
-            }
-            let primary_binding = bindings.first().ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "configured catalog publication has no primary geometry binding",
-                )
-            })?;
-            if primary_binding.lane_id != LaneId::SINGLE || primary_binding.activation_height != 0 {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "configured primary geometry binding is not lane zero at activation zero",
-                ));
-            }
-            match journal.configured_primary_binding.as_ref() {
-                Some(expected) if expected == primary_binding => {}
-                None => {
-                    return Err(self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "configured catalog publication has no authenticated primary geometry anchor",
-                    ));
-                }
-                Some(_) => {
-                    return Err(self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "configured primary geometry binding differs from its durable anchor",
-                    ));
-                }
-            }
-            self.require_lane_marker(primary_binding)?;
-        }
-        self.validate_lane_geometry_journal(&journal)?;
-        let published_journal_bytes = journal.encode();
-        // Use the same encoded bytes for the target replacement and rollback comparison. This
-        // makes the exact value whose publication was attempted explicit even if the encoder is
-        // changed in the future.
-        let publication_result = self.atomic_write_geometry_file(
-            &journal_path,
-            &publication_temp,
-            &published_journal_bytes,
+        let lease = super::publication_lease::KuraPublicationLease::from_geometry_guards(
+            self,
+            self.sidecar_lock.lock(),
+            _geometry_guard,
+            _canonical_chain_guard,
+            _prune_guard,
         );
-        #[cfg(test)]
-        let publication_result = publication_result.and_then(|()| {
-            if self
-                .fail_next_lane_geometry_publication_after_write
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                return Err(self.geometry_error(
-                    ErrorKind::Other,
-                    "lane geometry publication failed after journal replacement for test injection",
-                ));
-            }
-            Ok(())
-        });
-        if let Err(publication_error) = publication_result {
-            if let Err(restore_error) = self.restore_lane_geometry_journal_file(
-                prior_journal_bytes.as_deref(),
-                &published_journal_bytes,
-                publication_temp_preexisted,
-            ) {
-                return Err(Error::LaneGeometryPublicationRestoreFailed {
-                    publication: publication_error.to_string(),
-                    restoration: restore_error.to_string(),
-                });
-            }
-            return Err(publication_error);
-        }
-        Ok(())
+        lease.publish_prepared_lane_geometry_catalog(
+            guarded_publication::PreparedLaneGeometryCatalog {
+                bindings,
+                fingerprint,
+                lineage_root,
+                configured_baseline,
+                journal,
+            },
+        )
     }
     #[cfg(test)]
     pub(crate) fn fail_next_lane_geometry_publication_for_test(&self) {
@@ -13024,6 +12635,7 @@ mod tests {
     include!("lane_geometry_tests/04_physical_resource_accounting.rs");
     include!("lane_geometry_tests/05_prepared_journal.rs");
     include!("lane_geometry_tests/06_native_observation.rs");
+    include!("lane_geometry_tests/07_guarded_publication.rs");
 }
 
 include!("startup_replay_geometry_binding.rs");

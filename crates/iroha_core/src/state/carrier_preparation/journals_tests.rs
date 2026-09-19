@@ -408,9 +408,13 @@ fn archive_capacity_failure_drops_candidate_journals_without_artifact_writes() {
         .unwrap();
 }
 
-#[test]
-fn prepared_archive_projections_survive_state_journal_decomposition() {
-    use crate::query::reputation_finalized::ReputationFinalizedArchiveBounds;
+/// Genuine signed four-validator genesis with both governed archive projections.
+pub(super) fn archive_fixture() -> (
+    Box<State>,
+    iroha_data_model::block::SignedBlock,
+    crate::sumeragi::network_topology::Topology,
+    iroha_data_model::block::consensus_v2::HeightContext,
+) {
     use iroha_data_model::{
         isi::{
             Grant, Register,
@@ -521,6 +525,13 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
         .into(),
         SetSorafsReservePolicy::new(reserve_policy).into(),
     ]);
+    (state, proposal, topology, context)
+}
+
+#[test]
+fn prepared_archive_projections_survive_state_journal_decomposition() {
+    use crate::query::reputation_finalized::ReputationFinalizedArchiveBounds;
+    let (state, proposal, topology, context) = archive_fixture();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let directory_path = directory.path().canonicalize().unwrap();

@@ -345,3 +345,134 @@ def test_native_control_recording_refuses_capture_before_final_contexts(fixture)
     errors = validate(fixture)
     assert any("recorder lifecycle" in error for error in errors), errors
     assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    ("PREFIX", "retains_carrier", "native.retains_carrier(block, context)", "true"),
+    ("NATIVE_STAGE", "retains_carrier", "self.context.context() == context", "true"),
+    ("NATIVE_STAGE", "retains_carrier", "self.seal.completed_write_set_root.is_some()", "true"),
+    ("NATIVE_STAGE", "retains_carrier", "source.decisions() == wire.decisions", "true"),
+    ("ARCHIVE_CARRIER", "publish_archives", "drop(lease);", "// drop(lease);"),
+    ("ARCHIVE_CARRIER", "publish_archives", "self.finality.artifact()", "other.finality.artifact()"),
+    ("ARCHIVE_CARRIER", "publish_archives", "self.checkpoint.finality_receipt()", "other.checkpoint.finality_receipt()"),
+    ("ARCHIVE_CARRIER", "publish_archives", ".publish(receipt)", ".publish(other_receipt)"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "original.publish_archives()", "Ok::<_, CarrierArchivePublicationError>(())"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "admit(&original, target)", "admit(&other, target)"),
+    ("GEOMETRY_CARRIER", "is_identity_transition", "self._pending.is_none()", "true"),
+    ("GEOMETRY_CARRIER", "is_identity_transition", "self._previous_runtime_catalog == self._accepted_runtime_catalog", "true"),
+    ("TERMINAL_CARRIER", "publish", "journals.effects.replay_prevalidation", "false"),
+    ("TERMINAL_CARRIER", "publish", "journals.native_amx_manifest.entries().is_empty()", "true"),
+    ("TERMINAL_CARRIER", "publish", "return Err((self.abort(), error));", "return Err((other.abort(), error));"),
+    ("TERMINAL_CARRIER", "publish", "runtime.publish();", "// runtime.publish();"),
+    ("TERMINAL_CARRIER", "publish", "world_effects.publish(target);", "// world_effects.publish(target);"),
+    ("TERMINAL_CARRIER", "publish", "source: source_prefix,", "source: other_prefix,"),
+])
+def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner),
+                              f"fn {symbol}", old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("transactions.publish();", "transactions.publish(); return Err(other);"),
+    ("transactions.publish();", "transactions.publish(); fallible_effect()?;"),
+    ("transactions.publish();", "transactions.publish(); transactions.publish();"),
+    ("drop(generation);", "drop(generation); target.begin_state_view_write();"),
+])
+def test_terminal_carrier_rejects_post_write_retry_and_repeated_visibility(fixture, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.TERMINAL_CARRIER,
+                              "fn publish(", old, new)
+    errors = validate(fixture)
+    assert any("terminal lifecycle" in error or "post-write retry" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    ("WITNESS_CARRIER", "publish_execution_witness", "drop(lease);", "// drop(lease);"),
+    ("WITNESS_CARRIER", "publish_execution_witness", "self.journals.source_prefix.witness()", "other.source_prefix.witness()"),
+    ("WITNESS_CARRIER", "publish_execution_witness", "self.journals.execution_prefix", "other.execution_prefix"),
+    ("WITNESS_CARRIER", "publish_execution_witness", "self.checkpoint.finality_receipt()", "other.checkpoint.finality_receipt()"),
+    ("WITNESS_LEASE", "reauthenticate_execution_witness", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;", "// Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;"),
+    ("WITNESS_LEASE", "reauthenticate_execution_witness", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "true"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "original.publish_execution_witness()", "Ok::<_, CarrierExecutionWitnessPublicationError>(())"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "kura.reauthenticate_execution_witness(original.finality.artifact())", "Ok::<(), crate::kura::Error>(())"),
+])
+def test_terminal_carrier_requires_its_actual_durable_execution_witness(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner),
+                              f"fn {symbol}", old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("QUEUE_OWNER", "pub struct Queue {", "lane_reservation_transition_lock: PublicationMutex,", "lane_reservation_transition_lock: parking_lot::Mutex<()>,"),
+    ("QUEUE_OWNER", "fn from_config_with_router_limits_and_catalogs", "lane_reservation_transition_lock: PublicationMutex::default(),", "lane_reservation_transition_lock: other_mutex,"),
+    ("QUEUE_OWNER", "struct QueueLaneRetirementObserver", "_reservation_transition_guard: PublicationGuard<'queue>", "_reservation_transition_guard: parking_lot::MutexGuard<'queue, ()>"),
+    ("QUEUE_OWNER", "fn try_lock_lane_retirement_observer", "self.lane_reservation_transition_lock.try_lock_or_wait()?", "other.lane_reservation_transition_lock.try_lock_or_wait()?"),
+    ("QUEUE_OWNER", "fn try_lock_lane_retirement_observer", "_reservation_transition_guard: guard,", "_reservation_transition_guard: other_guard,"),
+    ("QUEUE_OWNER", "fn lane_has_pending_work_under_retirement_observer", "key.lane_incarnation == lane_incarnation", "true"),
+    ("QUEUE_OWNER", "fn lane_has_pending_work_under_retirement_observer", "!reservation_owned_hashes.contains(entry.key())", "true"),
+    ("PUBLICATION_MUTEX", "fn wrap", "self.released.guard(PhysicalPublicationGuard", "self.released.poisoning_guard(PhysicalPublicationGuard"),
+    ("PUBLICATION_MUTEX", "fn try_lock_or_wait", "self.released.observe()", "other.released.observe()"),
+    ("WITNESS_LEASE", "fn from_geometry_guards", "_canonical: canonical,", "_canonical: prune,"),
+    ("GEOMETRY_OWNER", "fn apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner", "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?", "0"),
+    ("GEOMETRY_OWNER", "fn mark_lane_geometry_catalog_published_with_lineage_root", "self.finish_pending_lane_geometry_gc_locked(&mut journal)?", "()"),
+    ("GEOMETRY_OWNER", "fn mark_lane_geometry_catalog_published_with_lineage_root", "self.sidecar_lock.lock()", "other.sidecar_lock.lock()"),
+    ("GUARDED_GEOMETRY", "fn apply_prepared_lane_geometry", "let kura = self.kura_under_publication_guards();", "let kura = other.kura_under_publication_guards();"),
+    ("GUARDED_GEOMETRY", "fn apply_prepared_lane_geometry", "kura.ensure_lane_retirement_admissible_locked(\n                pending_canonical_bytes,\n                &retiring,\n                &certified_retirements,\n            )?;", "// retained retry admission removed"),
+    ("GUARDED_GEOMETRY", "fn apply_prepared_lane_geometry", "prepared.persist(kura, LaneGeometryPhase::Intent)?;", "// no durable intent"),
+    ("GUARDED_GEOMETRY", "fn publish_prepared_lane_geometry_catalog", "record.updated_bindings != bindings", "false"),
+    ("GUARDED_GEOMETRY", "fn publish_prepared_lane_geometry_catalog", "kura.restore_lane_geometry_journal_file(", "kura.unchecked_replace_journal("),
+])
+def test_queue_geometry_owner_rejects_semantic_substitution(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner),
+                              anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "both retained retry" in error
+               for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,operation", [
+    ("apply_prepared_lane_geometry", "let _again = kura.sidecar_lock.lock();"),
+    ("publish_prepared_lane_geometry_catalog", "let _again = kura.lane_geometry_lock.lock();"),
+    ("apply_prepared_lane_geometry", "kura.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;"),
+    ("publish_prepared_lane_geometry_catalog", "kura.finish_pending_lane_geometry_gc_locked(&mut journal)?;"),
+])
+def test_guarded_geometry_rejects_locking_prelude_reentry(fixture, symbol, operation):
+    root, helper, checker, _ = fixture
+    original = "let kura = self.kura_under_publication_guards();"
+    helper.replace_once_after(root / checker.native_preparation_contract.GUARDED_GEOMETRY,
+                              f"fn {symbol}", original, original + "\n" + operation)
+    errors = validate(fixture)
+    assert any("reenters prelude or locking owner" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+def test_queue_release_observation_must_precede_actual_probe(fixture):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.PUBLICATION_MUTEX,
+                              "fn try_lock_or_wait",
+                              "let wait = self.released.observe();\n        self.try_lock().ok_or(wait)",
+                              "let result = self.try_lock().ok_or(wait);\n        let wait = self.released.observe();\n        result")
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error for error in errors), errors
+
+
+def test_geometry_capacity_and_gc_remain_before_sidecar_transfer(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.GEOMETRY_OWNER
+    anchor = "fn apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner"
+    capacity = "let pending_canonical_bytes =\n            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;"
+    helper.replace_once_after(path, anchor, capacity, "")
+    helper.replace_once_after(path, anchor, "lease.apply_prepared_lane_geometry(",
+                              capacity + "\n        lease.apply_prepared_lane_geometry(")
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error for error in errors), errors

@@ -11927,6 +11927,420 @@
             "Option<(&'state State, &SignedBlock, u64)>",
             "self.is_current().then_some((self.state, &self.input, self.generation))"
           ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "method",
+          "symbol": "ValidatedExecutionPrefix::retains_carrier",
+          "required_tokens": [
+            "self.sealed.proposal() == block.hash()",
+            "self.sealed.sources().proposal() == block.hash()",
+            "PrefixSourceAuthority::Ordinary => { !self.sealed.sources().is_native() && !block.execution_context().is_some_and(|bundle| bundle.native_lane_decisions.is_some()) }",
+            "PrefixSourceAuthority::Native(native) => { self.sealed.sources().is_native() && native.retains_carrier(block, context) }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "NativeExecutionCustody::retains_carrier",
+          "required_tokens": [
+            "self.context.context() == context",
+            "self.seal.completed_write_set_root.is_some()",
+            "self.seal.carrier == block.header()",
+            "block.header().npos_effects_hash() == self.seal.npos_effects_hash",
+            "Some(self.seal.queue_plan_admissions_hash)",
+            "block.external_entrypoints_slice().is_empty()",
+            "Some(self.seal.batch.as_ref())",
+            "self.sources.len() == self.seal.batch.groups.len()",
+            "self.executions.len() == self.sources.len()",
+            "source.body().payload() == &wire.payload && source.decisions() == wire.decisions"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/archive_publication.rs",
+          "kind": "fn",
+          "symbol": "publish_archives",
+          "required_tokens": [
+            "&mut self",
+            "try_publication_lease()",
+            "&self.checkpoint",
+            "self.finality.artifact()",
+            "self.journals.checkpoint",
+            "drop(lease)",
+            "self.checkpoint.finality_receipt()",
+            "self.journals.provider_capture.as_mut()",
+            "self.journals.reputation_capture.as_mut()",
+            "provider.publish(receipt)",
+            "reputation.publish(receipt)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "fn",
+          "symbol": "try_prepare_physical",
+          "required_tokens": [
+            "admit: impl FnOnce(&Self, &State)",
+            "admit(&original, target)",
+            "target.matches_kura_instance(&original.journals.kura)",
+            "original.publish_execution_witness()",
+            "original.publish_archives()",
+            "target.kura.try_publication_lease()",
+            "kura.reauthenticate_checkpoint(",
+            "kura.reauthenticate_execution_witness(original.finality.artifact())",
+            "StateFences::try_acquire(target)",
+            "journals.try_map_components(",
+            "Ok(PhysicallyPreparedCarrier { target, decision: retain!(journals), installation, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::is_identity_transition",
+          "required_tokens": [
+            "self._header == header",
+            "self._pending.is_none()",
+            "self._certified_frontiers.is_empty()",
+            "self._previous_runtime_catalog == self._accepted_runtime_catalog",
+            "self._predecessor.lanes == self._successor.lanes",
+            "self._predecessor.lane_count == self._successor.lane_count",
+            "self._predecessor.lane_incarnation_lineage == self._successor.lane_incarnation_lineage",
+            "self._predecessor.owner_policy == self._successor.owner_policy",
+            "self._predecessor.autoscale_last_transition_height == self._successor.autoscale_last_transition_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "CarrierFences::release_for_completion",
+          "required_tokens": [
+            "drop(write)",
+            "drop(lifecycle)",
+            "drop(kura)",
+            "commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/publication.rs",
+          "kind": "method",
+          "symbol": "PhysicallyPreparedCarrier::publish",
+          "required_tokens": [
+            "journals.effects.replay_prevalidation",
+            "journals.source_prefix.retains_carrier(journals.valid.as_ref(), &journals.context)",
+            "journals.effects.header != journals.valid.as_ref().header()",
+            "journals.staged_legacy_source()",
+            "journals.geometry.is_identity_transition(journals.effects.header)",
+            "journals.effects.pending_autoscale_lifecycle.is_some()",
+            "journals.native_amx_manifest.entries().is_empty()",
+            "return Err((self.abort(), error))",
+            "target.begin_state_view_write()",
+            "transactions.publish()",
+            "runtime.publish()",
+            "world.publish()",
+            "world_effects.publish(target)",
+            "target.apply_committed_da_commitment_bundle(pending, false)",
+            "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
+            "block_hashes.publish()",
+            "target.update_latest_block_header_cache(effects.header)",
+            "drop(generation)",
+            "fences.release_for_completion()",
+            "effects.publish_observability(target)",
+            "target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)",
+            "tiered_snapshot.publish(target, false)",
+            "target.enforce_nexus_storage_budget(height)",
+            "target.persist_query_index_status(height, Some(effects.header.hash()))",
+            "publication_events.append(&mut extra_events)",
+            "drop(commit)",
+            "Ok(PublishedCarrier {",
+            "source: source_prefix",
+            "admission, binding, installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_witness_publication.rs",
+          "kind": "fn",
+          "symbol": "publish_execution_witness",
+          "required_tokens": [
+            "&mut self",
+            "try_publication_lease()",
+            "&self.checkpoint",
+            "self.finality.artifact()",
+            "self.journals.checkpoint",
+            "drop(lease)",
+            "stage_kagemusha_finality_sidecar(",
+            "self.finality.artifact().height",
+            "self.finality.artifact().block_hash",
+            "self.journals.source_prefix.witness()",
+            "self.journals.execution_prefix",
+            "self.journals.source_prefix.parliament_timed_ovn_casting_bindings().unwrap_or(&[])",
+            "promote_kagemusha_finality_sidecar(self.finality.artifact(), self.checkpoint.finality_receipt(),)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::reauthenticate_execution_witness",
+          "required_tokens": [
+            "self.kura.kagemusha_finality_sidecar_path(finality.height)",
+            "let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else { return Err(",
+            "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?",
+            "self.kura.regular_sidecar_metadata(&path, &directory)?",
+            "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)",
+            "Ok(())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "Queue",
+          "required_tokens": [
+            "lane_reservation_transition_lock: PublicationMutex,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::from_config_with_router_limits_and_catalogs",
+          "required_tokens": [
+            "lane_reservation_transition_lock: PublicationMutex::default(),"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "QueueLaneRetirementObserver",
+          "required_tokens": [
+            "queue: &'queue Queue",
+            "_reservation_transition_guard: PublicationGuard<'queue>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lock_lane_retirement_observer",
+          "required_tokens": [
+            "queue: self",
+            "_reservation_transition_guard: self.lane_reservation_transition_lock.lock()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::try_lock_lane_retirement_observer",
+          "required_tokens": [
+            "Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait>",
+            "let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;",
+            "Ok(QueueLaneRetirementObserver { queue: self, _reservation_transition_guard: guard, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::lane_has_pending_work",
+          "required_tokens": [
+            "self.queue.lane_has_pending_work_under_retirement_observer(lane_id, dataspace_id, lane_incarnation,)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_has_pending_work_under_retirement_observer",
+          "required_tokens": [
+            "hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted()",
+            "let _queue_guard = self.push_remove_lock.lock();",
+            "if self.transaction_selection_durability_faulted() { return true; }",
+            "let reservations = self.lane_reservations.lock();",
+            "key.lane_id == lane_id && key.dataspace_id == dataspace_id && key.lane_incarnation == lane_incarnation",
+            "reservations.live_by_entrypoint.values().any(|record| exact_reservation(&record.key))",
+            "reservations.commit_barriers.iter().any(exact_reservation)",
+            "reservations.release_barriers.iter().any(|barrier| { barrier.lane_id == lane_id && barrier.dataspace_id == dataspace_id && barrier.lane_incarnation == lane_incarnation })",
+            "reservations.completed_releases.iter().any(|completion| { completion.barrier.lane_id == lane_id && completion.barrier.dataspace_id == dataspace_id && completion.barrier.lane_incarnation == lane_incarnation })",
+            "drop(reservations);",
+            "!reservation_owned_hashes.contains(entry.key())",
+            "self.txs.contains_key(entry.key())",
+            "entry.value().legs().into_iter().any(|leg|",
+            "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationMutex",
+          "required_tokens": [
+            "inner: parking_lot::Mutex<()>",
+            "released: mv::ReleaseNotification"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationGuard",
+          "required_tokens": [
+            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::wrap",
+          "required_tokens": [
+            "guard: parking_lot::MutexGuard<'state, ()>",
+            "self.released.guard(PhysicalPublicationGuard { guard: Some(guard), fair: false, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::lock",
+          "required_tokens": [
+            "self.wrap(self.inner.lock())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::try_lock",
+          "required_tokens": [
+            "self.inner.try_lock().map(|guard| self.wrap(guard))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::try_lock_or_wait",
+          "required_tokens": [
+            "let wait = self.released.observe();",
+            "self.try_lock().ok_or(wait)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PhysicalPublicationGuard<'_>::drop",
+          "required_tokens": [
+            "if let Some(guard) = self.guard.take()",
+            "if self.fair",
+            "parking_lot::MutexGuard::unlock_fair(guard);",
+            "else { drop(guard); }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "struct",
+          "symbol": "KuraPublicationLease",
+          "required_tokens": [
+            "kura: &'kura Kura",
+            "_sidecar: PublicationGuard<'kura>",
+            "_geometry: PublicationGuard<'kura>",
+            "_canonical: PublicationGuard<'kura>",
+            "_prune: PublicationGuard<'kura>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::from_geometry_guards",
+          "required_tokens": [
+            "pub(super) fn from_geometry_guards(",
+            "kura: &'kura Kura",
+            "sidecar: PublicationGuard<'kura>",
+            "geometry: PublicationGuard<'kura>",
+            "canonical: PublicationGuard<'kura>",
+            "prune: PublicationGuard<'kura>",
+            "Self { kura, _sidecar: sidecar, _geometry: geometry, _canonical: canonical, _prune: prune, }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::kura_under_publication_guards",
+          "required_tokens": [
+            "pub(super) fn kura_under_publication_guards(&self) -> &'kura Kura",
+            "self.kura"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "method",
+          "symbol": "Kura::apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner",
+          "required_tokens": [
+            "let _prune_guard = self.prune_lock.lock();",
+            "self.ensure_prune_recovery_not_required()?;",
+            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "self.resolve_canonical_storage_before_mutation()?;",
+            "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;",
+            "let _geometry_guard = self.lane_geometry_lock.lock();",
+            "let mut journal = self.read_lane_geometry_journal()?;",
+            "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
+            "KuraPublicationLease::from_geometry_guards(self, self.sidecar_lock.lock(), _geometry_guard, _canonical_chain_guard, _prune_guard,)",
+            "lease.apply_prepared_lane_geometry(guarded_publication::PreparedLaneGeometryTransition {",
+            "certified_retirements, transition_height, namespace_receipts, pending_canonical_bytes,",
+            "previous_bindings, updated_bindings, previous_catalog, updated_catalog, journal_was_present, journal"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "method",
+          "symbol": "Kura::mark_lane_geometry_catalog_published_with_lineage_root",
+          "required_tokens": [
+            "let _prune_guard = self.prune_lock.lock();",
+            "self.ensure_prune_recovery_not_required()?;",
+            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "self.resolve_canonical_storage_before_mutation()?;",
+            "let _geometry_guard = self.lane_geometry_lock.lock();",
+            "let mut journal = self.read_lane_geometry_journal()?;",
+            "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
+            "KuraPublicationLease::from_geometry_guards(self, self.sidecar_lock.lock(), _geometry_guard, _canonical_chain_guard, _prune_guard,)",
+            "lease.publish_prepared_lane_geometry_catalog(guarded_publication::PreparedLaneGeometryCatalog { bindings, fingerprint, lineage_root, configured_baseline, journal, },)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/guarded_publication.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::apply_prepared_lane_geometry",
+          "required_tokens": [
+            "pub(in crate::kura::lane_geometry) fn apply_prepared_lane_geometry(",
+            "let kura = self.kura_under_publication_guards();",
+            "PreparedLaneGeometryTransition {",
+            "certified_retirements, transition_height, mut namespace_receipts, pending_canonical_bytes,",
+            "updated_catalog, journal_was_present, mut journal, } = prepared;",
+            "record.previous_catalog == previous_catalog",
+            "record.previous_lineage_root == previous_lineage_root",
+            "record.updated_catalog == updated_catalog",
+            "record.updated_lineage_root == updated_lineage_root",
+            "existing.previous_bindings != previous_bindings",
+            "existing.updated_bindings != updated_bindings",
+            "kura.ensure_lane_retirement_admissible_locked(pending_canonical_bytes, &retiring, &certified_retirements,)?;",
+            "PreparedGeometryJournalTransition::prepare(kura, journal, record_index)?",
+            "prepared.persist(kura, LaneGeometryPhase::Intent)?;",
+            "GeometryEvidencePolicy::FreshJournalIntent",
+            "GeometryEvidencePolicy::AllowJournalIntentProvisioning",
+            "kura.poison_canonical_storage(\"lane geometry apply rollback\", &ambiguous);",
+            "prepared.persist(kura, LaneGeometryPhase::RolledBack)?;",
+            "prepared.persist(kura, LaneGeometryPhase::FilesApplied)?;",
+            "kura.ensure_authoritative_lane_markers_with_receipts(",
+            "*kura.lane_storage_entries.lock() = kura.lane_storage_entries_from_geometry("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/guarded_publication.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::publish_prepared_lane_geometry_catalog",
+          "required_tokens": [
+            "pub(in crate::kura::lane_geometry) fn publish_prepared_lane_geometry_catalog(",
+            "let kura = self.kura_under_publication_guards();",
+            "PreparedLaneGeometryCatalog { bindings, fingerprint, lineage_root, configured_baseline, mut journal, } = prepared;",
+            "let prior_journal_bytes = kura.read_geometry_file_bytes(&journal_path)?;",
+            "record.updated_catalog != fingerprint",
+            "record.updated_lineage_root != lineage_root",
+            "record.updated_bindings != bindings",
+            "journal.records[index].phase = LaneGeometryPhase::CatalogPublished;",
+            "kura.validate_lane_geometry_journal(&journal)?;",
+            "let published_journal_bytes = journal.encode();",
+            "kura.atomic_write_geometry_file(&journal_path, &publication_temp, &published_journal_bytes,)",
+            "kura.restore_lane_geometry_journal_file(prior_journal_bytes.as_deref(), &published_journal_bytes, publication_temp_preexisted,)",
+            "Error::LaneGeometryPublicationRestoreFailed",
+            "return Err(publication_error);"
+          ]
         }
       ]
     },

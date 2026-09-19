@@ -121,9 +121,17 @@ fn native_preparation_new_admission(
     input
 }
 
+// End the sizeable genesis/admission setup frames before retaining the complete
+// prepared journals and running their assertions on the default test stack.
+#[inline(never)]
 fn assert_native_preparation_success(atomic: bool) {
-    use super::NativeLaneBatchSourcePreparationV1;
     let fixture = native_control_execution_fixture(atomic);
+    assert_native_preparation_with_fixture(atomic, fixture);
+}
+
+#[inline(never)]
+fn assert_native_preparation_with_fixture(atomic: bool, fixture: NativeControlExecutionFixture) {
+    use super::NativeLaneBatchSourcePreparationV1;
     let pulse = native_control_requested_beacon(&fixture);
     let state = &fixture.economic.native.state;
     let admission = native_preparation_new_admission(&fixture);
@@ -454,24 +462,43 @@ state_test! { sync native_preparation_rejects_stale_source_without_execution_or_
 }
 
 state_test! { sync native_preparation_retained_prefix_does_not_authorize_raw_state_commit
-    use super::NativeLaneBatchSourcePreparationV1;
     let fixture = native_control_execution_fixture(false);
+    assert_native_preparation_raw_commit_refusal(fixture);
+}
+
+#[inline(never)]
+fn assert_native_preparation_raw_commit_refusal(fixture: NativeControlExecutionFixture) {
+    use super::NativeLaneBatchSourcePreparationV1;
     let state = &fixture.economic.native.state;
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
-        else { panic!("real first source"); };
+        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .unwrap()
+    else {
+        panic!("real first source");
+    };
     let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
-    let prepared = source.prepare_candidate(
-        fixture.applying.clone(), &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
-        &clock, state.sumeragi_block_cadence(),
-    ).unwrap().unwrap();
+    let prepared = source
+        .prepare_candidate(
+            fixture.applying.clone(),
+            &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+            &clock,
+            state.sumeragi_block_cadence(),
+        )
+        .unwrap()
+        .unwrap();
     assert!(prepared.native_source_for_test().is_some());
     let overlay = prepared.into_state_for_test();
-    assert_eq!(overlay.commit().unwrap_err(), TransactionsBlockError::MergeAdmission);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(
+        overlay.commit().unwrap_err(),
+        TransactionsBlockError::MergeAdmission
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before
+    );
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
     assert_native_economic_relay_recorder_released();
 }
@@ -604,13 +631,21 @@ fn native_preparation_publish_later_admission(
 }
 
 state_test! { sync native_preparation_refreshes_source_after_actual_finalized_height_advance
-    use super::NativeLaneBatchSourcePreparationV1;
     let fixture = native_control_execution_fixture(false);
+    assert_native_preparation_after_height_advance(fixture);
+}
+
+#[inline(never)]
+fn assert_native_preparation_after_height_advance(fixture: NativeControlExecutionFixture) {
+    use super::NativeLaneBatchSourcePreparationV1;
     let state = &fixture.economic.native.state;
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
-        else { panic!("original source before actual publication"); };
+        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .unwrap()
+    else {
+        panic!("original source before actual publication");
+    };
     let original_snapshot = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let original_height = state.view().height();
     let original_generation = state.state_view_generation();
@@ -625,14 +660,179 @@ state_test! { sync native_preparation_refreshes_source_after_actual_finalized_he
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let generation = state.state_view_generation();
     let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
-    assert!(source.prepare_candidate(
-        fixture.applying, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
-        &clock, state.sumeragi_block_cadence(),
-    ).unwrap().is_none(), "a finalized successor makes the retained source obsolete, not the proposal invalid");
+    assert!(
+        source
+            .prepare_candidate(
+                fixture.applying,
+                &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+                &clock,
+                state.sumeragi_block_cadence(),
+            )
+            .unwrap()
+            .is_none(),
+        "a finalized successor makes the retained source obsolete, not the proposal invalid"
+    );
     assert_eq!(state.view().height(), original_height + 1);
     assert_eq!(state.state_view_generation(), generation);
-    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), after);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        after
+    );
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
     drop(state.block(carrier.header()));
     assert_native_economic_relay_recorder_released();
+}
+
+/// Read-only bridge from the genuine Native control fixture to terminal tests.
+pub(super) struct NativePublicationFixture {
+    original: NativeControlExecutionFixture,
+    carrier: SignedBlock,
+    admission: iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
+    pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+}
+
+/// End original genesis/State construction before the terminal assertion frame.
+#[inline(never)]
+pub(super) fn native_publication_fixture(atomic: bool) -> Box<NativePublicationFixture> {
+    native_publication_fixture_from_control(native_control_execution_fixture(atomic))
+}
+
+#[inline(never)]
+fn native_publication_fixture_from_control(
+    original: NativeControlExecutionFixture,
+) -> Box<NativePublicationFixture> {
+    let pulse = native_control_requested_beacon(&original);
+    let admission = native_preparation_new_admission(&original);
+    let carrier = native_preparation_carrier(
+        &original,
+        vec![norito::encode_canonical(&admission).unwrap()],
+        Some(pulse),
+        Duration::ZERO,
+        false,
+    );
+    Box::new(NativePublicationFixture {
+        original,
+        carrier,
+        admission,
+        pulse,
+    })
+}
+
+impl NativePublicationFixture {
+    /// Original State whose authenticated admission and sources are retained.
+    pub(super) fn state(&self) -> &State {
+        &self.original.economic.native.state
+    }
+
+    /// Exact applying context verified from the original parent's durable QC.
+    pub(super) fn context(&self) -> &HeightContext {
+        self.original.applying.context()
+    }
+
+    /// Canonical signed proposal before recorded Native execution.
+    pub(super) fn carrier(&self) -> &SignedBlock {
+        &self.carrier
+    }
+
+    /// Actual source and destination of the single executed transfer.
+    pub(super) fn assets(&self) -> (&AssetId, &AssetId) {
+        (
+            &self.original.economic.source,
+            &self.original.economic.destination,
+        )
+    }
+
+    /// Real later pending input plus this carrier's admitted input.
+    pub(super) fn pending_inputs(
+        &self,
+    ) -> [&iroha_data_model::block::lane_admission::LaneAdmittedInputV1; 2] {
+        [&self.original.later, &self.admission]
+    }
+
+    /// Mandatory authenticated beacon retained by the signed proposal.
+    pub(super) fn pulse(
+        &self,
+    ) -> &iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1 {
+        &self.pulse
+    }
+
+    /// Execute through the real global preflight and sole Native source owner.
+    pub(super) fn prepare(&self) -> super::carrier_preparation::PreparedCarrier<'_> {
+        let super::NativeLaneBatchSourcePreparationV1::Ready(source) = self
+            .state()
+            .prepare_proposed_native_lane_batch_source(&self.carrier, &[])
+            .unwrap()
+        else {
+            panic!("genuine finalized Native source must be ready");
+        };
+        let (_, clock) =
+            iroha_primitives::time::TimeSource::new_mock(self.carrier.header().creation_time());
+        source
+            .prepare_candidate(
+                self.original.applying.clone(),
+                &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+                &clock,
+                self.state().sumeragi_block_cadence(),
+            )
+            .unwrap()
+            .expect("original applying generation remains current")
+    }
+
+    /// Authenticate the actual retained output commitment with this committee.
+    pub(super) fn finality(
+        &self,
+        block: &SignedBlock,
+        execution_commitment: ExecutionCommitment,
+    ) -> crate::block::VerifiedV2FinalityArtifact {
+        let context = self.context().clone();
+        let keys = native_preparation_global_keys(&context);
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: block.canonical_proposal_wire_hash().unwrap(),
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: block.header().view_change_index(),
+        };
+        let vote = iroha_data_model::block::consensus_v2::Vote {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        };
+        let shares = keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &vote.signature_preimage())
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let artifact = V2FinalityArtifact::new(
+            context,
+            subject,
+            QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: GlobalPhase::Commit,
+                subject,
+                execution_commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            },
+            keys.iter()
+                .map(|key| bls_normal_pop_prove(key.private_key()).unwrap())
+                .collect(),
+        );
+        crate::block::VerifiedV2FinalityArtifact::verify(artifact)
+            .expect("real three-of-four global finality joins the actual Native execution")
+    }
 }
