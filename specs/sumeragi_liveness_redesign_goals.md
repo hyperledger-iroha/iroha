@@ -1392,9 +1392,10 @@ controls on unchanged source and executable. Typed drain/storage failures remain
 local through candidate validation and emit no rejection event; deterministic
 errors still reject. Autoscale evaluation preserves its original sample/count
 across refusal and marks lifecycle completion only after success. Eight strict
-replay controls remain failed at fixture publication because the complete
-consuming publisher is missing; they are not included as passes in these later
-selections. See the [dated DPN record](../docs/history/2026-09-19/dpn-recovery-geometry.md)
+replay controls failed at fixture publication in those earlier selections. All
+eight now pass on the merged Core artifact in DPN development run42; this scoped
+replay result does not qualify the complete live Validate-to-Apply owner or the
+four-validator recovery corridor. See the [dated DPN record](../docs/history/2026-09-19/dpn-recovery-geometry.md)
 for the preceding failed builds and exact validation scope. The carrier now
 resumes its original geometry under the retained Kura lease; local backend
 contention releases all physical ownership before returning its actual release
@@ -1433,9 +1434,12 @@ custody controls on unchanged production source. Strict MV Clippy passes. Build3
 and publication, a finite requested-layout credit pool, and raw-acquisition panic
 wakes for Cell and Storage. All 120 MV library tests, five allocator/epoch tests,
 75 focused Core controls, strict MV Clippy and the charged-API compile-fail control
-pass on unchanged source. Existing State fields remain untracked. Original B+tree
-successors, complete node/cursor/nested payload custody and an explicit configured
-aggregate policy remain required before activating the live handoff.
+pass on unchanged source. Existing State fields remain untracked. Original B+tree successors subsequently retain their exact cursor, undo, root and
+reader identity through retry and publication. DPN runs32–35 pass 136 MV controls,
+strict Clippy and the charged-API check on the frozen parent source; those results
+do not qualify the subsequently merged tree. Complete actual node/cursor/nested
+payload custody and an explicit configured aggregate policy remain required
+before activating the live handoff.
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing
 verified-finality transition. It retains the original World/runtime/membership/hash

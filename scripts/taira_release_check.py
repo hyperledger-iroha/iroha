@@ -991,6 +991,7 @@ CORE_PENDING_KURA_RECOVERY_STAGES = (("standalone and linked Apply recovery acro
     'sumeragi::v2::tests::pending_kura_linked_apply_recovers_real_kura_shutdown_cut',
     'sumeragi::v2::tests::pending_kura_linked_apply_rejects_changed_parent_and_decision_without_mutation',
     'sumeragi::v2::tests::pending_kura_recovered_decision_chain_recovers_real_kura_shutdown_cut',
+    'sumeragi::v2::tests::pending_kura_validated_apply_preview_rejects_foreign_authority_and_fence_exhaustion_inertly',
 )), )
 CORE_ADMISSION_STARTUP_STAGES += CORE_PENDING_KURA_RECOVERY_STAGES
 
@@ -1387,6 +1388,7 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
     "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
 )), ("native Taira genesis and independent localnet profiles", (
     "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
+    "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",

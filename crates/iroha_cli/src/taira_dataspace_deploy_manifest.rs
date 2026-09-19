@@ -57,7 +57,12 @@ pub(super) fn generate(alias: &str, trust: &finality::TrustV1) -> Result<Json> {
         ..NativeLaneManifestV1::default()
     };
     let raw = json::to_json_bounded(&descriptor, MAX_NEXUS_RUNTIME_MANIFEST_BYTES)?;
-    let manifest = raw.parse::<Json>()?;
+    // Typed writers emit declaration order; the ledger Json owner requires the
+    // canonical lexical order supplied by Norito's semantic Value writer. Keep
+    // both encodings under the native source bound before strict Json admission.
+    let value = json::parse_value(&raw)?;
+    let canonical = json::to_json_bounded(&value, MAX_NEXUS_RUNTIME_MANIFEST_BYTES)?;
+    let manifest = Json::from_raw_json(canonical)?;
     // The lane ID is immaterial to this structural check; the caller binds the
     // resulting source to its real lane/dataspace and the Core semantic validator.
     RuntimeLaneManifestV1 {
@@ -224,6 +229,9 @@ mod tests {
             .unwrap();
         let encoded = generate("dpn", &trust).unwrap();
         let manifest: NativeLaneManifestV1 = json::from_str(encoded.get()).unwrap();
+        assert!(encoded.get().len() <= MAX_NEXUS_RUNTIME_MANIFEST_BYTES);
+        assert_eq!(encoded.get().parse::<Json>().unwrap(), encoded);
+        assert_eq!(Json::try_new(&manifest).unwrap(), encoded);
         assert_eq!(manifest.lane.as_deref(), Some("dpn"));
         assert_eq!(manifest.version, Some(1));
         assert_eq!(manifest.quorum, Some(3));
