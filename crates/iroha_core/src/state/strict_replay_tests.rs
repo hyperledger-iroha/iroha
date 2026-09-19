@@ -1466,21 +1466,35 @@ strict_replay_test!(
         let fixture = StrictReplayFixture::new();
         let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
         let frozen = replay_state.lane_manifests.read().clone();
+        let signed_policy = fixture.context.execution_policy_hash;
+        assert_eq!(
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap()),
+            signed_policy,
+            "the installed fixture registry must match signed genesis policy"
+        );
         replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
+        let missing_registry_policy =
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap());
+        assert_ne!(missing_registry_policy, signed_policy);
         let before = StateFingerprint::capture(&replay_state);
         let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect_err("replay must reject a durable block when its lane is absent");
         let diagnostic = format!("{error:?}");
+        // Manifest policy is authenticated by signed genesis. Its absence is a
+        // policy mismatch even if genesis instructions can execute without a
+        // normal transaction's lane admission check.
         assert!(
-            diagnostic.contains("first transaction error: tx#0"),
-            "replay rejection must identify the first failed transaction: {diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("lane 0 is absent from the installed manifest registry snapshot"),
-            "replay rejection must expose the missing registry binding: {diagnostic}"
+            diagnostic.contains(&format!(
+                "Sumeragi v2 signed execution-policy hash {signed_policy} does not match staged state {missing_registry_policy}"
+            )),
+            "replay rejection must bind the missing registry to signed genesis policy: {diagnostic}"
         );
         before.assert_unchanged(&replay_state);
         replay_state.install_lane_manifests(&frozen);
+        assert_eq!(
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap()),
+            signed_policy,
+        );
         super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect("the identical durable block replays after the lane snapshot is installed");
         assert_eq!(replay_state.committed_height(), 1);

@@ -3,8 +3,9 @@
 //! Proposal bytes contain only source Decisions and the exact applying pre-State.
 //! Actual outputs and prefix roots have private ownership until the common global
 //! result/witness projection; they never feed back into the executing block hash.
-//! TODO: integrate the full suffix/witness and publication/Apply authorization
-//! before accepting native carriers in ValidBlock or State commit.
+//! The canonical global owner consumes these sources through its full suffix,
+//! witness and exact durable finality before State publication. Standalone
+//! scratch execution retains no such publication authority.
 
 use super::{
     MergeLedgerCommitError, State, StateBlock, TransactionEntrypoint, VerifiedLaneDecisionGroupV1,
@@ -46,11 +47,12 @@ pub(super) struct NativeLaneStageSealV1 {
     application_write_set_root: Hash,
     write_set_root: Hash,
     completed_write_set_root: Option<Hash>,
+    settlements: Vec<super::LaneBlockCommitment>,
     fastpq: super::native_lane_fastpq::NativeLaneFastpqSeal,
 }
 
-/// One disposable start/native overlay and its actual outputs.
-/// Production has no mutable/consuming overlay publication accessor.
+/// One start/native overlay and its actual outputs, transferable only to the
+/// canonical global owner. Transfer alone grants no publication authority.
 pub(crate) struct PreparedLaneDecisionBatchV1<'state> {
     overlay: Box<StateBlock<'state>>,
     batch: Arc<LaneDecisionBatchV1>,
@@ -83,6 +85,12 @@ impl<'state> PreparedLaneDecisionBatchV1<'state> {
     /// Actual outputs for the eventual sole standard result projection.
     pub(crate) fn executions(&self) -> &[Execution] {
         &self.executions
+    }
+    /// Transfer sole execution custody to the canonical global output finalizer.
+    /// This does not authorize publication; the retained native/output seals
+    /// still require actual witness capture and exact durable global finality.
+    pub(crate) fn into_overlay(self) -> Box<StateBlock<'state>> {
+        self.overlay
     }
     /// Adversarial qualification only; production has no mutable overlay escape.
     #[cfg(test)]
@@ -192,9 +200,72 @@ impl State {
             PreparedLaneDecisionBatchV1::from_stage(overlay, executions)
         })
     }
+
+    /// Canonical native constructor under an already-owned witness recorder.
+    /// Source authentication occurs before this method; the pristine callback
+    /// applies only independently authenticated carrier controls after preflight.
+    pub(super) fn prepare_native_batch_with_pristine_stage<'state>(
+        &'state self,
+        header: BlockHeader,
+        batch: &LaneDecisionBatchV1,
+        groups: &[VerifiedLaneDecisionGroupV1],
+        pristine: impl FnOnce(&mut StateBlock<'state>) -> Result<()>,
+    ) -> Result<PreparedLaneDecisionBatchV1<'state>> {
+        with_stable_observation(self, || {
+            if self.prepare_lane_decision_batch(groups)? != *batch {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "native canonical source differs from exact applying pre-State".into(),
+                ));
+            }
+            let (overlay, executions) = self.with_native_lane_execution_and_pristine_stage(
+                header,
+                groups,
+                pristine,
+                |overlay, results| overlay.seal_native_lane_decision_batch(results, batch.clone()),
+            )?;
+            PreparedLaneDecisionBatchV1::from_stage(overlay, executions)
+        })
+    }
 }
 
 impl StateBlock<'_> {
+    /// Bind the retained source stage across witness, finality and publication.
+    /// This identity preserves the original native prefix cuts without confusing
+    /// them with the complete global metadata/publication State cut.
+    pub(super) fn native_output_publication_identity(
+        &self,
+    ) -> std::result::Result<Option<Hash>, String> {
+        let Some(seal) = self.native_lane_stage.as_ref() else {
+            return Ok(None);
+        };
+        self.validate_native_lane_stage_membership()
+            .map_err(|error| error.to_string())?;
+        let mut membership = seal.membership.iter().copied().collect::<Vec<_>>();
+        membership.sort();
+        let aliases = Hash::new(
+            &norito::encode_canonical(&seal.authenticated_aliases)
+                .map_err(|error| error.to_string())?,
+        );
+        let settlements = Hash::new(
+            &norito::encode_canonical(&seal.settlements).map_err(|error| error.to_string())?,
+        );
+        let bytes = norito::encode_canonical(&(
+            seal.carrier,
+            seal.batch_hash,
+            aliases,
+            membership,
+            seal.application_write_set_root,
+            seal.write_set_root,
+            seal.completed_write_set_root,
+            settlements,
+        ))
+        .map_err(|error| error.to_string())?;
+        Ok(Some(Hash::new_from_chunks(&[
+            b"iroha:native-output-publication-source:v1\0",
+            &bytes,
+        ])))
+    }
+
     /// Seal actual results supplied only by the constructor-owned after-start kernel.
     fn seal_native_lane_decision_batch(
         &mut self,
@@ -232,7 +303,6 @@ impl StateBlock<'_> {
             ));
         }
         let fastpq = self.seal_native_lane_fastpq_outputs(&results)?;
-        self.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
         let application_write_set_root = self.merge_execution_write_set_root();
         self.stage_lane_decision_application_markers(
             &batch,
@@ -248,6 +318,10 @@ impl StateBlock<'_> {
             application_write_set_root,
             write_set_root,
             completed_write_set_root: None,
+            settlements: results
+                .iter()
+                .map(|result| result.settlement_commitment.clone())
+                .collect(),
             fastpq,
         }));
         self.validate_native_lane_execution()?;
@@ -299,6 +373,7 @@ impl StateBlock<'_> {
                 .canonical_carrier_commit_metadata_authorization
                 .is_some()
             || self._curr_block != seal.carrier
+            || self.applied_npos_consensus_effects_hash != seal.carrier.npos_effects_hash()
             || seal.batch.canonical_hash().map_err(invalid)? != seal.batch_hash
             || Self::native_batch_membership(&seal.batch, &seal.authenticated_aliases)?
                 != seal.membership
@@ -392,6 +467,18 @@ impl StateBlock<'_> {
     ) -> std::result::Result<(), String> {
         self.validate_native_lane_execution()
             .map_err(|error| error.to_string())?;
+        self.validate_native_output_source(block)
+    }
+
+    /// Recheck retained immutable native authority after the global metadata
+    /// finalizer. The complete World/event seal, witness and finality own that
+    /// later cut; the earlier native prefix root cannot authorize publication.
+    pub(crate) fn validate_native_output_source(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> std::result::Result<(), String> {
+        self.validate_native_lane_stage_membership()
+            .map_err(|error| error.to_string())?;
         let seal = self
             .native_lane_stage
             .as_ref()
@@ -407,6 +494,23 @@ impl StateBlock<'_> {
             return Err("native output carrier differs from its actual source/tail".into());
         }
         Ok(())
+    }
+
+    /// Actual settlements retained from the original native Network execution.
+    /// The global finalizer projects these same receipts; it never reexecutes or
+    /// accepts caller-supplied native economic results.
+    pub(crate) fn native_lane_settlement_commitments(
+        &self,
+    ) -> std::result::Result<Option<&[super::LaneBlockCommitment]>, String> {
+        if self.native_lane_stage.is_none() {
+            return Ok(None);
+        }
+        self.validate_native_lane_stage_membership()
+            .map_err(|error| error.to_string())?;
+        Ok(self
+            .native_lane_stage
+            .as_ref()
+            .map(|seal| seal.settlements.as_slice()))
     }
 
     /// Install source/application markers after actual economics; errors discard

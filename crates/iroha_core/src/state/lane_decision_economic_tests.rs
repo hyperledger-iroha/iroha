@@ -4,7 +4,10 @@
 #[derive(Clone, Copy)]
 enum NativeEconomicCase {
     Transfer(u32),
+    AtomicBatchTransfer,
+    IndependentBatchTransfer,
     RegisterAssetDefinition,
+    RuntimeEffect(AutonomousRuntimeEffectFixture),
     CallbackTransfer,
     BadSignature,
     ExpiredAtAdmission,
@@ -50,18 +53,14 @@ fn native_economic_fixture_with_fee_policy(
     )
 }
 
-fn native_economic_fixture_with_world_initializer(
-    cases: &[NativeEconomicCase],
-    atomic_group: bool,
-    genesis_layout: Option<DataAvailabilityLayout>,
+// Finish World/State construction before reserving the later admission overlays.
+// Keeping the constructed State boxed also avoids copying it into each caller's
+// fixture setup frame on the ordinary test-thread stack.
+fn native_economic_initial_state(
     direct_fee: Option<NativeEconomicDirectFee>,
+    runtime_effect: bool,
     initialize_world: impl FnOnce(&mut World),
-) -> Box<NativeEconomicFixture> {
-    use iroha_data_model::transaction::signed::{
-        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
-    };
-    assert!(!cases.is_empty() && cases.len() <= 2);
-    assert!(!atomic_group || cases.len() == 1);
+) -> (Box<State>, KeyPair, AssetId, AssetId, SignedBlock) {
     let source_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let destination_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).unwrap();
     let source_account = AccountId::new(source_key.public_key().clone());
@@ -109,6 +108,10 @@ fn native_economic_fixture_with_world_initializer(
     );
     initialize_world(&mut world);
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    if runtime_effect {
+        nexus.staking.restricted_validator_mode =
+            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    }
     // These balance/order/rollback controls use an explicit zero-charge policy,
     // as the existing autonomous transfer fixture does. Empty signed fee limits
     // are valid only because the actual configured charge is zero.
@@ -168,6 +171,50 @@ fn native_economic_fixture_with_world_initializer(
         kura.configured_lane_catalog_baseline().unwrap(),
         Some(configured_catalog_hash),
     );
+    (Box::new(state), source_key, source, destination, genesis)
+}
+
+fn native_economic_fixture_with_world_initializer(
+    cases: &[NativeEconomicCase],
+    atomic_group: bool,
+    genesis_layout: Option<DataAvailabilityLayout>,
+    direct_fee: Option<NativeEconomicDirectFee>,
+    initialize_world: impl FnOnce(&mut World),
+) -> Box<NativeEconomicFixture> {
+    native_economic_fixture_with_initializers(
+        cases,
+        atomic_group,
+        genesis_layout,
+        direct_fee,
+        initialize_world,
+        |_, _| {},
+    )
+}
+
+fn native_economic_fixture_with_initializers(
+    cases: &[NativeEconomicCase],
+    atomic_group: bool,
+    genesis_layout: Option<DataAvailabilityLayout>,
+    direct_fee: Option<NativeEconomicDirectFee>,
+    initialize_world: impl FnOnce(&mut World),
+    before_admission: impl FnOnce(&State, &SignedBlock),
+) -> Box<NativeEconomicFixture> {
+    use iroha_data_model::transaction::signed::{
+        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+    };
+    assert!(!cases.is_empty() && cases.len() <= 2);
+    assert!(!atomic_group || cases.len() == 1);
+    let (state, source_key, source, destination, genesis) = native_economic_initial_state(
+        direct_fee,
+        cases
+            .iter()
+            .any(|case| matches!(case, NativeEconomicCase::RuntimeEffect(_))),
+        initialize_world,
+    );
+    let source_account = source.account().clone();
+    let destination_account = destination.account().clone();
+    let fee_asset = native_economic_direct_fee_asset(&source);
+    let kura = Arc::clone(&state.kura);
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
@@ -177,6 +224,12 @@ fn native_economic_fixture_with_world_initializer(
             (LaneId::new(1), DataSpaceId::UNIVERSAL, ids),
         ],
     );
+    if cases
+        .iter()
+        .any(|case| matches!(case, NativeEconomicCase::RuntimeEffect(_)))
+    {
+        install_native_runtime_startup_registry(&state, &validators);
+    }
     configure_commit_topology_preserving_world_peers(&state, 1);
     // The fixture starts with live asset definitions before executing genesis
     // instructions. Seed their real genesis incarnations while the parent history
@@ -295,6 +348,38 @@ fn native_economic_fixture_with_world_initializer(
                     ))
                     .into(),
                 ]
+            } else if matches!(
+                case,
+                NativeEconomicCase::AtomicBatchTransfer
+                    | NativeEconomicCase::IndependentBatchTransfer
+            ) {
+                let second_recipient = AccountId::new(
+                    KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+                        .expect("deterministic native batch second recipient")
+                        .public_key()
+                        .clone(),
+                );
+                let entries = vec![
+                    TransferAssetBatchEntry::with_leg_id(
+                        "autonomous-batch-leg-a",
+                        source_account.clone(),
+                        destination_account.clone(),
+                        source.definition().clone(),
+                        3_u32,
+                    ),
+                    TransferAssetBatchEntry::with_leg_id(
+                        "autonomous-batch-leg-b",
+                        source_account.clone(),
+                        second_recipient,
+                        source.definition().clone(),
+                        4_u32,
+                    ),
+                ];
+                vec![if matches!(case, NativeEconomicCase::AtomicBatchTransfer) {
+                    TransferAssetBatch::new(entries).into()
+                } else {
+                    TransferAssetBatch::independent(entries).into()
+                }]
             } else if matches!(case, NativeEconomicCase::CallbackTransfer) {
                 vec![ExecuteTrigger::new("native_sized_callback".parse().unwrap()).into()]
             } else {
@@ -357,6 +442,12 @@ fn native_economic_fixture_with_world_initializer(
             };
         }
         let entrypoint = match case {
+            NativeEconomicCase::RuntimeEffect(effect) => autonomous_runtime_effect_entrypoint(
+                &state,
+                &validators,
+                0x81 + index as u8,
+                *effect,
+            ),
             NativeEconomicCase::Reveal(_)
             | NativeEconomicCase::RevealExpired
             | NativeEconomicCase::OrderedReveal(_) => {
@@ -513,6 +604,10 @@ fn native_economic_fixture_with_world_initializer(
         .unwrap();
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
+    // Install caller-owned parent fixtures before the admission carrier's
+    // authenticated witness and finality. The applying batch is prepared only
+    // after this exact committed prefix; no certified base is rewritten.
+    before_admission(&state, &block);
     let opening = if let Some(layout) = genesis_layout {
         // Choose geometry before any signed finality or frozen lane instance.
         // Native historical recovery tests exercise the real enclosing batch,
@@ -565,7 +660,7 @@ fn native_economic_fixture_with_world_initializer(
         .unwrap();
     Box::new(NativeEconomicFixture {
         native: LaneContextVerifiedFixture {
-            state,
+            state: *state,
             validators,
             binding: first_binding.unwrap(),
             block,

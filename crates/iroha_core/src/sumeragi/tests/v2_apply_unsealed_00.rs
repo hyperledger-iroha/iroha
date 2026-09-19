@@ -434,7 +434,7 @@ impl ApplyFixture {
         Self::new_with_options(false, false, true, false)
     }
     fn new_for_production_recovered_decision_apply() -> Self {
-        Self::new_with_options(false, false, false, false)
+        Self::new_with_options(false, false, true, false)
     }
     fn new_for_production_recovered_decision_apply_with_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, false)
@@ -593,13 +593,22 @@ impl ApplyFixture {
                 Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&transaction_authority),
             );
         }
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            context.network_id,
-        );
+        let mut state = if include_lane_lifecycle {
+            crate::sumeragi::v2_lane_work::tests::authenticated_lane_work_state_for_testing(
+                world,
+                Arc::clone(&kura),
+                chain_id.clone(),
+                context.network_id,
+            )
+        } else {
+            State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                context.network_id,
+            )
+        };
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -921,6 +930,68 @@ impl ApplyFixture {
         self.service
             .execute(&self.context, store, &self.task)
             .map(drop)
+    }
+    /// Construct finality only after a test has finished seeding pending QueuePlan owners.
+    fn recertify_unapplied_body_for_current_state(&mut self) {
+        assert_eq!(self.state.committed_height(), 0);
+        assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 0);
+        let execution_commitment = self
+            .service
+            .validate_candidate(&self.context, &self.body)
+            .expect("execute the exact proposal against the completed fixture prestate");
+        let mut certificate = self.task.certificate().clone();
+        certificate.execution_commitment = execution_commitment;
+        let preimage = wire::Vote {
+            round: certificate.round,
+            proposal_round: certificate.proposal_round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    self.validator_keys[usize::try_from(*index).expect("fixture signer index")]
+                        .private_key(),
+                    &preimage,
+                )
+                .expect("sign final fixture prestate commitment")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate final fixture prestate votes");
+        // The old marker belongs to the old fixture prestate. A fresh store
+        // models proposal validation after setup, without overwriting authority.
+        self.body_root = tempfile::tempdir().expect("completed fixture prestate body store");
+        let mut store = self.reopen_body_store();
+        let durable = store
+            .store(
+                self.manifest.clone(),
+                self.body.encode_wire().expect("canonical fixture proposal"),
+            )
+            .expect("persist proposal after fixture admission setup");
+        let validated = store
+            .validate(&durable, |candidate| {
+                self.service.validate_candidate(&self.context, candidate)
+            })
+            .expect("persist exact final fixture prestate validation");
+        assert_eq!(validated.execution_commitment(), execution_commitment);
+        self.task = ApplyTask::for_test(
+            1,
+            self.task.tag(),
+            self.task.subject(),
+            certificate,
+            validated,
+        );
     }
     fn persist_exact_v2_finality_chain(&self, blocks: &[&SignedBlock]) {
         assert!(
@@ -1451,15 +1522,26 @@ fn merge_entry_with_reservation(
 fn complete_empty_fixture_block(mut block: SignedBlock, key: &KeyPair) -> SignedBlock {
     assert_eq!(block.external_entrypoints_cloned().count(), 0);
     let already_complete = block.has_results().then(|| block.clone());
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-block.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach complete empty fixture execution results");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
+            &[],
+            Vec::new(),
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach complete empty fixture execution results");
     if let Some(already_complete) = already_complete {
         assert_eq!(
             block, already_complete,
@@ -2067,28 +2149,6 @@ fn install_recreatable_reservation_lane(
     );
     lane
 }
-fn replace_recreatable_reservation_lane(
-    state: &State,
-    lane: &iroha_data_model::nexus::LaneConfig,
-) -> (Hash, Hash) {
-    let old_incarnation = state
-        .lane_incarnation(lane.id)
-        .expect("recreatable reservation lane has an incarnation");
-    state
-        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![lane.clone()],
-            retire: vec![lane.id],
-        })
-        .expect("replace reservation lane with the same lane id");
-    let new_incarnation = state
-        .lane_incarnation(lane.id)
-        .expect("replacement reservation lane has an incarnation");
-    assert_ne!(
-        new_incarnation, old_incarnation,
-        "same-ID replacement must rotate the reservation lane incarnation"
-    );
-    (old_incarnation, new_incarnation)
-}
 fn install_fixture_queue_plan_registry_value(
     state: &State,
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
@@ -2520,14 +2580,15 @@ fn body_with_exact_merge_execution_header(entry: &MergeLedgerEntry) -> SignedBlo
     );
     carrier
 }
-struct DeferredCanonicalCarrierStartupFixture {
+struct RetiredMergeCarrierStartupFixture {
     fixture: ApplyFixture,
     queue: Arc<Queue>,
-    plan: LaneReservationReconciliationPlan,
+    expected_members: Vec<HashOf<TransactionEntrypoint>>,
     expected_groups: Vec<crate::kura::AutonomousLifecyclePendingReservationGroupObservation>,
     outcome_paths: Vec<std::path::PathBuf>,
-    _queue_root: tempfile::TempDir,
+    queue_root: tempfile::TempDir,
 }
+
 fn bind_exact_fixture_reservation_identity(
     fixture: &ApplyFixture,
     queue: &Queue,
@@ -2602,7 +2663,7 @@ fn bind_exact_fixture_reservation_identity(
     assert_eq!(final_payload.reservation_keys.as_slice(), &[exact]);
     exact
 }
-fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStartupFixture {
+fn retired_merge_carrier_startup_fixture() -> RetiredMergeCarrierStartupFixture {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue_root = tempfile::tempdir().expect("deferred carrier Queue journal directory");
@@ -2848,51 +2909,65 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
     .expect("defer whole A+B carrier before Queue planning");
     assert_eq!(terminal.completed_outcomes(), 0);
     assert_eq!(terminal.deferred_pending_groups(), 2);
-    let deferred = terminal.into_deferred_terminal_recovery();
-    let initial = plan_lane_reservation_ownership(
-        fixture.state.as_ref(),
-        queue.as_ref(),
-        fixture.kura.as_ref(),
-        &verified_context,
-        None,
-    )
-    .expect("plan the sole Queue-owned carrier anchor");
-    let LaneReservationReconciliationPlanning::Ready(initial) = initial else {
-        panic!("deferred carrier anchor must be immediately plannable");
-    };
-    let planner_evidence = initial
-        .startup_snapshot_recovery_evidence()
-        .expect("extract exact deferred carrier planner evidence");
-    let lifecycle = crate::sumeragi::v2_lifecycle_recovery::reconcile_autonomous_lifecycle_startup(
-        fixture.state.as_ref(),
-        queue.as_ref(),
-        fixture.kura.as_ref(),
-        &active_context,
-        planner_evidence,
-        deferred,
-        Some(&generation),
-        &local_peer,
-        &local_signer,
-    )
-    .expect("pair only Queue-owned A without mutating absent deferred B");
-    assert_eq!(lifecycle.recovered_attempts(), 0);
-    let replanned = plan_lane_reservation_ownership(
-        fixture.state.as_ref(),
-        queue.as_ref(),
-        fixture.kura.as_ref(),
-        &verified_context,
-        Some(lifecycle),
-    )
-    .expect("replan with deferred A+B lifecycle handoff");
-    let LaneReservationReconciliationPlanning::Ready(plan) = replanned else {
-        panic!("paired deferred carrier plan must be ready for Queue application");
-    };
-    DeferredCanonicalCarrierStartupFixture {
+    RetiredMergeCarrierStartupFixture {
         fixture,
         queue,
-        plan,
+        expected_members: vec![first_key.entrypoint_hash, second_key.entrypoint_hash],
         expected_groups,
         outcome_paths,
-        _queue_root: queue_root,
+        queue_root,
     }
+}
+
+/// Apply one ordinary lane carrier through the real service for terminal ingress tests.
+pub(in crate::sumeragi) fn canonical_ordinary_terminal_fixture_for_test() -> (
+    Arc<State>,
+    Arc<Kura>,
+    Vec<KeyPair>,
+    Arc<SignedBlock>,
+    wire::HeightContext,
+    wire::HeightContext,
+) {
+    // Genesis has no ordinary lane slot. Keep the physical Kura owner locked so
+    // the H2 lane certificate and terminal signing journals use genuine custody.
+    let fixture = Box::new(ApplyFixture::new_with_lane_lifecycle());
+    let mut store = fixture.reopen_body_store();
+    fixture
+        .execute(&mut store)
+        .expect("apply genuine genesis through V2ApplyService");
+    fixture.assert_complete();
+    drop(store);
+    let context = verified_successor_context_at_fixture_tip(&fixture)
+        .context()
+        .clone();
+    let mut ordinary = build_apply_fixture_at_context_with_autonomous_payloads(
+        &fixture,
+        context.clone(),
+        Vec::new(),
+    );
+    fixture
+        .service
+        .execute(&ordinary.context, &mut ordinary.store, &ordinary.task)
+        .expect("apply genuine ordinary lane outputs through V2ApplyService");
+    assert_eq!(fixture.state.committed_height(), 2);
+    let block = fixture
+        .kura
+        .get_block(NonZeroUsize::new(2).unwrap())
+        .expect("real Apply retains its exact executed carrier");
+    assert_eq!(block.hash(), ordinary.body.hash());
+    assert_eq!(block.external_entrypoint_count(), 1);
+    assert!(block.execution_context().unwrap().merge_entry.is_none());
+    assert_eq!(context.roster.len(), 4);
+    assert_eq!(ordinary.task.certificate().signers.len(), 3);
+    let successor = verified_successor_context_after_fixture_tip(&fixture)
+        .context()
+        .clone();
+    (
+        Arc::clone(&fixture.state),
+        Arc::clone(&fixture.kura),
+        fixture.validator_keys.clone(),
+        block,
+        context,
+        successor,
+    )
 }

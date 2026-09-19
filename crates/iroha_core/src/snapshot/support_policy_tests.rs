@@ -625,6 +625,7 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
         try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(1),
             TEST_CHUNK_SIZE,
@@ -728,6 +729,7 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.committed_height()),
         TEST_CHUNK_SIZE,
@@ -804,12 +806,17 @@ async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() 
 }
 fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_with_chain(
+    let mut state = State::try_new_with_chain(
         crate::queue::tests::world_with_test_domains(),
         Arc::clone(&kura),
         query_handle,
         chain_id,
-    );
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("construct snapshot State before materializing configured storage");
+    kura.bind_lane_storage_network(state.network_id)
+        .expect("bind the exact snapshot fixture network before its geometry anchor");
     let (baseline, _, _) = kura
         .lane_geometry_journal_state_for_test()
         .expect("snapshot fixture has readable geometry custody");
@@ -825,6 +832,8 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
         )
         .expect("snapshot fixture anchors its configured primary geometry");
     }
+    state.install_active_lane_markers_for_tests();
+    state.configure_test_runtime_defaults();
     state
 }
 fn state_factory_with_kura(kura: Arc<Kura>) -> State {

@@ -5305,6 +5305,14 @@ impl V2ApplyService {
         // Native participant frontiers in the State overlay. Do not construct
         // that overlay until every canonical manifest leaf has a durable,
         // read-back-authenticated manifest/receipt/latest-index triple.
+        state_block
+            .authorize_execution_output_publication(&committed_block, &witness)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "finalized execution output publication authorization",
+                    &error,
+                )
+            })?;
         let state_events = state_block
             .apply_without_execution_with_verified_v2_finality(&committed_block)
             .map_err(|error| {
@@ -5766,6 +5774,8 @@ mod fastpq_submission_tests {
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(in crate::sumeragi) use tests::canonical_ordinary_terminal_fixture_for_test;
 #[cfg(test)]
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
 #[cfg(all(test, feature = "bls"))]

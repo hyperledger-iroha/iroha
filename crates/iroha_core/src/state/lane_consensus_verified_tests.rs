@@ -9,25 +9,58 @@ struct LaneContextVerifiedFixture {
     witness: ExecWitness,
 }
 
-fn lane_context_verified_fixture() -> LaneContextVerifiedFixture {
+fn lane_context_verified_fixture() -> Box<LaneContextVerifiedFixture> {
     let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
     let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
-        &state, crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-            LaneId::SINGLE, DataSpaceId::UNIVERSAL,
-        )), &validators, parent.header().height().get(), 0x4B,
+        &state,
+        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        )),
+        &validators,
+        parent.header().height().get(),
+        0x4B,
     );
-    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let block = empty_global_block_after(Some(&parent));
-    let opening = lane_opening_context_for_state_test(&state);
+    let (block, opening, witness) =
+        publish_lane_context_verified_fixture(&state, &parent, &certificate);
+    Box::new(LaneContextVerifiedFixture {
+        state,
+        validators,
+        binding,
+        block,
+        opening,
+        witness,
+    })
+}
+
+// State construction and its publication overlay need separate stack frames;
+// callers retain the completed fixture on the heap, including foreign owners.
+#[inline(never)]
+fn publish_lane_context_verified_fixture(
+    state: &State,
+    parent: &SignedBlock,
+    certificate: &[u8],
+) -> (
+    SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    ExecWitness,
+) {
+    seed_exact_queue_plan_admission_state_for_test(state, certificate);
+    let block = empty_global_block_after(Some(parent));
+    let opening = lane_opening_context_for_state_test(state);
     let mut overlay = state.block(block.header());
-    overlay.finalize_lane_consensus_contexts(&block, Some(&opening)).unwrap();
+    overlay
+        .finalize_lane_consensus_contexts(&block, Some(&opening))
+        .unwrap();
     let mut witness = ExecWitness::default();
-    overlay.capture_lane_consensus_contexts(&mut witness).unwrap();
+    overlay
+        .capture_lane_consensus_contexts(&mut witness)
+        .unwrap();
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
     state.kura.store_block(Arc::new(block.clone())).unwrap();
-    LaneContextVerifiedFixture { state, validators, binding, block, opening, witness }
+    (block, opening, witness)
 }
 
 // Real test-key finality authenticates these exact fixture witness bytes. This
@@ -40,16 +73,30 @@ fn stage_lane_context_fixture_finality(
 ) -> (V2FinalityArtifact, crate::kura::KuraV2CommitReceipt) {
     let mut parent = None;
     for height in 1..block.header().height().get() {
-        let artifact = state.kura.v2_finality_artifact(height).unwrap().unwrap_or_else(|| {
-            let block = state.kura.get_block(NonZeroUsize::new(height as usize).unwrap()).unwrap();
-            let artifact = merge_carrier_finality_artifact_with_network(&block, parent.as_ref(), state.network_id);
-            let _receipt = state.kura.store_v2_finality_artifact(&artifact).unwrap();
-            artifact
-        });
+        let artifact = state
+            .kura
+            .v2_finality_artifact(height)
+            .unwrap()
+            .unwrap_or_else(|| {
+                let block = state
+                    .kura
+                    .get_block(NonZeroUsize::new(height as usize).unwrap())
+                    .unwrap();
+                let artifact = merge_carrier_finality_artifact_with_network(
+                    &block,
+                    parent.as_ref(),
+                    state.network_id,
+                );
+                let _receipt = state.kura.store_v2_finality_artifact(&artifact).unwrap();
+                artifact
+            });
         parent = Some(artifact);
     }
     let height = block.header().height().get();
-    let fee = iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(height, None);
+    let fee =
+        iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
+            height, None,
+        );
     let casting = iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(height, &[]).unwrap();
     witness.writes.extend([
         iroha_data_model::block::consensus::ExecKv {
@@ -57,27 +104,60 @@ fn stage_lane_context_fixture_finality(
             value: norito::to_bytes(&fee).unwrap(),
         },
         iroha_data_model::block::consensus::ExecKv {
-            key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+            key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1
+                .to_vec(),
             value: norito::to_bytes(&casting).unwrap(),
         },
     ]);
     let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
-        block.encode_wire().unwrap().len() as u64, block.executed_block_wire_hash().unwrap(),
+        block.encode_wire().unwrap().len() as u64,
+        block.executed_block_wire_hash().unwrap(),
     );
-    let commitment = crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest).unwrap();
-    let mut artifact = merge_carrier_finality_artifact_with_network(block, parent.as_ref(), state.network_id);
+    let commitment =
+        crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
+            .unwrap();
+    let mut artifact =
+        merge_carrier_finality_artifact_with_network(block, parent.as_ref(), state.network_id);
     artifact.height_context = opening;
     artifact.commit_qc.round.context_id = artifact.context_id();
     artifact.commit_qc.proposal_round.context_id = artifact.context_id();
     artifact.commit_qc.execution_commitment = commitment;
-    let mut keys = (0xD3_u8..=0xD6).map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap()).collect::<Vec<_>>();
+    let mut keys = (0xD3_u8..=0xD6)
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        .collect::<Vec<_>>();
     keys.sort_by(|a, b| a.public_key().cmp(b.public_key()));
-    assert_eq!(artifact.height_context.roster.iter().map(|entry| entry.validator.public_key()).collect::<Vec<_>>(), keys.iter().map(KeyPair::public_key).collect::<Vec<_>>());
-    let preimage = artifact.commit_qc.signer_preimage(&artifact.height_context, 0).unwrap();
-    let signatures = keys.iter().take(3).map(|key| Signature::try_new(key.private_key(), &preimage).unwrap().payload().to_vec()).collect::<Vec<_>>();
-    artifact.commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signatures.iter().map(Vec::as_slice).collect::<Vec<_>>()).unwrap();
+    assert_eq!(
+        artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.public_key())
+            .collect::<Vec<_>>(),
+        keys.iter().map(KeyPair::public_key).collect::<Vec<_>>()
+    );
+    let preimage = artifact
+        .commit_qc
+        .signer_preimage(&artifact.height_context, 0)
+        .unwrap();
+    let signatures = keys
+        .iter()
+        .take(3)
+        .map(|key| {
+            Signature::try_new(key.private_key(), &preimage)
+                .unwrap()
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    artifact.commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .unwrap();
     artifact.verify().unwrap();
-    state.kura.stage_kagemusha_finality_sidecar(height, block.hash(), &witness, commitment, &[]).unwrap();
+    state
+        .kura
+        .stage_kagemusha_finality_sidecar(height, block.hash(), &witness, commitment, &[])
+        .unwrap();
     let receipt = state.kura.store_v2_finality_artifact(&artifact).unwrap();
     (artifact, receipt)
 }

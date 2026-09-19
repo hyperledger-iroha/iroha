@@ -6,6 +6,27 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[test]
+fn block_identity_binds_original_owner_predecessor_and_mode_without_reading_values() {
+    let target: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
+    let foreign: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
+    let mut block = target.block();
+    let identity = block.publication_identity();
+    assert!(block.belongs_to(&target));
+    assert!(!block.belongs_to(&foreign));
+    assert_eq!(identity, block.publication_identity());
+    assert_ne!(identity, foreign.block().publication_identity());
+    block.insert(1, 99);
+    assert!(block.belongs_to(&target));
+    assert_eq!(identity, block.publication_identity());
+    drop(block);
+    assert_eq!(identity, target.block().publication_identity());
+    assert_ne!(identity, target.block_and_revert().publication_identity());
+    target.block().commit();
+    assert_eq!(target.view().get(&1), Some(&10));
+    assert_ne!(identity, target.block().publication_identity());
+}
+
 fn detach<K: Key, V: Value>(block: Block<'_, K, V>) -> Detached<K, V, ()> {
     block.try_detach(|_| Ok::<_, ()>(())).unwrap()
 }
@@ -141,7 +162,7 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .err()
             .unwrap();
-        assert_eq!(error, PublicationPreparationError::Busy);
+        assert!(matches!(error, PublicationPreparationError::Busy(_)));
         assert_eq!(returned.entries.as_ptr(), original);
         drop(current);
         drop(undo);

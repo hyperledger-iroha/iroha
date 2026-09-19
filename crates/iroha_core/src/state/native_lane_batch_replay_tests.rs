@@ -89,7 +89,6 @@ fn retained_native_batch_fixture_with_cases(
     SignedBlock,
     crate::kura::FinalizedNativeLaneBatchV1,
 ) {
-    use crate::kura::NativeLaneBatchCarrierReadV1;
     let fixture = native_economic_fixture_with_genesis_layout(
         cases,
         false,
@@ -102,9 +101,20 @@ fn retained_native_batch_fixture_with_cases(
             max_chunk_count: 512,
         }),
     );
+    let (carrier, included) = retain_native_batch_fixture(&fixture, substitute);
+    (fixture, carrier, included)
+}
+
+// Reserve carrier overlays only after economic State/genesis construction has
+// returned; the retained input fixture remains on the heap throughout staging.
+fn retain_native_batch_fixture(
+    fixture: &NativeEconomicFixture,
+    substitute: bool,
+) -> (SignedBlock, crate::kura::FinalizedNativeLaneBatchV1) {
+    use crate::kura::NativeLaneBatchCarrierReadV1;
     let state = &fixture.native.state;
     seed_autoscale_sample_history_for_snapshot_test(state);
-    let groups = native_economic_groups(&fixture);
+    let groups = native_economic_groups(fixture);
     let mut carrier = empty_global_block_after(Some(&fixture.native.block));
     carrier.set_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
         &state.nexus_snapshot(),
@@ -173,7 +183,7 @@ fn retained_native_batch_fixture_with_cases(
         panic!("locally retained canonical carrier");
     };
     assert_eq!(included.batch(), &batch);
-    (fixture, carrier, included)
+    (carrier, included)
 }
 
 state_test! { sync historical_native_batch_replays_only_on_exact_pre_state_without_publication

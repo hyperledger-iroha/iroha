@@ -903,10 +903,11 @@ state_test! { sync apply_without_execution_updates_commit_topology_from_world_pe
         }
         world_block.commit();
     }
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -923,39 +924,23 @@ state_test! { sync apply_without_execution_updates_commit_topology_from_world_pe
     assert_eq!(prev, base_topology);
 }
 state_test! { sync v2_authority_preserves_topology_transition
-    let kura = Kura::blank_kura_for_testing();
-    let state = blank_test_state_from_kura(&kura);
-    let keypairs = configure_commit_topology(&state, 4);
-    let_row! { base_topology = keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect::<Vec<_>>() };
-    let_row! { block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
-    let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
-    let artifact = merge_carrier_finality_artifact_with_network(
-        valid.as_ref(),
-        None,
-        *state.network_id_ref(),
-    );
-    let_row! { exact_roster = artifact .height_context .roster .iter() .map(|entry| entry.validator.clone()) .collect::<Vec<_>>() };
-    let_row! { verified_artifact = crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone()) .expect("fixture finality verifies once") };
-    let committed = valid
-        .commit_with_verified_v2_artifact(
-            verified_artifact,
-            artifact.commit_qc.execution_commitment,
-        )
-        .unpack(|_| {})
-        .expect("fixture block binds exact v2 finality");
+    let (fixture, mut block, context) = native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let base_topology = state.commit_topology_snapshot();
+    let exact_roster = context.roster.iter().map(|entry| entry.validator.clone()).collect::<Vec<_>>();
+    let mut state_block = ValidBlock::execute_native_block_and_capture_for_test(&mut block, state, &context)
+        .expect("actual complete execution precedes topology publication");
+    let (committed, witness) = finalize_native_execution_for_test(state, block, &mut state_block, context);
+    state_block.authorize_execution_output_publication(&committed, &witness)
+        .expect("exact durable finality binds the original execution owner");
     let block_hash = committed.as_ref().hash();
-    let_row! { _ = state_block .apply_without_execution_with_verified_v2_finality(&committed) .expect("ordinary v2 carrier metadata remains valid") };
-    state_block
-        .commit()
-        .expect("commit v2-authorized state block");
+    let _events = state_block.apply_without_execution_with_verified_v2_finality(&committed)
+        .expect("ordinary v2 carrier metadata remains valid");
+    state_block.commit().expect("commit v2-authorized state block");
     let mut expected_topology = Topology::new(base_topology.clone());
     expected_topology.block_committed(exact_roster, block_hash);
-    assert_eq!(
-        state.commit_topology_snapshot(),
-        expected_topology.as_ref().to_vec(),
-        "v2 authority must rotate from the exact authenticated roster without world-peer append"
-    );
+    assert_eq!(state.commit_topology_snapshot(), expected_topology.as_ref().to_vec(),
+        "v2 authority must rotate from the exact authenticated roster without world-peer append");
     assert_eq!(state.prev_commit_topology_snapshot(), base_topology);
 }
 state_test! { sync v2_authority_requires_exact_context_before_post_execution_mutation
@@ -971,7 +956,9 @@ state_test! { sync v2_authority_requires_exact_context_before_post_execution_mut
     );
     let block_hash = block.hash();
     let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+    // This structural capability fixture deliberately has no execution owner;
+    // authority must fail before metadata or output publication can begin.
+    let valid = ValidBlock::new_unverified_for_tests(block);
     let artifact = merge_carrier_finality_artifact_with_network(
         valid.as_ref(),
         Some(&genesis_artifact),
@@ -1012,7 +999,9 @@ state_test! { sync v2_state_apply_rejects_ordinary_commit_capability
     let_row! { block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
     let block_hash = block.hash();
     let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+    // This structural capability fixture deliberately has no execution owner;
+    // authority must fail before metadata or output publication can begin.
+    let valid = ValidBlock::new_unverified_for_tests(block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let transactions_before = norito::json::to_vec(&state_block.transactions)
         .expect("encode staged transaction history before failed apply");
@@ -1059,14 +1048,19 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
         }
         world_block.commit();
     }
-    let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
-    let_row! { second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&first_block)) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
+    let first_block = empty_signed_block_after(None, 1);
+    let second_block = empty_signed_block_after(Some(&first_block), 2);
     state.kura.store_block(Arc::new(first_block)).expect("retain exact predecessor");
     seed_committed_height_for_state_test(&state, 1);
+    store_block_for_state_commit(&state.kura, &second_block);
     let mut state_block = state.block(second_block.header());
-    let valid = ValidBlock::validate_unchecked(second_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(second_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+    assert_eq!(state_block.prev_commit_topology.iter().cloned().collect::<Vec<_>>(), base_topology,
+        "metadata preparation must stage the old topology before publication fails");
+    assert_eq!(state_block.commit_topology.len(), base_topology.len() + 1,
+        "the rejected overlay must contain the appended peer");
     let_row! { err = state_block .commit() .expect_err("height mismatch must abort staged topology updates") };
     assert!(matches!(
         err,
@@ -1088,12 +1082,10 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
 state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_checkpoint_lanes
     use iroha_config::parameters::actual::LaneValidatorMode;
     use iroha_data_model::nexus::{LaneCatalog, LaneConfig as CatalogLaneConfig, LaneVisibility};
-    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
     {
         let_row! { lane_catalog = LaneCatalog::new( NonZeroU32::new(2).expect("nonzero lane count"), vec![ CatalogLaneConfig::default(), CatalogLaneConfig { id: LaneId::new(1), alias: "restricted".to_string(), visibility: LaneVisibility::Restricted, ..CatalogLaneConfig::default() }, ], ) .expect("lane catalog") };
-        let nexus = state.nexus.get_mut();
         nexus.lane_catalog = lane_catalog.clone();
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
@@ -1101,6 +1093,7 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
         nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
         nexus.staking.min_validator_stake = 100_u64.into();
     }
+    let state = State::new_with_nexus_for_testing(World::default(), nexus, query);
     let_row! { public_keypairs: Vec<_> = (0..2) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { restricted_keypairs: Vec<_> = (0..2) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { base_topology: Vec<_> = public_keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
@@ -1173,10 +1166,11 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
             .cloned()
             .collect::<Vec<_>>(),
     );
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(public_keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -1204,8 +1198,9 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
     let keypairs = configure_commit_topology(&state, 4);
     let_row! { base_topology: Vec<_> = keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
     let_row! { new_peer = PeerId::new( crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal) .public_key() .clone(), ) };
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     {
         let mut peers = state_block.world.peers_mut_for_testing().transaction();
@@ -1214,7 +1209,7 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
         peers.push(new_peer);
         peers.apply();
     }
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -1231,20 +1226,17 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
 state_test! { sync apply_without_execution_widens_npos_commit_topology_with_active_public_validator
     use iroha_config::parameters::actual::LaneValidatorMode;
     use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
-    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+    nexus.staking.min_validator_stake = 100_u64.into();
+    let state = State::new_with_nexus_for_testing(World::default(), nexus, query);
     {
         let mut params = state.world.parameters.block();
         params.set_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ));
         params.commit();
-    }
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-        nexus.staking.min_validator_stake = 100_u64.into();
     }
     let keypairs = configure_commit_topology(&state, 3);
     let missing_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1288,10 +1280,11 @@ state_test! { sync apply_without_execution_widens_npos_commit_topology_with_acti
             .cloned()
             .collect::<Vec<_>>(),
     );
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -1324,8 +1317,9 @@ state_test! { sync apply_without_execution_uses_npos_parameters_for_commit_topol
     let keypairs = configure_commit_topology(&state, 4);
     let_row! { base_topology: Vec<_> = keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
     let_row! { new_peer = PeerId::new( crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal) .public_key() .clone(), ) };
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     {
         let mut peers = state_block.world.peers_mut_for_testing().transaction();
@@ -1334,7 +1328,7 @@ state_test! { sync apply_without_execution_uses_npos_parameters_for_commit_topol
         peers.push(new_peer);
         peers.apply();
     }
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let prev_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -1355,8 +1349,9 @@ state_test! { sync apply_without_execution_derives_commit_topology_when_roster_m
     let keypairs = configure_commit_topology(&state, 4);
     let_row! { base_topology: Vec<_> = keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
     let_row! { new_peer = PeerId::new( crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal) .public_key() .clone(), ) };
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     {
         let mut peers = state_block.world.peers_mut_for_testing().transaction();
@@ -1365,7 +1360,7 @@ state_test! { sync apply_without_execution_derives_commit_topology_when_roster_m
         peers.push(new_peer.clone());
         peers.apply();
     }
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let block_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, Vec::new());
@@ -1388,8 +1383,9 @@ state_test! { sync apply_without_execution_prefers_checkpoint_topology_when_worl
     let state = State::new_for_testing(World::default(), kura, query);
     let keypairs = configure_commit_topology(&state, 4);
     let_row! { base_topology: Vec<_> = keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
-    let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) };
-    let signed_block: SignedBlock = block.into();
+    // This fixture tests metadata topology selection, with no executable Network sources.
+    let signed_block = empty_signed_block_after(None, 1);
+    store_block_for_state_commit(&state.kura, &signed_block);
     let mut state_block = state.block(signed_block.header());
     {
         let mut peers = state_block.world.peers_mut_for_testing().transaction();
@@ -1397,7 +1393,7 @@ state_test! { sync apply_without_execution_prefers_checkpoint_topology_when_worl
         peers.push(base_topology[0].clone());
         peers.apply();
     }
-    let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
     let block_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
@@ -2661,23 +2657,32 @@ state_test! { sync commit_merge_entry_rejects_unknown_dataspace_catalog_entry
     let entry = merge_entry_from_candidate(candidate, qc);
     let authority_height = entry.merge_qc.carrier_height;
     // Remove the dataspace only after binding the candidate to valid lane authority.
-    {
+    let invalid_nexus = {
         let mut nexus = state.nexus.write();
         nexus.dataspace_catalog =
             DataSpaceCatalog::new(Vec::new()).expect("empty dataspace catalog");
-    }
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.clone()
+    };
+    state
+        .install_canonical_runtime_projection(
+            &invalid_nexus,
+            &state.lane_incarnation_lineage_snapshot(),
+            &state.autoscale_sample_history_snapshot(),
+        )
+        .expect("bind the deliberately missing dataspace to its exact runtime policy");
     let expected_authority_error = LaneAuthorityError::UnknownDataspace {
         dataspace_id: DataSpaceId::UNIVERSAL,
     };
     let_row! { err = state .commit_merge_entry(entry) .expect_err("merge commit must reject snapshots for missing dataspace catalog entries") };
     assert!(matches!(
-        err,
+        &err,
         MergeLedgerCommitError::ExecutionBatchInvalid(reason)
-            if reason == format!(
+            if *reason == format!(
                 "merge lane {} authority is unavailable at height {authority_height}: {expected_authority_error}",
                 LaneId::SINGLE,
             )
-    ));
+    ), "missing dataspace must be rejected by exact authority resolution: {err}");
     assert!(state.merge_ledger().is_empty());
 }
 state_test! { sync commit_merge_entry_rejects_empty_entry
@@ -3049,58 +3054,121 @@ state_test! { sync state_rehydrates_merge_ledger_from_kura_snapshot
     let first_carrier = store_and_commit_exact_merge_carrier(&original, &parent, &first);
     let second = next_relay_merge_entry(&original, 2, &validator_keypairs, &commit_keypairs);
     store_and_commit_exact_merge_carrier(&original, &first_carrier, &second);
+    let serialized = norito::json::to_value(&original).expect("serialize committed relay World");
+    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(&original).unwrap();
+    let lane_manifests = original.lane_manifests.read().clone();
+    let durable_history = kura.merge_ledger_snapshot();
+    assert_eq!(durable_history, vec![first.clone(), second.clone()]);
     drop(original);
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-    assert!(
-        state.merge_ledger().is_empty(),
-        "durable future carriers must not publish before restored State history reaches them"
-    );
-    for height in 1..=kura.blocks_count() {
-        let_row! { block = kura .get_block(NonZeroUsize::new(height).expect("restored height is non-zero")) .expect("durable restored block is available") };
-        state.push_block_hash_for_testing(block.hash());
+    {
+        let fresh = blank_test_state_from_kura(&kura);
+        assert_eq!(fresh.committed_height(), 0);
+        assert!(
+            fresh.merge_ledger().is_empty(),
+            "durable future carriers must not publish before restored State history reaches them"
+        );
+        assert!(fresh.world.merge_hint_roots.view().is_empty());
+        assert!(fresh.world.merge_global_state_root.view().is_none());
     }
-    state
-        .recover_merge_ledger_from_kura()
-        .expect("rehydrate merge ledger from restored Kura history");
+    let state = deserialize::KuraSeed {
+        kura: Arc::clone(&kura),
+        lane_manifests,
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }.into_state_from_json(serialized)
+        .expect("restore committed World and rehydrate its exact merge ledger");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(), expected_hash);
     let snapshot = state.merge_ledger().snapshot();
     assert_eq!(snapshot.len(), 2, "state seeds merge cache from kura");
     assert_eq!(snapshot[0].as_ref(), &first);
     assert_eq!(snapshot[1].as_ref(), &second);
-    let kura_snapshot = kura.merge_ledger_snapshot();
-    assert_eq!(kura_snapshot, vec![first, second]);
+    assert_eq!(kura.merge_ledger_snapshot(), durable_history,
+        "restoration must not rewrite durable relay history");
 }
 state_test! { sync state_rehydrates_multi_lane_merge_ledger_from_kura_snapshot
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut original = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-    let_row! { (first_candidate, first_keypairs, _) = record_commit_ready_merge_candidate_with_lanes(&mut original, 2, 1) };
-    let first_qc = merge_qc_for_candidate(&original, &first_candidate, &first_keypairs, &[0]);
-    let first = merge_entry_from_candidate(first_candidate, first_qc);
-    let_row! { first_stored = original .commit_merge_entry(first.clone()) .expect("commit first authenticated multi-lane merge entry") };
-    publish_committed_merge_carrier_for_test(&original, first_stored.as_ref());
-    let_row! { (second_candidate, second_keypairs, _) = record_commit_ready_merge_candidate_with_lanes(&mut original, 2, 2) };
-    let second_qc = merge_qc_for_candidate(&original, &second_candidate, &second_keypairs, &[0]);
-    let second = merge_entry_from_candidate(second_candidate, second_qc);
-    let_row! { second_stored = original .commit_merge_entry(second.clone()) .expect("commit second authenticated multi-lane merge entry") };
-    publish_committed_merge_carrier_for_test(&original, second_stored.as_ref());
+    let lane_ids = [LaneId::SINGLE, LaneId::new(1)];
+    let lanes = vec![
+        LaneConfig::default(),
+        LaneConfig {
+            id: lane_ids[1],
+            alias: "snapshot-relay-lane".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            ..LaneConfig::default()
+        },
+    ];
+    let nexus = iroha_config::parameters::actual::Nexus {
+        lane_catalog: LaneCatalog::new(nonzero!(2_u32), lanes).expect("two-lane catalog"),
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+    original.set_nexus(nexus).expect("configure both lanes before genesis");
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&original, &validator_keypairs);
+    install_lane_manifest_registry(&original, &[
+        (lane_ids[0], DataSpaceId::UNIVERSAL, validator_ids.clone()),
+        (lane_ids[1], DataSpaceId::UNIVERSAL, validator_ids),
+    ]);
+    let commit_keypairs = configure_commit_topology_preserving_world_peers(&original, 1);
+    let parent = empty_global_block_after(None);
+    kura.store_block(Arc::new(parent.clone())).expect("store multi-lane genesis parent");
+    commit_block_metadata_with_genesis_checkpoint_to_state(&original, &parent);
+    let next_entry = |height| {
+        let mut envelopes = lane_ids.iter().map(|&lane| {
+            sample_lane_relay_envelope_for_state(&original, height, lane, &validator_keypairs)
+        }).collect::<Vec<_>>();
+        finalize_lane_relay_batch_for_state_test(
+            &original,
+            &mut envelopes.iter_mut().collect::<Vec<_>>(),
+            &validator_keypairs,
+        );
+        for envelope in envelopes {
+            let envelope = seed_effect_authenticated_relay_for_merge_test(&original, envelope);
+            original.record_lane_relay(&envelope).expect("record authenticated lane relay");
+        }
+        let candidate = original.merge_entry_candidates_from_lane_relays().into_iter().next()
+            .expect("complete two-lane relay candidate");
+        let qc = merge_qc_for_candidate(&original, &candidate, &commit_keypairs, &[0]);
+        merge_entry_from_candidate(candidate, qc)
+    };
+    let first = next_entry(1);
+    let first_carrier = store_and_commit_exact_merge_carrier(&original, &parent, &first);
+    let second = next_entry(2);
+    store_and_commit_exact_merge_carrier(&original, &first_carrier, &second);
+    let serialized = norito::json::to_value(&original).expect("serialize committed multi-lane relay World");
+    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(&original).unwrap();
+    let lane_manifests = original.lane_manifests.read().clone();
+    let durable_history = kura.merge_ledger_snapshot();
+    assert_eq!(durable_history, vec![first.clone(), second.clone()]);
     drop(original);
-    let state = blank_test_state_from_kura(&kura);
-    assert!(
-        state.merge_ledger().is_empty(),
-        "durable multi-lane carriers must remain unpublished until State history catches up"
-    );
-    ensure_merge_carrier_parent_for_test(&state);
-    state
-        .recover_merge_ledger_from_kura()
-        .expect("rehydrate multi-lane merge ledger from Kura history");
+    {
+        let fresh = blank_test_state_from_kura(&kura);
+        assert_eq!(fresh.committed_height(), 0);
+        assert!(
+            fresh.merge_ledger().is_empty(),
+            "durable multi-lane carriers must remain unpublished until State history catches up"
+        );
+        assert!(fresh.world.merge_hint_roots.view().is_empty());
+        assert!(fresh.world.merge_global_state_root.view().is_none());
+    }
+    let state = deserialize::KuraSeed {
+        kura: Arc::clone(&kura),
+        lane_manifests,
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }.into_state_from_json(serialized)
+        .expect("restore committed multi-lane World and its exact merge ledger");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(), expected_hash);
     let snapshot = state.merge_ledger().snapshot();
     assert_eq!(snapshot.len(), 2, "state seeds both multi-lane epochs");
     assert_eq!(snapshot[0].as_ref(), &first);
     assert_eq!(snapshot[1].as_ref(), &second);
     assert_eq!(
         kura.merge_ledger_snapshot(),
-        vec![first, second],
+        durable_history,
         "recovery must not rewrite durable multi-lane history"
     );
 }
@@ -3225,9 +3293,17 @@ state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_
     ).err().expect("an otherwise valid autoscale pin must not bypass aggregate geometry admission");
     assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)), "autoscale: {error:?}");
     prospective.lane_catalog = prospective.lane_catalog.apply_lifecycle(&plan).unwrap();
-    let error = state.set_nexus_from_config(prospective)
+    prospective.configured_lane_catalog = prospective.lane_catalog.clone();
+    // Startup configuration belongs to an empty State. The committed fixture
+    // retains its dataspace authority and exercises runtime rejection below.
+    let mut startup = blank_test_state();
+    let startup_before = startup.nexus_snapshot();
+    let startup_generation = startup.state_view_generation();
+    let error = startup.set_nexus_from_config(prospective)
         .expect_err("startup configuration must reject unmergeable geometry before any publication");
-    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)), "startup: {error:?}");
+    assert_eq!(startup.nexus_snapshot().lane_catalog, startup_before.lane_catalog);
+    assert_eq!(startup.state_view_generation(), startup_generation);
     let mut invalid_policy = before.clone();
     let mut invalid_dataspaces = invalid_policy.dataspace_catalog.entries().to_vec();
     invalid_dataspaces[0].fault_tolerance = 43;

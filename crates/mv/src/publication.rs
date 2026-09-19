@@ -1,6 +1,7 @@
 //! Opaque local identity for one storage owner's published current/undo pair.
 
-use std::sync::{Arc, Mutex};
+use crate::{BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait};
+use std::sync::{Arc, Mutex, TryLockError};
 
 struct Owner;
 struct Version;
@@ -9,12 +10,34 @@ struct Version;
 /// These are local installation conditions, not consensus validity verdicts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicationPreparationError<E> {
-    /// An original current or undo writer is already held.
-    Busy,
+    /// An original writer or the joint publication identity is already held.
+    Busy(ReleaseWait),
+    /// An original writer or joint publication panicked; reconstruct this local owner.
+    Poisoned,
     /// The target owner or its jointly published current/undo pair changed.
     Changed,
     /// The caller refused the complete installation allocation/retention budget.
     Admission(E),
+}
+
+/// Successful preparation or the exact original journal and its local refusal.
+/// The error retains custody so a caller can defer without rebuilding execution.
+pub type PublicationPreparationResult<Prepared, Journal, E> =
+    Result<Prepared, (Journal, PublicationPreparationError<E>)>;
+
+impl<E> PublicationPreparationError<E> {
+    /// Classify failed physical acquisition using its pre-probe observation.
+    ///
+    /// A writer that unwound may have poisoned an underlying lock whose try API
+    /// reports only absence. Such an owner needs reconstruction, not another
+    /// wait for a release that already happened and can never happen again.
+    pub fn after_failed_acquisition(wait: ReleaseWait) -> Self {
+        if wait.is_poisoned() {
+            Self::Poisoned
+        } else {
+            Self::Busy(wait)
+        }
+    }
 }
 
 pub(crate) struct NextPublication(Arc<Version>);
@@ -29,6 +52,7 @@ impl NextPublication {
 pub(crate) struct Publication {
     owner: Arc<Owner>,
     version: Mutex<Arc<Version>>,
+    released: ReleaseNotification,
 }
 
 pub(crate) struct CapturedPublication {
@@ -36,12 +60,58 @@ pub(crate) struct CapturedPublication {
     version: Arc<Version>,
 }
 
+/// Opaque local equality of a block's original owner, predecessor and mode.
+///
+/// Capturing this identity borrows no values and acquires no locks. Equality
+/// remains stable while a block stages changes; publication rotates the captured
+/// current/undo predecessor even if values remain equal. This observation grants
+/// no mutation or publication authority and is not a portable state commitment.
+pub struct BlockPublicationIdentity {
+    predecessor: CapturedPublication,
+    mode: BlockMode,
+}
+
+impl BlockPublicationIdentity {
+    pub(crate) fn capture(predecessor: &CapturedPublication, mode: BlockMode) -> Self {
+        Self {
+            predecessor: CapturedPublication {
+                owner: Arc::clone(&predecessor.owner),
+                version: Arc::clone(&predecessor.version),
+            },
+            mode,
+        }
+    }
+}
+
+impl std::fmt::Debug for BlockPublicationIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BlockPublicationIdentity")
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for BlockPublicationIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.mode == other.mode && self.predecessor.same_as(&other.predecessor)
+    }
+}
+
+impl Eq for BlockPublicationIdentity {}
+
 impl Publication {
     pub(crate) fn new() -> Self {
         Self {
             owner: Arc::new(Owner),
             version: Mutex::new(Arc::new(Version)),
+            released: ReleaseNotification::default(),
         }
+    }
+
+    fn lock_version(&self) -> ReleaseGuard<'_, std::sync::MutexGuard<'_, Arc<Version>>> {
+        self.released
+            .poisoning_guard(self.version.lock().expect("MV publication lock poisoned"))
     }
 
     // Call only after acquiring the original current and undo writers. The
@@ -49,7 +119,7 @@ impl Publication {
     pub(crate) fn capture(&self) -> CapturedPublication {
         CapturedPublication {
             owner: Arc::clone(&self.owner),
-            version: Arc::clone(&self.version.lock().expect("MV publication lock poisoned")),
+            version: Arc::clone(&self.lock_version()),
         }
     }
 
@@ -63,22 +133,42 @@ impl Publication {
     }
 
     pub(crate) fn publish_prepared(&self, next: NextPublication, publish: impl FnOnce()) {
-        let mut version = self.version.lock().expect("MV publication lock poisoned");
+        let mut version = self.lock_version();
         publish();
-        *version = next.0;
+        **version = next.0;
     }
 }
 
 impl CapturedPublication {
+    /// Compare only the original owner without acquiring its publication lock.
+    pub(crate) fn belongs_to(&self, publication: &Publication) -> bool {
+        Arc::ptr_eq(&self.owner, &publication.owner)
+    }
+
+    /// Check the original owner and version without waiting on a publication cut.
+    pub(crate) fn try_check_current<E>(
+        &self,
+        publication: &Publication,
+    ) -> Result<(), PublicationPreparationError<E>> {
+        if !Arc::ptr_eq(&self.owner, &publication.owner) {
+            return Err(PublicationPreparationError::Changed);
+        }
+        let wait = publication.released.observe();
+        match publication
+            .version
+            .try_lock()
+            .map(|guard| publication.released.poisoning_guard(guard))
+        {
+            Ok(version) if Arc::ptr_eq(&self.version, &version) => Ok(()),
+            Ok(_) => Err(PublicationPreparationError::Changed),
+            Err(TryLockError::WouldBlock) => Err(PublicationPreparationError::Busy(wait)),
+            Err(TryLockError::Poisoned(_)) => Err(PublicationPreparationError::Poisoned),
+        }
+    }
+
     pub(crate) fn matches(&self, publication: &Publication) -> bool {
         Arc::ptr_eq(&self.owner, &publication.owner)
-            && Arc::ptr_eq(
-                &self.version,
-                &publication
-                    .version
-                    .lock()
-                    .expect("MV publication lock poisoned"),
-            )
+            && Arc::ptr_eq(&self.version, &publication.lock_version())
     }
 
     pub(crate) fn same_as(&self, other: &Self) -> bool {
@@ -87,8 +177,11 @@ impl CapturedPublication {
 }
 
 #[cfg(test)]
+#[path = "publication_nonblocking_tests.rs"]
+mod nonblocking_tests;
+
+#[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::mpsc;
 
     #[test]

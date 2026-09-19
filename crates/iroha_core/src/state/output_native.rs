@@ -3,7 +3,7 @@
 //! The consumed constructor capability binds exact admitted sources before start
 //! hooks. Each actual bounded Network row supplies membership and settlement,
 //! then the same owner executes Pipeline and Time and retains the complete tail.
-//! Full State/witness publication remains a separate, still-closed boundary.
+//! Full State/witness publication requires the canonical global finality owner.
 
 use super::*;
 use crate::state::{
@@ -32,6 +32,8 @@ impl StateBlock<'_> {
                 "native producer differs from its exact after-start overlay".into(),
             ));
         }
+        crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(self)
+            .map_err(|error| invalid(format!("SoraFS pin expiry maintenance failed: {error}")))?;
         self.reserve_native_execution_outputs(groups)
             .map_err(invalid)?;
         let mut producer = ExecutionOutputProducer::new(self, source).map_err(invalid)?;

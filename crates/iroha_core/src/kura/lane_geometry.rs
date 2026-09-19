@@ -11712,46 +11712,6 @@ impl Kura {
             }
         }
     }
-    /// Authenticate an original immutable pair retained by a completed transition.
-    /// This read-only test boundary reuses the production journal and pair checks.
-    #[cfg(test)]
-    pub(crate) fn validate_retained_lane_pair_for_test(
-        &self,
-        identity: LaneStorageIdentity,
-        retained_blocks: &Path,
-        retained_merge: &Path,
-    ) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let expected = LaneGeometryBinding::from_identity(identity);
-        if self.relative_geometry_path(retained_blocks)? != expected.blocks_path
-            || self.relative_geometry_path(retained_merge)? != expected.merge_path
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retained test pair paths differ from its exact original identity",
-            ));
-        }
-        let journal = self.read_lane_geometry_journal()?;
-        if !journal
-            .records
-            .iter()
-            .filter(|record| record.phase == LaneGeometryPhase::CatalogPublished)
-            .flat_map(|record| record.operations.iter())
-            .any(|operation| {
-                matches!(
-                    operation.kind,
-                    LaneGeometryOperationKind::Retire | LaneGeometryOperationKind::Replace
-                ) && operation.previous.as_ref() == Some(&expected)
-            })
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retained test pair has no completed geometry journal owner",
-            ));
-        }
-        self.require_retained_lane_storage_entry(&LaneStorageEntry { identity })
-    }
     #[cfg(test)]
     pub(super) fn seal_native_amx_reservation_pair_move_for_test(
         &self,

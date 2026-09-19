@@ -73,7 +73,10 @@ impl NativeLaneInput {
 pub(crate) enum NativeLaneAdmission {
     Accepted,
     Retry(NativeLaneInput),
-    Rejected { input: NativeLaneInput, reason: String },
+    Rejected {
+        input: NativeLaneInput,
+        reason: String,
+    },
 }
 
 fn message_instance(message: &LaneMessageV1) -> Hash {
@@ -142,7 +145,11 @@ impl NativeLaneDriver {
             return NativeLaneAdmission::Retry(input);
         }
         let id = input.instance();
-        let Some(lane) = observed.contexts().iter().find(|lane| lane.instance_id() == id) else {
+        let Some(lane) = observed
+            .contexts()
+            .iter()
+            .find(|lane| lane.instance_id() == id)
+        else {
             return NativeLaneAdmission::Rejected {
                 input,
                 reason: "native ingress has no exact current opening".into(),
@@ -209,7 +216,8 @@ impl NativeLaneDriver {
                     {
                         return NativeLaneAdmission::Rejected {
                             input: NativeLaneInput::Decision(decision),
-                            reason: "native instance already retains a different Commit value".into(),
+                            reason: "native instance already retains a different Commit value"
+                                .into(),
                         };
                     }
                     // A different valid exact quorum for the same immutable value
@@ -222,10 +230,13 @@ impl NativeLaneDriver {
                     return NativeLaneAdmission::Retry(NativeLaneInput::Decision(decision));
                 }
                 if local {
-                    self.ingress.push_back((id, LaneMessageEnvelopeV1 {
-                        version: LANE_MESSAGE_VERSION_V1,
-                        message: LaneMessageV1::QuorumCertificate(decision.commit_qc.clone()),
-                    }));
+                    self.ingress.push_back((
+                        id,
+                        LaneMessageEnvelopeV1 {
+                            version: LANE_MESSAGE_VERSION_V1,
+                            message: LaneMessageV1::QuorumCertificate(decision.commit_qc.clone()),
+                        },
+                    ));
                 }
                 self.decisions.insert(id, decision);
             }
@@ -243,63 +254,121 @@ impl NativeLaneDriver {
         if self.process.reconcile(observed) != LaneCurrentGate::Current {
             return Ok(());
         }
-        let current = observed.contexts().iter().map(|lane| lane.instance_id()).collect::<BTreeSet<_>>();
+        let current = observed
+            .contexts()
+            .iter()
+            .map(|lane| lane.instance_id())
+            .collect::<BTreeSet<_>>();
         self.decisions.retain(|id, _| current.contains(id));
-        if let Some(completed) = self.pool.try_completion().map_err(|error| error.to_string())? {
-            self.process.accept_completion(completed, observed)
+        if let Some(completed) = self
+            .pool
+            .try_completion()
+            .map_err(|error| error.to_string())?
+        {
+            self.process
+                .accept_completion(completed, observed)
                 .map_err(|(error, _retained)| error.to_string())?;
         }
         let known = self.process.instance_ids().collect::<BTreeSet<_>>();
         if self.process.occupancy().instances < self.limits.process.instances.get()
             && let Some(lane) = observed.contexts().iter().find(|lane| {
                 !known.contains(&lane.instance_id())
-                    && lane.frozen().committee.iter().any(|peer| peer.public_key() == self.key.public_key())
+                    && lane
+                        .frozen()
+                        .committee
+                        .iter()
+                        .any(|peer| peer.public_key() == self.key.public_key())
             })
         {
-            self.process.reserve_opening(observed, lane, self.key.clone(), now)
+            let required =
+                super::v2_lane_frame_bounds::maximum_message_bytes(lane.frozen().committee.len())?;
+            if required > self.limits.maximum_message_bytes.get() {
+                return Err(format!(
+                    "native control frame capacity {} is below required {required} before opening",
+                    self.limits.maximum_message_bytes
+                ));
+            }
+            self.process
+                .reserve_opening(observed, lane, self.key.clone(), now)
                 .map_err(|error| error.to_string())?;
         }
         let ids = self.process.instance_ids().collect::<Vec<_>>();
-        let next = ids.iter().copied().find(|id| self.last_serviced.is_none_or(|last| *id > last))
+        let next = ids
+            .iter()
+            .copied()
+            .find(|id| self.last_serviced.is_none_or(|last| *id > last))
             .or_else(|| ids.first().copied());
         if let Some(id) = next {
             self.last_serviced = Some(id);
-            match self.process.settle_opening(id, observed).map_err(|error| error.to_string())? {
+            match self
+                .process
+                .settle_opening(id, observed)
+                .map_err(|error| error.to_string())?
+            {
                 LaneProcessProgress::Failed(reason) => return Err(reason),
                 _ => {}
             }
             if !current.contains(&id) {
-                self.process.prepare_closed_drain(id).map_err(|error| error.to_string())?;
+                self.process
+                    .prepare_closed_drain(id)
+                    .map_err(|error| error.to_string())?;
             } else if self.process.is_productive(id) {
-                self.process.service_one(id, observed, now).map_err(|error| error.to_string())?;
-                self.process.poll_clock(id, observed, now).map_err(|error| error.to_string())?;
-                self.process.service_body_completion(id, observed).map_err(|error| error.to_string())?;
-                self.process.prepare_persistence(id).map_err(|error| error.to_string())?;
-                self.process.prepare_body(id, observed).map_err(|error| error.to_string())?;
-                self.process.flush_one(id, observed, &self.send).map_err(|error| error.to_string())?;
+                self.process
+                    .service_one(id, observed, now)
+                    .map_err(|error| error.to_string())?;
+                self.process
+                    .poll_clock(id, observed, now)
+                    .map_err(|error| error.to_string())?;
+                self.process
+                    .service_body_completion(id, observed)
+                    .map_err(|error| error.to_string())?;
+                self.process
+                    .prepare_persistence(id)
+                    .map_err(|error| error.to_string())?;
+                self.process
+                    .prepare_body(id, observed)
+                    .map_err(|error| error.to_string())?;
+                self.process
+                    .flush_one(id, observed, &self.send)
+                    .map_err(|error| error.to_string())?;
             }
         }
         if let Some((id, envelope)) = self.ingress.pop_front() {
             if current.contains(&id) {
                 let retry = if self.process.is_productive(id) {
                     matches!(
-                        self.process.offer(id, observed, &envelope.message).map_err(|error| error.to_string())?,
-                        LaneInputOutcome::Backpressured | LaneInputOutcome::Gate(LaneCurrentGate::ObservationChanged)
+                        self.process
+                            .offer(id, observed, &envelope.message)
+                            .map_err(|error| error.to_string())?,
+                        LaneInputOutcome::Backpressured
+                            | LaneInputOutcome::Gate(LaneCurrentGate::ObservationChanged)
                     )
-                } else { true };
-                if retry { self.ingress.push_back((id, envelope)); }
+                } else {
+                    true
+                };
+                if retry {
+                    self.ingress.push_back((id, envelope));
+                }
             }
             // Only the complete authenticated set can retire an obsolete ingress
             // occurrence. This never retires the instance's Decision/Apply owner.
         }
-        for class in [LaneWorkerClass::Opening, LaneWorkerClass::Wal, LaneWorkerClass::Body] {
-            self.process.dispatch_one(&self.pool, class).map_err(|error| error.to_string())?;
+        for class in [
+            LaneWorkerClass::Opening,
+            LaneWorkerClass::Wal,
+            LaneWorkerClass::Body,
+        ] {
+            self.process
+                .dispatch_one(&self.pool, class)
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
 
     /// Deadline belongs to native instances, independently of global view changes.
-    pub(crate) fn next_deadline(&self) -> Option<Instant> { self.process.next_deadline() }
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+        self.process.next_deadline()
+    }
 
     /// Move one exact packet into its transport owner. Acceptance here is custody,
     /// not delivery. The transport must retain each unfinished fanout destination.
@@ -312,7 +381,15 @@ impl NativeLaneDriver {
     }
 
     /// Borrow actual local custody for recovery and exact future Apply settlement.
-    pub(crate) fn process(&self) -> &LaneProcessOwner { &self.process }
+    pub(crate) fn process(&self) -> &LaneProcessOwner {
+        &self.process
+    }
+
+    /// Transfer one retained diagnostic to the reporting consumer. It must not
+    /// remain indefinitely in the bounded effect queue behind ordinary traffic.
+    pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<core::Effect> {
+        self.process.take_diagnostic(id)
+    }
 
     /// Transfer closed obligations explicitly; absence from the current set alone
     /// is never an ApplicationCompleted event or permission to discard this owner.
@@ -322,13 +399,23 @@ impl NativeLaneDriver {
 
     /// Capture bounded evidence for an off-control candidate worker. All actual
     /// reducer Decisions, body handles and Apply effects remain with this driver.
-    pub(crate) fn capture_decisions(&self, observed: &VerifiedLaneContexts) -> Result<Option<NativeLaneDecisionHandoff>> {
-        if !observed.is_current(&self.state) { return Ok(None); }
+    pub(crate) fn capture_decisions(
+        &self,
+        observed: &VerifiedLaneContexts,
+    ) -> Result<Option<NativeLaneDecisionHandoff>> {
+        if !observed.is_current(&self.state) {
+            return Ok(None);
+        }
         let mut decisions = BTreeMap::new();
         for lane in observed.contexts() {
             let id = lane.instance_id();
-            let local = self.process.instance(id).map(|owner| owner.native_decision()).transpose()
-                .map_err(|error| error.to_string())?.flatten();
+            let local = self
+                .process
+                .instance(id)
+                .map(|owner| owner.native_decision())
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .flatten();
             if let Some(decision) = local.or_else(|| self.decisions.get(&id).cloned()) {
                 if decisions.len() == self.limits.process.instances.get() {
                     return Err("native Decision handoff exceeds its instance bound".into());
@@ -336,13 +423,20 @@ impl NativeLaneDriver {
                 decisions.insert(id, decision);
             }
         }
-        if !observed.is_current(&self.state) { return Ok(None); }
-        Ok(Some(NativeLaneDecisionHandoff { state: Arc::clone(&self.state), decisions }))
+        if !observed.is_current(&self.state) {
+            return Ok(None);
+        }
+        Ok(Some(NativeLaneDecisionHandoff {
+            state: Arc::clone(&self.state),
+            decisions,
+        }))
     }
 
     /// Stop physical admission; the returned join owner belongs on a blocking
     /// shutdown worker. Original process custody remains fail-stop on drop.
-    pub(crate) fn shutdown(self) -> LanePhysicalShutdown { self.pool.shutdown() }
+    pub(crate) fn shutdown(self) -> LanePhysicalShutdown {
+        self.pool.shutdown()
+    }
 }
 
 /// Bounded immutable candidate input evidence, safe to move to a worker. It does
@@ -365,37 +459,67 @@ impl NativeLaneDecisionHandoff {
     /// the runner control turn; a stale handoff cannot open a replacement slot.
     pub(crate) fn prepare_groups(&self) -> Result<NativeLaneDecisionPreparation> {
         let Some(observed) = self.state.verified_lane_consensus_contexts()? else {
-            return Ok(NativeLaneDecisionPreparation { groups: Vec::new(), waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged] });
+            return Ok(NativeLaneDecisionPreparation {
+                groups: Vec::new(),
+                waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+            });
         };
         let mut groups = Vec::new();
         let mut waits = Vec::new();
         let mut visited = BTreeSet::new();
         for lane in observed.contexts() {
-            if !self.decisions.contains_key(&lane.instance_id()) || !visited.insert(lane.frozen().admitted_binding_hash) { continue; }
+            if !self.decisions.contains_key(&lane.instance_id())
+                || !visited.insert(lane.frozen().admitted_binding_hash)
+            {
+                continue;
+            }
             let source = match self.state.first_lane_admitted_input(&observed, lane)? {
                 FirstLaneAdmittedInputReadV1::Ready(source) => source,
                 FirstLaneAdmittedInputReadV1::CanonicalBodyRecoveryRequired(source) => {
-                    waits.push(LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source));
+                    waits.push(
+                        LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source),
+                    );
                     continue;
                 }
                 FirstLaneAdmittedInputReadV1::ObservationChanged => {
-                    return Ok(NativeLaneDecisionPreparation { groups: Vec::new(), waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged] });
+                    return Ok(NativeLaneDecisionPreparation {
+                        groups: Vec::new(),
+                        waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+                    });
                 }
                 FirstLaneAdmittedInputReadV1::InstanceNotCurrent => {
                     waits.push(LaneDecisionGroupPreparationV1::InstanceNotCurrent);
                     continue;
                 }
             };
-            let decisions = self.decisions.values().filter(|decision| decision.value().admitted_binding_hash == lane.frozen().admitted_binding_hash).cloned().collect::<Vec<_>>();
-            match self.state.prepare_lane_decision_group(&observed, lane, &source, &decisions)? {
+            let decisions = self
+                .decisions
+                .values()
+                .filter(|decision| {
+                    decision.value().admitted_binding_hash == lane.frozen().admitted_binding_hash
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            match self
+                .state
+                .prepare_lane_decision_group(&observed, lane, &source, &decisions)?
+            {
                 LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group),
-                LaneDecisionGroupPreparationV1::ObservationChanged => return Ok(NativeLaneDecisionPreparation { groups: Vec::new(), waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged] }),
+                LaneDecisionGroupPreparationV1::ObservationChanged => {
+                    return Ok(NativeLaneDecisionPreparation {
+                        groups: Vec::new(),
+                        waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+                    });
+                }
                 wait => waits.push(wait),
             }
         }
         groups.sort_by_key(|group| group.body().payload().descriptor.admission_priority);
         if !observed.is_current(&self.state) {
-            return Ok(NativeLaneDecisionPreparation { groups: Vec::new(), waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged] });
+            return Ok(NativeLaneDecisionPreparation {
+                groups: Vec::new(),
+                waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+            });
         }
         Ok(NativeLaneDecisionPreparation { groups, waits })
     }

@@ -51,12 +51,12 @@ pub(crate) use persistence::LanePersistenceWait;
 pub(crate) use persistence::{
     LanePersistenceCompletion, LanePersistenceJob, LanePersistenceLaunch,
 };
-#[cfg(test)]
 pub(crate) use process::{
-    LaneClosedInstance, LanePhysicalCompletion, LanePhysicalPool, LanePhysicalShutdown,
-    LaneProcessLimits, LaneProcessOccupancy, LaneProcessOwner, LaneProcessProgress,
-    LaneWorkerClass,
+    LaneClosedInstance, LanePhysicalPool, LanePhysicalShutdown, LaneProcessLimits,
+    LaneProcessOwner, LaneProcessProgress, LaneWorkerClass,
 };
+#[cfg(test)]
+pub(crate) use process::{LanePhysicalCompletion, LaneProcessOccupancy};
 
 /// A control-boundary contradiction or permanent physical failure.
 #[derive(Debug, thiserror::Error)]

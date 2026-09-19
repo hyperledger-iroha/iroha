@@ -11940,11 +11940,6 @@ impl Kura {
             merge_log.indexed_lookups,
         )
     }
-    /// Exact identities attempted through this instance's indexed lookup path.
-    #[cfg(test)]
-    pub(crate) fn merge_query_indexed_hashes_for_test(&self) -> BTreeSet<HashOf<MergeLedgerEntry>> {
-        self.merge_log.lock().indexed_lookup_hashes.clone()
-    }
     #[cfg(test)]
     fn fail_next_merge_append_after_for_test(&self, point: MergeLedgerAppendFailurePoint) {
         self.merge_log.lock().fail_next_append_after = Some(point);
@@ -42474,7 +42469,6 @@ mod lane_admission_source;
 )]
 mod native_lane_batch_source;
 pub(crate) use native_lane_batch_source::FinalizedNativeLaneBatchV1;
-#[cfg(test)]
 pub(crate) use native_lane_batch_source::NativeLaneBatchCarrierReadV1;
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");

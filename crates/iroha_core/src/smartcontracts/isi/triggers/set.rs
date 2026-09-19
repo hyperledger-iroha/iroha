@@ -10,7 +10,7 @@ pub(crate) mod invocation_identity;
 
 #[path = "set_detachment.rs"]
 mod detachment;
-pub(crate) use detachment::{DetachError, DetachedSet};
+pub(crate) use detachment::{DetachError, DetachedSet, PreparedSet, SetPublicationError};
 
 use super::{
     data_trigger_global_permission_grantee, data_trigger_scope_authorization_is_well_formed,
@@ -1070,6 +1070,39 @@ impl SetBlock<'_> {
     }
 }
 impl SetBlock<'_> {
+    /// Retain the exact ten original trigger journals for State publication.
+    /// Owner and acquisition mode checks read no values and acquire no locks.
+    pub(crate) fn append_world_publication_identities(
+        &self,
+        expected: &Set,
+        mode: mv::BlockMode,
+        identities: &mut Vec<mv::BlockPublicationIdentity>,
+    ) -> core::result::Result<(), String> {
+        macro_rules! append {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if !self.$field.belongs_to(&expected.$field) || self.$field.mode() != mode {
+                        return Err(concat!("trigger publication journal owner or mode changed: ", stringify!($field)).into());
+                    }
+                )+
+                identities.extend([$(self.$field.publication_identity()),+]);
+            };
+        }
+        append!(
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
+            contracts,
+        );
+        Ok(())
+    }
+
     /// Visit actual trigger stores for the private World projection.
     ///
     /// Delta and baseline owners share borrowed semantic encoders. This covers

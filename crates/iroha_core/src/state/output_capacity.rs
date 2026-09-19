@@ -1,10 +1,11 @@
 //! Constructor-owned agreed output policy and one retained terminal reservation.
 //!
 //! A terminal plan is not complete source/wire/host admission. Its unfinished
-//! owner blocks publication until the actual producer consumes every reservation.
-//! TODO: compose source/metadata/trace/resident reservations and the sole typed
-//! producer with final State/witness authorization before replacing that
-//! publication gate. No native path is enabled.
+//! owner blocks publication until the actual producer consumes every reservation,
+//! captures the full witness and joins exact durable finality. Publication then
+//! retains and verifies the resulting journals and deterministic metadata tail.
+//! TODO: compose remaining source/metadata/trace/resident admission under the
+//! complete global carrier owner before enabling native runtime admission.
 
 use super::{StateBlock, StateTransaction, VerifiedLaneDecisionGroupV1};
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
@@ -101,6 +102,9 @@ pub(super) enum ExecutionOutputPlanState {
     Retained(producer::RetainedExecutionOutputs),
     Sealing,
     Sealed(producer::SealedExecutionOutputs),
+    Authorized(producer::AuthorizedExecutionOutputs),
+    Finalizing,
+    Finalized(producer::FinalizedExecutionOutputs),
     Poisoned,
 }
 

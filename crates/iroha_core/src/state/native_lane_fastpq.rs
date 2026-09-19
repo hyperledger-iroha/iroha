@@ -2,8 +2,9 @@
 //!
 //! Only actual execution constructs the private prefix seal. The common inventory
 //! rejoins retained rows and captures before sealing; no portable source claim can
-//! recreate either owner. TODO: integrate the final witness and sole publication
-//! consumer before enabling native production acceptance or State commit.
+//! recreate either owner. Actual witness capture and exact durable finality must
+//! join the common seal before State publication; runtime input admission remains
+//! gated on complete global source and resource qualification.
 
 use super::{
     BTreeMap, Hash, MergeLedgerCommitError, StateBlock, TransactionEntrypoint,

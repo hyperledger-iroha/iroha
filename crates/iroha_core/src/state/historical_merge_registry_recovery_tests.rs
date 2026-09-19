@@ -20,31 +20,31 @@ state_test!(consensus_stack historical_autonomous_merge_recovers_certified_carri
     historical_autonomous_merge_recovers_certified_carrier_before_world_replay_on_consensus_stack();
 );
 fn historical_autonomous_merge_recovers_certified_carrier_before_world_replay_on_consensus_stack() {
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
-    let batch = entry.execution_batch.as_ref().expect("catalog execution");
-    let reservation = decode_canonical_merge_reservation_key(&batch.lanes[0].reservation_keys[0])
-        .expect("exact native reservation");
-    commit_staged_autonomous_for_test(production_validated_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("commit the catalog before starting cold recovery");
-    assert_eq!(
-        state
-            .kura
-            .merge_ledger_all_entries()
-            .expect("durable history"),
-        vec![entry.clone()],
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let state = &fixture.native.state;
+    let batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap();
+    let input = &batch.groups[0].payload.input;
+    let (staged, committed) = prepared_native_publication_for_test(state, &carrier, context);
+    staged
+        .commit()
+        .expect("commit actual native catalog before cold recovery");
+    promote_native_execution_finality_for_test(state, &committed);
+    assert_native_application_recorded_for_test(state, &carrier);
+    assert!(
+        state.kura.merge_ledger_all_entries().unwrap().is_empty(),
+        "native Decisions do not manufacture a retired MergeQC sidecar"
     );
     assert_eq!(
         state.committed_height(),
-        usize::try_from(carrier.header().height().get()).expect("carrier height fits"),
+        carrier.header().height().get() as usize
     );
 
-    // Use the fallible production constructor, which authenticates the durable
-    // carrier/finality chain before minting Historical execution authority.
-    // No World, registry, transactions, or block history are copied from the
-    // writer. Rebuilding these is the subsequent block-replay phase's job.
     let cold = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
         Arc::clone(&state.kura),
@@ -52,42 +52,46 @@ fn historical_autonomous_merge_recovers_certified_carrier_before_world_replay_on
         state.chain_id.clone(),
         *state.network_id_ref(),
     )
-    .expect("certified durable history must validate before World replay");
+    .expect("durable global finality authenticates before World replay");
     assert_eq!(cold.committed_height(), 0);
     assert_eq!(
         State::queue_plan_admission_registry_match_in_view(
             &cold.view(),
-            reservation.entrypoint_hash,
-            reservation.queue_plan_admission_binding_hash,
+            input.entrypoint.hash(),
+            input.certificate.binding.canonical_hash(),
         )
-        .expect("empty World contains no orphan admission evidence"),
-        QueuePlanAdmissionRegistryMatch::Absent,
+        .unwrap(),
+        QueuePlanAdmissionRegistryMatch::Absent
     );
     assert!(cold.merge_ledger().snapshot().is_empty());
     assert_eq!(cold.merge_admission.read().expected_epoch(), 1);
     assert!(cold.view().runtime_catalog_hash().unwrap().is_none());
-    assert!(
-        !cold
-            .merge_execution_already_applied(&entry, batch)
-            .expect("fresh World marker lookup"),
-        "validating durable history must not publish its future execution effects",
-    );
-    let before = crate::snapshot::canonical_state_snapshot_hash(&cold)
-        .expect("stable valid fixture snapshot");
-    cold.recover_merge_ledger_from_kura()
-        .expect("repeat authenticated cold recovery remains read-only");
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&cold)
-            .expect("stable valid fixture snapshot"),
-        before
-    );
-    assert!(cold.merge_ledger().snapshot().is_empty());
-    assert_eq!(
-        cold.kura
-            .merge_ledger_all_entries()
-            .expect("retained history"),
-        vec![entry],
-    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(&cold).unwrap();
+    for _ in 0..2 {
+        let crate::kura::NativeLaneBatchCarrierReadV1::Ready(included) = cold
+            .read_finalized_native_lane_batch(
+                NonZeroUsize::new(carrier.header().height().get() as usize).unwrap(),
+                carrier.hash(),
+            )
+            .expect(
+                "cold source recovery retains authentic inclusion without future World authority",
+            )
+        else {
+            panic!("exact locally retained native carrier");
+        };
+        assert_eq!(
+            included.batch(),
+            batch,
+            "native source Decisions are recovered without translation"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&cold).unwrap(),
+            before,
+            "recovering future finalized inputs does not apply their World or registry effects"
+        );
+        assert!(cold.view().runtime_catalog_hash().unwrap().is_none());
+        assert!(cold.merge_ledger().snapshot().is_empty());
+    }
 }
 
 state_test!(consensus_stack live_autonomous_merge_requires_exact_pending_queue_plan_owner
@@ -263,55 +267,121 @@ state_test!(consensus_stack historical_autonomous_merge_rejects_restored_registr
     historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_stack();
 );
 fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_stack() {
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
-    let batch = entry.execution_batch.as_ref().expect("catalog execution");
-    let reservation = decode_canonical_merge_reservation_key(&batch.lanes[0].reservation_keys[0])
-        .expect("exact native reservation");
-    let key = State::queue_plan_admission_registry_marker_key(
-        &crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-            network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
-                state.network_id_ref(),
-            ),
-            entrypoint_hash: reservation.entrypoint_hash,
-        },
-    )
-    .expect("exact historical registry key");
-    commit_staged_autonomous_for_test(production_validated_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("commit catalog effects and canonical transaction membership");
-    let snapshot = norito::json::to_value(&state).expect("native State snapshot");
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let state = &fixture.native.state;
+    let batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap();
+    let input = &batch.groups[0].payload.input;
+    let binding = &input.certificate.binding;
+    let key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()).unwrap();
+    let (staged, committed) = prepared_native_publication_for_test(state, &carrier, context);
+    staged
+        .commit()
+        .expect("publish native catalog and exact carrier membership");
+    promote_native_execution_finality_for_test(state, &committed);
+    let snapshot = norito::json::to_value(state).expect("native State snapshot");
+    let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
+    let restore = |lane_manifests: LaneManifestRegistryHandle| {
+        deserialize::KuraSeed {
+            kura: Arc::clone(&state.kura),
+            lane_manifests,
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot.clone())
+    };
+    let error = restore(Arc::new(LaneManifestRegistry::empty()))
+        .err()
+        .expect("restoration rejects an unrelated configured manifest baseline");
+    assert!(
+        error
+            .to_string()
+            .contains("manifest baseline differs from canonical World catalog")
+    );
+    let baseline = state.lane_manifests.read().clone();
+    let expected_state_hash = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    for field in ["merge_global_state_root", "merge_hint_roots"] {
+        let mut changed = snapshot.clone();
+        let world = changed.get_mut("world").unwrap().as_object_mut().unwrap();
+        let cell = world.get_mut(field).unwrap().as_object_mut().unwrap();
+        let foreign = Hash::new(b"unbound restored reduction metadata");
+        let value = if field == "merge_global_state_root" {
+            norito::json::to_value(&Some(foreign)).unwrap()
+        } else {
+            norito::json::to_value(&vec![foreign]).unwrap()
+        };
+        cell.insert("blocks".to_owned(), value);
+        let error = deserialize::KuraSeed {
+            kura: Arc::clone(&state.kura),
+            lane_manifests: Arc::clone(&baseline),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(changed)
+        .err()
+        .expect("empty durable merge history cannot authenticate fabricated reduction metadata");
+        assert!(
+            error
+                .to_string()
+                .contains("empty merge history has noncanonical reduction metadata"),
+            "wrong {field} recovery rejection: {error}"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+            expected_state_hash,
+            "malformed restore cannot mutate the original canonical State"
+        );
+    }
     for expected in [
         QueuePlanAdmissionRegistryMatch::Absent,
         QueuePlanAdmissionRegistryMatch::Conflict,
     ] {
-        let restored =
-            deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura))
-                .expect("exact snapshot restores through authenticated durable history");
+        let restored = restore(Arc::clone(&baseline))
+            .expect("restore exact applied native World with durable source history");
+        assert_eq!(restored.committed_height(), height.get());
         assert_eq!(
-            restored.committed_height(),
-            usize::try_from(carrier.header().height().get()).unwrap(),
+            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),
+            expected_state_hash,
+            "configured baseline restores the exact canonical applied State before registry tampering: {}",
+            canonical_native_restore_difference_for_test(state, &restored)
         );
-        assert_eq!(
-            restored.merge_ledger().snapshot().as_slice(),
-            &[Arc::new(entry.clone())],
-        );
+        assert!(restored.merge_ledger().snapshot().is_empty());
         assert_eq!(
             State::queue_plan_admission_registry_match_in_view(
                 &restored.view(),
-                reservation.entrypoint_hash,
-                reservation.queue_plan_admission_binding_hash,
+                input.entrypoint.hash(),
+                binding.canonical_hash(),
             )
-            .expect("restored exact applied owner"),
-            QueuePlanAdmissionRegistryMatch::Exact,
+            .unwrap(),
+            QueuePlanAdmissionRegistryMatch::Exact
+        );
+        assert!(
+            matches!(
+                restored
+                    .read_finalized_native_lane_batch(height, carrier.hash())
+                    .unwrap(),
+                crate::kura::NativeLaneBatchCarrierReadV1::Ready(_)
+            ),
+            "untampered applied native source passes recovery"
         );
         {
             let mut world = restored.world.block();
             if expected == QueuePlanAdmissionRegistryMatch::Absent {
                 world.smart_contract_state.remove(key.clone());
             } else {
+                let priority = State::decode_exact_queue_plan_admission_registry_record(
+                    &key,
+                    world.smart_contract_state.get(&key).unwrap(),
+                )
+                .unwrap()
+                .priority;
                 world.smart_contract_state.insert(
                     key.clone(),
                     State::queue_plan_admission_registry_marker_payload(
@@ -319,14 +389,9 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
                             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
                             binding_hash: Hash::new(b"conflicting restored registry owner"),
                         },
-                        State::decode_exact_queue_plan_admission_registry_record(
-                            &key,
-                            world.smart_contract_state.get(&key).unwrap(),
-                        )
-                        .unwrap()
-                        .priority,
+                        priority,
                     )
-                    .expect("canonical conflicting registry value"),
+                    .unwrap(),
                 );
             }
             world.commit();
@@ -334,25 +399,26 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
         assert_eq!(
             State::queue_plan_admission_registry_match_in_view(
                 &restored.view(),
-                reservation.entrypoint_hash,
-                reservation.queue_plan_admission_binding_hash,
+                input.entrypoint.hash(),
+                binding.canonical_hash(),
             )
-            .expect("exactly classified restored owner evidence"),
-            expected,
+            .unwrap(),
+            expected
         );
-        let before = crate::snapshot::canonical_state_snapshot_hash(&restored)
-            .expect("stable valid fixture snapshot");
+        let before = crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap();
         let cached = restored.merge_ledger().snapshot();
         let expected_epoch = restored.merge_admission.read().expected_epoch();
+        let error = restored
+            .read_finalized_native_lane_batch(height, carrier.hash())
+            .expect_err(
+                "applied native history must prove its exact retained World admission owner",
+            );
         assert_merge_binding_error(
-            restored.recover_merge_ledger_from_kura().expect_err(
-                "history at the restored height cannot defer its World ownership check",
-            ),
-            MERGE_REGISTRY_BINDING_ERROR,
+            error,
+            "applied native source lacks its exact retained admission registry binding",
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&restored)
-                .expect("stable valid fixture snapshot"),
+            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),
             before
         );
         assert_eq!(restored.merge_ledger().snapshot(), cached);

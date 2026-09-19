@@ -4004,6 +4004,7 @@ pub(crate) mod tests {
         let snapshot = norito::json::to_value(&state)
             .expect("serialize the committed key rotation and pulse history");
         let restored = crate::state::deserialize::KuraSeed {
+            lane_manifests: state.lane_manifests.read().clone(),
             kura: state.kura_handle(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]

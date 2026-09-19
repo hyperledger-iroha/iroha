@@ -22,6 +22,7 @@ async fn can_read_snapshot_after_writing() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -83,6 +84,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -382,6 +384,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(0),
         TEST_CHUNK_SIZE,
@@ -470,6 +473,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -540,6 +544,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -581,6 +586,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -622,6 +628,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -708,6 +715,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         let result = try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -948,6 +956,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(1),
             TEST_CHUNK_SIZE,
@@ -1013,6 +1022,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1067,6 +1077,7 @@ async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -1199,6 +1210,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1226,6 +1238,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1254,6 +1267,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1294,6 +1308,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1344,6 +1359,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1380,6 +1396,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1424,6 +1441,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1455,6 +1473,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,

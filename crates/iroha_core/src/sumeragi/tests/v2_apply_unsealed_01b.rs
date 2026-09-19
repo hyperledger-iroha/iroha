@@ -59,7 +59,7 @@ v2_apply_test!(
             "kura_released",
             "queue_completion_forgotten",
         ] {
-            let fixture =
+            let mut fixture =
                 ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
             let producer = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal)
                 .expect("derive autonomous crash producer");
@@ -102,6 +102,7 @@ v2_apply_test!(
                 )
                 .expect("bind autonomous crash lifecycle reservation group"),
             );
+            fixture.recertify_unapplied_body_for_current_state();
             let mut global_body_store = fixture.reopen_body_store();
             fixture
                 .execute(&mut global_body_store)
@@ -479,7 +480,7 @@ v2_apply_test!(
 v2_apply_test!(
     autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending,
     {
-        let fixture =
+        let mut fixture =
             ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
         let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
             .expect("derive missing-Queue-owner producer");
@@ -520,6 +521,7 @@ v2_apply_test!(
             lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
                 .expect("bind missing-Queue-owner lifecycle reservation group"),
         );
+        fixture.recertify_unapplied_body_for_current_state();
         let mut global_body_store = fixture.reopen_body_store();
         fixture
             .execute(&mut global_body_store)
@@ -968,7 +970,7 @@ v2_apply_test!(
         let V2ApplyError::Validation(message) = error else {
             panic!("unexpected classification")
         };
-        assert!(message.contains("rejected transaction result count: 1"));
+        assert!(message.contains("rejected execution output count: 1"));
         assert!(!message.contains(secret));
     }
 );
@@ -1204,34 +1206,42 @@ v2_apply_test!(
 );
 v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
     let fixture = ApplyFixture::new();
-    let artifact = wire::finality::V2FinalityArtifact::new(
-        fixture.context.clone(),
-        fixture.task.subject(),
-        fixture.task.certificate().clone(),
-        fixture.service.validator_set_pops.clone(),
-    );
-    let verified_artifact = VerifiedV2FinalityArtifact::verify(artifact)
-        .expect("fixture finality artifact must verify");
+    let mut store = fixture.reopen_body_store();
     fixture
-        .service
-        .validate_and_apply(
-            &fixture.context,
-            fixture.body.clone(),
-            false,
-            fixture.task.validated_receipt().execution_commitment(),
-            verified_artifact,
-            CheckedCarrierApplications::for_block(&fixture.body),
-        )
-        .expect("model corrupted WSV-ahead crash image");
+        .execute(&mut store)
+        .expect("publish actual execution only after exact durable finality");
+    fixture.assert_complete();
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+        .expect("capture actually committed State");
+    let checkpoint = fixture
+        .kura
+        .wsv_checkpoint(1)
+        .expect("committed checkpoint");
+    let manifest = fixture.kura.commit_manifest(1).expect("committed manifest");
+    let finality = fixture
+        .kura
+        .v2_finality_artifact(1)
+        .expect("committed finality");
+    fixture
+        .kura
+        .remove_block_body_for_recovery_test(NonZeroUsize::new(1).unwrap())
+        .expect("model loss of the committed canonical body without inventing WSV authority");
     assert_eq!(fixture.state.committed_height(), 1);
-    assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
+    assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+    drop(store);
     let mut store = fixture.reopen_body_store();
     let error = fixture
         .execute(&mut store)
         .expect_err("WSV cannot outrun canonical storage");
     assert!(matches!(&error, V2ApplyError::StateAheadOfKura));
     assert!(error.requires_restart_recovery());
-    fixture.assert_no_post_apply_sidecars();
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+        state_hash
+    );
+    assert_eq!(fixture.kura.wsv_checkpoint(1).unwrap(), checkpoint);
+    assert_eq!(fixture.kura.commit_manifest(1).unwrap(), manifest);
+    assert_eq!(fixture.kura.v2_finality_artifact(1).unwrap(), finality);
 });
 v2_apply_test!(
     apply_rejects_commit_qc_execution_commitment_drift_before_state_or_kura_write,

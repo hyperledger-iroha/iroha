@@ -8,113 +8,165 @@ state_test!(consensus_stack autonomous_merge_beacon_composition_preserves_certif
 );
 fn autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once_on_consensus_stack()
  {
-    let (state, entry, carrier, context) = autonomous_merge_beacon_composition_fixture();
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("real certified execution batch");
-    let original_entry = entry.clone();
+    let (fixture, carrier, context) = autonomous_native_beacon_composition_fixture();
+    let state = &fixture.native.state;
+    let original_batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap()
+        .clone();
     let pulse = carrier
         .npos_consensus_effects()
-        .expect("pulse effects")
+        .unwrap()
         .finalized_global_beacon_pulse
-        .expect("real threshold signature");
+        .unwrap();
     assert_eq!(carrier.external_entrypoint_count(), 0);
-    assert_eq!(batch.entrypoint_count, 1);
-    let original_root = batch.write_set_root;
-    let first = staged_native_merge_beacon_block(&state, &carrier, &context);
-    let authorization = first
-        .canonical_wsv_merge_commit_authorization
-        .as_ref()
-        .expect("original QC authorization");
-    assert_eq!(authorization.write_set_root, original_root);
+    assert_eq!(original_batch.groups.len(), 1);
+    let mut first_wire = carrier.clone();
+    let mut first =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut first_wire, state, &context)
+            .expect(
+                "native Decisions, pristine beacon, shared start hooks and complete output tail",
+            );
+    let expected_identity = first
+        .native_output_publication_identity()
+        .unwrap()
+        .expect("retained exact native source");
+    let expected_root = first.merge_execution_write_set_root();
+    let expected_events = norito::encode_canonical(
+        &first
+            .world
+            .external_event_buf
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let expected_witness = first
+        .take_exec_witness()
+        .expect("complete original witness owner");
     assert_eq!(
-        authorization.expected_post_state_hash,
-        batch.expected_post_state_hash
+        first.world.assets.get(&fixture.source).unwrap().0,
+        Quantity::from(75u32)
     );
-    let seal = authorization
-        .beacon_composition
-        .as_ref()
-        .expect("native pulse composition seal");
-    let expected_composed = (
-        seal.write_set_root,
-        seal.external_event_bytes.clone(),
-        seal.publication_event_bytes.clone(),
-    );
-    assert_ne!(
-        seal.write_set_root, original_root,
-        "the pulse maps remain committed, not excluded"
+    assert_eq!(
+        first.world.assets.get(&fixture.destination).unwrap().0,
+        Quantity::from(25u32)
     );
     assert_eq!(
         first.world.global_beacon_pulses.get(&pulse.pulse_id),
         Some(&pulse)
     );
+    assert!(
+        !expected_witness.writes.is_empty(),
+        "actual economics and pulse must enter the complete witness"
+    );
+    assert!(
+        first_wire.execution_outputs().iter().all(|output| matches!(
+            output,
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(_)
+        )),
+        "this fixture schedules no internal invocation; actual Time maintenance still runs"
+    );
     drop(first);
     assert!(
         state
             .world
+            .global_beacon_pulses
             .view()
-            .global_beacon_pulses()
             .get(&pulse.pulse_id)
             .is_none(),
         "abandoned reconstruction cannot publish a pulse"
     );
-
-    let mut replayed = staged_native_merge_beacon_block(&state, &carrier, &context);
-    let seal = replayed
-        .canonical_wsv_merge_commit_authorization
-        .as_ref()
-        .unwrap()
-        .beacon_composition
-        .as_ref()
-        .unwrap();
     assert_eq!(
-        (
-            seal.write_set_root,
-            seal.external_event_bytes.clone(),
-            seal.publication_event_bytes.clone()
-        ),
-        expected_composed,
-        "native reconstruction must produce identical complete roots and events",
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
-    let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut replayed).unpack(|_| {});
-    let _witness = replayed
-        .take_exec_witness()
-        .expect("native execution witness");
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    assert_eq!(committed.as_ref().hash(), carrier.hash());
-    let topology = state.commit_topology_snapshot();
-    let (_, authority) = replayed.apply_without_execution_inner(
-        &committed,
-        topology,
-        ApplyTopologyAuthority::Fixture,
+
+    let mut executed = carrier.clone();
+    let mut replayed =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+            .expect("reconstruct the same complete native execution");
+    assert_eq!(
+        replayed.native_output_publication_identity().unwrap(),
+        Some(expected_identity)
     );
-    authority.expect("native finalized composed carrier authorization");
-    commit_staged_autonomous_for_test(*replayed).expect("consume exact staged authorization once");
+    assert_eq!(replayed.merge_execution_write_set_root(), expected_root);
+    assert_eq!(
+        norito::encode_canonical(
+            &replayed
+                .world
+                .external_event_buf
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        expected_events
+    );
+    assert_eq!(
+        executed.encode_wire().unwrap(),
+        first_wire.encode_wire().unwrap(),
+        "all actual Network/Pipeline/Time outputs are reproducible"
+    );
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, executed, &mut replayed, context.clone());
+    assert_eq!(
+        witness, expected_witness,
+        "the entire original witness is reproduced, including the native prefix"
+    );
+    replayed
+        .authorize_execution_output_publication(&committed, &witness)
+        .expect("exact actual witness and durable four-validator finality");
+    let events = replayed
+        .apply_without_execution_with_verified_v2_finality(&committed)
+        .expect("consume canonical native finality authorization");
+    assert!(
+        !events.is_empty(),
+        "real Time and execution events are published"
+    );
+    replayed
+        .commit()
+        .expect("publish exact native source/output owner once");
+    promote_native_execution_finality_for_test(state, &committed);
     assert_eq!(
         state.committed_height(),
         usize::try_from(carrier.header().height().get()).unwrap()
     );
     assert_eq!(
-        state
-            .world
-            .view()
-            .global_beacon_pulses()
-            .get(&pulse.pulse_id),
+        state.world.global_beacon_pulses.view().get(&pulse.pulse_id),
         Some(&pulse)
     );
-    assert!(
-        state
-            .merge_execution_already_applied(&entry, batch)
-            .expect("exact execution marker")
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(75u32)
     );
     assert_eq!(
-        entry, original_entry,
-        "the merge QC and both certified roots were never rewritten"
+        state
+            .world
+            .assets
+            .view()
+            .get(&fixture.destination)
+            .unwrap()
+            .0,
+        Quantity::from(25u32)
     );
+    assert_eq!(
+        carrier
+            .execution_context()
+            .unwrap()
+            .native_lane_decisions
+            .as_deref(),
+        Some(&original_batch),
+        "native Decisions and their certified input/base commitments are never rewritten as output claims"
+    );
+    let mut duplicate = carrier.clone();
     assert!(
-        ValidBlock::state_block_for_execution_for_test(&carrier, &state, &context).is_err(),
-        "a committed pulse/execution pair cannot be applied twice"
+        ValidBlock::execute_native_block_and_capture_for_test(&mut duplicate, state, &context)
+            .is_err(),
+        "a committed pulse and economic input cannot be applied twice"
     );
 }
 
@@ -123,11 +175,19 @@ state_test!(consensus_stack autonomous_merge_beacon_composition_rejects_invalid_
 );
 fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift_on_consensus_stack()
  {
-    let (state, entry, carrier, context) = autonomous_merge_beacon_composition_fixture();
-    let original = carrier
-        .npos_consensus_effects()
-        .expect("real pulse effects")
-        .clone();
+    let (fixture, carrier, context) = autonomous_native_beacon_composition_fixture();
+    let state = &fixture.native.state;
+    let original = carrier.npos_consensus_effects().unwrap().clone();
+    let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_canonical_native_lane_batch_source(&carrier)
+        .expect("the complete native source is authentic before pristine controls")
+    else {
+        panic!("locally retained exact native source");
+    };
+    assert!(
+        source.stage_with_start_hooks().is_err(),
+        "a pulse-bearing native source cannot retain a stage after omitting its pristine pulse"
+    );
     for alteration in 0..5 {
         let mut changed = carrier.clone();
         let mut effects = original.clone();
@@ -167,67 +227,55 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
         }
         changed.set_npos_consensus_effects(Some(effects));
         assert!(
-            ValidBlock::state_block_for_execution_for_test(&changed, &state, &context).is_err(),
-            "native admission must reject missing, corrupt, foreign-parent, wrong-session or mixed effects: {alteration}"
+            ValidBlock::execute_native_block_and_capture_for_test(&mut changed, state, &context)
+                .is_err(),
+            "native owner rejects missing, corrupt, foreign-parent, wrong-session and mixed pulse effects: {alteration}"
         );
     }
-    // A successful native stage is required before each tamper control; failure
-    // cannot be explained by a mock authorization or unrelated missing metadata.
     for alteration in 0..3 {
-        let mut staged = staged_native_merge_beacon_block(&state, &carrier, &context);
-        stage_exact_autonomous_carrier_membership_for_pre_vote(&mut staged, &carrier);
-        if alteration == 2 {
-            staged.world.external_event_buf.push(
+        let mut executed = carrier.clone();
+        let mut staged =
+            ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+                .expect("successful complete source execution before every tamper");
+        staged
+            .verify_execution_output_seal(&executed)
+            .expect("untampered exact global seal");
+        match alteration {
+            0 => {
+                staged.world.smart_contract_state.insert(
+                    StatePath::from_str("native_beacon_post_seal_drift").unwrap(),
+                    vec![0x91],
+                );
+            }
+            1 => {
+                staged
+                    .world
+                    .global_beacon_pulses
+                    .remove(original.finalized_global_beacon_pulse.unwrap().pulse_id);
+            }
+            _ => staged.world.external_event_buf.push(
                 BlockEvent {
                     header: carrier.header(),
                     status: BlockStatus::Approved,
                 }
                 .into(),
-            );
-        }
-        // The canonical output owner also runs Time maintenance and emits its
-        // authorization-bound event when no internal invocation is scheduled.
-        // TODO: migrate this legacy certified-merge fixture to the complete
-        // native source/common output owner. Keep its current admission failure
-        // until that integration exists; a synthetic Time event would omit the
-        // real maintenance effects and weaken these authorization controls.
-        let mut executed = carrier.canonical_resultless_proposal();
-        ValidBlock::execute_block_outputs_for_test(&mut executed, &mut staged, None)
-            .expect("native composition requires the complete canonical output owner");
-        assert!(executed.execution_outputs().is_empty());
-        if alteration != 2 {
-            staged
-                .validate_staged_merge_execution_authorization()
-                .expect("untampered composition passes exact pre-vote validation");
-        }
-        match alteration {
-            0 => {
-                staged.world.smart_contract_state.insert(
-                    StatePath::from_str("merge_beacon_post_seal_drift").unwrap(),
-                    vec![0x91],
-                );
-            }
-            1 => {
-                let pulse_id = original.finalized_global_beacon_pulse.unwrap().pulse_id;
-                staged.world.global_beacon_pulses.remove(pulse_id);
-            }
-            _ => {}
+            ),
         }
         assert!(
-            staged
-                .validate_staged_merge_execution_authorization()
-                .is_err(),
-            "arbitrary WSV, beacon-map or event-only drift cannot be resealed: {alteration}"
+            staged.verify_execution_output_seal(&executed).is_err(),
+            "WSV, beacon-map and event-only drift cannot be resealed: {alteration}"
         );
     }
     for event_only in [false, true] {
-        let mut staged = staged_native_merge_beacon_block(&state, &carrier, &context);
-        let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut staged).unpack(|_| {});
-        let _witness = staged
-            .take_exec_witness()
-            .expect("validated native witness");
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        // A late mutation must fail before finality metadata can seal a new root.
+        let mut executed = carrier.clone();
+        let mut staged =
+            ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+                .unwrap();
+        let (committed, witness) =
+            finalize_native_execution_for_test(state, executed, &mut staged, context.clone());
+        staged
+            .authorize_execution_output_publication(&committed, &witness)
+            .expect("actual untampered execution receives exact durable finality");
         if event_only {
             staged.world.external_event_buf.push(
                 BlockEvent {
@@ -238,28 +286,22 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
             );
         } else {
             staged.world.smart_contract_state.insert(
-                StatePath::from_str("merge_beacon_pre_finality_drift").unwrap(),
+                StatePath::from_str("native_beacon_pre_finality_drift").unwrap(),
                 vec![0x92],
             );
         }
-        let (events, authority) = staged.apply_without_execution_inner(
-            &committed,
-            state.commit_topology_snapshot(),
-            ApplyTopologyAuthority::Fixture,
-        );
-        assert!(
-            authority.is_err(),
-            "finalization cannot reseal post-vote WSV or event drift"
-        );
-        assert!(
-            events.is_empty(),
-            "rejected finality must not publish events"
-        );
         assert!(
             staged
-                .canonical_carrier_commit_metadata_authorization
-                .is_none(),
-            "rejected finality must not mint a new metadata authorization"
+                .apply_without_execution_with_verified_v2_finality(&committed)
+                .is_err(),
+            "finalization rejects post-authorization WSV/event drift before returning any publication events"
+        );
+        assert!(
+            matches!(
+                staged.execution_output_plan,
+                Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)
+            ),
+            "failed finality cannot mint a replacement publication owner"
         );
     }
     assert_eq!(
@@ -267,9 +309,16 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
         autonomous_carrier_parent_height(&carrier)
     );
     assert!(
-        !state
-            .merge_execution_already_applied(&entry, entry.execution_batch.as_ref().unwrap())
-            .unwrap()
+        state
+            .world
+            .global_beacon_pulses
+            .view()
+            .get(&original.finalized_global_beacon_pulse.unwrap().pulse_id)
+            .is_none()
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
 
@@ -292,68 +341,97 @@ fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     assert_eq!(*borrowed_hash, carrier_hash);
     assert!(core::ptr::eq(borrowed_hash, &carrier_hash));
 }
-state_test!(consensus_stack canonical_wsv_authorization_commits_exact_autonomous_execution_once
-    canonical_wsv_authorization_commits_exact_autonomous_execution_once_on_consensus_stack();
+state_test!(consensus_stack native_finality_owner_commits_exact_execution_once
+    native_finality_owner_commits_exact_execution_once_on_consensus_stack();
 );
-fn canonical_wsv_authorization_commits_exact_autonomous_execution_once_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("exact authorized autonomous execution must commit");
+fn native_finality_owner_commits_exact_execution_once_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let (overlay, committed) =
+        prepared_native_publication_for_test(state, &carrier, context.clone());
+    overlay
+        .commit()
+        .expect("the exact finalized native execution publishes once");
+    promote_native_execution_finality_for_test(state, &committed);
     assert_eq!(
         state.committed_height(),
-        usize::try_from(carrier.header().height().get()).expect("carrier height fits usize"),
+        usize::try_from(carrier.header().height().get()).unwrap()
     );
-    assert!(
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(75u32)
+    );
+    assert_eq!(
         state
-            .merge_execution_already_applied(
-                &entry,
-                entry
-                    .execution_batch
-                    .as_ref()
-                    .expect("fixture carries execution"),
-            )
-            .expect("committed marker lookup"),
-        "canonical commit must publish its replay markers"
+            .world
+            .assets
+            .view()
+            .get(&fixture.destination)
+            .unwrap()
+            .0,
+        Quantity::from(25u32)
+    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let mut duplicate = carrier;
+    assert!(
+        ValidBlock::execute_native_block_and_capture_for_test(&mut duplicate, state, &context)
+            .is_err(),
+        "the committed native input/frontier markers reject duplicate application"
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before
     );
 }
 state_test!(consensus_stack queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl
     queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_consensus_stack();
 );
+include!("native_transfer_publication_test_support.rs");
 fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_consensus_stack() {
-    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("QueuePlan transfer produces an autonomous execution batch");
-    let lane = batch.lanes.first().expect("fixture carries one lane");
-    let TransactionEntrypoint::External(transaction) = &lane.entrypoints[0] else {
+    let (fixture, carrier, context) =
+        native_transfer_publication_fixture(QueuePlanTransferFixture::Single);
+    let state = &fixture.native.state;
+    let mut executed = carrier.clone();
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+            .expect("authenticated first admission and native Decisions execute exactly once");
+    assert_eq!(executed.network_entrypoint_count(), 1);
+    let input = executed.network_entrypoint_at(0).unwrap();
+    let TransactionEntrypoint::External(transaction) = input else {
         panic!("fixture QueuePlan transfer is external")
     };
     assert_eq!(
         transaction.admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
     );
     let expires_at = transaction
         .creation_time()
         .checked_add(transaction.time_to_live().expect("fixture TTL"))
-        .expect("fixture expiry fits");
+        .unwrap();
     assert!(
         carrier.header().creation_time() > expires_at,
-        "embedded canonical execution must remain valid after top-level transaction TTL"
+        "authenticated first admission remains valid after top-level transaction TTL"
+    );
+    let call_hash = Hash::from(input.execution_call_hash());
+    assert_eq!(
+        call_hash,
+        Hash::from(input.hash()),
+        "external source retains its exact owner"
     );
     assert_eq!(
-        lane.fastpq_transcripts.len(),
+        executed.fastpq_transcripts().len(),
         1,
-        "numeric transfer must emit FASTPQ evidence; results={:?}",
-        lane.results
+        "numeric transfer must emit FASTPQ evidence; outputs={:?}",
+        executed.execution_outputs()
     );
-    let bundle = &lane.fastpq_transcripts[0];
-    assert_eq!(bundle.entry_hash, lane.entrypoint_hashes[0]);
-    assert_eq!(bundle.transcripts.len(), 1);
-    let transcript = &bundle.transcripts[0];
-    assert_eq!(transcript.batch_hash, bundle.entry_hash);
+    let transcripts = executed
+        .fastpq_transcripts()
+        .get(&call_hash)
+        .expect("evidence belongs to the exact native input");
+    assert_eq!(transcripts.len(), 1);
+    let transcript = &transcripts[0];
+    assert_eq!(transcript.batch_hash, call_hash);
     let delta = transcript
         .deltas
         .first()
@@ -373,36 +451,52 @@ fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_c
     };
     assert_eq!(balance(&source_asset), Quantity::from(10_u32));
     assert_eq!(balance(&destination_asset), Quantity::zero());
-    let mut lane_without_evidence = lane.clone();
-    lane_without_evidence.fastpq_transcripts = Vec::new().into();
-    assert_ne!(
-        crate::merge::merge_lane_execution_hash(lane),
-        crate::merge::merge_lane_execution_hash(&lane_without_evidence),
-        "FASTPQ evidence must change the lane execution hash"
+    let without_evidence = native_transfer_output_mutant_for_test(
+        &executed,
+        executed.execution_outputs().to_vec(),
+        BTreeMap::new(),
     );
     assert_ne!(
-        batch.execution_root,
-        crate::merge::merge_execution_root(core::slice::from_ref(&lane_without_evidence)),
-        "FASTPQ evidence must change the execution root"
+        Hash::new(&executed.fastpq_transcripts().encode()),
+        Hash::new(&without_evidence.fastpq_transcripts().encode()),
+        "FASTPQ evidence changes the canonical transcript commitment"
     );
-    let mut batch_without_evidence = batch.clone();
-    batch_without_evidence.lanes[0] = lane_without_evidence;
-    batch_without_evidence.execution_root =
-        crate::merge::merge_execution_root(&batch_without_evidence.lanes);
     assert_ne!(
-        crate::merge::merge_execution_batch_hash(batch),
-        crate::merge::merge_execution_batch_hash(&batch_without_evidence),
-        "FASTPQ evidence must change the execution batch hash"
+        executed.executed_block_wire_hash().unwrap(),
+        without_evidence.executed_block_wire_hash().unwrap(),
+        "FASTPQ evidence changes the executed carrier wire commitment"
     );
     let pending_obligation_key = State::queue_plan_pending_obligation_marker_key(
         crate::torii_proxy::queue_plan_admission_network_id_digest(state.network_id_ref()),
-        lane.entrypoints[0].hash(),
+        input.hash(),
     )
     .expect("fixture pending-obligation key");
-    commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("follower replay and exact carrier commit accept transcript-bound execution");
+    assert!(
+        state
+            .world
+            .view()
+            .smart_contract_state()
+            .get(&pending_obligation_key)
+            .is_some(),
+        "admission owns one durable obligation before economic publication"
+    );
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, executed, &mut overlay, context);
+    assert_ne!(
+        native_transfer_commitment_for_test(committed.as_ref(), &witness),
+        native_transfer_commitment_for_test(&without_evidence, &witness),
+        "FASTPQ evidence changes the exact finality execution commitment"
+    );
+    overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .unwrap();
+    let _events = overlay
+        .apply_without_execution_with_verified_v2_finality(&committed)
+        .unwrap();
+    overlay
+        .commit()
+        .expect("exact durable native finality publishes transcript-bound execution");
+    promote_native_execution_finality_for_test(state, &committed);
     assert_eq!(balance(&source_asset), Quantity::from(7_u32));
     assert_eq!(balance(&destination_asset), Quantity::from(3_u32));
     assert!(
@@ -416,20 +510,25 @@ fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl_on_c
     );
 }
 fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFixture) {
-    let (state, entry, carrier) =
-        autonomous_merge_batch_transfer_commit_authorization_fixture(mode);
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("batch transfer produces an autonomous execution batch");
-    let lane = batch.lanes.first().expect("fixture carries one lane");
-    assert_eq!(lane.results.len(), 1);
-    let outcomes = lane.results[0].batch_transfer_outcomes();
+    let (fixture, carrier, context) = native_transfer_publication_fixture(mode);
+    let state = &fixture.native.state;
+    let mut executed = carrier.clone();
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+            .expect("complete production native owner executes the batch");
+    assert_eq!(executed.network_entrypoint_count(), 1);
+    let input = executed.network_entrypoint_at(0).unwrap();
+    let input_hash = input.hash();
+    let result = &executed
+        .network_output_at(0)
+        .expect("one exact Network result")
+        .1
+        .result;
+    let outcomes = result.batch_transfer_outcomes();
     assert_eq!(
         outcomes.len(),
         2,
-        "both batch legs must be result-bound; result={:?}",
-        lane.results[0]
+        "both batch legs must be result-bound; result={result:?}"
     );
     assert_eq!(
         outcomes
@@ -468,26 +567,36 @@ fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFix
     assert_eq!(balance(&source_asset), Quantity::from(20_u32));
     assert_eq!(balance(&destination_assets[0]), Quantity::zero());
     assert_eq!(balance(&destination_assets[1]), Quantity::zero());
-
-    let mut result_without_receipts = lane.results[0].clone();
+    let mut result_without_receipts = result.clone();
     result_without_receipts.set_batch_transfer_outcomes(Vec::new());
     assert_ne!(
-        lane.results[0].hash(),
+        result.hash(),
         result_without_receipts.hash(),
-        "receipt rows must change the transaction-result leaf"
+        "receipt rows change the transaction-result leaf"
     );
-    let mut lane_without_receipts = lane.clone();
-    lane_without_receipts.results[0] = result_without_receipts;
-    lane_without_receipts.result_hashes[0] = Hash::from(lane_without_receipts.results[0].hash());
+    let mut changed_rows = executed.execution_outputs().to_vec();
+    let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(row) =
+        &mut changed_rows[0]
+    else {
+        panic!("first native output joins its Network input");
+    };
+    row.result = result_without_receipts;
+    let without_receipts = native_transfer_output_mutant_for_test(
+        &executed,
+        changed_rows,
+        executed.fastpq_transcripts().clone(),
+    );
     assert_ne!(
-        crate::merge::merge_lane_execution_hash(lane),
-        crate::merge::merge_lane_execution_hash(&lane_without_receipts),
-        "receipt-bound results must change the lane execution hash"
+        executed.output_merkle_commitment(),
+        without_receipts.output_merkle_commitment(),
+        "receipt-bound results change the canonical output commitment"
     );
-
     assert!(!matches!(mode, QueuePlanTransferFixture::Single));
-    assert_eq!(lane.fastpq_transcripts.len(), 1);
-    let transcripts = &lane.fastpq_transcripts[0].transcripts;
+    assert_eq!(executed.fastpq_transcripts().len(), 1);
+    let transcripts = executed
+        .fastpq_transcripts()
+        .get(&Hash::from(input.execution_call_hash()))
+        .unwrap();
     assert_eq!(transcripts.len(), 1);
     assert_eq!(transcripts[0].deltas.len(), 2);
     assert_eq!(transcripts[0].poseidon_preimage_digest, None);
@@ -497,35 +606,40 @@ fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFix
         assert_eq!(&delta.asset_definition, source_asset.definition());
         assert_eq!(&delta.amount, &outcome.amount);
     }
-
-    let state_block = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
-    commit_staged_autonomous_for_test(state_block)
-        .expect("production-validated autonomous batch carrier must commit");
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, executed, &mut overlay, context.clone());
+    assert_ne!(
+        native_transfer_commitment_for_test(committed.as_ref(), &witness),
+        native_transfer_commitment_for_test(&without_receipts, &witness),
+        "native finality binds every exact receipt-bearing result"
+    );
+    assert!(
+        overlay.batch_transfer_outcomes.is_empty(),
+        "each receipt has one canonical Network owner"
+    );
+    overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .unwrap();
+    let _events = overlay
+        .apply_without_execution_with_verified_v2_finality(&committed)
+        .unwrap();
+    overlay
+        .commit()
+        .expect("production native batch with genuine finality must commit");
+    promote_native_execution_finality_for_test(state, &committed);
     assert_eq!(balance(&source_asset), Quantity::from(13_u32));
     assert_eq!(balance(&destination_assets[0]), Quantity::from(3_u32));
     assert_eq!(balance(&destination_assets[1]), Quantity::from(4_u32));
     assert!(
-        state
-            .merge_execution_already_applied(&entry, batch)
-            .expect("committed marker lookup"),
-        "batch effects and receipt-bound execution must have one applied marker set"
+        state.has_committed_entrypoint(input_hash),
+        "batch effects and receipts have one canonical applied membership"
     );
-    match state.block_with_certified_merge_entry(
-        carrier.header().clone(),
-        &entry,
-        ConsensusMode::Permissioned,
-    ) {
-        Err(MergeLedgerCommitError::NonMonotonicEpoch {
-            expected,
-            attempted,
-        }) => {
-            assert_eq!(expected, 2);
-            assert_eq!(attempted, 1);
-        }
-        Err(MergeLedgerCommitError::ExecutionMarkerConflict(_)) => {}
-        Err(error) => panic!("unexpected autonomous batch replay rejection: {error:?}"),
-        Ok(_) => panic!("committed autonomous batch replay must fail closed"),
-    }
+    let mut duplicate = carrier.clone();
+    assert!(
+        ValidBlock::execute_native_block_and_capture_for_test(&mut duplicate, state, &context)
+            .is_err(),
+        "committed native batch replay must fail closed"
+    );
     assert_eq!(balance(&source_asset), Quantity::from(13_u32));
     assert_eq!(balance(&destination_assets[0]), Quantity::from(3_u32));
     assert_eq!(balance(&destination_assets[1]), Quantity::from(4_u32));
@@ -716,53 +830,107 @@ state_test!(consensus_stack live_autonomous_merge_rejects_historical_sealed_sign
     live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_consensus_stack();
 );
 fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_consensus_stack() {
-    let (state, entry, _) = autonomous_sealed_reveal_merge_commit_authorization_fixture();
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("fixture carries one sealed-reveal execution batch");
-    let reveal = match &batch.lanes[0].entrypoints[0] {
+    let (fixture, carrier, _) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Reveal(0)]);
+    let state = &fixture.native.state;
+    let groups = native_economic_groups(&fixture);
+    let input = &groups[0].body().payload().input.entrypoint;
+    let reveal = match input {
         TransactionEntrypoint::SealedReveal(reveal) => reveal,
         _ => panic!("fixture execution entrypoint must be a sealed reveal"),
     };
-    let outer_hash = batch.lanes[0].entrypoints[0].hash();
+    let outer_hash = input.hash();
     let signed_execution_alias = reveal.signed_transaction().hash_as_entrypoint();
     assert_ne!(outer_hash, signed_execution_alias);
-
-    let historical_height = NonZeroUsize::new(state.committed_height())
-        .expect("fixture has a non-zero committed parent height");
+    assert!(
+        !state.has_committed_entrypoint(outer_hash),
+        "first QueuePlan admission does not claim economic execution membership"
+    );
+    assert!(!state.has_committed_entrypoint(signed_execution_alias));
+    let historical_height = NonZeroUsize::new(state.committed_height()).unwrap();
     state.record_committed_entrypoints_for_tests([signed_execution_alias], historical_height);
     assert!(state.has_committed_entrypoint(signed_execution_alias));
     assert!(
         !state.has_committed_entrypoint(outer_hash),
-        "the regression must exercise a fresh outer carrier with a replayed signed identity"
+        "fresh outer carrier must not conceal an already executed signed identity"
+    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    // Call the actual native kernel with its retained verified source, not a
+    // precomputed batch root that would reject only because membership changed.
+    // Its pristine preflight must reject the replay before hooks or economics.
+    match state.preexecute_lane_decision_groups(carrier.header(), &groups) {
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => assert_eq!(
+            reason,
+            "native execution reuses a committed carrier or sealed signed-execution identity"
+        ),
+        Err(error) => panic!("wrong native replay rejection: {error:?}"),
+        Ok(_) => panic!("native signed replay alias must fail before economics"),
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before,
+        "preflight rejection cannot publish start hooks or economic effects"
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100_u32)
+    );
+    assert!(
+        state
+            .world
+            .assets
+            .view()
+            .get(&fixture.destination)
+            .is_none()
     );
 
-    {
-        // Historical acceptance needs a complete committed carrier and its
-        // resolved QueuePlan obligations. The live negative below deliberately
-        // has only the reused signed alias and a fresh outer identity.
-        let (historical_state, historical_entry, historical_carrier) =
-            autonomous_sealed_reveal_merge_commit_authorization_fixture();
-        let historical_block = production_validated_autonomous_merge_commit_block(
-            &historical_state,
-            &historical_entry,
-            &historical_carrier,
-        );
-        commit_staged_autonomous_for_test(historical_block)
-            .expect("commit the exact historical sealed carrier");
-        historical_state.recover_merge_ledger_from_kura()
-            .expect("historical recovery authenticates the complete committed carrier and its registry ownership");
-    }
-    assert!(matches!(
-        state.validate_merge_execution_batch(
-            &entry.active_lanes,
-            batch,
-            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
-        ),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
-            if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
-    ));
+    // The corresponding genuine historical carrier remains readable, and its
+    // preserved pre-State can replay its exact inputs after live publication.
+    let (historical_fixture, historical_carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Reveal(0)]);
+    let historical_state = &historical_fixture.native.state;
+    let pre_state = restore_native_batch_pre_state_for_test(historical_state);
+    let (overlay, committed) =
+        prepared_native_publication_for_test(historical_state, &historical_carrier, context);
+    overlay
+        .commit()
+        .expect("publish the actual historical sealed carrier");
+    promote_native_execution_finality_for_test(historical_state, &committed);
+    let crate::kura::NativeLaneBatchCarrierReadV1::Ready(retained) = historical_state
+        .read_finalized_native_lane_batch(
+            NonZeroUsize::new(historical_state.committed_height()).unwrap(),
+            committed.as_ref().hash(),
+        )
+        .expect("historical native reader authenticates exact canonical wire and finality")
+    else {
+        panic!("actual finalized native carrier is locally available");
+    };
+    let super::NativeLaneBatchReplayV1::Ready(replayed) = pre_state
+        .replay_finalized_native_lane_batch(&retained, &[])
+        .expect("historical native replay authenticates complete carrier and original admission ownership") else {
+        panic!("all exact first-input bodies remain available");
+    };
+    assert!(replayed.executions()[0].result.is_ok());
+    assert_eq!(
+        replayed
+            .overlay()
+            .world
+            .assets
+            .get(&historical_fixture.source)
+            .unwrap()
+            .0,
+        Quantity::from(75_u32)
+    );
+    assert_eq!(
+        replayed
+            .overlay()
+            .world
+            .assets
+            .get(&historical_fixture.destination)
+            .unwrap()
+            .0,
+        Quantity::from(25_u32)
+    );
 }
 state_test!(consensus_stack sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity
     sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_consensus_stack();
@@ -947,235 +1115,391 @@ fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface_on_consen
             if reason == "autonomous merge execution staged an effect outside the bound WSV overlay"
     ));
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_missing_apply_carrier_authorization
-    autonomous_execution_commit_rejects_missing_apply_carrier_authorization_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_unfinalized_outputs
+    native_execution_commit_rejects_unfinalized_outputs_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+fn native_execution_commit_rejects_unfinalized_outputs_on_consensus_stack() {
+    let (fixture, mut carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut carrier, state, &context)
+            .expect("complete authenticated native execution");
     assert!(matches!(
-        state_block.commit(),
-        Err(TransactionsBlockError::MergeAdmission)
+        overlay.execution_output_plan,
+        Some(super::output_capacity::ExecutionOutputPlanState::Sealed(_))
     ));
+    assert!(
+        matches!(
+            overlay.commit(),
+            Err(TransactionsBlockError::MergeAdmission)
+        ),
+        "actual execution and witness alone do not authorize publication"
+    );
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_missing_wsv_authorization
-    autonomous_execution_commit_rejects_missing_wsv_authorization_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_missing_output_owner
+    native_execution_commit_rejects_missing_output_owner_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_missing_wsv_authorization_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    let _authorization = state_block
-        .canonical_wsv_merge_commit_authorization
+fn native_execution_commit_rejects_missing_output_owner_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
+    let _owner = overlay
+        .execution_output_plan
         .take()
-        .expect("fixture authorization");
-    assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
+        .expect("retained finalized output owner");
+    assert!(
+        matches!(
+            overlay.commit(),
+            Err(TransactionsBlockError::MergeAdmission)
+        ),
+        "dropping the sole output owner cannot complete native publication"
+    );
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_missing_carrier_metadata_authorization
-    autonomous_execution_commit_rejects_missing_carrier_metadata_authorization_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_unprepared_finality_metadata
+    native_execution_commit_rejects_unprepared_finality_metadata_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_missing_carrier_metadata_authorization_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    let _authorization = state_block
-        .canonical_carrier_commit_metadata_authorization
+fn native_execution_commit_rejects_unprepared_finality_metadata_on_consensus_stack() {
+    let (fixture, mut carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let height = autonomous_carrier_parent_height(&carrier);
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut carrier, state, &context)
+            .expect("complete authenticated native execution");
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, carrier, &mut overlay, context);
+    overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .unwrap();
+    assert!(matches!(
+        overlay.execution_output_plan,
+        Some(super::output_capacity::ExecutionOutputPlanState::Authorized(_))
+    ));
+    assert!(
+        matches!(
+            overlay.commit(),
+            Err(TransactionsBlockError::MergeAdmission)
+        ),
+        "durable exact finality cannot skip deterministic carrier metadata preparation"
+    );
+    assert_eq!(state.committed_height(), height);
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
+    );
+}
+state_test!(consensus_stack native_execution_authorization_rejects_substituted_witness
+    native_execution_authorization_rejects_substituted_witness_on_consensus_stack();
+);
+fn native_execution_authorization_rejects_substituted_witness_on_consensus_stack() {
+    let (fixture, mut carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let height = autonomous_carrier_parent_height(&carrier);
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut carrier, state, &context)
+            .expect("complete authenticated native execution");
+    let (committed, mut witness) =
+        finalize_native_execution_for_test(state, carrier, &mut overlay, context);
+    witness
+        .writes
+        .first_mut()
+        .expect("actual economic witness has writes")
+        .value
+        .push(0xD1);
+    let error = overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .expect_err("a supplied witness cannot replace the execution owner's captured witness");
+    assert!(error.contains("actual captured witness"), "{error}");
+    assert!(matches!(
+        overlay.commit(),
+        Err(TransactionsBlockError::MergeAdmission)
+    ));
+    assert_eq!(state.committed_height(), height);
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
+    );
+}
+state_test!(consensus_stack native_execution_commit_rejects_replayed_finalized_owner
+    native_execution_commit_rejects_replayed_finalized_owner_on_consensus_stack();
+);
+fn native_execution_commit_rejects_replayed_finalized_owner_on_consensus_stack() {
+    let (first_fixture, first_carrier, first_context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let (mut first, _) = prepared_native_publication_for_test(
+        &first_fixture.native.state,
+        &first_carrier,
+        first_context,
+    );
+    let replayed_owner = first
+        .execution_output_plan
         .take()
-        .expect("fixture carrier metadata authorization");
-    assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
+        .expect("first exact finalized owner");
+    drop(first);
+    let (second_fixture, second_carrier, second_context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(26)]);
+    let state = &second_fixture.native.state;
+    let (mut second, _) =
+        prepared_native_publication_for_test(state, &second_carrier, second_context);
+    second.execution_output_plan = Some(replayed_owner);
+    assert!(
+        matches!(second.commit(), Err(TransactionsBlockError::MergeAdmission)),
+        "finalized source/output authority belongs to its exact original carrier"
+    );
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&second_carrier)
+    );
+    assert_eq!(
+        state
+            .world
+            .assets
+            .view()
+            .get(&second_fixture.source)
+            .unwrap()
+            .0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_mismatched_wsv_authorization
-    autonomous_execution_commit_rejects_mismatched_wsv_authorization_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_post_finality_block_history_drift
+    native_execution_commit_rejects_post_finality_block_history_drift_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_mismatched_wsv_authorization_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    state_block
-        .canonical_wsv_merge_commit_authorization
-        .as_mut()
-        .expect("fixture authorization")
-        .batch_hash = Hash::new(b"mismatched-canonical-wsv-authorization");
-    assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
+fn native_execution_commit_rejects_post_finality_block_history_drift_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
+    overlay
+        .block_hashes
+        .push(HashOf::from_untyped_unchecked(Hash::new(
+            b"unbound successor history",
+        )));
+    assert!(
+        matches!(
+            overlay.commit(),
+            Err(TransactionsBlockError::MergeAdmission)
+        ),
+        "a finalized execution cannot publish a different block-history cut"
+    );
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
     );
-}
-state_test!(consensus_stack autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization
-    autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization_on_consensus_stack();
-);
-fn autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization_on_consensus_stack()
-{
-    let (first_state, first_entry, first_carrier, _) =
-        autonomous_merge_commit_authorization_fixture(false, false);
-    let mut first_block =
-        staged_autonomous_merge_commit_block(&first_state, &first_entry, &first_carrier);
-    let replayed_authorization = first_block
-        .canonical_carrier_commit_metadata_authorization
-        .take()
-        .expect("first fixture carrier metadata authorization");
-    drop(first_block);
-    let (second_state, second_entry, second_carrier, _) =
-        autonomous_merge_commit_authorization_fixture(false, false);
-    let mut second_block =
-        staged_autonomous_merge_commit_block(&second_state, &second_entry, &second_carrier);
-    second_block.canonical_carrier_commit_metadata_authorization = Some(replayed_authorization);
-    assert!(matches!(
-        commit_staged_autonomous_for_test(second_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
     assert_eq!(
-        second_state.committed_height(),
-        autonomous_carrier_parent_height(&second_carrier),
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_stale_authorized_base
-    autonomous_execution_commit_rejects_stale_authorized_base_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_post_finality_wsv_drift
+    native_execution_commit_rejects_post_finality_wsv_drift_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_stale_authorized_base_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    state_block
-        .canonical_wsv_merge_commit_authorization
-        .as_mut()
-        .expect("fixture authorization")
-        .base_state_height = 0;
-    assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
-    assert_eq!(
-        state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
-    );
-}
-state_test!(consensus_stack autonomous_execution_commit_rejects_post_stage_wsv_drift
-    autonomous_execution_commit_rejects_post_stage_wsv_drift_on_consensus_stack();
-);
-fn autonomous_execution_commit_rejects_post_stage_wsv_drift_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    let drift_key = StatePath::from_str("canonical_wsv_authorization_post_stage_drift")
-        .expect("fixture state path");
-    state_block
+fn native_execution_commit_rejects_post_finality_wsv_drift_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
+    let drift_key = StatePath::from_str("native_publication_post_finality_drift").unwrap();
+    overlay
         .world
         .smart_contract_state
-        .insert(drift_key, vec![0xD1]);
+        .insert(drift_key.clone(), vec![0xD1]);
     assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
+        overlay.commit(),
         Err(TransactionsBlockError::MergeAdmission)
     ));
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert!(
+        state
+            .world
+            .smart_contract_state
+            .view()
+            .get(&drift_key)
+            .is_none()
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_commit_rejects_post_stage_runtime_surface_drift
-    autonomous_execution_commit_rejects_post_stage_runtime_surface_drift_on_consensus_stack();
+state_test!(consensus_stack native_execution_commit_rejects_post_finality_topology_drift
+    native_execution_commit_rejects_post_finality_topology_drift_on_consensus_stack();
 );
-fn autonomous_execution_commit_rejects_post_stage_runtime_surface_drift_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+fn native_execution_commit_rejects_post_finality_topology_drift_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let before = state.commit_topology_snapshot();
+    let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
     let peer = PeerId::new(
         checked_keypair_with_algorithm(Algorithm::BlsNormal)
             .public_key()
             .clone(),
     );
-    state_block
+    overlay
         .commit_topology
         .mutate_vec(|topology| topology.push(peer));
     assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
+        overlay.commit(),
         Err(TransactionsBlockError::MergeAdmission)
     ));
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert_eq!(state.commit_topology_snapshot(), before);
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
 state_test!(consensus_stack autonomous_execution_commit_rejects_post_publication_event_surface_drift
     autonomous_execution_commit_rejects_post_publication_event_surface_drift_on_consensus_stack();
 );
 fn autonomous_execution_commit_rejects_post_publication_event_surface_drift_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    state_block.world.external_event_buf.push(
+    let (fixture, carrier, context) = autonomous_native_beacon_composition_fixture();
+    let state = &fixture.native.state;
+    let mut executed = carrier.clone();
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+            .expect("actual complete native execution");
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, executed, &mut overlay, context);
+    overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .unwrap();
+    let events = overlay
+        .apply_without_execution_with_verified_v2_finality(&committed)
+        .expect("exact finality completes publication preparation before tampering");
+    assert!(!events.is_empty());
+    overlay.world.external_event_buf.push(
         BlockEvent {
             header: carrier.header(),
             status: BlockStatus::Applied,
         }
         .into(),
     );
-    assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
-        Err(TransactionsBlockError::MergeAdmission)
-    ));
+    assert!(
+        matches!(
+            overlay.commit(),
+            Err(TransactionsBlockError::MergeAdmission)
+        ),
+        "post-drain event-only changes cannot cross the final publication boundary"
+    );
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
-state_test!(consensus_stack autonomous_execution_defers_expired_axt_replay_pruning
-    autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack();
+state_test!(consensus_stack native_finality_prepares_expired_axt_replay_pruning_before_checkpoint
+    native_finality_prepares_expired_axt_replay_pruning_before_checkpoint_on_consensus_stack();
 );
-fn autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack() {
-    let (state, entry, carrier, expired_key) =
-        autonomous_merge_commit_authorization_fixture(true, false);
-    let expired_key = expired_key.expect("fixture expired replay key");
-    let block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
-    assert!(
-        block.json_serialize_committed_axt_replay_ledger().is_none(),
-        "autonomous execution must not project ordinary expiry removals"
+fn native_finality_prepares_expired_axt_replay_pruning_before_checkpoint_on_consensus_stack() {
+    let replay_key = AxtHandleReplayKey::from_parts(
+        DataSpaceId::UNIVERSAL,
+        axt_replay_incarnation_for_test(0xA7),
+        [0xA7; 32],
+        1,
+        1,
+        LaneId::SINGLE,
     );
-    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
-    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
+    // The fixture admits inputs at H6. Keep this valid guard through that exact
+    // predecessor, then expire it at the H7 economic carrier's ledger time.
+    let expiry_slot = 1_700_000_000_005_u64;
+    let record = axt_replay_record_for_key(&replay_key, 1, expiry_slot);
+    record.validate_for_key(&replay_key).unwrap();
+    let fixture = native_economic_fixture_with_world_initializer(
+        &[NativeEconomicCase::Transfer(25)],
+        false,
+        Some(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 8192,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
+        }),
+        None,
+        |world| {
+            world.axt_handle_budget_ledger.insert(
+                record.budget_key.clone(),
+                consumed_axt_budget_record_for_key(&record.budget_key, 1, expiry_slot),
+            );
+            world.axt_replay_ledger.insert(replay_key, record.clone());
+        },
+    );
+    let (carrier, context) = native_publication_carrier_for_test(&fixture);
+    let state = &fixture.native.state;
+    assert_eq!(
+        state.world.axt_replay_ledger.view().get(&replay_key),
+        Some(&record)
+    );
+    assert!(record.is_expired(
+        current_axt_slot_from_block(&carrier.header(), state.nexus_snapshot().axt.slot_length_ms),
+        state.nexus_snapshot().axt.replay_retention_slots.get(),
+    ));
+    let (overlay, committed) = prepared_native_publication_for_test(state, &carrier, context);
+    assert!(
+        overlay.world.axt_replay_ledger.get(&replay_key).is_none(),
+        "the complete canonical carrier prepares deterministic expiry before sealing publication"
+    );
+    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&overlay);
+    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&overlay);
     assert_eq!(staged_hash, Hash::new(&staged_bytes));
-    commit_staged_autonomous_for_test(block)
-        .expect("authorized execution carrier must not gain AXT pruning effects");
+    overlay
+        .commit()
+        .expect("publish native execution and its deterministic expiry together");
+    promote_native_execution_finality_for_test(state, &committed);
     assert!(
         state
             .world
             .axt_replay_ledger
             .view()
-            .get(&expired_key)
-            .is_some(),
-        "expired replay guards must remain for a later non-execution carrier"
+            .get(&replay_key)
+            .is_none()
     );
-    let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
-    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state)
-        .expect("stable valid fixture snapshot");
+    let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     assert_eq!(committed_hash, Hash::new(&committed_bytes));
-    assert!(
-        staged_bytes == committed_bytes && staged_hash == committed_hash,
-        "autonomous checkpoint must retain expiry rows in both surfaces: \
-         staged_hash={staged_hash}, committed_hash={committed_hash}"
+    assert_eq!(staged_bytes, committed_bytes);
+    assert_eq!(
+        staged_hash, committed_hash,
+        "prepared and committed checkpoints contain the same exact expiry effects"
     );
 }
-state_test!(consensus_stack autonomous_execution_rejects_post_stage_axt_replay_drift
-    autonomous_execution_rejects_post_stage_axt_replay_drift_on_consensus_stack();
+state_test!(consensus_stack native_execution_rejects_post_finality_axt_replay_drift
+    native_execution_rejects_post_finality_axt_replay_drift_on_consensus_stack();
 );
-fn autonomous_execution_rejects_post_stage_axt_replay_drift_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+fn native_execution_rejects_post_finality_axt_replay_drift_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
     let replay_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
         axt_replay_incarnation_for_test(0xD2),
@@ -1184,17 +1508,29 @@ fn autonomous_execution_rejects_post_stage_axt_replay_drift_on_consensus_stack()
         2,
         LaneId::SINGLE,
     );
-    state_block
+    overlay
         .world
         .axt_replay_ledger
         .insert(replay_key, axt_replay_record_for_key(&replay_key, 0, 0));
     assert!(matches!(
-        commit_staged_autonomous_for_test(state_block),
+        overlay.commit(),
         Err(TransactionsBlockError::MergeAdmission)
     ));
     assert_eq!(
         state.committed_height(),
-        autonomous_carrier_parent_height(&carrier),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert!(
+        state
+            .world
+            .axt_replay_ledger
+            .view()
+            .get(&replay_key)
+            .is_none()
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
     );
 }
 state_test!(consensus_stack autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
@@ -1344,83 +1680,78 @@ state_test!(consensus_stack autonomous_execution_finality_rejects_unbound_event_
     autonomous_execution_finality_rejects_unbound_event_surface_drift_on_consensus_stack();
 );
 fn autonomous_execution_finality_rejects_unbound_event_surface_drift_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
     {
-        let (state, entry, carrier, _) =
-            autonomous_merge_commit_authorization_fixture(false, false);
-        let mut state_block = state
-            .block_with_certified_merge_entry(
-                carrier.header().clone(),
-                &entry,
-                ConsensusMode::Permissioned,
-            )
-            .expect("certified autonomous execution must stage on its exact carrier");
-        stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
-        let expected_event = EventBox::from(BlockEvent {
-            header: carrier.header(),
-            status: BlockStatus::Approved,
-        });
-        let actual_event = EventBox::from(BlockEvent {
+        let mut executed = carrier.clone();
+        let mut overlay =
+            ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+                .expect("capture the complete actual native execution surface");
+        overlay
+            .verify_execution_output_seal(&executed)
+            .expect("unchanged execution retains its exact seal");
+        let original_count = overlay.world.external_event_buf.len();
+        let original = overlay
+            .world
+            .external_event_buf
+            .first()
+            .expect("actual execution emits events")
+            .clone();
+        let changed = EventBox::from(BlockEvent {
             header: carrier.header(),
             status: BlockStatus::Applied,
         });
-        let authorization = state_block
-            .canonical_wsv_merge_commit_authorization
-            .as_mut()
-            .expect("fixture authorization");
-        authorization.external_event_count = 1;
-        authorization.external_event_bytes = Some(vec![expected_event].encode());
-        state_block.world.external_event_buf.push(actual_event);
-        assert!(matches!(
-            state_block.validate_staged_merge_execution_authorization(),
-            Err(MergeLedgerCommitError::ExecutionDivergence(message))
-                if message.contains("event prefix drifted before block admission")
-        ));
+        assert_ne!(original, changed);
+        overlay.world.external_event_buf[0] = changed;
+        assert_eq!(overlay.world.external_event_buf.len(), original_count);
+        assert!(
+            overlay.verify_execution_output_seal(&executed).is_err(),
+            "changing event contents cannot retain a seal even with the exact original event count"
+        );
     }
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let mut state_block = state
-        .block_with_certified_merge_entry(
-            carrier.header().clone(),
-            &entry,
-            ConsensusMode::Permissioned,
-        )
-        .expect("certified autonomous execution must stage on its exact carrier");
-    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, &carrier);
-    state_block
-        .validate_staged_merge_execution_authorization()
-        .expect("fixture reaches the exact post-block/pre-vote surface");
-    state_block.world.external_event_buf.push(
+    let mut executed = carrier.clone();
+    let mut overlay =
+        ValidBlock::execute_native_block_and_capture_for_test(&mut executed, state, &context)
+            .expect("reconstruct the exact untampered native execution");
+    let (committed, witness) =
+        finalize_native_execution_for_test(state, executed, &mut overlay, context);
+    overlay
+        .authorize_execution_output_publication(&committed, &witness)
+        .expect("the original execution has genuine durable four-validator finality");
+    overlay.world.external_event_buf.push(
         BlockEvent {
             header: carrier.header(),
             status: BlockStatus::Applied,
         }
         .into(),
     );
-    let artifact = state
-        .kura
-        .v2_finality_artifact(carrier.header().height().get())
-        .expect("read exact carrier finality")
-        .expect("fixture persists exact carrier finality");
-    let verified_artifact = crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())
-        .expect("fixture finality verifies once");
-    let committed = ValidBlock::new_unverified_for_tests(carrier.clone())
-        .commit_with_verified_v2_artifact(
-            verified_artifact,
-            artifact.commit_qc.execution_commitment,
-        )
-        .unpack(|_| {})
-        .expect("carrier binds its exact verified v2 finality");
-    assert!(matches!(
-        state_block.apply_without_execution_with_verified_v2_finality(&committed),
-        Err(MergeLedgerCommitError::ExecutionDivergence(message))
-            if message.contains("event surface drifted before publication")
-    ));
     assert!(
-        state_block
-            .canonical_carrier_commit_metadata_authorization
-            .is_none(),
+        matches!(
+            overlay.apply_without_execution_with_verified_v2_finality(&committed),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                if message.contains("publication surface changed")
+        ),
+        "an event added after authorization must fail before any publication metadata"
+    );
+    assert!(
+        matches!(
+            overlay.execution_output_plan,
+            Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)
+        ),
         "an unbound event must not mint finalized carrier authorization"
     );
+    drop(overlay);
+    assert_eq!(
+        state.committed_height(),
+        autonomous_carrier_parent_height(&carrier)
+    );
+    assert_eq!(
+        state.world.assets.view().get(&fixture.source).unwrap().0,
+        Quantity::from(100u32)
+    );
 }
+
 fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -4938,8 +5269,10 @@ state_test!(consensus_stack autonomous_runtime_catalog_effects_commit_and_recove
     autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_stack();
 );
 fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_stack() {
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let state = &fixture.native.state;
+    let baseline_dataspaces = state.nexus_snapshot().dataspace_catalog;
     let before = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     assert!(
@@ -4950,7 +5283,7 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
             .is_none()
     );
     {
-        let staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        let (staged, _) = prepared_native_publication_for_test(state, &carrier, context.clone());
         assert!(
             staged
                 .pending_autoscale_lifecycle
@@ -4971,7 +5304,12 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
         before,
         "dropping an authenticated staged catalog must not publish runtime effects"
     );
-    let staged = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
+    assert_eq!(
+        state.nexus_snapshot().dataspace_catalog,
+        baseline_dataspaces
+    );
+    let (staged, finalized) =
+        prepared_native_publication_for_test(state, &carrier, context.clone());
     let expected_runtime = runtime_catalog_from_world(&staged.world)
         .expect("staged protected runtime")
         .expect("catalog effect must publish protected runtime");
@@ -4981,7 +5319,10 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
     let expected_lineage = staged.lane_incarnation_lineage.clone();
     let expected_activation = staged.lane_incarnation_activation_heights.clone();
     let expected_manifests = staged.lane_manifests.consensus_policy_digest();
-    commit_staged_autonomous_for_test(staged).expect("exact native catalog merge commits");
+    staged
+        .commit()
+        .expect("exact native catalog execution commits");
+    promote_native_execution_finality_for_test(state, &finalized);
     assert_eq!(
         state.committed_height(),
         usize::try_from(carrier.header().height().get()).unwrap()
@@ -4990,6 +5331,11 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
     assert_eq!(
         state.nexus_snapshot().dataspace_catalog,
         expected_dataspaces
+    );
+    assert_eq!(state.view().nexus.dataspace_catalog, expected_dataspaces);
+    assert_eq!(
+        state.view().world().dataspace_catalog(),
+        &expected_dataspaces
     );
     assert_eq!(state.lane_incarnations_snapshot(), expected_incarnations);
     assert_eq!(state.lane_incarnation_lineage_snapshot(), expected_lineage);
@@ -5005,33 +5351,45 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
         state.view().runtime_catalog_hash().unwrap(),
         Some(expected_runtime.canonical_hash().unwrap())
     );
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("native catalog batch");
-    assert!(
-        state
-            .merge_execution_already_applied(&entry, batch)
-            .expect("exact replay marker")
-    );
+    assert_native_application_recorded_for_test(state, &carrier);
     let committed = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     state
-        .recover_merge_ledger_from_kura()
-        .expect("authenticated catalog history recovers");
+        .read_finalized_native_lane_batch(
+            NonZeroUsize::new(carrier.header().height().get() as usize).unwrap(),
+            carrier.hash(),
+        )
+        .expect("authenticated native catalog history recovers");
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state)
             .expect("stable valid fixture snapshot"),
         committed,
         "recovering an already applied catalog must preserve its exact state"
     );
+    let restored = deserialize::KuraSeed {
+        kura: Arc::clone(&state.kura),
+        lane_manifests: state.lane_manifests.read().clone(),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json(norito::json::to_value(state).expect("serialize exact committed catalog"))
+    .expect("restore the exact signed runtime catalog descriptors");
+    assert_eq!(
+        restored.nexus_snapshot().dataspace_catalog,
+        expected_dataspaces
+    );
+    assert_eq!(restored.view().nexus.dataspace_catalog, expected_dataspaces);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored)
+            .expect("restored catalog has a canonical commitment"),
+        committed,
+        "{}",
+        canonical_native_restore_difference_for_test(state, &restored),
+    );
+    let mut duplicate = carrier.clone();
     assert!(
-        state
-            .validate_merge_execution_batch(
-                &entry.active_lanes,
-                batch,
-                MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned)
-            )
+        ValidBlock::execute_native_block_and_capture_for_test(&mut duplicate, state, &context)
             .is_err(),
         "the same catalog execution cannot be admitted twice"
     );
@@ -5042,16 +5400,21 @@ state_test!(consensus_stack autonomous_bootstrap_parameter_effects_commit_and_re
 );
 fn autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensus_stack() {
     use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
-    let batch = entry.execution_batch.as_ref().expect("bootstrap batch");
-    let owner = batch.lanes[0].entrypoints[0].authority().clone();
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
+    let state = &fixture.native.state;
+    let owner = carrier
+        .network_entrypoint_at(0)
+        .unwrap()
+        .authority()
+        .clone();
     let expected = AliasDataspaceBootstrapGrantV1::try_new(AUTONOMOUS_RUNTIME_DATASPACE, owner)
         .expect("exact native bootstrap grant");
     let id = expected.parameter_id().unwrap();
     let baseline_catalog = state.nexus_snapshot().lane_catalog;
     assert!(!state.world.view().parameters().custom().contains_key(&id));
-    let staged = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
+    let (staged, finalized) =
+        prepared_native_publication_for_test(state, &carrier, context.clone());
     assert!(
         staged.pending_autoscale_lifecycle.is_none(),
         "bootstrap changes parameters without geometry"
@@ -5068,7 +5431,10 @@ fn autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensu
         .unwrap(),
         Some(expected.clone())
     );
-    commit_staged_autonomous_for_test(staged).expect("native bootstrap parameter merge commits");
+    staged
+        .commit()
+        .expect("native bootstrap parameter execution commits");
+    promote_native_execution_finality_for_test(state, &finalized);
     assert_eq!(
         AliasDataspaceBootstrapGrantV1::from_custom_parameter(
             state
@@ -5084,28 +5450,23 @@ fn autonomous_bootstrap_parameter_effects_commit_and_recover_exactly_on_consensu
     );
     assert_eq!(state.nexus_snapshot().lane_catalog, baseline_catalog);
     assert!(state.view().runtime_catalog_hash().unwrap().is_none());
-    assert!(
-        state
-            .merge_execution_already_applied(&entry, batch)
-            .unwrap()
-    );
+    assert_native_application_recorded_for_test(state, &carrier);
     let committed = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     state
-        .recover_merge_ledger_from_kura()
-        .expect("authenticated bootstrap history recovers");
+        .read_finalized_native_lane_batch(
+            NonZeroUsize::new(carrier.header().height().get() as usize).unwrap(),
+            carrier.hash(),
+        )
+        .expect("authenticated native bootstrap history recovers");
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state)
             .expect("stable valid fixture snapshot"),
         committed
     );
+    let mut duplicate = carrier.clone();
     assert!(
-        state
-            .validate_merge_execution_batch(
-                &entry.active_lanes,
-                batch,
-                MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned)
-            )
+        ValidBlock::execute_native_block_and_capture_for_test(&mut duplicate, state, &context)
             .is_err(),
         "the same bootstrap execution cannot be admitted twice"
     );
@@ -5115,12 +5476,14 @@ state_test!(consensus_stack autonomous_runtime_catalog_effects_reject_post_stage
     autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_stack();
 );
 fn autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_stack() {
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let state = &fixture.native.state;
     let before = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     for case in 0..8 {
-        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        let (mut staged, _) =
+            prepared_native_publication_for_test(state, &carrier, context.clone());
         match case {
             0 => staged.world.dataspace_catalog = state.nexus_snapshot().dataspace_catalog,
             1 => staged.nexus.dataspace_catalog = state.nexus_snapshot().dataspace_catalog,
@@ -5179,17 +5542,11 @@ fn autonomous_runtime_catalog_effects_reject_post_stage_tampering_on_consensus_s
             _ => unreachable!(),
         }
         assert!(
-            matches!(
-                staged.validate_merge_runtime_catalog_effects(),
-                Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
-            ),
+            staged.verify_execution_output_publication().is_err(),
             "runtime projection case {case}"
         );
         assert!(
-            matches!(
-                commit_staged_autonomous_for_test(staged),
-                Err(TransactionsBlockError::MergeAdmission)
-            ),
+            matches!(staged.commit(), Err(TransactionsBlockError::MergeAdmission)),
             "unbound runtime projection must reject at final commit, case {case}"
         );
         assert_eq!(
@@ -5205,9 +5562,12 @@ state_test!(consensus_stack autonomous_parameter_effects_reject_post_stage_tampe
 );
 fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack() {
     use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
-    let owner = entry.execution_batch.as_ref().unwrap().lanes[0].entrypoints[0]
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Bootstrap);
+    let state = &fixture.native.state;
+    let owner = carrier
+        .network_entrypoint_at(0)
+        .unwrap()
         .authority()
         .clone();
     let grant =
@@ -5216,7 +5576,8 @@ fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack()
     let before = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     for case in 0..2 {
-        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        let (mut staged, _) =
+            prepared_native_publication_for_test(state, &carrier, context.clone());
         let root = staged.merge_execution_write_set_root();
         if case == 0 {
             staged.world.parameters.get_mut().custom.remove(&id);
@@ -5240,10 +5601,7 @@ fn autonomous_parameter_effects_reject_post_stage_tampering_on_consensus_stack()
             "the native parameter delta must participate in the write root"
         );
         assert!(
-            matches!(
-                commit_staged_autonomous_for_test(staged),
-                Err(TransactionsBlockError::MergeAdmission)
-            ),
+            matches!(staged.commit(), Err(TransactionsBlockError::MergeAdmission)),
             "parameter removal/change must not reuse an authenticated write root"
         );
         assert_eq!(
@@ -5259,12 +5617,14 @@ state_test!(consensus_stack autonomous_runtime_catalog_effects_require_matching_
 );
 fn autonomous_runtime_catalog_effects_require_matching_pending_transition_on_consensus_stack() {
     use iroha_data_model::nexus::NexusRuntimeCatalogV1;
-    let (state, entry, carrier) =
-        autonomous_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let (fixture, carrier, context) =
+        autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
+    let state = &fixture.native.state;
     let before = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
     for case in 0..4 {
-        let mut staged = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+        let (mut staged, _) =
+            prepared_native_publication_for_test(state, &carrier, context.clone());
         match case {
             0 => {
                 staged.pending_autoscale_lifecycle = None;
@@ -5293,17 +5653,11 @@ fn autonomous_runtime_catalog_effects_require_matching_pending_transition_on_con
             _ => unreachable!(),
         }
         assert!(
-            matches!(
-                staged.validate_merge_runtime_catalog_effects(),
-                Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
-            ),
+            staged.verify_execution_output_publication().is_err(),
             "missing/mismatched binding case {case}"
         );
         assert!(
-            matches!(
-                commit_staged_autonomous_for_test(staged),
-                Err(TransactionsBlockError::MergeAdmission)
-            ),
+            matches!(staged.commit(), Err(TransactionsBlockError::MergeAdmission)),
             "pending runtime and native protected parameter must remain exact, case {case}"
         );
         assert_eq!(

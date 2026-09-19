@@ -139,3 +139,98 @@ state_test! { sync native_observation_preserves_stable_bad_source_but_retries_ch
     assert!(!called.get(), "busy observations do not begin source work");
     drop(publication);
 }
+
+state_test! { sync native_economic_batch_preserves_merge_ledger_query_metadata
+    let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let state = &fixture.native.state;
+    // Isolate the native writer boundary with a nonempty, internally exact
+    // previous relay reduction. The canonical native source binds this pre-State;
+    // this scratch test grants no relay finality or State publication authority.
+    let roots = vec![Hash::new(b"prior finalized relay one"), Hash::new(b"prior finalized relay two")];
+    let global = crate::merge::reduce_merge_hint_roots(&roots);
+    {
+        let mut world = state.world.block();
+        *world.merge_hint_roots = roots.clone();
+        *world.merge_global_state_root = Some(global);
+        world.commit();
+    }
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let groups = native_economic_groups(&fixture);
+    let carrier = empty_global_block_after(Some(&fixture.native.block));
+    let prepared = state.prepare_native_batch_on_carrier(carrier.header(), &groups)
+        .expect("actual native source executes from its exact current pre-State");
+    assert!(prepared.executions()[0].result.is_ok());
+    assert_eq!(prepared.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(75_u32));
+    assert_eq!(prepared.overlay().world.merge_hint_roots.as_slice(), roots.as_slice(),
+        "native Decisions do not replace the latest relay merge-ledger hints");
+    assert_eq!(*prepared.overlay().world.merge_global_state_root, Some(global),
+        "native Decisions do not replace the latest relay merge-ledger root");
+    drop(prepared);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+}
+
+state_test!(consensus_stack merge_recovery_validates_latest_entry_without_rewriting_world
+    merge_recovery_validates_latest_entry_without_rewriting_world_impl();
+);
+fn merge_recovery_validates_latest_entry_without_rewriting_world_impl() {
+    let (state, _, _, keys) =
+        setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x46; 32]);
+    let candidate = state
+        .merge_entry_candidates_from_lane_relays()
+        .into_iter()
+        .next()
+        .unwrap();
+    let qc = merge_qc_for_candidate(&state, &candidate, &keys, &[0]);
+    let entry = state
+        .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+        .expect("retain actual certified relay entry and its advertised query roots");
+    assert!(entry.execution_batch.is_none());
+    assert!(!entry.merge_hint_roots().is_empty());
+    let exact_hints = norito::json::to_value(&state.world.merge_hint_roots).unwrap();
+    let exact_global = norito::json::to_value(&state.world.merge_global_state_root).unwrap();
+    state
+        .validate_recovered_merge_metadata(Some(entry.as_ref()))
+        .expect("exact latest applied relay metadata validates without mutation");
+    assert_eq!(
+        norito::json::to_value(&state.world.merge_hint_roots).unwrap(),
+        exact_hints
+    );
+    assert_eq!(
+        norito::json::to_value(&state.world.merge_global_state_root).unwrap(),
+        exact_global,
+        "recovery validation preserves the original current and undo roots"
+    );
+    for mutate_hints in [false, true] {
+        {
+            let mut world = state.world.block();
+            *world.merge_hint_roots = entry.merge_hint_roots();
+            *world.merge_global_state_root = Some(entry.global_state_root);
+            if mutate_hints {
+                *world.merge_hint_roots = vec![Hash::new(b"foreign relay hints")];
+            } else {
+                *world.merge_global_state_root = None;
+            }
+            world.commit();
+        }
+        let hints = norito::json::to_value(&state.world.merge_hint_roots).unwrap();
+        let global = norito::json::to_value(&state.world.merge_global_state_root).unwrap();
+        let error = state
+            .validate_recovered_merge_metadata(Some(entry.as_ref()))
+            .expect_err(
+                "restore refuses inconsistent query roots instead of repairing snapshot bytes",
+            );
+        assert!(
+            error
+                .to_string()
+                .contains("differs from its exact latest applied entry")
+        );
+        assert_eq!(
+            norito::json::to_value(&state.world.merge_hint_roots).unwrap(),
+            hints
+        );
+        assert_eq!(
+            norito::json::to_value(&state.world.merge_global_state_root).unwrap(),
+            global
+        );
+    }
+}

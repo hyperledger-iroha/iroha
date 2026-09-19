@@ -3,6 +3,43 @@ type TailBatchOutcomes = BTreeMap<
     Vec<iroha_data_model::events::data::prelude::AssetBatchTransferOutcome>,
 >;
 
+#[test]
+fn native_settlement_projection_rejects_evidence_without_contributing_transactions() {
+    let empty = LaneBlockCommitment {
+        block_height: 1,
+        lane_id: LaneId::SINGLE,
+        lane_incarnation: Hash::new(b"native settlement test incarnation"),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        tx_count: 0,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
+    };
+    assert!(
+        ValidBlock::nonempty_native_lane_settlements(std::slice::from_ref(&empty))
+            .unwrap()
+            .is_empty()
+    );
+    for field in 0..4 {
+        let mut changed = empty.clone();
+        *match field {
+            0 => &mut changed.total_local_amount,
+            1 => &mut changed.total_xor_due,
+            2 => &mut changed.total_xor_after_haircut,
+            _ => &mut changed.total_xor_variance,
+        } = Quantity::from(1u32);
+        assert!(
+            ValidBlock::nonempty_native_lane_settlements(&[changed]).is_err(),
+            "zero-count settlement cannot silently discard monetary evidence: {field}"
+        );
+    }
+}
+
 /// Attach executor-owned receipt rows without clearing already-complete outputs.
 /// Validate every row before changing any result. No display-hash inference occurs here.
 fn attach_fixture_receipts(

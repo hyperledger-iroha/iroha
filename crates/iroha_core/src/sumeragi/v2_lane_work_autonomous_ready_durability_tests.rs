@@ -1,3 +1,5 @@
+include!("v2_lane_work_terminal_ingress_tests.rs");
+
 #[derive(Clone, Copy)]
 struct AutonomousTestRouter {
     route: RoutingDecision,
@@ -13,12 +15,78 @@ impl crate::queue::LaneRouter for AutonomousTestRouter {
 }
 
 fn prepare_autonomous_test_lane(
-    adapter: &mut V2LaneWorkAdapter,
+    adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 ) {
-    enable_multilane_nexus(adapter, keys, lane_id, dataspace_id);
+    assert_eq!(lane_id, LaneId::new(1));
+    assert_eq!(dataspace_id, DataSpaceId::new(7));
+    let nexus = adapter.state.nexus_snapshot();
+    let lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .expect("autonomous lane geometry was installed before genesis");
+    assert_eq!(lane.dataspace_id, dataspace_id);
+    let manifests = adapter.state.lane_manifests.read();
+    let status = manifests
+        .status(lane_id)
+        .expect("autonomous lane manifest was installed before genesis");
+    assert_eq!(status.alias, lane.alias);
+    assert_eq!(status.dataspace, lane.dataspace_id);
+    assert_eq!(status.visibility, lane.visibility);
+    assert_eq!(status.storage, lane.storage);
+    assert_eq!(status.governance, lane.governance);
+    let rules = status
+        .governance_rules
+        .as_ref()
+        .expect("exact lane authority");
+    let expected = keys
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(expected.len(), 4);
+    assert_eq!(
+        rules.validators.iter().cloned().collect::<BTreeSet<_>>(),
+        keys.iter()
+            .map(|key| AccountId::new(key.public_key().clone()))
+            .collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        rules
+            .validator_bindings
+            .iter()
+            .map(|binding| (binding.validator.clone(), binding.peer_id.clone()))
+            .collect::<BTreeSet<_>>(),
+        keys.iter()
+            .map(|key| (
+                AccountId::new(key.public_key().clone()),
+                PeerId::new(key.public_key().clone())
+            ))
+            .collect::<BTreeSet<_>>()
+    );
+    drop(manifests);
+    let committee = adapter
+        .state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            adapter.context.height,
+        )
+        .expect("configured lane authority resolves at the frozen height")
+        .into_validators();
+    assert_eq!(committee.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid configured Nexus authority"),
+        adapter.context.nexus_amx_context_hash
+    );
+    assert_eq!(
+        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
+            .expect("valid configured execution policy"),
+        adapter.context.execution_policy_hash
+    );
 }
 
 fn autonomous_test_fixture(
@@ -26,25 +94,92 @@ fn autonomous_test_fixture(
     author: bool,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
     let local_validator_index = if author { 0 } else { 1 };
-    let (mut observer, keys) = fixture_at_height_inner_with_kura_and_local_index(
+    let (adapter, keys) = fixture_at_height_inner_with_initial_lane(
         mode,
         9,
         true,
+        default_lane_work_test_limits(),
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
-        false,
+        true,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Some(LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        None,
     );
-    // Complete the static authority before opening any voting journal. A
-    // journal opened before these context hashes change cannot be replayed
-    // under the finished lane geometry at the same height.
-    enable_multilane_nexus(&mut observer, &keys, LaneId::new(1), DataSpaceId::new(7));
-    let context = observer.context.clone();
-    let restart = LaneAdapterRestartParts::capture(&observer);
-    drop(observer);
-    let adapter = restart
-        .reopen_isolated(context, true)
-        .expect("open autonomous voting journals under the completed lane context");
     (adapter, keys)
+}
+
+fn autonomous_nonmember_test_fixture(
+    height: u64,
+    lane_only_key_seed: u8,
+    voting_enabled: bool,
+) -> (V2LaneWorkAdapter, Vec<KeyPair>, Vec<KeyPair>) {
+    let mut lane_keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic global fixture validator")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    lane_keys.remove(3);
+    lane_keys.push(
+        KeyPair::try_from_seed(vec![lane_only_key_seed; 32], Algorithm::BlsNormal)
+            .expect("deterministic lane-only validator"),
+    );
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let (adapter, global_keys) = fixture_at_height_inner_with_initial_lane(
+        wire::ConsensusMode::Permissioned,
+        height,
+        true,
+        default_lane_work_test_limits(),
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        Some(3),
+        voting_enabled,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Some(LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        Some(lane_keys.clone()),
+    );
+    assert_eq!(adapter.context.roster.len(), 4);
+    assert_eq!(
+        adapter.context.roster.iter().map(|entry| entry.validator.clone()).collect::<Vec<_>>(),
+        global_keys.iter().map(|key| PeerId::new(key.public_key().clone())).collect::<Vec<_>>(),
+        "registered lane-only peers do not expand the frozen global committee",
+    );
+    assert!(
+        global_keys
+            .iter()
+            .any(|key| key.public_key() == adapter.local_peer.public_key())
+    );
+    assert!(
+        lane_keys
+            .iter()
+            .all(|key| key.public_key() != adapter.local_peer.public_key())
+    );
+    (adapter, global_keys, lane_keys)
 }
 
 fn assert_autonomous_test_role(
@@ -1677,45 +1812,7 @@ fn voting_validator_outside_lane_committee_skips_private_new_view_cursor_restore
 }
 #[test]
 fn voting_validator_outside_lane_committee_retires_transport_only_loser_without_queue() {
-    let (mut adapter, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
-        wire::ConsensusMode::Permissioned,
-        9,
-        true,
-        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
-        Some(3),
-        true,
-    );
-    let extra_lane_key = KeyPair::try_from_seed(vec![0xF1; 32], Algorithm::BlsNormal)
-        .expect("deterministic extra lane validator key");
-    {
-        let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "transport-only-lane-validator");
-        let record = ConsensusKeyRecord {
-            id: id.clone(),
-            public_key: extra_lane_key.public_key().clone(),
-            pop: Some(
-                iroha_crypto::bls_normal_pop_prove(extra_lane_key.private_key())
-                    .expect("extra lane validator proof of possession"),
-            ),
-            activation_height: 0,
-            expiry_height: None,
-            replaces: None,
-            status: ConsensusKeyStatus::Active,
-        };
-        let mut world = adapter.state.world.block();
-        world.consensus_keys.insert(id.clone(), record.clone());
-        world
-            .consensus_keys_by_pk
-            .insert(record.public_key.to_string(), vec![id]);
-        world.commit();
-    }
-
-    let mut lane_keys = global_keys
-        .iter()
-        .filter(|key| key.public_key() != adapter.local_peer.public_key())
-        .cloned()
-        .collect::<Vec<_>>();
-    lane_keys.push(extra_lane_key);
-    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let (mut adapter, global_keys, lane_keys) = autonomous_nonmember_test_fixture(9, 0xF1, true);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
     prepare_autonomous_test_lane(&mut adapter, &lane_keys, lane_id, dataspace_id);
@@ -2792,11 +2889,19 @@ fn autonomous_fixture_binds_final_lane_context_before_opening_signing_guards() {
         for author in [false, true] {
             let (mut adapter, keys) = autonomous_test_fixture(mode, author);
             let context = adapter.context.clone();
+            let snapshot = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+                .expect("capture initialized autonomous fixture");
             assert!(adapter.voting_enabled);
             assert!(adapter.native_signing_guard.is_some());
             assert!(adapter.merge_signing_guard.is_some());
             assert!(adapter.lane_drain_signing_guard.is_some());
             prepare_autonomous_test_lane(&mut adapter, &keys, LaneId::new(1), DataSpaceId::new(7));
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+                    .expect("capture verified autonomous fixture"),
+                snapshot,
+                "preparation must preserve configured geometry and every retained State journal"
+            );
             assert_eq!(
                 adapter.context.id(),
                 context.id(),
@@ -3007,10 +3112,12 @@ fn autonomous_carrier_block_at_view(
         BlockExecutionContextBundle::new(Vec::new()).with_autonomous_lane_payloads(vec![envelope]),
     ));
     let leader = usize::try_from(adapter.context.leader(view)).expect("global leader index");
-    builder.build_with_signature(
+    let mut block = builder.build_with_signature(
         u64::try_from(leader).expect("global leader index fits u64"),
         keys[leader].private_key(),
-    )
+    );
+    install_empty_lane_work_outputs_for_test(&mut block);
+    block
 }
 /// Exact record-backed autonomous lane certificate shared with worker handoff tests.
 pub(in crate::sumeragi) struct HistoricalAutonomousLaneCertificateFixture {
@@ -3589,47 +3696,7 @@ struct NonmemberCanonicalReplicaPreQcFixture {
 }
 
 fn nonmember_canonical_replica_pre_qc_fixture() -> NonmemberCanonicalReplicaPreQcFixture {
-    let (mut adapter, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
-        wire::ConsensusMode::Permissioned,
-        2,
-        true,
-        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
-        Some(3),
-        true,
-    );
-    let extra_lane_key = KeyPair::try_from_seed(vec![0xF2; 32], Algorithm::BlsNormal)
-        .expect("deterministic canonical-replica lane validator key");
-    {
-        let id = ConsensusKeyId::new(
-            ConsensusKeyRole::Validator,
-            "canonical-replica-lane-validator",
-        );
-        let record = ConsensusKeyRecord {
-            id: id.clone(),
-            public_key: extra_lane_key.public_key().clone(),
-            pop: Some(
-                iroha_crypto::bls_normal_pop_prove(extra_lane_key.private_key())
-                    .expect("canonical-replica validator proof of possession"),
-            ),
-            activation_height: 0,
-            expiry_height: None,
-            replaces: None,
-            status: ConsensusKeyStatus::Active,
-        };
-        let mut world = adapter.state.world.block();
-        world.consensus_keys.insert(id.clone(), record.clone());
-        world
-            .consensus_keys_by_pk
-            .insert(record.public_key.to_string(), vec![id]);
-        world.commit();
-    }
-    let mut lane_keys = global_keys
-        .iter()
-        .filter(|key| key.public_key() != adapter.local_peer.public_key())
-        .cloned()
-        .collect::<Vec<_>>();
-    lane_keys.push(extra_lane_key);
-    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let (mut adapter, global_keys, lane_keys) = autonomous_nonmember_test_fixture(2, 0xF2, true);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
     prepare_autonomous_test_lane(&mut adapter, &lane_keys, lane_id, dataspace_id);
@@ -4574,590 +4641,6 @@ pub(in crate::sumeragi) fn retain_public_lane_evidence_before_application_for_te
         .collect()
 }
 
-/// Check terminal message replay against the real merge application's durable chain.
-pub(in crate::sumeragi) fn inspect_applied_public_lane_qc_replay_for_test(
-    state: Arc<State>,
-    kura: Arc<Kura>,
-    context: wire::HeightContext,
-    limits: V2LaneWorkLimits,
-    certificate: LaneBlockCertificateV1,
-    votes: [&[LaneBlockVoteV1]; 2],
-    validator_keys: &[KeyPair],
-    local_key: &KeyPair,
-    retained_terminal_adapters: Vec<V2LaneWorkAdapter>,
-) {
-    let proposal = &certificate.proposal;
-    let source_global_height = proposal.descriptor.proposal_height;
-    let committed_height =
-        u64::try_from(state.committed_height()).expect("committed height fits u64");
-    assert_eq!(
-        context.height,
-        committed_height
-            .checked_add(1)
-            .expect("next context height")
-    );
-    assert!(source_global_height < committed_height);
-    let source_height =
-        NonZeroUsize::new(usize::try_from(source_global_height).expect("source height fits usize"))
-            .expect("exact nonzero public carrier height");
-    let source_carrier = kura
-        .get_block(source_height)
-        .expect("retain the original public carrier");
-    let source_wire = source_carrier
-        .encode_wire()
-        .expect("encode the exact original carrier");
-    let source_finality = kura
-        .v2_finality_artifact(source_global_height)
-        .expect("read original public finality")
-        .expect("original public finality remains durable");
-    assert_eq!(source_finality.block_hash, source_carrier.hash());
-    assert_eq!(
-        state.committed_block_hash_at_height(source_global_height),
-        Some(source_carrier.hash())
-    );
-    let terminal_receipt = kura
-        .read_lane_block_application_receipt(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-        )
-        .expect("real terminal merge application wrote its economic receipt");
-    assert_eq!(
-        terminal_receipt.format,
-        crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
-    );
-    assert_eq!(terminal_receipt.proposal, *proposal);
-    assert_eq!(
-        terminal_receipt.application_block_height,
-        source_global_height
-            .checked_add(1)
-            .expect("real fixture application height")
-    );
-    assert!(terminal_receipt.application_block_height <= committed_height);
-    assert_eq!(
-        state.committed_block_hash_at_height(terminal_receipt.application_block_height),
-        Some(terminal_receipt.application_block_hash)
-    );
-    assert!(
-        state
-            .certified_autonomous_lane_block_is_globally_applied(proposal)
-            .expect("authenticate exact durable application evidence")
-    );
-    let state_hash = crate::snapshot::canonical_state_snapshot_hash(state.as_ref())
-        .expect("stable valid fixture snapshot");
-    let session = CommittedLaneBlockSession {
-        proposal: certificate.proposal.clone(),
-        prepare_qc: certificate.prepare_qc.clone(),
-        commit_qc: certificate.commit_qc.clone(),
-    };
-    assert!(
-        state
-            .certified_lane_block_session_is_applied_or_snapshot_anchored(&session)
-            .expect("authenticate exact durable application evidence")
-    );
-    assert!(kura.lane_block_application_receipt_available(proposal));
-    for (index, mut retained) in retained_terminal_adapters.into_iter().enumerate() {
-        assert_eq!(retained.lane_sessions.len(), 1);
-        retained
-            .committed_lane_outputs
-            .push_back(PendingCommittedLaneOutput {
-                session: session.clone(),
-                next_validator: session.commit_qc.validator_set.len(),
-            });
-        assert_eq!(
-            retained.committed_lane_outputs.len(),
-            retained.limits.session_capacity.get()
-        );
-        assert!(
-            !retained
-                .proposal_can_progress(proposal)
-                .expect("authenticate lane progress authority")
-        );
-        if index == 0 {
-            retained.drive_lane_sessions();
-        } else {
-            // First prove terminal retirement while the one-slot output queue is full.
-            // The following guarded persistence also inventories both durable cycles,
-            // so it must use the fixture's valid whole-context inventory budget.
-            retained
-                .retire_applied_autonomous_sessions()
-                .expect("retire partial terminal evidence under full output pressure");
-            assert!(retained.lane_sessions.is_empty());
-            assert!(retained.lane_sessions.rollover_slots().is_empty());
-            retained.limits.session_capacity = limits.session_capacity;
-            assert_eq!(
-                retained
-                    .persist_anchored_sessions()
-                    .expect("guarded persistence rechecks the complete durable inventory"),
-                0
-            );
-        }
-        assert!(retained.lane_sessions.is_empty());
-        assert!(
-            retained.lane_sessions.rollover_slots().is_empty(),
-            "retirement includes independent signer locks"
-        );
-        assert_eq!(retained.committed_lane_outputs.len(), 1);
-        assert_eq!(retained.committed_lane_outputs[0].session, session);
-        assert_eq!(
-            retained.committed_lane_outputs[0].next_validator,
-            session.commit_qc.validator_set.len()
-        );
-        assert!(retained.pending_committed_lanes.is_empty());
-        assert!(retained.historical_recovery_sessions.is_empty());
-        assert!(retained.lane_ready_authorizations.is_empty());
-        assert!(retained.effects.is_empty());
-        assert!(!retained.output_guard.restart_required());
-    }
-    let observer_key = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal)
-        .expect("deterministic non-voting public observer key");
-    let observer_peer = PeerId::new(observer_key.public_key().clone());
-    assert!(!proposal.descriptor.validator_set.contains(&observer_peer));
-    assert!(
-        !context
-            .roster
-            .iter()
-            .any(|entry| entry.validator == observer_peer)
-    );
-    let sender = certificate
-        .commit_qc
-        .validator_set
-        .iter()
-        .find(|peer| context.roster.iter().any(|entry| &entry.validator == *peer))
-        .expect("historical public certificate has an authenticated connected sender")
-        .clone();
-    let mut observer = V2LaneWorkAdapter::new(
-        context.clone(),
-        observer_peer,
-        observer_key,
-        false,
-        Arc::clone(&state),
-        Arc::clone(&kura),
-        limits,
-        None,
-    )
-    .expect("reopen a public observer after the real terminal merge application");
-    // Startup must inspect every active route before this test constrains live recovery.
-    assert!(
-        observer.lane_sessions.is_empty(),
-        "startup must not discard retained sessions"
-    );
-    observer.lane_sessions.set_unprotected_capacity_for_testing(
-        NonZeroUsize::new(1).expect("one live recovery slot"),
-    );
-    assert!(!observer.local_can_own_autonomous_payload(proposal));
-    assert_eq!(
-        observer
-            .canonical_finalized_autonomous_payload_for_proposal(proposal)
-            .expect("reauthenticate the unchanged public carrier and finality")
-            .expect("the original public source remains independently available")
-            .origin_proposal,
-        *proposal
-    );
-    assert!(observer.lane_sessions.is_empty());
-    assert!(observer.effects.is_empty());
-    let admit = |message| {
-        fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-            message,
-            sender.clone(),
-        ))
-    };
-    assert_eq!(
-        observer
-            .accept_lane_message_with_ingress_ownership(
-                admit(BlockMessage::LaneBlockCertificate(Box::new(
-                    certificate.clone()
-                ))),
-                0,
-            )
-            .expect("authenticate the exact applied complete certificate"),
-        V2LaneIngressOutcome::Duplicate
-    );
-    assert!(observer.lane_sessions.is_empty());
-    assert!(observer.historical_recovery_sessions.is_empty());
-    assert!(observer.effects.is_empty());
-    assert!(!observer.output_guard.restart_required());
-    let empty_cache = observer.lane_sessions.clone();
-    let wrong_ready_votes = votes[0]
-        .iter()
-        .map(|vote| {
-            let ready = vote
-                .payload_availability_vote
-                .as_ref()
-                .expect("actual autonomous Prepare READY");
-            let key = validator_keys
-                .iter()
-                .find(|key| key.public_key() == vote.signer.public_key())
-                .expect("actual READY signer fixture key");
-            let mut body = ready.body.clone();
-            body.executable_payload_hash =
-                Hash::new(b"independently signed wrong terminal executable payload");
-            let mut wrong = vote.clone();
-            wrong.payload_availability_vote = Some(
-                LanePayloadAvailabilityVoteV1::new_signed(
-                    body,
-                    vote.signer.clone(),
-                    ready.validator_set_pops.clone(),
-                    key.private_key(),
-                )
-                .expect("sign a valid wrong-payload READY"),
-            );
-            wrong
-        })
-        .collect::<Vec<_>>();
-    let wrong_ready_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-        certificate.prepare_qc.body.clone(),
-        proposal.descriptor.validator_set.clone(),
-        &wrong_ready_votes,
-    )
-    .expect("aggregate independently authenticated wrong-payload READY evidence");
-    let mut missing_ready_qc = certificate.prepare_qc.clone();
-    missing_ready_qc.payload_availability_qc = None;
-    let mut commit_with_ready = certificate.commit_qc.clone();
-    commit_with_ready.payload_availability_qc =
-        certificate.prepare_qc.payload_availability_qc.clone();
-    let mut corrupt_ready_signature = certificate.prepare_qc.clone();
-    corrupt_ready_signature
-        .payload_availability_qc
-        .as_mut()
-        .expect("READY aggregate")
-        .bls_aggregate_signature[0] ^= 0x80;
-    let mut corrupt_ready_pop = certificate.prepare_qc.clone();
-    corrupt_ready_pop
-        .payload_availability_qc
-        .as_mut()
-        .expect("READY committee")
-        .validator_set_pops[0][0] ^= 0x80;
-    for invalid in [
-        wrong_ready_qc,
-        missing_ready_qc,
-        commit_with_ready,
-        corrupt_ready_signature,
-        corrupt_ready_pop,
-    ] {
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(
-                    admit(BlockMessage::LaneBlockQc(invalid.clone())),
-                    0,
-                )
-                .expect("reject incorrect terminal QC execution role"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut invalid_certificate = certificate.clone();
-        match invalid.body.phase {
-            CertPhase::Prepare => invalid_certificate.prepare_qc = invalid,
-            CertPhase::Commit => invalid_certificate.commit_qc = invalid,
-            CertPhase::NewView => unreachable!("only Prepare and Commit QCs are tested"),
-        }
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(
-                    admit(BlockMessage::LaneBlockCertificate(Box::new(
-                        invalid_certificate
-                    ))),
-                    0,
-                )
-                .expect("complete terminal certificate must authenticate its exact payload role"),
-            V2LaneIngressOutcome::Rejected
-        );
-        assert_eq!(observer.lane_sessions, empty_cache);
-    }
-    for qc in [
-        &certificate.commit_qc,
-        &certificate.prepare_qc,
-        &certificate.commit_qc,
-        &certificate.prepare_qc,
-    ] {
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(
-                    admit(BlockMessage::LaneBlockQc(qc.clone())),
-                    0,
-                )
-                .expect("authenticate the same applied certificate through standalone QC ingress"),
-            V2LaneIngressOutcome::Duplicate
-        );
-        assert_eq!(observer.lane_sessions, empty_cache);
-        let mut invalid = qc.clone();
-        invalid.bls_aggregate_signature[0] ^= 0x80;
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(
-                    admit(BlockMessage::LaneBlockQc(invalid)),
-                    0,
-                )
-                .expect("malformed terminal QC is a normal ingress rejection"),
-            V2LaneIngressOutcome::Rejected
-        );
-        assert_eq!(observer.lane_sessions, empty_cache);
-    }
-    for vote in votes[1].iter().take(1).chain(votes[0]).chain(votes[1]) {
-        let accept_vote = |vote: LaneBlockVoteV1| {
-            let signer = vote.signer.clone();
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockVote(vote),
-                signer,
-            ))
-        };
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(accept_vote(vote.clone()), 0)
-                .expect("authenticate terminal votes independently of replay order"),
-            V2LaneIngressOutcome::Duplicate
-        );
-        assert_eq!(observer.lane_sessions, empty_cache);
-        let mut invalid = vote.clone();
-        invalid.bls_signature[0] ^= 0x80;
-        assert_eq!(
-            observer
-                .accept_lane_message_with_ingress_ownership(accept_vote(invalid), 0)
-                .expect("malformed terminal vote is a normal ingress rejection"),
-            V2LaneIngressOutcome::Rejected
-        );
-        if let Some(ready) = &vote.payload_availability_vote {
-            for corrupt_pop in [false, true] {
-                let mut corrupt = vote.clone();
-                let paired = corrupt
-                    .payload_availability_vote
-                    .as_mut()
-                    .expect("paired READY");
-                if corrupt_pop {
-                    paired.validator_set_pops[0][0] ^= 0x80;
-                } else {
-                    paired.bls_signature[0] ^= 0x80;
-                }
-                assert_eq!(
-                    observer
-                        .accept_lane_message_with_ingress_ownership(accept_vote(corrupt), 0)
-                        .expect("terminal replay validates paired READY cryptography"),
-                    V2LaneIngressOutcome::Rejected
-                );
-            }
-            let mut missing = vote.clone();
-            missing.payload_availability_vote = None;
-            assert_eq!(
-                observer
-                    .accept_lane_message_with_ingress_ownership(accept_vote(missing), 0)
-                    .expect("terminal Prepare requires READY"),
-                V2LaneIngressOutcome::Rejected
-            );
-            let key = validator_keys
-                .iter()
-                .find(|key| key.public_key() == vote.signer.public_key())
-                .expect("retain the actual terminal vote signer fixture key");
-            let mut wrong = vote.clone();
-            let mut body = ready.body.clone();
-            body.executable_payload_hash =
-                Hash::new(b"other independently signed terminal payload");
-            wrong.payload_availability_vote = Some(
-                LanePayloadAvailabilityVoteV1::new_signed(
-                    body,
-                    vote.signer.clone(),
-                    ready.validator_set_pops.clone(),
-                    key.private_key(),
-                )
-                .expect("sign an independently valid wrong-payload READY vote"),
-            );
-            assert_eq!(
-                observer
-                    .accept_lane_message_with_ingress_ownership(accept_vote(wrong), 0)
-                    .expect("wrong terminal READY is a normal ingress rejection"),
-                V2LaneIngressOutcome::Rejected
-            );
-        } else {
-            let mut wrong_role = vote.clone();
-            wrong_role.payload_availability_vote = votes[0][0].payload_availability_vote.clone();
-            assert_eq!(
-                observer
-                    .accept_lane_message_with_ingress_ownership(accept_vote(wrong_role), 0)
-                    .expect("terminal Commit cannot carry READY"),
-                V2LaneIngressOutcome::Rejected
-            );
-        }
-        assert_eq!(observer.lane_sessions, empty_cache);
-    }
-    assert!(
-        !observer
-            .has_pending_historical_recovery()
-            .expect("authenticate pending historical recovery")
-    );
-    assert!(
-        !observer
-            .proposal_can_progress(proposal)
-            .expect("authenticate lane progress authority")
-    );
-    observer
-        .collect_committed_lane_sessions()
-        .expect("collect terminal lane owners after verified application");
-    assert_eq!(observer.lane_sessions, empty_cache);
-    assert_eq!(
-        observer
-            .persist_anchored_sessions()
-            .expect("service actual recovery after terminal standalone QC replay"),
-        0
-    );
-    assert_eq!(observer.lane_sessions, empty_cache);
-    assert!(observer.pending_committed_lanes.is_empty());
-    assert!(observer.historical_recovery_sessions.is_empty());
-    assert!(observer.lane_ready_authorizations.is_empty());
-    assert!(observer.effects.is_empty());
-    assert!(!observer.output_guard.restart_required());
-    let member_key = local_key.clone();
-    let member_peer = PeerId::new(member_key.public_key().clone());
-    assert!(proposal.descriptor.validator_set.contains(&member_peer));
-    let mut member = V2LaneWorkAdapter::new(
-        context,
-        member_peer,
-        member_key,
-        true,
-        Arc::clone(&state),
-        Arc::clone(&kura),
-        limits,
-        None,
-    )
-    .expect("reopen an actual committee member after economic application");
-    assert!(member.local_can_own_autonomous_payload(proposal));
-    assert!(member.lane_sessions.is_empty());
-    for qc in [&certificate.commit_qc, &certificate.prepare_qc] {
-        assert_eq!(
-            member
-                .accept_lane_message_with_ingress_ownership(
-                    admit(BlockMessage::LaneBlockQc(qc.clone())),
-                    0,
-                )
-                .expect("terminal committee QC is authenticated without custody recovery"),
-            V2LaneIngressOutcome::Duplicate
-        );
-    }
-    for vote in votes[1].iter().chain(votes[0]) {
-        let admitted =
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockVote(vote.clone()),
-                vote.signer.clone(),
-            ));
-        assert_eq!(
-            member
-                .accept_lane_message_with_ingress_ownership(admitted, 0)
-                .expect("terminal committee vote is authenticated without custody recovery"),
-            V2LaneIngressOutcome::Duplicate
-        );
-    }
-    assert!(member.lane_sessions.is_empty());
-    assert!(member.lane_ready_authorizations.is_empty());
-    assert!(member.pending_committed_lanes.is_empty());
-    assert!(member.historical_recovery_sessions.is_empty());
-    assert!(member.effects.is_empty());
-    assert!(!member.output_guard.restart_required());
-    if proposal.descriptor.previous_lane_block_height != 0 {
-        assert!(
-            !member
-                .proposal_predecessor_is_ready_for_progress(proposal)
-                .expect("authenticate the real advanced economic frontier"),
-            "an applied non-genesis slot is no longer eligible for fresh voting"
-        );
-    }
-    let remote_member = proposal
-        .descriptor
-        .validator_set
-        .iter()
-        .find(|peer| *peer != &member.local_peer)
-        .expect("the exact four-validator committee has a remote member")
-        .clone();
-    for requester in [remote_member, observer.local_peer.clone()] {
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester.clone());
-        let admitted = fair_v2_ingress_admit_for_test(
-            InboundBlockMessage::try_from_transport_with_reply_route(
-                BlockMessage::LaneBlockProposal(proposal.clone()),
-                requester.clone(),
-                requester.clone(),
-                route.clone(),
-            )
-            .expect("a lagging peer retains its authenticated recovery route"),
-        );
-        assert_eq!(
-            member
-                .accept_lane_message_with_ingress_ownership(admitted, 0)
-                .expect("serve an exact stored certificate after economic application"),
-            V2LaneIngressOutcome::Inserted
-        );
-        member
-            .purge_queued_global_body_effects_except_committed_outputs()
-            .expect("a later global decision retains the historical certificate response");
-        let effects = member.drain_effects(usize::MAX);
-        assert_eq!(effects.len(), 1);
-        assert!(matches!(
-            &effects[0],
-            V2LaneWorkEffect::PostDurableLaneCertificate {
-                peer,
-                reply_routes: Some(reply_routes),
-                ingress_ownership: Some(ownership),
-                certificate: recovered,
-            } if peer == &requester
-                && recovered == &certificate
-                && reply_routes.len() == 1
-                && reply_routes.iter().any(|retained| retained.same_delivery(&route))
-                && ownership.validate_exact()
-                && ownership.matches_reply_routes(Some(reply_routes))
-        ));
-        for phase in [CertPhase::Prepare, CertPhase::Commit] {
-            assert!(
-                member
-                    .sign_lane_vote(proposal, phase)
-                    .expect("recovery does not reopen an applied slot for signing")
-                    .is_none()
-            );
-        }
-        assert!(member.lane_sessions.is_empty());
-        assert!(member.lane_ready_authorizations.is_empty());
-        assert!(member.pending_committed_lanes.is_empty());
-        assert!(member.historical_recovery_sessions.is_empty());
-        assert!(member.effects.is_empty());
-        assert!(!member.output_guard.restart_required());
-    }
-    for change_incarnation in [false, true] {
-        let mut other = proposal.clone();
-        if change_incarnation {
-            other.descriptor.lane_incarnation = Hash::new(b"another applied recovery incarnation");
-        } else {
-            other.descriptor.subject_hash = Hash::new(b"another applied recovery subject");
-        }
-        other.descriptor.descriptor_hash = other.descriptor.computed_descriptor_hash();
-        other.proposal_hash = other.computed_proposal_hash();
-        validate_lane_block_proposal(&other).expect("a structurally valid substituted proposal");
-        assert!(
-            member
-                .reconstruct_durable_lane_certificate(&other, &sender)
-                .expect("reject a distinct proposal without changing durable state")
-                .is_none()
-        );
-    }
-    assert_eq!(
-        kura.get_block(source_height)
-            .expect("original source survives replay")
-            .encode_wire()
-            .expect("encode retained source"),
-        source_wire
-    );
-    assert_eq!(
-        kura.v2_finality_artifact(source_global_height)
-            .expect("original finality survives replay"),
-        Some(source_finality)
-    );
-    assert_eq!(
-        kura.read_lane_block_application_receipt(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height
-        ),
-        Some(terminal_receipt)
-    );
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(state.as_ref())
-            .expect("stable valid fixture snapshot"),
-        state_hash
-    );
-}
-
 #[test]
 fn restarted_nonmember_accepts_public_qcs_and_persists_only_canonical_replica() {
     let NonmemberCanonicalReplicaPreQcFixture {
@@ -5951,15 +5434,18 @@ fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligibl
 
     // QueuePlan-synchronized ownership remains autonomous even when the
     // topology exposes only one route.
-    let (mut observer, keys) =
-        observer_fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    enable_single_custom_lane_nexus(&mut observer, &keys, lane_id, dataspace_id);
-    let context = observer.context.clone();
-    let restart = LaneAdapterRestartParts::capture(&observer);
-    drop(observer);
-    let mut adapter = restart
-        .reopen_isolated(context, true)
-        .expect("open voting journals after freezing the single-route authority");
+    let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
+    assert_eq!(
+        adapter
+            .state
+            .consensus_lane_routes_at_height(adapter.context.height)
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec![(lane_id, dataspace_id)],
+        "single-route retry uses the authority established before its durable parent and journals",
+    );
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)
         .expect("install the runner's exact unlocked single-route candidate view");
@@ -6055,44 +5541,7 @@ fn autonomous_producer_skips_idle_routes_with_an_occupied_queue() {
 
 #[test]
 fn autonomous_producer_outside_lane_committee_skips_storage_planning() {
-    let (mut observer, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
-        wire::ConsensusMode::Permissioned,
-        9,
-        true,
-        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
-        Some(3),
-        false,
-    );
-    let extra_key = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal)
-        .expect("deterministic lane-only validator");
-    let id = ConsensusKeyId::new(
-        ConsensusKeyRole::Validator,
-        "producer-prefilter-lane-validator",
-    );
-    let record = ConsensusKeyRecord {
-        id: id.clone(),
-        public_key: extra_key.public_key().clone(),
-        pop: Some(iroha_crypto::bls_normal_pop_prove(extra_key.private_key()).unwrap()),
-        activation_height: 0,
-        expiry_height: None,
-        replaces: None,
-        status: ConsensusKeyStatus::Active,
-    };
-    {
-        let mut world = observer.state.world.block();
-        world.consensus_keys.insert(id.clone(), record.clone());
-        world
-            .consensus_keys_by_pk
-            .insert(record.public_key.to_string(), vec![id]);
-        world.commit();
-    }
-    let mut lane_keys = global_keys
-        .iter()
-        .filter(|key| key.public_key() != observer.local_peer.public_key())
-        .cloned()
-        .collect::<Vec<_>>();
-    lane_keys.push(extra_key);
-    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let (mut observer, _, lane_keys) = autonomous_nonmember_test_fixture(9, 0xE9, false);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
     prepare_autonomous_test_lane(&mut observer, &lane_keys, lane_id, dataspace_id);

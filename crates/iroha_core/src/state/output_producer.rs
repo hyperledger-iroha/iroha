@@ -43,6 +43,22 @@ pub(in crate::state) struct SealedExecutionOutputs {
     // Actual canonical World net changes at attachment, including finalizer
     // effects. This is only one component of the still-unfinished State proof.
     world_delta: crate::state::world_projection::WorldNetDelta,
+    // Captured by the sole witness recorder before the witness is handed out.
+    witness_hash: Option<HashOf<iroha_data_model::block::consensus::ExecWitness>>,
+    witness_surface: Option<Box<crate::state::output_publication::FinalizedPublicationSurface>>,
+}
+
+/// Exact durable finality over this owner's complete outputs and actual witness.
+pub(in crate::state) struct AuthorizedExecutionOutputs {
+    sealed: SealedExecutionOutputs,
+    finality_hash: Hash,
+}
+
+/// Retain both execution authority and the deterministic publication surface.
+pub(in crate::state) struct FinalizedExecutionOutputs {
+    authorized: AuthorizedExecutionOutputs,
+    surface: Box<crate::state::output_publication::FinalizedPublicationSurface>,
+    _events_hash: Hash,
 }
 
 /// Owns both the State borrow and its only mutable output budget. It cannot be

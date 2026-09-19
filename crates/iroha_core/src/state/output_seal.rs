@@ -1,5 +1,6 @@
 //! Consuming common output attachment, preserving State ownership on every exit.
-//! This seals actual output/source metadata, not final witness or publication authority.
+//! Sealed actual outputs join the original witness and durable finality before
+//! one deterministic metadata tail can authorize their exact journal publication.
 
 use super::*;
 use crate::queue::RoutingDecision;
@@ -49,10 +50,193 @@ impl Drop for SealOwner<'_, '_> {
 }
 
 impl StateBlock<'_> {
+    /// Bind the recorder's actual complete witness before extraction. A second
+    /// capture cannot replace the first witness owned by this execution.
+    pub(in crate::state) fn bind_execution_output_witness(
+        &mut self,
+        witness: &iroha_data_model::block::consensus::ExecWitness,
+    ) -> Result<(), String> {
+        if self.execution_output_plan.is_none() {
+            return Ok(());
+        }
+        let surface = crate::state::output_publication::FinalizedPublicationSurface::capture(self)?;
+        let Some(plan) = self.execution_output_plan.as_mut() else {
+            return Ok(());
+        };
+        let ExecutionOutputPlanState::Sealed(sealed) = plan else {
+            return Err("witness capture requires completed execution outputs".into());
+        };
+        let hash = HashOf::new(witness);
+        match sealed.witness_hash {
+            Some(previous) if previous != hash => {
+                Err("captured execution witness changed after sealing".into())
+            }
+            _ => {
+                if let Some(previous) = sealed.witness_surface.as_ref() {
+                    if previous.as_ref() != &surface {
+                        return Err("execution surface changed after witness capture".into());
+                    }
+                }
+                sealed.witness_hash = Some(hash);
+                sealed.witness_surface = Some(Box::new(surface));
+                Ok(())
+            }
+        }
+    }
+
+    /// Authorize this exact execution only after its witness, result wire and
+    /// verified finality have crossed the canonical durable Kura boundary.
+    pub(crate) fn authorize_execution_output_publication(
+        &mut self,
+        block: &crate::block::CommittedBlock,
+        witness: &iroha_data_model::block::consensus::ExecWitness,
+    ) -> Result<(), String> {
+        self.verify_execution_output_seal(block.as_ref())?;
+        if self.native_lane_stage.is_some() {
+            self.validate_native_output_source(block.as_ref())?;
+        }
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
+        else {
+            return Err("publication requires the original sealed output owner".into());
+        };
+        if sealed.witness_hash != Some(HashOf::new(witness)) {
+            return Err("publication witness differs from the actual captured witness".into());
+        }
+        let artifact = block
+            .verified_v2_finality_artifact()
+            .ok_or("execution publication requires verified finality")?;
+        let native = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+            block.as_ref(), self.staged_merge_entry(),
+        )?;
+        let lanes = crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
+            block.as_ref(),
+        )?;
+        let actual = crate::sumeragi::exec::execution_commitment_from_validated_block(
+            witness,
+            &native,
+            &lanes,
+            block.as_ref(),
+        )
+        .map_err(str::to_owned)?;
+        if actual != artifact.commit_qc.execution_commitment {
+            return Err("captured execution differs from verified finality".into());
+        }
+        let durable = self
+            .state_ref
+            .kura
+            .v2_finality_artifact(artifact.height)
+            .map_err(|error| error.to_string())?
+            .ok_or("execution finality has not been durably stored")?;
+        if durable != *artifact {
+            return Err("durable finality differs from execution authority".into());
+        }
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.take()
+        else {
+            unreachable!("exclusive borrow retains the checked seal")
+        };
+        self.execution_output_plan = Some(ExecutionOutputPlanState::Authorized(
+            AuthorizedExecutionOutputs {
+                sealed,
+                finality_hash: HashOf::new(artifact).into(),
+            },
+        ));
+        Ok(())
+    }
+
+    /// Consume authorized execution around the sole deterministic metadata tail.
+    /// Failed or unwound preparation permanently poisons this publication owner.
+    pub(in crate::state) fn finalize_authorized_execution_outputs(
+        &mut self,
+        block: &crate::block::CommittedBlock,
+        prepare: impl FnOnce(
+            &mut Self,
+        ) -> Result<
+            Vec<iroha_data_model::events::EventBox>,
+            crate::state::MergeLedgerCommitError,
+        >,
+    ) -> Result<Vec<iroha_data_model::events::EventBox>, crate::state::MergeLedgerCommitError> {
+        let invalid = crate::state::MergeLedgerCommitError::ExecutionBatchInvalid;
+        let Some(ExecutionOutputPlanState::Authorized(authorized)) = self
+            .execution_output_plan
+            .replace(ExecutionOutputPlanState::Finalizing)
+        else {
+            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            return Err(invalid(
+                "execution publication lacks exact durable finality authorization".into(),
+            ));
+        };
+        let mut owner = SealOwner {
+            state: self,
+            finished: false,
+        };
+        let state = &mut *owner.state;
+        let artifact = block
+            .verified_v2_finality_artifact()
+            .ok_or_else(|| invalid("publication lost verified finality".into()))?;
+        if state.native_lane_stage.is_some() {
+            state
+                .validate_native_output_source(block.as_ref())
+                .map_err(invalid)?;
+        }
+        let wire = block
+            .as_ref()
+            .encode_wire()
+            .map_err(|error| invalid(error.to_string()))?;
+        if authorized.finality_hash != Hash::from(HashOf::new(artifact))
+            || authorized.sealed.proposal != block.as_ref().hash()
+            || state._curr_block != block.as_ref().header()
+            || u64::try_from(wire.len()).ok() != Some(authorized.sealed.wire_bytes)
+            || Hash::new(&wire) != authorized.sealed.wire_hash
+            || state.world.net_state_delta().map_err(invalid)? != authorized.sealed.world_delta
+        {
+            return Err(invalid(
+                "authorized execution changed before metadata preparation".into(),
+            ));
+        }
+        authorized
+            .sealed
+            .witness_surface
+            .as_ref()
+            .ok_or_else(|| invalid("publication lost its captured execution surface".into()))?
+            .verify(state)
+            .map_err(invalid)?;
+        let events = prepare(state)?;
+        let surface = state
+            .prepare_finalized_publication_surface()
+            .map_err(invalid)?;
+        state.execution_output_plan = Some(ExecutionOutputPlanState::Finalized(
+            FinalizedExecutionOutputs {
+                authorized,
+                surface: Box::new(surface),
+                _events_hash: crate::state::world_projection::hash_value(&events)
+                    .map_err(invalid)?,
+            },
+        ));
+        owner.finished = true;
+        Ok(events)
+    }
+
+    /// Validate the retained linear owner immediately before journal publication.
+    pub(in crate::state) fn verify_execution_output_publication(&self) -> Result<(), String> {
+        match self.execution_output_plan.as_ref() {
+            None if self.native_lane_stage.is_none() => Ok(()),
+            Some(ExecutionOutputPlanState::Finalized(finalized)) => {
+                if finalized.authorized.sealed.proposal != self._curr_block.hash() {
+                    return Err("finalized execution belongs to another carrier".into());
+                }
+                finalized.surface.verify(self)
+            }
+            _ => Err(
+                "execution output owner has not completed finality and publication preparation"
+                    .into(),
+            ),
+        }
+    }
+
     /// Run the complete execution output owner and consume its actual sources.
     /// The caller still owes source/finality and non-output resource admission.
-    /// TODO: complete persistent State/read authority and publication admission;
-    /// the sealed output owner does not grant commit authority by itself.
+    /// The sealed output owner does not grant commit authority by itself: the
+    /// original witness, durable finality and publication surface must join it.
     pub(crate) fn execute_and_seal_ordinary_outputs<E>(
         &mut self,
         block: &mut SignedBlock,
@@ -189,6 +373,8 @@ impl StateBlock<'_> {
                 .map_err(|error| error.to_string())?;
             let wire = block.encode_wire().map_err(|error| error.to_string())?;
             Ok(SealedExecutionOutputs {
+                witness_hash: None,
+                witness_surface: None,
                 world_delta,
                 proposal: block.hash(),
                 wire_hash: Hash::new(&wire),
@@ -231,6 +417,9 @@ impl StateBlock<'_> {
         }
         if self.world.net_state_delta()? != sealed.world_delta {
             return Err("World values changed after the execution output seal".into());
+        }
+        if let Some(surface) = sealed.witness_surface.as_ref() {
+            surface.verify(self)?;
         }
         self.verified_fastpq_source_inventory_for_capture()?;
         Ok(())

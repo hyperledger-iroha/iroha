@@ -7129,6 +7129,7 @@ mod validation_fee_registry_restore_tests {
         }
         let snapshot = json::to_value(&state).expect("serialize validation-fee restore fixture");
         KuraSeed {
+            lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -7284,6 +7285,7 @@ mod validation_fee_registry_restore_tests {
         ));
         let error = build_state(
             BuildStateInputs {
+                lane_manifests: Arc::new(LaneManifestRegistry::empty()),
                 canonical_runtime,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
@@ -8852,6 +8854,7 @@ mod asset_transfer_control_persistence_tests {
 }
 
 struct BuildStateInputs {
+    lane_manifests: LaneManifestRegistryHandle,
     canonical_runtime: Cell<SnapshotNexusRuntime>,
     world: World,
     block_hashes: BlockHashes,
@@ -8876,6 +8879,7 @@ fn build_state(
     emergency_fast: bool,
 ) -> Result<Box<State>, MergeLedgerCommitError> {
     let BuildStateInputs {
+        lane_manifests,
         canonical_runtime,
         world,
         block_hashes,
@@ -9041,7 +9045,7 @@ fn build_state(
         query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
         da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
         lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
-        lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
+        lane_manifests: parking_lot::RwLock::new(lane_manifests),
         lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
         lane_compliance: parking_lot::RwLock::new(None),
         da_index_hydration_fence: parking_lot::Mutex::new(()),
@@ -9086,16 +9090,28 @@ fn build_state(
         authenticated_snapshot_bootstrap_payload: None,
         #[cfg(feature = "telemetry")]
         telemetry,
-        lane_lifecycle_lock: parking_lot::Mutex::new(()),
+        lane_lifecycle_lock: StatePublicationMutex::default(),
         queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
-        state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
-        state_write_lock: parking_lot::Mutex::new(()),
+        state_commit_lock: Arc::new(StatePublicationMutex::default()),
+        state_write_lock: StatePublicationMutex::default(),
         view_generation: AtomicU64::new(0),
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
     });
+    if !emergency_fast {
+        // Restore effective manifests from the caller's frozen startup sources before
+        // any State view or derived index can observe the committed runtime catalog.
+        let projection = {
+            let runtime = state.canonical_runtime.view();
+            let world = state.world.view();
+            state.project_canonical_runtime(runtime.get(), &world)
+        }
+        .map_err(|error| MergeLedgerCommitError::ExecutionStatePublication(error.to_string()))?;
+        *state.lane_manifests.get_mut() = projection.manifests;
+        *state.lane_privacy_registry.get_mut() = projection.privacy;
+    }
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
         &state.view(),
         restored_height,
@@ -10705,6 +10721,7 @@ mod decode_tests {
         assert!(!encoded.contains("\"account_scope_directory\""));
         let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
         let restored = KuraSeed {
+            lane_manifests: state.lane_manifests.read().clone(),
             kura,
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]

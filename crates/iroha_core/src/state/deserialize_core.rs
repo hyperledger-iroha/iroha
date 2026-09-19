@@ -226,6 +226,8 @@ impl IvmSeed<'_, TriggerSet> {
 }
 pub struct KuraSeed {
     pub kura: Arc<Kura>,
+    /// Immutable configured manifest sources used before the first restored State view.
+    pub lane_manifests: LaneManifestRegistryHandle,
     pub query_handle: LiveQueryStoreHandle,
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
@@ -285,6 +287,7 @@ impl KuraSeed {
             .collect();
         let state = build_state(
             BuildStateInputs {
+                lane_manifests: self.lane_manifests,
                 world: World::default(),
                 block_hashes,
                 transactions: TransactionsStorage::new(),
@@ -524,6 +527,15 @@ impl KuraSeed {
                 message: error.to_string(),
             }
         })?;
+        if world_catalog.as_ref().is_some_and(|catalog| {
+            catalog.baseline_manifests_hash
+                != Hash::prehashed(self.lane_manifests.baseline_consensus_policy_digest())
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "state.lane_manifests".to_owned(),
+                message: "manifest baseline differs from canonical World catalog".to_owned(),
+            });
+        }
         let added_dataspaces: BTreeSet<_> = world_catalog
             .as_ref()
             .into_iter()
@@ -692,6 +704,7 @@ impl KuraSeed {
         }
         let state = build_state(
             BuildStateInputs {
+                lane_manifests: self.lane_manifests,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
                 transactions,

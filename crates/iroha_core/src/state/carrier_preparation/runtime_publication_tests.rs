@@ -1,0 +1,465 @@
+//! Four-cell installation custody; these structural tests grant no State finality.
+
+use super::*;
+use mv::{BlockMode, PublicationPreparationError};
+use std::{
+    convert::Infallible,
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    task::{Context, Wake, Waker},
+};
+
+type Blocks<'state> = (
+    CellBlock<'state, SnapshotNexusRuntime>,
+    CellBlock<'state, Vec<PeerId>>,
+    CellBlock<'state, Vec<PeerId>>,
+    CellBlock<'state, LaneConsensusContextsV1>,
+);
+
+#[derive(Debug, PartialEq, Eq)]
+struct Images {
+    canonical_runtime: (SnapshotNexusRuntime, Option<SnapshotNexusRuntime>),
+    commit_topology: (Vec<PeerId>, Option<Vec<PeerId>>),
+    prev_commit_topology: (Vec<PeerId>, Option<Vec<PeerId>>),
+    lane_consensus_contexts: (LaneConsensusContextsV1, Option<LaneConsensusContextsV1>),
+}
+
+fn images(state: &State) -> Images {
+    fn image<V: mv::Value>(cell: &Cell<V>) -> (V, Option<V>) {
+        (
+            cell.view().get().clone(),
+            cell.predecessor_view().get().clone(),
+        )
+    }
+    Images {
+        canonical_runtime: image(&state.canonical_runtime),
+        commit_topology: image(&state.commit_topology),
+        prev_commit_topology: image(&state.prev_commit_topology),
+        lane_consensus_contexts: image(&state.lane_consensus_contexts),
+    }
+}
+
+fn blocks(state: &State, mode: BlockMode) -> Blocks<'_> {
+    match mode {
+        BlockMode::Ordinary => (
+            state.canonical_runtime.block(),
+            state.commit_topology.block(),
+            state.prev_commit_topology.block(),
+            state.lane_consensus_contexts.block(),
+        ),
+        BlockMode::Replace => (
+            state.canonical_runtime.block_and_revert(),
+            state.commit_topology.block_and_revert(),
+            state.prev_commit_topology.block_and_revert(),
+            state.lane_consensus_contexts.block_and_revert(),
+        ),
+    }
+}
+
+fn commit((runtime, topology, previous, contexts): Blocks<'_>) {
+    runtime.commit();
+    topology.commit();
+    previous.commit();
+    contexts.commit();
+}
+
+fn mutate((runtime, topology, previous, contexts): &mut Blocks<'_>, value: u8) {
+    let mut context = crate::state::lane_consensus_context::frozen_lane_context_fixture_for_test();
+    context.leader_seed = [value; 32];
+    runtime.get_mut().autoscale_last_transition_height = u64::from(value);
+    let mut child = topology.transaction();
+    *child.get_mut() = context.committee.clone();
+    child.get_mut().rotate_left(usize::from(value) % 4);
+    child.apply();
+    *previous.get_mut() = context.committee.clone();
+    previous.get_mut().rotate_right(usize::from(value) % 4);
+    // This child must not erase the preceding actual parent change.
+    let mut aborted = previous.transaction();
+    aborted.get_mut().clear();
+    drop(aborted);
+    *contexts.get_mut() = LaneConsensusContextsV1::new(vec![context]).unwrap();
+}
+
+fn fixture() -> Box<State> {
+    let (state, _, _, _) = crate::state::carrier_preparation::tests::fixture();
+    let mut initial = blocks(&state, BlockMode::Ordinary);
+    mutate(&mut initial, 1);
+    commit(initial);
+    state
+}
+
+fn capture<Admission>(
+    (runtime, topology, previous, contexts): Blocks<'_>,
+    admission: Admission,
+) -> RuntimeJournals<Admission> {
+    RuntimeJournals::capture(runtime, topology, previous, contexts, |inputs| {
+        let mode = inputs.canonical_runtime().mode();
+        assert_eq!(inputs.commit_topology().mode(), mode);
+        assert_eq!(inputs.prev_commit_topology().mode(), mode);
+        assert_eq!(inputs.lane_consensus_contexts().mode(), mode);
+        Ok::<_, Infallible>(admission)
+    })
+    .unwrap()
+}
+
+fn prepare<Admission>(
+    journal: RuntimeJournals<Admission>,
+    state: &State,
+) -> PreparedRuntimeJournals<'_, Admission, ()> {
+    journal
+        .try_prepare_publication(state, |_, _| Ok::<_, Infallible>(()))
+        .unwrap_or_else(|(_, error)| panic!("runtime publication: {error:?}"))
+}
+
+fn original_topology_allocation<Admission>(journal: &RuntimeJournals<Admission>) -> *const PeerId {
+    journal
+        .commit_topology
+        .touched_value()
+        .expect("original applied child touch")
+        .after
+        .as_ptr()
+}
+
+fn assert_writers_released_except(state: &State, except: Option<&str>) {
+    macro_rules! released {
+        ($field:ident) => {
+            if except != Some(stringify!($field)) {
+                drop(state.$field.block());
+            }
+        };
+    }
+    released!(canonical_runtime);
+    released!(commit_topology);
+    released!(prev_commit_topology);
+    released!(lane_consensus_contexts);
+}
+
+#[derive(Default)]
+struct WakeCount(AtomicUsize);
+
+impl Wake for WakeCount {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct ResourceGuard<'state> {
+    state: &'state State,
+    released: Arc<AtomicBool>,
+    except: Option<&'static str>,
+}
+
+impl Drop for ResourceGuard<'_> {
+    fn drop(&mut self) {
+        assert_writers_released_except(self.state, self.except);
+        assert!(!self.released.swap(true, Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn runtime_publication_holds_all_four_writers_and_matches_direct_current_and_undo() {
+    let state = fixture();
+    let direct = fixture();
+    let before = images(&state);
+    let probes = capture(blocks(&state, BlockMode::Ordinary), ());
+    let mut original = blocks(&state, BlockMode::Ordinary);
+    let mut reference = blocks(&direct, BlockMode::Ordinary);
+    mutate(&mut original, 2);
+    mutate(&mut reference, 2);
+    let journal = capture(original, ());
+    let pointer = original_topology_allocation(&journal);
+    let prepared = prepare(journal, &state);
+    assert_eq!(images(&state), before);
+    macro_rules! held {
+        ($field:ident) => {
+            assert!(matches!(
+                probes
+                    .$field
+                    .try_prepare_publication(&state.$field, |_, _| Ok::<_, Infallible>(())),
+                Err((_, PublicationPreparationError::Busy(_)))
+            ));
+        };
+    }
+    held!(canonical_runtime);
+    held!(commit_topology);
+    held!(prev_commit_topology);
+    held!(lane_consensus_contexts);
+    let journal = prepared.abort();
+    assert_eq!(original_topology_allocation(&journal), pointer);
+    assert!(journal.matches_current(&state));
+    assert_writers_released_except(&state, None);
+    commit(reference);
+    prepare(journal, &state).publish();
+    assert_eq!(images(&state), images(&direct));
+    assert_writers_released_except(&state, None);
+}
+
+#[test]
+fn runtime_replacement_preserves_untouched_discarded_tip_and_real_undo() {
+    for touched in [false, true] {
+        let state = fixture();
+        let direct = fixture();
+        for target in [&state, &direct] {
+            let mut tip = blocks(target, BlockMode::Ordinary);
+            mutate(&mut tip, 3);
+            commit(tip);
+        }
+        let mut original = blocks(&state, BlockMode::Replace);
+        let mut reference = blocks(&direct, BlockMode::Replace);
+        if touched {
+            // Leave the last field untouched: replacement itself must restore
+            // its predecessor instead of retaining the discarded tip context.
+            original.0.get_mut().autoscale_last_transition_height = 9;
+            reference.0.get_mut().autoscale_last_transition_height = 9;
+        }
+        let journal = capture(original, ());
+        assert_eq!(journal.canonical_runtime.mode(), BlockMode::Replace);
+        assert!(journal.lane_consensus_contexts.touched_value().is_none());
+        commit(reference);
+        prepare(journal, &state).publish();
+        assert_eq!(images(&state), images(&direct));
+        commit(blocks(&state, BlockMode::Replace));
+        commit(blocks(&direct, BlockMode::Replace));
+        assert_eq!(images(&state), images(&direct));
+    }
+}
+
+#[test]
+fn runtime_busy_at_each_field_returns_exact_journals_and_releases_earlier_writers() {
+    let state = fixture();
+    let before = images(&state);
+    let retained = Arc::new(AtomicBool::new(false));
+    let mut original = blocks(&state, BlockMode::Ordinary);
+    mutate(&mut original, 2);
+    let mut journal = capture(
+        original,
+        ResourceGuard {
+            state: &state,
+            released: Arc::clone(&retained),
+            except: None,
+        },
+    );
+    let pointer = original_topology_allocation(&journal);
+    macro_rules! busy {
+        ($field:ident) => {{
+            let busy = state.$field.block();
+            let released = Arc::new(AtomicBool::new(false));
+            let (returned, error) = journal
+                .try_prepare_publication(&state, |_, _| {
+                    Ok::<_, Infallible>(ResourceGuard {
+                        state: &state,
+                        released: Arc::clone(&released),
+                        except: Some(stringify!($field)),
+                    })
+                })
+                .err()
+                .expect("busy original component");
+            let RuntimePublicationError::Component {
+                field,
+                cause: PublicationPreparationError::Busy(wait),
+            } = error
+            else {
+                panic!("expected original writer contention, got {error:?}");
+            };
+            assert_eq!(field, stringify!($field));
+            assert!(released.load(Ordering::SeqCst));
+            assert!(!retained.load(Ordering::SeqCst));
+            // The returned wait belongs to the actual refused writer, not the
+            // earlier fields released during rollback or a periodic timer.
+            let wake = Arc::new(WakeCount::default());
+            let waker = Waker::from(Arc::clone(&wake));
+            let mut context = Context::from_waker(&waker);
+            let mut wait = wait.wait_for_release();
+            assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+            drop(busy);
+            assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+            assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+            returned
+        }};
+    }
+    for field in 0..4 {
+        journal = match field {
+            0 => busy!(canonical_runtime),
+            1 => busy!(commit_topology),
+            2 => busy!(prev_commit_topology),
+            _ => busy!(lane_consensus_contexts),
+        };
+        assert_eq!(original_topology_allocation(&journal), pointer);
+        assert_eq!(images(&state), before);
+        assert!(journal.matches_current(&state));
+        assert_writers_released_except(&state, None);
+    }
+    let guards = prepare(journal, &state).publish();
+    assert!(!retained.load(Ordering::SeqCst));
+    drop(guards);
+    assert!(retained.load(Ordering::SeqCst));
+}
+
+#[test]
+fn runtime_late_changed_field_restores_original_custody_and_releases_installation_last() {
+    let state = fixture();
+    let before = images(&state);
+    let retained = Arc::new(AtomicBool::new(false));
+    let installation = Arc::new(AtomicBool::new(false));
+    let mut original = blocks(&state, BlockMode::Ordinary);
+    mutate(&mut original, 2);
+    let journal = capture(
+        original,
+        ResourceGuard {
+            state: &state,
+            released: Arc::clone(&retained),
+            except: None,
+        },
+    );
+    let pointer = original_topology_allocation(&journal);
+    let (journal, error) = journal
+        .try_prepare_publication(&state, |_, target| {
+            assert_writers_released_except(target, None);
+            // Same visible value, different actual current/undo identity in the
+            // final acquisition; every earlier prepared field must be aborted.
+            target.lane_consensus_contexts.block().commit();
+            Ok::<_, Infallible>(ResourceGuard {
+                state: &state,
+                released: Arc::clone(&installation),
+                except: None,
+            })
+        })
+        .err()
+        .expect("late exact identity mismatch");
+    assert!(matches!(
+        error,
+        RuntimePublicationError::Component {
+            field: "lane_consensus_contexts",
+            cause: PublicationPreparationError::Changed,
+        }
+    ));
+    assert_eq!(original_topology_allocation(&journal), pointer);
+    assert!(installation.load(Ordering::SeqCst));
+    assert!(!retained.load(Ordering::SeqCst));
+    let after = images(&state);
+    assert_eq!(after.canonical_runtime, before.canonical_runtime);
+    assert_eq!(after.commit_topology, before.commit_topology);
+    assert_eq!(after.prev_commit_topology, before.prev_commit_topology);
+    assert_eq!(
+        after.lane_consensus_contexts.0,
+        before.lane_consensus_contexts.0
+    );
+    assert_eq!(after.lane_consensus_contexts.1, None);
+    assert!(!journal.matches_current(&state));
+    assert!(
+        journal
+            .canonical_runtime
+            .matches_current(&state.canonical_runtime)
+    );
+    drop(journal);
+    assert!(retained.load(Ordering::SeqCst));
+}
+
+#[test]
+fn runtime_installation_refusal_precedes_all_writer_acquisition_and_preserves_original() {
+    let state = fixture();
+    let before = images(&state);
+    let mut original = blocks(&state, BlockMode::Ordinary);
+    mutate(&mut original, 2);
+    let journal = capture(original, ());
+    let pointer = original_topology_allocation(&journal);
+    let mut called = 0;
+    let (journal, error) = journal
+        .try_prepare_publication(&state, |candidate, target| {
+            called += 1;
+            assert_eq!(original_topology_allocation(candidate), pointer);
+            assert_writers_released_except(target, None);
+            Err::<(), _>("bounded installation exhausted")
+        })
+        .err()
+        .expect("required capacity refusal");
+    assert_eq!(called, 1);
+    assert!(matches!(
+        error,
+        RuntimePublicationError::Admission("bounded installation exhausted")
+    ));
+    assert_eq!(original_topology_allocation(&journal), pointer);
+    assert!(journal.matches_current(&state));
+    assert_eq!(images(&state), before);
+    prepare(journal, &state).publish();
+    assert_ne!(images(&state), before);
+}
+
+#[test]
+fn runtime_capture_and_installation_guards_outlive_all_writers_on_drop_abort_and_publish() {
+    for operation in 0..3 {
+        let state = fixture();
+        let before = images(&state);
+        let retained = Arc::new(AtomicBool::new(false));
+        let installation = Arc::new(AtomicBool::new(false));
+        let mut original = blocks(&state, BlockMode::Ordinary);
+        mutate(&mut original, 2);
+        let journal = capture(
+            original,
+            ResourceGuard {
+                state: &state,
+                released: Arc::clone(&retained),
+                except: None,
+            },
+        );
+        let prepared = journal
+            .try_prepare_publication(&state, |_, _| {
+                Ok::<_, Infallible>(ResourceGuard {
+                    state: &state,
+                    released: Arc::clone(&installation),
+                    except: None,
+                })
+            })
+            .unwrap_or_else(|_| panic!("prepare original runtime journals"));
+        match operation {
+            0 => drop(prepared),
+            1 => {
+                let journal = prepared.abort();
+                assert!(installation.load(Ordering::SeqCst));
+                assert!(!retained.load(Ordering::SeqCst));
+                assert!(journal.matches_current(&state));
+                drop(journal);
+            }
+            _ => {
+                let guards = prepared.publish();
+                assert!(!installation.load(Ordering::SeqCst));
+                assert!(!retained.load(Ordering::SeqCst));
+                assert_writers_released_except(&state, None);
+                assert_ne!(images(&state), before);
+                drop(guards);
+            }
+        }
+        assert!(retained.load(Ordering::SeqCst));
+        assert!(installation.load(Ordering::SeqCst));
+        assert_writers_released_except(&state, None);
+        if operation != 2 {
+            assert_eq!(images(&state), before);
+        }
+    }
+}
+
+#[test]
+fn runtime_equal_values_from_another_state_do_not_supply_original_publication_identity() {
+    let state = fixture();
+    let foreign = fixture();
+    assert_eq!(images(&state), images(&foreign));
+    let mut original = blocks(&state, BlockMode::Ordinary);
+    mutate(&mut original, 2);
+    let journal = capture(original, ());
+    let (journal, error) = journal
+        .try_prepare_publication(&foreign, |_, _| Ok::<_, Infallible>(()))
+        .err()
+        .expect("equal foreign owner");
+    assert!(matches!(
+        error,
+        RuntimePublicationError::Component {
+            field: "canonical_runtime",
+            cause: PublicationPreparationError::Changed,
+        }
+    ));
+    assert!(journal.matches_current(&state));
+    assert_writers_released_except(&foreign, None);
+    prepare(journal, &state).publish();
+    assert_ne!(images(&state), images(&foreign));
+}

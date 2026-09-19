@@ -524,6 +524,14 @@ NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/bl
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'method',
   'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
+  'let mut state = if include_lane_lifecycle { '
+  'crate::sumeragi::v2_lane_work::tests::authenticated_lane_work_state_for_testing('
+  'world, Arc::clone(&kura), chain_id.clone(), context.network_id,) } else { '
+  'State::new_with_chain_and_network_id_for_testing(world, Arc::clone(&kura), '
+  'LiveQueryStore::start_test(), chain_id.clone(), context.network_id,) };'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
   'install_fixture_validator_authority(&state, &context, &validator_set_pops); if '
   'include_native_lane { install_fixture_native_lane(&mut state, &mut context); }'),
  ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
@@ -776,45 +784,281 @@ NATIVE_PARTICIPANT_APPLICATION_ROLE_TOKENS = (
     "NativeAmxParticipantApplicationRole::SeparateParticipant",
 )
 
+# Executable publication uses native Decisions and their actual captured outputs.
+# A certified MergeQC remains an adverse source-control fixture; it cannot stand
+# in for native participant publication or application-evidence repair coverage.
+NATIVE_CANONICAL_PUBLICATION_FIXTURE_BINDINGS = (('crates/iroha_core/src/sumeragi/tests/v2_apply_certified_source_rejection.rs',
+  'fn',
+  'assert_retired_merge_candidate_rejected',
+  ('let before_state = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())',
+   'let before_ledger = fixture.state.merge_ledger.snapshot();',
+   'let before_height = fixture.state.committed_height();',
+   'let before_tree = completed_secondary_tree(&fixture.kura.store_root());',
+   'for _ in 0..2 {',
+   '.validate_candidate(context, body)',
+   '.expect_err("MergeQC cannot substitute for the canonical native Decision source")',
+   'reason.contains("ordinary output source contains a competing native owner")',
+   'assert_eq!(fixture.state.committed_height(), before_height);',
+   'crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),\n'
+   '            before_state',
+   'assert_eq!(fixture.state.merge_ledger.snapshot(), before_ledger);',
+   'assert_eq!(fixture.state.has_committed_entrypoint(*hash), *committed);',
+   'completed_secondary_tree(&fixture.kura.store_root()),\n            before_tree')),
+ ('crates/iroha_core/src/state/native_publication_test_support.rs',
+  'fn',
+  'prepared_native_publication_for_test',
+  ('let mut executed = carrier.clone();',
+   'ValidBlock::execute_native_block_and_capture_for_test(',
+   '&mut executed, state, &context',
+   'let (committed, witness) =\n        finalize_native_execution_for_test(',
+   'state, executed, &mut overlay, context',
+   'overlay\n        .authorize_execution_output_publication(&committed, &witness)',
+   'overlay\n        .apply_without_execution_with_verified_v2_finality(&committed)',
+   'assert!(\n'
+   '        overlay\n'
+   '            .native_output_publication_identity()\n'
+   '            .unwrap()\n'
+   '            .is_some()\n'
+   '    );',
+   'assert!(matches!(\n'
+   '        overlay.execution_output_plan,\n'
+   '        Some(super::output_capacity::ExecutionOutputPlanState::Finalized(\n'
+   '            _\n'
+   '        ))\n'
+   '    ));',
+   '(overlay, committed)')),
+ ('crates/iroha_core/src/state/native_execution_finality_test_support.rs',
+  'fn',
+  'finalize_native_execution_for_test',
+  ('context.validate()',
+   'assert_eq!(context.network_id, state.network_id);',
+   'assert_eq!(context.height, block.header().height().get());',
+   'context.roster.len(),\n        4',
+   'assert_eq!(validator.power, 1',
+   'let witness = overlay\n        .take_exec_witness()',
+   'let casting = overlay\n        .take_parliament_timed_ovn_casting_bindings()',
+   'NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(',
+   'LaneFinalityManifestV1::from_result_bearing_block(&block)',
+   'execution_commitment_from_validated_block(&witness, &native, &lanes, &block)',
+   'let preimage = iroha_data_model::block::consensus_v2::Vote {',
+   'let signatures = keys\n        .iter()\n        .take(3)',
+   'signers: vec![0, 1, 2]',
+   'crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())',
+   '.commit_with_verified_v2_artifact(verified, execution_commitment)',
+   '.stage_kagemusha_finality_sidecar(',
+   '&witness,\n            execution_commitment,\n            &casting',
+   '.store_block(committed.clone())',
+   '.store_v2_finality_artifact(&artifact)',
+   'assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));',
+   'assert_eq!(receipt.block_hash(), committed.as_ref().hash());',
+   '(committed, witness)')),
+ ('crates/iroha_core/src/state/native_execution_finality_test_support.rs',
+  'fn',
+  'promote_native_execution_finality_for_test',
+  ('.verified_v2_finality_artifact()',
+   '.store_v2_finality_artifact(artifact)',
+   '.promote_kagemusha_finality_sidecar(artifact, &receipt)')),
+ ('crates/iroha_core/src/state/native_completed_history_tests.rs',
+  'fn',
+  'publish_next_native_group_for_test',
+  ('state\n        .kura\n        .get_block(',
+   'state\n        .kura\n        .v2_finality_artifact(',
+   'build_successor_height_context(',
+   'state\n        .prepare_lane_decision_batch(std::slice::from_ref(group))',
+   'BlockExecutionContextBundle::default().with_native_lane_decisions(batch)',
+   'prepared_native_publication_for_test(state, &carrier, context)',
+   'overlay\n        .commit()',
+   'promote_native_execution_finality_for_test(state, &committed)')),
+ ('crates/iroha_core/src/state/native_completed_history_tests.rs',
+  'fn',
+  'cold_restore_completed_native_history_for_test',
+  ('for entry in std::fs::read_dir(source)',
+   'if kind.is_dir() {',
+   'copy_durable_tree(&source, &destination);',
+   'assert!(\n                    kind.is_file()',
+   'std::fs::write(&destination, &bytes)',
+   'assert_eq!(std::fs::read(&destination).unwrap(), bytes);',
+   'assert_eq!(\n'
+   '                    std::fs::read(&source).unwrap(),\n'
+   '                    bytes',
+   'let cold_root = tempfile::tempdir()',
+   'copy_durable_tree(&state.kura.store_root(), cold_root.path());',
+   'strict_kura_config_for_testing(cold_root.path().to_path_buf())',
+   'Kura::new_with_configured_lane_catalog(',
+   'kura: cold_kura',
+   'lane_manifests: state.lane_manifests.read().clone()',
+   '.into_state_from_json(norito::json::to_value(state).unwrap())',
+   'restored\n        .kura\n        .bind_lane_storage_network(restored.network_id)',
+   'restored\n'
+   '        '
+   '.prepare_restored_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)',
+   'restored\n        .restore_kura_lane_segments_from_nexus()',
+   'restored\n        .set_nexus_from_config(nexus)',
+   'restored.install_lane_compliance_engine(state.lane_compliance_engine())',
+   'restored.execution_policy_digest_v1().unwrap()',
+   'state.execution_policy_digest_v1().unwrap()',
+   'crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap()',
+   'crate::snapshot::canonical_state_snapshot_hash(state).unwrap()',
+   '(cold_root, restored)')),
+ ('crates/iroha_core/src/state/native_completed_history_tests.rs',
+  'fn',
+  'assert_completed_native_history_for_test',
+  ('crate::snapshot::canonical_state_snapshot_hash(state).unwrap()',
+   'state.kura.exact_durable_blocks_count().unwrap()',
+   'blocks.iter().zip(original_groups)',
+   'let expected_wire = signed.encode_wire().unwrap()',
+   'state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n            expected_wire',
+   'block.verified_v2_finality_artifact().unwrap()',
+   'let finality_bytes = std::fs::read(&path).unwrap()',
+   'state\n'
+   '                .kura\n'
+   '                .v2_finality_artifact(height.get() as u64)\n'
+   '                .unwrap()\n'
+   '                .as_ref(),\n'
+   '            Some(original_finality)',
+   'NativeLaneBatchCarrierReadV1::Ready(included)',
+   'state\n'
+   '            .read_finalized_native_lane_batch(height, signed.hash())\n'
+   '            .unwrap()',
+   'assert_eq!(included.batch().groups, vec![group.to_wire()])',
+   'assert_eq!(\n'
+   '            state.view().transactions.get(&entrypoint),\n'
+   '            Some(height)',
+   'assert!(\n'
+   '            state\n'
+   '                .replay_finalized_native_lane_batch(&included, &[])\n'
+   '                .is_err()',
+   'state\n'
+   '            .preexecute_lane_decision_groups(successor.header(), '
+   'std::slice::from_ref(group))\n'
+   '            .err()',
+   'if reason == expected_reason',
+   'assert_eq!(\n            std::fs::read(&path).unwrap(),\n            finality_bytes',
+   'assert_eq!(\n'
+   '            state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n'
+   '            expected_wire\n'
+   '        )',
+   'assert_eq!(\n'
+   '        state.kura.exact_durable_blocks_count().unwrap(),\n'
+   '        durable_height\n'
+   '    )',
+   'assert_eq!(\n'
+   '        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),\n'
+   '        before')),
+ ('crates/iroha_core/src/state/native_completed_history_tests.rs',
+  'fn',
+  'native_completed_history_rejects_reapplication_after_second_economic_commit_impl',
+  ('native_publication_fixture_for_test(&[\n'
+   '        NativeEconomicCase::Transfer(25),\n'
+   '        NativeEconomicCase::Transfer(15),\n'
+   '    ])',
+   'assert_eq!(original_groups.len(), 2)',
+   'for original in &original_groups {',
+   'publish_next_native_group_for_test(&fixture, current)',
+   'assert_eq!(block.as_ref().network_entrypoint_count(), 1)',
+   'assert!(\n'
+   '            block\n'
+   '                .as_ref()\n'
+   '                .network_output_at(0)\n'
+   '                .unwrap()\n'
+   '                .1\n'
+   '                .result\n'
+   '                .is_ok()\n'
+   '        )',
+   'assert!(block.as_ref().output_results().all(|result| result.is_ok()))',
+   'assert_eq!(state.committed_height(), admission_height + committed.len())',
+   'assert!(\n            current_total > total',
+   'assert_completed_native_history_for_test(\n'
+   '            state,\n'
+   '            &committed,\n'
+   '            &original_groups[..committed.len()],\n'
+   '        )',
+   'assert_eq!(total, Quantity::from(40_u32))',
+   'assert_eq!(\n'
+   '        state.world.assets.view().get(&fixture.source).unwrap().0,\n'
+   '        Quantity::from(60_u32)\n'
+   '    )',
+   'assert_eq!(\n'
+   '        committed[1].as_ref().header().prev_block_hash(),\n'
+   '        Some(committed[0].as_ref().hash())\n'
+   '    )',
+   'state\n'
+   '            .verified_lane_consensus_contexts()\n'
+   '            .unwrap()\n'
+   '            .unwrap()\n'
+   '            .contexts()\n'
+   '            .is_empty()',
+   'let (_cold_root, restored) = cold_restore_completed_native_history_for_test(state)',
+   'restored\n'
+   '            .kura\n'
+   '            .get_block(admission_height)\n'
+   '            .unwrap()\n'
+   '            .encode_wire()\n'
+   '            .unwrap(),\n'
+   '        admission_wire',
+   'restored\n'
+   '            .kura\n'
+   '            .v2_finality_artifact(admission_height.get() as u64)\n'
+   '            .unwrap(),\n'
+   '        admission_finality',
+   'assert_completed_native_history_for_test(&restored, &committed, &original_groups)',
+   'assert!(\n        restored\n            .read_finalized_native_lane_batch(',
+   'committed[0].as_ref().hash(),\n            )\n            .is_err()',
+   'assert_eq!(\n'
+   '        restored.world.assets.view().get(&fixture.source).unwrap().0,\n'
+   '        Quantity::from(60_u32)\n'
+   '    )',
+   'assert_eq!(\n'
+   '        restored\n'
+   '            .world\n'
+   '            .assets\n'
+   '            .view()\n'
+   '            .get(&fixture.destination)\n'
+   '            .unwrap()\n'
+   '            .0,\n'
+   '        Quantity::from(40_u32)\n'
+   '    )',
+   'for change_instance in [false, true] {',
+   'copied.base_state_height = restored.committed_height() as u64;',
+   'copied.base_state_hash = restored.lane_execution_state_hash().unwrap();',
+   'copied.groups[0].payload.descriptor.slots[0].instance_id =',
+   'copied.groups[0].payload.descriptor.slots[0].lane_incarnation =',
+   'assert!(\n'
+   '            restored\n'
+   '                .prepare_proposed_native_lane_batch_source(&candidate, &[])\n'
+   '                .is_err()',
+   'assert_eq!(\n'
+   '            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),\n'
+   '            before\n'
+   '        )',
+   'assert_completed_native_history_for_test(&restored, &committed, &original_groups)')))
+
 NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
-    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
-     'fn',
-     'run_autonomous_merge_frontier_fixture',
-     ('ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()',
-      'lane_work.merge_execution_full_validation_checks_for_test(),\n            0',
-      'for _ in 0..4 {',
-      '.validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)',
-      '"the locally built execution candidate must not be fully reexecuted by the adapter"',
-      'lane_work.merge_execution_full_validation_checks_for_test(),\n            1',
-      'fail_next_native_amx_prepublication_for_tests',
-      '"pre-WSV Native AMX participant evidence publication"',
-      '"failed live Native prepublication must not stage WSV"',
-      'prepublish_native_amx_participant_application_evidence(',
-      'durable_carrier.as_ref(), None)',
-      '"live merge prepublication requires its exact staged witness"',
-      'durable_carrier.as_ref(),\n                Some(&entry),',
-      'live_prepublication.authenticates_state_frontiers',
-      'remove_latest_native_amx_participant_manifest_for_testing',
-      '"remove only the exact latest Native manifest"',
-      'remove_merge_carrier_record_for_testing',
-      'read_structural_native_amx_participant_application_receipt(',
-      '"manifest loss must retain the exact structural Native receipt"',
-      'read_native_amx_participant_application_receipt(',
-      '.is_none()',
-      '"the authoritative reader must reject a receipt without its manifest"',
-      'preflight_native_amx_participant_application_evidence_repair(',
-      'std::slice::from_ref(&native_marker),\n                None,',
-      '"startup Native repair requires a committed or planned association"',
-      'std::slice::from_ref(&native_marker),\n                Some(&entry),',
-      '"planned merge association authorizes exact Native startup repair"',
-      'plan_lane_application_evidence_repair(',
-      'apply_lane_application_evidence_repair(',
-      'native_carriers: 1',
-      'native_routes: 1',
-      'merge_carriers: 1',
-      '"startup repair must reproduce the exact retained receipt bytes"',
-      '"startup evidence repair must not mutate canonical WSV"',
-      'assert!(empty_plan.is_empty())')),
+('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+ 'fn',
+ 'run_autonomous_merge_frontier_fixture',
+ ('ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()',
+  'for _ in 0..4 {',
+  '.validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)',
+  '"the locally built execution candidate must not be fully reexecuted by the adapter"',
+  'authenticate_merge_entry_for_height_context(',
+  'if frontier_case != MergeFrontierFixtureCase::SuccessfulApply {',
+  'assert_retired_merge_candidate_rejected(',
+  'assert_eq!(queue.live_lane_reservations(), reservations);',
+  'assert!(queue.lane_reservation_commit_barriers().is_empty());',
+  'assert!(queue.lane_reservation_release_barriers().is_empty());',
+  'assert_eq!(autonomous_balance(), None);',
+  'assert!(!participant_metadata_is_committed());',
+  'assert!(\n'
+  '                expected_fifo\n'
+  '                    .iter()\n'
+  '                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))\n'
+  '            );',
+  'fixture\n            .kura\n            .durable_autonomous_lane_merge_source(',
+  'assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));',
+  'assert_cold_merge_registry_replay_boundary(',
+  'return;')),
+    *NATIVE_CANONICAL_PUBLICATION_FIXTURE_BINDINGS,
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
@@ -1228,7 +1472,7 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
 NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
     (
         NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
-        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
+        "historical_certified_source_recovery_cannot_authorize_retired_merge_execution",
         ("run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::HistoricalRecovery);",),
     ),
 )
@@ -1241,6 +1485,7 @@ NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
     Path("pytests/scripts/sumeragi_v2_multilane_native_settlement_test.py"),
     NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
     NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE,
+    *(Path(path) for path, _, _, _ in NATIVE_CANONICAL_PUBLICATION_FIXTURE_BINDINGS),
     Path(NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE),
 )
 
@@ -1284,9 +1529,10 @@ def _validate_native_merge_manifest_raw_tests(root: Path, errors: list[str]) -> 
                              f"{label} helper {helper}", errors)
         if body is None:
             continue
+        normalized = _normalize_rust_relation(body)
         cursor = -1
         for token in helper_tokens:
-            position = body.find(token, cursor + 1)
+            position = normalized.find(_normalize_rust_relation(token).rstrip(","), cursor + 1)
             if position < 0:
                 errors.append(f"{label} helper {helper} is missing or reorders token {token!r}")
                 break
@@ -1299,10 +1545,50 @@ def _validate_native_merge_manifest_raw_tests(root: Path, errors: list[str]) -> 
         )
         if _code(dispatch) not in code:
             errors.append(f"{label} helper {helper} changes its exact Native fixture dispatch")
-        # HistoricalRecovery is deliberately the ordinary fallthrough. A new
-        # special branch or early return must not skip its retained assertions.
+        # Every historical source must reach the exact rejection/custody branch.
+        # A special branch must not skip its retained assertions.
         if "MergeFrontierFixtureCase::HistoricalRecovery" in code:
             errors.append(f"{label} helper {helper} intercepts HistoricalRecovery fallthrough")
+        if _code("if false {") in code:
+            errors.append(f"{label} helper {helper} hides a required source check")
+
+    history_path = root / "crates/iroha_core/src/state/native_completed_history_tests.rs"
+    try:
+        history_source = history_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append(f"{history_path}: canonical native publication wrapper is unavailable: {error}")
+    else:
+        wrapper = (
+            "state_test!(consensus_stack "
+            "native_completed_history_rejects_reapplication_after_second_economic_commit "
+            "native_completed_history_rejects_reapplication_after_second_economic_commit_impl(););"
+        )
+        if _code(history_source).count(_code(wrapper)) != 1:
+            errors.append(f"{history_path}: canonical native publication wrapper must dispatch exactly once")
+
+    for relative, _, symbol, tokens in NATIVE_CANONICAL_PUBLICATION_FIXTURE_BINDINGS:
+        path = root / relative
+        label = f"{path}: canonical native publication fixture {symbol}"
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(f"{label}: cannot read source: {error}")
+            continue
+        body = _fixture_body(source, re.compile(
+            r"\bfn\s+" + re.escape(symbol) + r"(?:<[^>]*>)?\s*\([^)]*\)"),
+            label, errors)
+        if body is None:
+            continue
+        normalized = _normalize_rust_relation(body)
+        cursor = -1
+        for token in tokens:
+            position = normalized.find(_normalize_rust_relation(token).rstrip(","), cursor + 1)
+            if position < 0:
+                errors.append(f"{label} is missing or reorders {token!r}")
+                break
+            cursor = position
+        if _code("if false {") in _code(body):
+            errors.append(f"{label} hides a required publication assertion")
 
 
 def _normalize_rust_relation(source: str) -> str:

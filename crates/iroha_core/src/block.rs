@@ -51,6 +51,7 @@
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
 mod native_lane_carrier;
+pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
 pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
@@ -6851,28 +6852,6 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
-        /// Test-only entry into the production native staging and capability path.
-        #[cfg(test)]
-        pub(crate) fn state_block_for_execution_for_test<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-            context: &iroha_data_model::block::consensus_v2::HeightContext,
-        ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
-            Self::validate_npos_effects_with_state(
-                block,
-                state,
-                Some(context.mode),
-                Some(context),
-            )?;
-            Self::state_block_for_execution(
-                block,
-                state,
-                false,
-                Some(context.mode),
-                Some(context),
-                None,
-            )
-        }
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
@@ -6943,6 +6922,44 @@ pub(crate) mod valid {
                     })
             };
             let execution_context = block.execution_context();
+            if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
+                if soft_fork {
+                    return Err(Self::execution_context_error(
+                        "soft-fork replacement cannot apply native lane Decisions",
+                    ));
+                }
+                Self::validate_npos_effects_with_state(
+                    block,
+                    state,
+                    authoritative_mode,
+                    authenticated_height_context,
+                )?;
+                let source = state
+                    .prepare_canonical_native_lane_batch_source(block)
+                    .map_err(Self::execution_context_error)?;
+                let crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) = source else {
+                    return Err(Self::execution_context_error(
+                        "native execution requires current complete authenticated first sources",
+                    ));
+                };
+                let staged = source
+                    .stage_with_pristine_controls(|overlay| {
+                        apply_npos(overlay).map_err(|error| {
+                            crate::state::MergeLedgerCommitError::ExecutionBatchInvalid(
+                                error.to_string(),
+                            )
+                        })
+                    })
+                    .map_err(|error| Self::execution_context_error(error.to_string()))?;
+                return match staged {
+                    crate::state::NativeLaneBatchReplayV1::Ready(prepared) => {
+                        Ok(prepared.into_overlay())
+                    }
+                    _ => Err(Self::execution_context_error(
+                        "native source observation changed before execution",
+                    )),
+                };
+            }
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
             if let Some(reference) = merge_reference {
                 Self::validate_npos_merge_composition(block, reference)?;
@@ -7394,6 +7411,8 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            crate::sumeragi::witness::start_block();
             let mut state_block = match Self::state_block_for_execution(
                 &block,
                 state,
@@ -7428,7 +7447,6 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
             let genesis = if block.header().is_genesis() {
                 match authenticate_genesis_block_intents(&block, genesis_account) {
@@ -10810,6 +10828,62 @@ pub(crate) mod valid {
             lane_summaries: &BTreeMap<LaneId, LaneSummary>,
         ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
         {
+            if let Some(batch) = block
+                .execution_context()
+                .and_then(|bundle| bundle.native_lane_decisions.as_deref())
+            {
+                state_block
+                    .validate_native_output_source(block)
+                    .map_err(Self::execution_context_error)?;
+                if !state_block.drain_settlement_records().is_empty()
+                    || !state_block.drain_nexus_fee_records().is_empty()
+                {
+                    return Err(Self::execution_context_error(
+                        "native common tail retains settlement without an authenticated source owner",
+                    ));
+                }
+                let commitments = Self::nonempty_native_lane_settlements(
+                    state_block
+                        .native_lane_settlement_commitments()
+                        .map_err(Self::execution_context_error)?
+                        .ok_or_else(|| {
+                            Self::execution_context_error(
+                                "native settlement lost its executed source",
+                            )
+                        })?,
+                )?;
+                let mut coordinates = BTreeMap::new();
+                for group in &batch.groups {
+                    let descriptor = &group.payload.descriptor;
+                    let descriptor_hash = descriptor
+                        .canonical_hash()
+                        .map_err(Self::execution_context_error)?;
+                    for slot in &descriptor.slots {
+                        if coordinates
+                            .insert(
+                                (slot.route.lane_id, slot.route.dataspace_id),
+                                LanePayloadCoordinate {
+                                    lane_incarnation: slot.lane_incarnation,
+                                    lane_block_height: slot.lane_height,
+                                    lane_block_descriptor_hash: descriptor_hash,
+                                },
+                            )
+                            .is_some()
+                        {
+                            return Err(Self::execution_context_error(
+                                "native settlement repeats a frozen route",
+                            ));
+                        }
+                    }
+                }
+                return Self::finalize_lane_settlement_commitments(
+                    block,
+                    state_block,
+                    &commitments,
+                    lane_summaries,
+                    &coordinates,
+                );
+            }
             let mut native_amx_receipts_by_hash = BTreeMap::new();
             if let Some(bundle) = block.execution_context() {
                 for (entrypoint, context) in block
@@ -11106,6 +11180,23 @@ pub(crate) mod valid {
                     })
                 })
                 .collect::<Result<Vec<_>, BlockValidationError>>()?;
+            Self::finalize_lane_settlement_commitments(
+                block,
+                state_block,
+                &lane_settlement_commitments,
+                lane_summaries,
+                &lane_payload_coordinates,
+            )
+        }
+
+        fn finalize_lane_settlement_commitments(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+            lane_settlement_commitments: &[LaneBlockCommitment],
+            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
+            lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
+        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
+        {
             if lane_settlement_commitments.is_empty() {
                 return Ok(Vec::new());
             }
@@ -11216,7 +11307,12 @@ pub(crate) mod valid {
                     )
                 })?;
             }
-            let expired =
+            let native = block
+                .execution_context()
+                .is_some_and(|bundle| bundle.native_lane_decisions.is_some());
+            let expired = if native {
+                0
+            } else {
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
                 )
@@ -11224,31 +11320,40 @@ pub(crate) mod valid {
                     Self::execution_context_error(format!(
                         "SoraFS pin expiry maintenance failed: {error}"
                     ))
-                })?;
+                })?
+            };
             if expired != 0 {
                 iroha_logger::debug!(
                     count = expired,
                     "retired SoraFS pins at the block consensus timestamp"
                 );
             }
-            crate::sumeragi::witness::start_block();
-            state_block
-                .execute_and_seal_ordinary_outputs(block, genesis, |state, source, routes| {
-                    Self::finalize_owned_execution_metadata(
-                        source,
-                        state,
-                        routes,
-                        advertised_fragments,
-                        advertised_policy.as_ref(),
-                        advertised_transitions.as_ref(),
-                    )
-                })
-                .map_err(|error| match error {
-                    crate::state::ExecutionOutputSealError::Owner(reason) => {
-                        Self::execution_context_error(reason)
-                    }
-                    crate::state::ExecutionOutputSealError::Finalizer(error) => error,
-                })?;
+            let finalize = |state: &mut StateBlock<'_>,
+                            source: &SignedBlock,
+                            routes: &[crate::queue::RoutingDecision]| {
+                Self::finalize_owned_execution_metadata(
+                    source,
+                    state,
+                    routes,
+                    advertised_fragments,
+                    advertised_policy.as_ref(),
+                    advertised_transitions.as_ref(),
+                )
+            };
+            let result = if native {
+                state_block.seal_execution_outputs(block, finalize)
+            } else {
+                // Standalone ordinary callers may enter with a plain overlay;
+                // native execution always begins recording before its constructor.
+                crate::sumeragi::witness::start_block();
+                state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize)
+            };
+            result.map_err(|error| match error {
+                crate::state::ExecutionOutputSealError::Owner(reason) => {
+                    Self::execution_context_error(reason)
+                }
+                crate::state::ExecutionOutputSealError::Finalizer(error) => error,
+            })?;
             if sccp_root_validation == SccpRootValidation::Enforce {
                 Self::validate_sccp_commitment_root(block)?;
             }
@@ -13489,7 +13594,7 @@ pub(crate) mod valid {
                         dataspace: lane.dataspace_id,
                         visibility: lane.visibility,
                         storage: lane.storage,
-                        governance: Some("test-governance".to_owned()),
+                        governance: lane.governance.clone(),
                         manifest_path: Some(PathBuf::from("/tmp/block-test-lane-manifest.json")),
                         governance_rules: Some(crate::governance::manifest::GovernanceRules {
                             validators: validators.clone(),
@@ -13893,14 +13998,20 @@ pub(crate) mod valid {
                 .expect("persist actual predecessor finality before application receipts");
             {
                 let mut state_block = state.block(committed.as_ref().header());
-                // This fixture supplies the results directly, so it must also stage
-                // the execution-owned frontier before finality applies those results.
+                // This structural predecessor fixture supplies results directly;
+                // use the explicit metadata fixture path with its verified roster.
                 state_block
                     .stage_ordinary_lane_frontiers(committed.as_ref())
                     .expect("stage the exact predecessor execution frontier");
-                let _ = state_block
-                    .apply_without_execution_with_verified_v2_finality(&committed)
-                    .expect("apply predecessor under exact finality topology");
+                let _ = state_block.apply_without_execution(
+                    &committed,
+                    artifact
+                        .height_context
+                        .roster
+                        .iter()
+                        .map(|entry| entry.validator.clone())
+                        .collect(),
+                );
                 state_block.commit().unwrap();
             }
             for proposal in proposals {
@@ -16085,9 +16196,17 @@ pub(crate) mod valid {
                 state_block
                     .stage_ordinary_lane_frontiers(committed_first.as_ref())
                     .expect("stage the result-bearing predecessor execution frontier");
-                let _ = state_block
-                    .apply_without_execution_with_verified_v2_finality(&committed_first)
-                    .expect("apply the exact predecessor under its frozen finality authority");
+                // The test supplies structural results rather than executing a
+                // proposal. Prepare its predecessor with the explicit fixture API.
+                let _ = state_block.apply_without_execution(
+                    &committed_first,
+                    artifact
+                        .height_context
+                        .roster
+                        .iter()
+                        .map(|entry| entry.validator.clone())
+                        .collect(),
+                );
                 state_block
                     .commit()
                     .expect("commit first lane predecessor block");

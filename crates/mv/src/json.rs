@@ -350,6 +350,8 @@ where
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Storage {
             publication: crate::publication::Publication::new(),
+            revert_released: crate::ReleaseNotification::default(),
+            blocks_released: crate::ReleaseNotification::default(),
             revert: EbrCell::new(revert),
             blocks,
         })
@@ -447,6 +449,8 @@ where
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Cell {
             publication: crate::publication::Publication::new(),
+            revert_released: crate::ReleaseNotification::default(),
+            blocks_released: crate::ReleaseNotification::default(),
             revert: EbrCell::new(revert),
             blocks: EbrCell::new(blocks),
         })
@@ -600,10 +604,10 @@ where
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         out.push_str("\"revert\":");
-        JsonSerialize::json_serialize(self.revert.deref(), out);
+        JsonSerialize::json_serialize(self.revert.deref().deref(), out);
         out.push(',');
         out.push_str("\"blocks\":");
-        JsonSerialize::json_serialize(self.blocks.deref(), out);
+        JsonSerialize::json_serialize(self.blocks.deref().deref(), out);
         out.push('}');
     }
 }

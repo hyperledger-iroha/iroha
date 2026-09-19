@@ -30,6 +30,8 @@ impl<K: Key, V: Value> Storage<K, V> {
     pub fn from_snapshot_parts(current: BTreeMap<K, V>, revert: BTreeMap<K, Option<V>>) -> Self {
         Self {
             publication: crate::publication::Publication::new(),
+            revert_released: crate::ReleaseNotification::default(),
+            blocks_released: crate::ReleaseNotification::default(),
             blocks: current.into_iter().collect(),
             revert: EbrCell::new(revert),
         }

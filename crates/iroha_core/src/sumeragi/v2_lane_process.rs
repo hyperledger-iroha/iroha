@@ -356,13 +356,6 @@ pub(crate) enum LaneProcessProgress {
     ClosedDrained,
     Persistence(LaneService),
     Body(LaneBodyProgress),
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "TODO: consume retained native lane progress through the production driver"
-        )
-    )]
     Failed(String),
 }
 /// Sole process-lifetime owner, independent of global height/view rollover.
@@ -404,6 +397,22 @@ impl LaneProcessOwner {
     /// held effects without fabricating an acknowledgement or a second scheduler.
     pub(crate) fn instance(&self, id: HeightContextId) -> Option<&LaneInstance> {
         self.entries.get(&id).and_then(Entry::instance)
+    }
+    /// Only the original active owner accepts productive input. Closed custody
+    /// remains inspectable through `instance` without becoming a fresh signer.
+    pub(crate) fn is_productive(&self, id: HeightContextId) -> bool {
+        self.entries
+            .get(&id)
+            .is_some_and(|entry| matches!(entry.owner, Owner::Active(_)))
+    }
+    /// Transfer one actual diagnostic effect to its explicit reporting consumer.
+    /// This never acknowledges a Decision, Apply, body or transport effect.
+    pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<reducer::Effect> {
+        match self.entries.get_mut(&id).map(|entry| &mut entry.owner) {
+            Some(Owner::Active(owner) | Owner::Closing(owner)) => owner.take_diagnostic(),
+            Some(Owner::Closed(closed)) => closed.owner.take_diagnostic(),
+            _ => None,
+        }
     }
     /// Actual owned identities, including opening/closing/drain occurrences.
     pub(crate) fn instance_ids(&self) -> impl Iterator<Item = HeightContextId> + '_ {
@@ -879,13 +888,6 @@ impl LaneProcessOwner {
         self.active(id)?.service_one(&state, observed, now)
     }
     /// Settle already-returned body work without another physical operation.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "TODO: consume retained native lane progress through the production driver"
-        )
-    )]
     pub(crate) fn service_body_completion(
         &mut self,
         id: HeightContextId,

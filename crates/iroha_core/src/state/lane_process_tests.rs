@@ -83,6 +83,34 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
         let mut execution = block.execution_context().cloned().unwrap_or_default();
         execution.queue_plan_admissions = controls.clone();
         block.set_execution_context(Some(execution));
+        // Final admission attachments replace the proposal commitment and clear
+        // its earlier result. This source fixture performs admission only; bind
+        // the empty typed output owner and sign the final proposal, as the
+        // independently authenticated first-input fixtures do.
+        assert_eq!(block.network_entrypoint_count(), 0);
+        block
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                BTreeMap::new(),
+                Vec::new(),
+                AxtPolicySnapshot::default(),
+                BTreeSet::new(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .unwrap();
+        let carrier_key = merge_carrier_finality_fixture_keypair();
+        block
+            .replace_signatures(BTreeSet::from([
+                iroha_data_model::block::BlockSignature::new(
+                    0,
+                    iroha_crypto::SignatureOf::from_hash(carrier_key.private_key(), block.hash()),
+                ),
+            ]))
+            .unwrap();
+        block.validate_proposal_commitments().unwrap();
+        block.validate_execution_result_structure().unwrap();
         let opening = match state
             .kura
             .v2_finality_artifact(parent.header().height().get())
@@ -108,6 +136,9 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
         overlay
             .capture_lane_consensus_contexts(&mut witness)
             .unwrap();
+        overlay
+            .stage_autoscale_sample_record_for_count(&block, 0)
+            .expect("admission-only fixture retains its exact runtime predecessor");
         overlay.block_hashes.push(block.hash());
         insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
         overlay.commit().unwrap();
@@ -272,6 +303,9 @@ fn native_process_advance(fixture: &NativeProcessFixture, close: bool) -> Signed
     overlay
         .capture_lane_consensus_contexts(&mut witness)
         .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .expect("global rollover retains its exact runtime predecessor");
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
@@ -514,3 +548,5 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
     assert!(!guard.restart_required());drop(table);pool.shutdown().join().unwrap();
     assert_eq!(packet.canonical_bytes,norito::encode_canonical(&packet.envelope).unwrap(),"already-transferred native packet stays transport-owned even when table closes");
 }
+
+include!("lane_driver_tests.rs");

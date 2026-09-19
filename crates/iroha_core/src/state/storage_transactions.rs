@@ -41,6 +41,7 @@ pub struct TransactionsStorage {
     // The opaque identity covers both the hot tip and the historical map.
     // It rotates while the writer is held, never from a caller-provided scalar.
     write_lock: Mutex<Arc<()>>,
+    released: mv::ReleaseNotification,
 }
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct BlockInfo {
@@ -57,6 +58,7 @@ impl TransactionsStorage {
             latest_block: ArcSwapOption::empty(),
             blocks: DashMap::new(),
             write_lock: Mutex::new(Arc::new(())),
+            released: mv::ReleaseNotification::default(),
         }
     }
     /// Create persistent view of storage at certain point in time
@@ -80,7 +82,7 @@ impl TransactionsStorage {
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
         height: NonZeroUsize,
     ) {
-        let mut guard = self.write_lock.lock();
+        let mut guard = self.released.guard(self.write_lock.lock());
         let next_identity = Arc::new(());
         let entrypoints = entrypoints.into_iter().collect::<HashSet<_>>();
         let latest = self.latest_block.load_full();
@@ -109,7 +111,7 @@ impl TransactionsStorage {
                 height,
             }))),
         }
-        *guard = next_identity;
+        **guard = next_identity;
     }
     /// Deliberately replace existing membership for a malformed-State recovery fixture.
     ///
@@ -122,7 +124,7 @@ impl TransactionsStorage {
         entrypoint: Key,
         height: Value,
     ) {
-        let mut guard = self.write_lock.lock();
+        let mut guard = self.released.guard(self.write_lock.lock());
         let next_identity = Arc::new(());
         assert!(
             self.view().get(&entrypoint).is_some(),
@@ -145,7 +147,7 @@ impl TransactionsStorage {
             self.blocks.insert(entrypoint, height);
         }
         self.latest_block.store(Some(Arc::new(updated)));
-        *guard = next_identity;
+        **guard = next_identity;
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> TransactionsBlock<'_> {
@@ -156,7 +158,7 @@ impl TransactionsStorage {
         self.block_impl(true)
     }
     fn block_impl(&self, revert: bool) -> TransactionsBlock<'_> {
-        let guard = self.write_lock.lock();
+        let guard = self.released.guard(self.write_lock.lock());
         TransactionsBlock {
             latest_block_ref: &self.latest_block,
             blocks_ref: &self.blocks,
@@ -280,7 +282,7 @@ mod block {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
         pub(super) blocks_ref: &'storage DashMap<Key, Value>,
-        pub(super) _guard: MutexGuard<'storage, RawMutex, Arc<()>>,
+        pub(super) _guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>,
         /// Own fields
         pub(super) revert: bool,
         pub(super) current_block: Option<Arc<BlockInfo>>,
@@ -299,36 +301,25 @@ mod block {
     /// An admitted transition whose original physical writer has been released.
     ///
     /// All payload sets are moved or share their original immutable allocation.
-    /// This owner exposes no live-history reader or independent publish method:
-    /// the aggregate State publisher must validate every journal before writing.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: connect retained journals to the consuming State publisher"
-        )
-    )]
+    /// This owner exposes no live-history reader. Publication preparation must
+    /// reacquire its exact predecessor; the aggregate State publisher must
+    /// retain every prepared component before publishing any of them.
     pub(crate) struct DetachedTransactionsBlock {
         predecessor_identity: Arc<()>,
         predecessor: Option<Arc<BlockInfo>>,
         current: Arc<BlockInfo>,
         revert: bool,
-        #[cfg_attr(
-            test,
-            expect(
-                dead_code,
-                reason = "TODO: consume retained journals and effects in the aggregate State publisher"
-            )
-        )]
         publication: MembershipPublication,
-        #[cfg_attr(
-            test,
-            expect(
-                dead_code,
-                reason = "TODO: consume retained journals and effects in the aggregate State publisher"
-            )
-        )]
         next_identity: Arc<()>,
+    }
+
+    /// Exact admitted membership with its writer reacquired for publication.
+    ///
+    /// The installation admission outlives the writer even when this owner is
+    /// abandoned. Publication returns that admission to the aggregate owner.
+    pub(crate) struct PreparedDetachedTransactionsBlock<'storage, Installation> {
+        prepared: PreparedTransactionsBlock<'storage>,
+        installation: Installation,
     }
 
     /// A short observation, never authorization to publish a detached journal.
@@ -526,7 +517,7 @@ mod block {
                 }
             }
             if changes_identity {
-                *block._guard = next_identity;
+                **block._guard = next_identity;
             }
             drop(block);
         }
@@ -539,6 +530,75 @@ mod block {
         )
     )]
     impl DetachedTransactionsBlock {
+        /// Admit installation and reacquire the original predecessor without waiting.
+        ///
+        /// No transaction set is rebuilt or admitted again. The callback must
+        /// account for history-map insertion and reader retention before the
+        /// writer is acquired. A refusal returns the original journal intact.
+        /// This component does not establish aggregate State/finality authority.
+        pub(crate) fn try_prepare_publication<'storage, Installation, E>(
+            self,
+            storage: &'storage TransactionsStorage,
+            admit: impl FnOnce(&Self, &TransactionsStorage) -> Result<Installation, E>,
+        ) -> Result<
+            PreparedDetachedTransactionsBlock<'storage, Installation>,
+            (Self, mv::PublicationPreparationError<E>),
+        > {
+            let wait = storage.released.observe();
+            match self.observe_predecessor(storage) {
+                MembershipPredecessorStatus::Busy => {
+                    return Err((
+                        self,
+                        mv::PublicationPreparationError::after_failed_acquisition(wait),
+                    ));
+                }
+                MembershipPredecessorStatus::Changed => {
+                    return Err((self, mv::PublicationPreparationError::Changed));
+                }
+                MembershipPredecessorStatus::Current => {}
+            }
+            let installation = match admit(&self, storage) {
+                Ok(installation) => installation,
+                Err(error) => {
+                    return Err((self, mv::PublicationPreparationError::Admission(error)));
+                }
+            };
+            let wait = storage.released.observe();
+            let Some(guard) = storage.write_lock.try_lock() else {
+                return Err((
+                    self,
+                    mv::PublicationPreparationError::after_failed_acquisition(wait),
+                ));
+            };
+            let guard = storage.released.guard(guard);
+            if !Arc::ptr_eq(&guard, &self.predecessor_identity) {
+                drop(guard);
+                return Err((self, mv::PublicationPreparationError::Changed));
+            }
+            let Self {
+                predecessor_identity: _,
+                predecessor: _,
+                current,
+                revert,
+                publication,
+                next_identity,
+            } = self;
+            Ok(PreparedDetachedTransactionsBlock {
+                prepared: PreparedTransactionsBlock {
+                    block: TransactionsBlock {
+                        latest_block_ref: &storage.latest_block,
+                        blocks_ref: &storage.blocks,
+                        _guard: guard,
+                        revert,
+                        current_block: Some(current),
+                    },
+                    publication,
+                    next_identity,
+                },
+                installation,
+            })
+        }
+
         /// Borrow the exact admitted carrier height and immutable membership.
         pub(crate) fn staged_membership(&self) -> (Value, &HashSet<Key>) {
             (self.current.height, &self.current.transactions)
@@ -568,11 +628,44 @@ mod block {
             let Some(guard) = storage.write_lock.try_lock() else {
                 return MembershipPredecessorStatus::Busy;
             };
+            let guard = storage.released.guard(guard);
             if Arc::ptr_eq(&guard, &self.predecessor_identity) {
                 MembershipPredecessorStatus::Current
             } else {
                 MembershipPredecessorStatus::Changed
             }
+        }
+    }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
+    impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
+        /// Release the physical writer and recover the same admitted journal.
+        pub(crate) fn abort(self) -> DetachedTransactionsBlock {
+            let Self {
+                prepared,
+                installation,
+            } = self;
+            let journal = prepared.detach();
+            drop(installation);
+            journal
+        }
+
+        /// Consume the original admitted action and return its installation guard.
+        ///
+        /// The caller must already hold all other component writers and the
+        /// exact aggregate publication authorization before calling this method.
+        pub(crate) fn publish(self) -> Installation {
+            let Self {
+                prepared,
+                installation,
+            } = self;
+            prepared.publish();
+            installation
         }
     }
     impl TransactionsReadOnly for PreparedTransactionsBlock<'_> {
@@ -602,11 +695,73 @@ mod block {
         }
     }
 }
-#[cfg(test)]
-pub(crate) use block::MembershipPredecessorStatus;
 pub(crate) use block::{DetachedTransactionsBlock, PreparedTransactionsBlock};
+#[cfg(test)]
+pub(crate) use block::{MembershipPredecessorStatus, PreparedDetachedTransactionsBlock};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
+
+/// Local identity of an immutable pending row under its retained predecessor.
+///
+/// The exclusive writer freezes both historical membership and its opaque
+/// predecessor identity. The pending `BlockInfo` allocation is immutable and is
+/// replaced only by staging a different row. Pointer equality therefore binds
+/// the exact publication without copying or sorting its membership set.
+pub(in crate::state) struct TransactionsPublicationSurface {
+    predecessor: Arc<()>,
+    current: Option<Arc<BlockInfo>>,
+    revert: bool,
+}
+
+impl std::fmt::Debug for TransactionsPublicationSurface {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TransactionsPublicationSurface")
+            .field("has_current", &self.current.is_some())
+            .field("revert", &self.revert)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for TransactionsPublicationSurface {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.predecessor, &other.predecessor)
+            && self.revert == other.revert
+            && match (&self.current, &other.current) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for TransactionsPublicationSurface {}
+
+impl TransactionsBlock<'_> {
+    /// Return how this block acquired its original membership predecessor.
+    pub(in crate::state) fn mode(&self) -> mv::BlockMode {
+        if self.revert {
+            mv::BlockMode::Replace
+        } else {
+            mv::BlockMode::Ordinary
+        }
+    }
+
+    /// Check the exact original membership owner without reading its history.
+    pub(in crate::state) fn belongs_to(&self, storage: &TransactionsStorage) -> bool {
+        std::ptr::eq(self.latest_block_ref, &storage.latest_block)
+            && std::ptr::eq(self.blocks_ref, &storage.blocks)
+    }
+
+    /// Bind this owner's exact predecessor and immutable pending membership row.
+    pub(in crate::state) fn publication_surface(&self) -> TransactionsPublicationSurface {
+        TransactionsPublicationSurface {
+            predecessor: Arc::clone(&self._guard),
+            current: self.current_block.clone(),
+            revert: self.revert,
+        }
+    }
+}
 
 /// Borrowed logical membership, independent of the latest/history representation.
 #[cfg_attr(
@@ -848,6 +1003,10 @@ mod projection_tests;
 #[path = "storage_transactions_preparation_tests.rs"]
 mod preparation_tests;
 
+#[cfg(test)]
+#[path = "storage_transactions_publication_tests.rs"]
+mod publication_tests;
+
 /// Module with serialization and deserialization of [`TransactionsStorage`]
 mod serialization {
     use super::*;
@@ -975,6 +1134,7 @@ mod serialization {
                 latest_block: ArcSwapOption::from(latest_block),
                 blocks: dash,
                 write_lock: Mutex::new(Arc::new(())),
+                released: mv::ReleaseNotification::default(),
             })
         }
     }
@@ -1004,6 +1164,29 @@ mod tests {
     fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
         let keys = keys.iter().copied().collect();
         block.insert_block(keys, value);
+    }
+    #[test]
+    fn publication_surface_binds_original_predecessor_and_immutable_row() {
+        let storage = TransactionsStorage::new();
+        let foreign_storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        assert!(block.belongs_to(&storage));
+        assert!(!block.belongs_to(&foreign_storage));
+        assert_eq!(block.mode(), mv::BlockMode::Ordinary);
+        let empty = block.publication_surface();
+        assert_eq!(empty, block.publication_surface());
+        assert_ne!(empty, foreign_storage.block().publication_surface());
+        let [key] = get_keys();
+        insert_keys(&mut block, &[key], NonZeroUsize::MIN);
+        let staged = block.publication_surface();
+        assert_ne!(empty, staged);
+        insert_keys(&mut block, &[key], NonZeroUsize::MIN);
+        assert_eq!(staged, block.publication_surface());
+        block.commit().unwrap();
+        assert_ne!(empty, storage.block().publication_surface());
+        let replacement = storage.block_and_revert();
+        assert_eq!(replacement.mode(), mv::BlockMode::Replace);
+        assert_ne!(staged, replacement.publication_surface());
     }
     #[test]
     fn fixture_membership_overwrite_reaches_public_reader_without_moving_frontier() {

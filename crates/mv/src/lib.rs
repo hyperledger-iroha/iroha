@@ -6,7 +6,11 @@
 //! suitable for in-memory testing or thin adapters in higher-level crates.
 use core::fmt::Debug;
 mod publication;
-pub use publication::PublicationPreparationError;
+pub use publication::{
+    BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,
+};
+mod release;
+pub use release::{ReleaseFuture, ReleaseGuard, ReleaseNotification, ReleaseWait};
 
 /// How a block acquired its exact published predecessor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

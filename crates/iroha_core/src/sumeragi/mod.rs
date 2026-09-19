@@ -545,6 +545,15 @@ pub(crate) mod v2_lane_body_store;
         reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
     )
 )]
+pub(crate) mod v2_lane_driver;
+pub(crate) mod v2_lane_frame_bounds;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 pub(crate) mod v2_lane_instance;
 #[cfg_attr(
     not(test),

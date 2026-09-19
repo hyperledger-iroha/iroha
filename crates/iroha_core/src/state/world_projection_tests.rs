@@ -44,6 +44,28 @@ fn world_delta_ignores_noop_touch_history_and_aborted_changes() {
 }
 
 #[test]
+fn publication_delta_retains_noop_undo_entries_but_ignores_aborted_children() {
+    let world = World::default();
+    let mut block = world.block();
+    let semantic = block.net_state_delta().unwrap();
+    let original = block.publication_state_delta().unwrap();
+    {
+        let mut aborted = block.smart_contract_state.transaction();
+        aborted.insert(path("publication/aborted"), vec![1]);
+    }
+    assert_eq!(original, block.publication_state_delta().unwrap());
+    block
+        .smart_contract_state
+        .remove(path("publication/absent"));
+    assert_eq!(semantic, block.net_state_delta().unwrap());
+    let touched_storage = block.publication_state_delta().unwrap();
+    assert_ne!(original, touched_storage);
+    let _ = block.soradns_last_publish_ms.get_mut();
+    assert_eq!(semantic, block.net_state_delta().unwrap());
+    assert_ne!(touched_storage, block.publication_state_delta().unwrap());
+}
+
+#[test]
 fn delta_binds_actual_preimages_deletions_empty_bytes_and_physical_keys() {
     fn capture(before: Option<Vec<u8>>, after: Option<Vec<u8>>, key: &str) -> WorldNetDelta {
         let world = World::default();

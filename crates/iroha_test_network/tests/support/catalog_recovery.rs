@@ -3,7 +3,7 @@
 //! The caller owns daemon startup/restart and signed-snapshot observation. This
 //! module retains the exact four-peer execution proofs and permissions across
 //! those phase boundaries, using the parent module's native finality cache and
-//! strict committed merge-log reader.
+//! fixed canonical result-bearing carrier reader.
 use super::*;
 use iroha::client::Client;
 use iroha_genesis::ValidatedGenesisBundle;
@@ -310,132 +310,16 @@ async fn canonical_execution(
     let transaction = transaction.clone();
     let expected_committee = expected_committee.map(<[PeerId]>::to_vec);
     read_on_dedicated_thread(move || {
-        let details =
-            client.get_successful_transaction_details(transaction.hash_as_entrypoint())?;
-        let committed = &details.transaction;
-        ensure!(
-            committed.entrypoint() == &TransactionEntrypoint::External(transaction.clone())
-                && committed.result().0.is_ok(),
-            "committed transaction bytes or result changed"
-        );
-        let execution_commitment = finality.execution_commitment(
-            &peer_identity, &client, height, *committed.block_hash(),
-        )?;
-        let wire = client.get_canonical_executed_block_wire(
-            NonZeroU64::new(height).ok_or_else(|| eyre!("zero Applied height"))?,
-            committed,
-            &execution_commitment,
-        )?;
-        let block = decode_framed_signed_block(&wire)?;
-        let context = block
-            .execution_context()
-            .ok_or_else(|| eyre!("committed block omitted execution context"))?;
-        let carrier_routes = context
-            .external
-            .iter()
-            .filter(|entry| entry.entrypoint_hash == transaction.hash_as_entrypoint())
-            .count();
-        ensure!(
-            carrier_routes == 0,
-            "QueuePlanSynced transaction has {carrier_routes} duplicate carrier routes"
-        );
-        let reference = context
-            .merge_entry
-            .as_ref()
-            .ok_or_else(|| eyre!("QueuePlanSynced carrier omitted certified merge reference"))?;
-        ensure!(
-            committed.verify_certified_merge_inclusion(reference),
-            "exact transaction/result proofs are not bound to the certified merge reference"
-        );
-        let catalog = client.get_lane_lifecycle_status()?.validate()?;
-        let log = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog)
-            .primary()
-            .merge_log_path(&store);
-        let entry = committed_merge_entry(&log, reference)?;
-        let batch = entry
-            .execution_batch
-            .as_ref()
-            .ok_or_else(|| eyre!("certified merge entry omitted execution batch"))?;
-        ensure!(
-            merge_execution_batch_commitments_match(batch)
-                && batch.application_block_header
-                    == merge_application_header_from_carrier(&block.header()),
-            "certified merge batch commitments or exact carrier context changed"
-        );
-        let mut routed = Vec::new();
-        for execution in &batch.lanes {
-            for (index, candidate) in execution.entrypoints.iter().enumerate() {
-                if candidate.hash() == transaction.hash_as_entrypoint() {
-                    routed.push((execution, index));
-                }
-            }
-        }
-        ensure!(
-            routed.len() == 1,
-            "exact transaction must have one certified merge route, got {}",
-            routed.len()
-        );
-        let (execution, index) = routed[0];
-        let descriptor = &execution.proposal.descriptor;
-        ensure!(
-            execution.entrypoint_hashes.len() == execution.entrypoints.len()
-                && execution.routing_plans.len() == execution.entrypoints.len()
-                && execution.results.len() == execution.entrypoints.len()
-                && execution.result_hashes.len() == execution.entrypoints.len()
-                && descriptor.accepted_transaction_hashes == execution.entrypoint_hashes,
-            "certified merge route/result vectors are not aligned with the lane descriptor"
-        );
-        let plan: RoutingPlan = norito::decode_canonical(&execution.routing_plans[index])?;
-        ensure!(
-            execution.entrypoints[index] == *committed.entrypoint()
-                && execution.entrypoint_hashes[index]
-                    == Hash::from(transaction.hash_as_entrypoint())
-                && execution.results[index] == *committed.result()
-                && execution.result_hashes[index] == Hash::from(*committed.result_hash())
-                && descriptor.lane_id == lane
-                && descriptor.dataspace_id == dataspace
-                && plan == RoutingPlan::single(RoutingDecision::new(lane, dataspace)),
-            "the exact successful signed transaction executed on a different certified route: {plan:?}"
-        );
-        validate_lane_block_proposal(&execution.proposal)?;
-        let mut pops = BTreeMap::new();
-        for proof in &execution.signer_proofs {
-            ensure!(
-                pops.insert(proof.public_key.clone(), proof.proof_of_possession.clone())
-                    .is_none(),
-                "certified lane repeats a signer proof"
-            );
-        }
-        let mut expected_signers = BTreeSet::new();
-        for (phase, qc) in [
-            (CertPhase::Prepare, &execution.prepare_qc),
-            (CertPhase::Commit, &execution.commit_qc),
-        ] {
-            ensure!(
-                qc.body == execution.proposal.vote_body(phase)
-                    && qc.validator_set == descriptor.validator_set,
-                "lane QC body or committee differs from its certified proposal"
-            );
-            validate_lane_block_qc_aggregate(qc, &pops)?;
-            for (index, peer) in qc.validator_set.iter().enumerate() {
-                if qc.signers_bitmap[index / 8] & (1 << (index % 8)) != 0 {
-                    expected_signers.insert(peer.public_key().clone());
-                }
-            }
-        }
-        ensure!(
-            pops.keys().cloned().collect::<BTreeSet<_>>() == expected_signers,
-            "lane signer proofs differ from the exact Prepare/Commit signer union"
-        );
-        if let Some(expected_committee) = expected_committee {
-            ensure!(
-                descriptor.validator_set == expected_committee
-                    && descriptor.validator_count == 4
-                    && descriptor.min_quorum == 3,
-                "new lane did not execute under its exact four-member/q3 committee"
-            );
-        }
-        Ok(wire)
+        authenticated_native_execution(
+            &finality,
+            &peer_identity,
+            &client,
+            &store,
+            &transaction,
+            height,
+            RoutingDecision::new(lane, dataspace),
+            expected_committee.as_deref(),
+        )
     })
     .await
 }

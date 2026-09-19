@@ -4,6 +4,7 @@ struct SignedSnapshotPhysicalFixture {
     _store_directory: TempDir,
     snapshot_directory: TempDir,
     kura: Arc<Kura>,
+    lane_manifests: crate::governance::manifest::LaneManifestRegistryHandle,
     policy: SnapshotBootstrapPolicy,
     signing_key: KeyPair,
     network_id: iroha_data_model::NetworkId,
@@ -152,6 +153,7 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         audited_sha256: Some(hex::encode(Sha256::digest(&payload))),
         audited_height: Some(3),
     };
+    let lane_manifests = state.lane_manifests.read().clone();
     drop(state);
     drop(kura);
     let (kura, block_count) = Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
@@ -168,6 +170,7 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         _store_directory: directory,
         snapshot_directory,
         kura,
+        lane_manifests,
         policy,
         signing_key,
         network_id,
@@ -184,6 +187,7 @@ fn read_signed_snapshot_physical_fixture(
     crate::snapshot::try_read_snapshot_with_bootstrap_policy(
         fixture.snapshot_directory.path(),
         &fixture.kura,
+        &fixture.lane_manifests,
         LiveQueryStore::start_test,
         fixture.block_count,
         nonzero!(1024_usize),

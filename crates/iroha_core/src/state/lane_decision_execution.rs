@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use iroha_crypto::Hash;
 
-use super::{State, StateBlock, VerifiedLaneDecisionGroupV1};
+use super::{State, StateBlock, StateReadOnlyWithTransactions, VerifiedLaneDecisionGroupV1};
 
 impl StateBlock<'_> {
     /// Check all immutable sources against this exact pre-execution overlay.
@@ -65,6 +65,15 @@ impl StateBlock<'_> {
                 return Err("native execution source is outside its exact carrier history".into());
             }
             let entrypoint = &payload.input.entrypoint;
+            if crate::tx::canonical_replay_alias_hashes(std::slice::from_ref(entrypoint))
+                .into_iter()
+                .any(|hash| self.has_entrypoint(hash))
+            {
+                return Err(
+                    "native execution reuses a committed carrier or sealed signed-execution identity"
+                        .into(),
+                );
+            }
             if !entrypoints.insert(entrypoint.hash()) {
                 return Err("native execution batch repeats an entrypoint".into());
             }
@@ -221,6 +230,21 @@ impl State {
             Vec<PreexecutedLaneDecisionGroupV1>,
         ) -> Result<R, super::MergeLedgerCommitError>,
     ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
+        self.with_native_lane_execution_and_pristine_stage(header, groups, |_| Ok(()), finish)
+    }
+
+    /// Execute native sources after exact preflight and authenticated pristine
+    /// controls, retaining the caller's complete execution witness owner.
+    pub(super) fn with_native_lane_execution_and_pristine_stage<'state, R>(
+        &'state self,
+        header: super::BlockHeader,
+        groups: &[VerifiedLaneDecisionGroupV1],
+        pristine: impl FnOnce(&mut StateBlock<'state>) -> Result<(), super::MergeLedgerCommitError>,
+        finish: impl FnOnce(
+            &mut StateBlock<'state>,
+            Vec<PreexecutedLaneDecisionGroupV1>,
+        ) -> Result<R, super::MergeLedgerCommitError>,
+    ) -> Result<(Box<StateBlock<'state>>, R), super::MergeLedgerCommitError> {
         // The constructor acquires a coherent predecessor and retains the
         // actual World, membership, hash and runtime writer guards throughout
         // this transition. Its policy projections are immutable snapshots.
@@ -243,6 +267,7 @@ impl State {
                 overlay
                     .preflight_lane_decision_execution_inputs(groups)
                     .map_err(invalid)?;
+                pristine(overlay)?;
                 Ok(NativeLaneAfterStartV1 {
                     header: overlay._curr_block.clone(),
                     groups,

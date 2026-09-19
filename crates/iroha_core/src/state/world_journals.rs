@@ -3,7 +3,8 @@
 //! The existing overlay inventory generates exhaustive destructuring and typed
 //! target accessors. Private generic wrappers retain their real MV values; the
 //! flat vector erases only the heterogeneous field type, never its owner or
-//! publication identity. It is not a World read view or publication capability.
+//! publication identity. Consuming preparation reacquires every original writer;
+//! final State authorization and visibility remain the aggregate owner's duty.
 
 use core::convert::Infallible;
 
@@ -13,6 +14,9 @@ use super::{
 use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
 use mv::{BlockMode, Key, Value};
+
+#[path = "world_publication.rs"]
+pub(in crate::state) mod publication;
 
 /// Refusal drops the entire original overlay without publishing any component.
 #[derive(Debug, thiserror::Error)]
@@ -82,7 +86,8 @@ pub(in crate::state) struct FieldSummary {
 ///
 /// TODO: compose these original journals with all other State owners, admitted
 /// resources and exact finality in one consuming publisher. This owner cannot
-/// reattach, publish, reconstruct a World, or authorize a decided-block refusal.
+/// reconstruct a World or authorize a decided-block refusal. Preparing World
+/// writers alone does not authorize State publication.
 pub(in crate::state) struct DetachedWorld<Admission> {
     mode: BlockMode,
     fields: Vec<Box<dyn RetainedWorldField>>,
@@ -140,10 +145,18 @@ impl<Admission> DetachedWorld<Admission> {
 }
 
 // Private and non-extensible outside this module. There is no Any/downcast,
-// name-based dispatch, mutable access, live read view or per-field publisher.
+// name-based dispatch, mutable access or live read view. Only the complete
+// consuming World owner can acquire and publish its private field publishers.
 trait RetainedWorldField: Send + Sync {
     fn summary(&self) -> FieldSummary;
     fn matches_current(&self, target: &World) -> bool;
+    fn try_prepare<'target>(
+        self: Box<Self>,
+        target: &'target World,
+    ) -> Result<
+        Box<dyn publication::PreparedWorldField + 'target>,
+        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+    >;
 }
 
 trait CaptureWorldField: Sized {
@@ -174,6 +187,15 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
     }
     fn matches_current(&self, target: &World) -> bool {
         self.journal.matches_current((self.target)(target))
+    }
+    fn try_prepare<'target>(
+        self: Box<Self>,
+        target: &'target World,
+    ) -> Result<
+        Box<dyn publication::PreparedWorldField + 'target>,
+        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+    > {
+        publication::prepare_storage(self, target)
     }
 }
 
@@ -216,6 +238,15 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
     }
     fn matches_current(&self, target: &World) -> bool {
         self.journal.matches_current((self.target)(target))
+    }
+    fn try_prepare<'target>(
+        self: Box<Self>,
+        target: &'target World,
+    ) -> Result<
+        Box<dyn publication::PreparedWorldField + 'target>,
+        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+    > {
+        publication::prepare_cell(self, target)
     }
 }
 
@@ -286,6 +317,15 @@ impl RetainedWorldField for RetainedTriggers {
     }
     fn matches_current(&self, target: &World) -> bool {
         self.journal.matches_current((self.target)(target))
+    }
+    fn try_prepare<'target>(
+        self: Box<Self>,
+        target: &'target World,
+    ) -> Result<
+        Box<dyn publication::PreparedWorldField + 'target>,
+        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+    > {
+        publication::prepare_triggers(self, target)
     }
 }
 

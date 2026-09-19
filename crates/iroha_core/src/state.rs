@@ -394,6 +394,7 @@ mod da_hydration;
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 mod output_capacity;
+mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 mod prepared_transfer_transcript;
 mod replay_outputs;
@@ -431,7 +432,6 @@ mod lane_decision_batch;
 )]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
-#[cfg(test)]
 pub(crate) use native_lane_batch_replay::{
     NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
 };
@@ -1542,6 +1542,9 @@ macro_rules! with_world_overlay_fields {
         )
     };
 }
+mod publication_lock;
+use publication_lock::{StatePublicationGuard, StatePublicationMutex};
+
 mod world_commit;
 #[cfg_attr(
     not(test),
@@ -1653,6 +1656,7 @@ macro_rules! build_world_view {
 pub struct BlockHashes {
     owner: Arc<BlockHashOwner>,
     inner: parking_lot::RwLock<BlockHashStorage>,
+    released: mv::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
@@ -1716,6 +1720,7 @@ impl BlockHashes {
         let committed_height = initial.len();
         Self {
             owner: Arc::new(BlockHashOwner),
+            released: mv::ReleaseNotification::default(),
             inner: parking_lot::RwLock::new(BlockHashStorage::Owned {
                 hashes: initial,
                 publication: Arc::new(BlockHashPublication),
@@ -1733,6 +1738,7 @@ impl BlockHashes {
         );
         Self {
             owner: Arc::new(BlockHashOwner),
+            released: mv::ReleaseNotification::default(),
             inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
             committed_height: AtomicUsize::new(committed_height),
         }
@@ -1759,7 +1765,7 @@ impl BlockHashes {
     /// Obtain a read-only snapshot of the committed hashes.
     pub fn view(&self) -> BlockHashesView<'_> {
         BlockHashesView {
-            guard: self.inner.read(),
+            guard: self.released.guard(self.inner.read()),
         }
     }
     /// Return the latest committed height without taking the block-hash read lock.
@@ -1773,15 +1779,15 @@ pub struct BlockHashesBlock<'a> {
     owner: Arc<BlockHashOwner>,
     publication: Arc<BlockHashPublication>,
     mode: mv::BlockMode,
-    guard: Option<parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
+    guard: Option<mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>>,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
 }
 impl<'a> BlockHashesBlock<'a> {
     fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
-        let guard = inner.inner.read();
-        let BlockHashStorage::Owned { publication, .. } = &*guard else {
+        let guard = inner.released.guard(inner.inner.read());
+        let BlockHashStorage::Owned { publication, .. } = &**guard else {
             panic!(
                 "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
             );
@@ -1878,11 +1884,11 @@ impl<'a> BlockHashesBlock<'a> {
         // hash write lock. A future aggregate publisher must admit/preallocate
         // this token and its installation storage before the publication cut.
         let publication = Arc::new(BlockHashPublication);
-        let mut guard = self.inner.inner.write();
+        let mut guard = self.inner.released.guard(self.inner.inner.write());
         let mut hashes = guard.as_slice().to_vec();
         hashes.truncate(visible_len);
         hashes.extend(pending);
-        *guard = BlockHashStorage::Owned {
+        **guard = BlockHashStorage::Owned {
             hashes,
             publication,
         };
@@ -1906,8 +1912,9 @@ impl std::ops::Deref for BlockHashesBlock<'_> {
 ///
 /// The exact owner/publication identity covers untouched hashes as well as the
 /// discarded tip in replacement mode. The original visible prefix and pending
-/// appends are retained without another chain copy. This move-only owner has no
-/// publication API and keeps no State or BlockHashes reference alive.
+/// appends are retained without another chain copy. This move-only owner keeps
+/// no State or BlockHashes reference alive. Publication preparation reacquires
+/// its exact predecessor and retains the writer for the aggregate publisher.
 ///
 /// TODO: join aggregate predecessor/resource/finality ownership and preallocate
 /// installation before adding a single consuming State publication operation.
@@ -1919,6 +1926,16 @@ pub(crate) struct DetachedBlockHashes {
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
 }
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
+#[path = "state/block_hashes_publication.rs"]
+mod block_hashes_publication;
 
 #[cfg_attr(
     not(test),
@@ -1957,9 +1974,9 @@ impl DetachedBlockHashes {
         if !Arc::ptr_eq(&self.owner, &target.owner) {
             return false;
         }
-        let guard = target.inner.read();
+        let guard = target.released.guard(target.inner.read());
         matches!(
-            &*guard,
+            &**guard,
             BlockHashStorage::Owned { publication, .. }
                 if Arc::ptr_eq(&self.publication, publication)
         )
@@ -2003,7 +2020,7 @@ impl std::ops::Deref for BlockHashesTransaction<'_> {
 }
 /// Read-only view of the committed block hashes.
 pub struct BlockHashesView<'a> {
-    guard: parking_lot::RwLockReadGuard<'a, BlockHashStorage>,
+    guard: mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
 }
 impl std::ops::Deref for BlockHashesView<'_> {
     type Target = [HashOf<BlockHeader>];
@@ -12619,7 +12636,7 @@ pub struct State {
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
-    lane_lifecycle_lock: parking_lot::Mutex<()>,
+    lane_lifecycle_lock: StatePublicationMutex,
     /// Outermost lock serializing QueuePlan sidecar snapshot-to-persistence operations.
     ///
     /// The admission path acquires this before `state_commit_lock`; block commit
@@ -12628,9 +12645,9 @@ pub struct State {
     /// to race from the same stale inventory snapshot.
     queue_plan_admission_persistence_lock: parking_lot::Mutex<()>,
     /// Lock serializing complete block commits across fallible pre-publication work.
-    state_commit_lock: Arc<parking_lot::Mutex<()>>,
+    state_commit_lock: Arc<StatePublicationMutex>,
     /// Lock serializing writer commit phases that mutate several state components.
-    state_write_lock: parking_lot::Mutex<()>,
+    state_write_lock: StatePublicationMutex,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
     /// Wakeup for retained work awaiting a stable committed State frontier.
@@ -13690,7 +13707,7 @@ pub struct StateBlock<'state> {
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
     /// Lock serializing multi-component writer commit phases.
-    state_write_lock: &'state parking_lot::Mutex<()>,
+    state_write_lock: &'state StatePublicationMutex,
     /// Ledger-derived DA commitments indexed while applying the block.
     pub(crate) da_commitments:
         &'state parking_lot::RwLock<crate::da::commitment_store::DaCommitmentStore>,
@@ -27770,7 +27787,7 @@ impl State {
     /// ownership`, so a queue operation either becomes visible before a drain
     /// closes or validates against the fully published post-transition
     /// catalog.
-    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
+    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> StatePublicationGuard<'_> {
         self.lane_lifecycle_lock.lock()
     }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
@@ -29891,10 +29908,10 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
-            lane_lifecycle_lock: parking_lot::Mutex::new(()),
+            lane_lifecycle_lock: StatePublicationMutex::default(),
             queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
-            state_write_lock: parking_lot::Mutex::new(()),
+            state_commit_lock: Arc::new(StatePublicationMutex::default()),
+            state_write_lock: StatePublicationMutex::default(),
             view_generation: AtomicU64::new(0),
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -30483,7 +30500,8 @@ impl State {
         state.configure_test_runtime_defaults();
         state
     }
-    fn configure_test_runtime_defaults(&mut self) {
+    /// Apply deterministic test runtime settings after authenticated fixture startup.
+    pub(crate) fn configure_test_runtime_defaults(&mut self) {
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         self.pipeline.dynamic_prepass = true;
@@ -32127,12 +32145,23 @@ impl State {
     ) -> Option<Hash> {
         let _view_generation = self.begin_state_view_write();
         let mut runtime = self.canonical_runtime.block();
+        let previous = runtime
+            .get()
+            .lane_incarnation_lineage
+            .iter()
+            .find(|entry| entry.lane_id == lane_id)?
+            .incarnation;
+        if previous == incarnation {
+            // Generation-only fixture races must preserve the authenticated
+            // current/undo runtime pair when no lineage value changed.
+            return Some(previous);
+        }
         let entry = runtime
             .get_mut()
             .lane_incarnation_lineage
             .iter_mut()
             .find(|entry| entry.lane_id == lane_id)?;
-        let previous = std::mem::replace(&mut entry.incarnation, incarnation);
+        entry.incarnation = incarnation;
         runtime.commit();
         Some(previous)
     }
@@ -32597,7 +32626,7 @@ impl State {
     }
     /// Exclude committed State publication while consensus consumes a
     /// generation-bound validation result and performs its private-key action.
-    pub(crate) fn consensus_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+    pub(crate) fn consensus_publication_lease(&self) -> StatePublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
     #[inline]
@@ -32956,9 +32985,9 @@ impl State {
             previous_carrier = Some(carrier);
         }
         let hydrated_admission = MergeAdmissionState::from_entries(&hydrated_entries)?;
+        self.validate_recovered_merge_metadata(hydrated_entries.last())?;
         *self.merge_admission.write() = hydrated_admission;
         self.merge_ledger.replace(hydrated_entries);
-        self.refresh_merge_metadata_from_latest_entry();
         Ok(())
     }
     /// Load journals whose recovery was deliberately deferred while Kura was
@@ -36824,7 +36853,7 @@ impl State {
                     // writer. The waited lock is released before this loop takes
                     // State again; neither old classification nor old Kura authority
                     // survives the released interval.
-                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    state_commit.unlock_fair();
                     #[cfg(test)]
                     queue_plan_publication_wait_observer::notify();
                     self.kura.wait_for_queue_plan_publication();
@@ -36884,7 +36913,7 @@ impl State {
                         return Err(error.into());
                     }
 
-                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    state_commit.unlock_fair();
                     let deadline = reconciliation_deadline
                         .get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT);
                     if Instant::now() >= *deadline {
@@ -45174,32 +45203,36 @@ impl State {
         .map_err(|_| MergeLedgerCommitError::MergeQCAggregateSignatureInvalid)?;
         Ok(())
     }
-    fn refresh_merge_metadata_from_latest_entry(&self) {
-        if let Some(entry) = self.merge_ledger.latest() {
-            self.update_merge_metadata(entry.as_ref());
+    fn validate_recovered_merge_metadata(
+        &self,
+        latest: Option<&MergeLedgerEntry>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        // These query fields belong exclusively to the merge ledger. Native
+        // Decisions preserve them. Validate against the exact latest entry
+        // applied at this State height, without repairing its current/undo cut
+        // while hydrating derived caches from durable history.
+        let roots = self.world.merge_hint_roots.view();
+        let global = self.world.merge_global_state_root.view();
+        let (matches, reason) = if let Some(entry) = latest {
+            (
+                roots.as_slice() == entry.merge_hint_roots().as_slice()
+                    && global.as_ref() == Some(&entry.global_state_root),
+                "restored merge reduction metadata differs from its exact latest applied entry",
+            )
         } else {
-            let should_clear_roots = {
-                let current = self.world.merge_hint_roots.view();
-                !current.is_empty()
-            };
-            if should_clear_roots {
-                let mut block = self.world.merge_hint_roots.block();
-                {
-                    let mut tx = block.transaction();
-                    tx.clear();
-                    tx.apply();
-                }
-                block.commit();
-            }
-            let should_clear_global = {
-                let current = self.world.merge_global_state_root.view();
-                current.is_some()
-            };
-            if should_clear_global {
-                self.replace_merge_global_state_root(None);
-            }
+            (
+                roots.is_empty() && global.is_none(),
+                "empty merge history has noncanonical reduction metadata",
+            )
+        };
+        if !matches {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                reason.to_owned(),
+            ));
         }
+        Ok(())
     }
+    #[cfg(test)]
     fn update_merge_metadata(&self, entry: &MergeLedgerEntry) {
         let entry_merge_hint_roots = entry.merge_hint_roots();
         let should_update_roots = {
@@ -45224,6 +45257,7 @@ impl State {
             self.replace_merge_global_state_root(Some(entry.global_state_root));
         }
     }
+    #[cfg(test)]
     fn replace_merge_global_state_root(&self, new_root: Option<Hash>) {
         let mut block = self.world.merge_global_state_root.block();
         {
@@ -46823,6 +46857,10 @@ impl State {
         publication: &StateViewGenerationWriteGuard<'_>,
     ) {
         let update = &pending.catalog_update;
+        // The MV owner supplies catalog identities; metadata-only projections
+        // read descriptions from this cache. Publish the exact accepted
+        // descriptors before observers inspect the newly committed catalog.
+        self.nexus.write().dataspace_catalog = update.updated_dataspace_catalog.clone();
         self.install_lane_manifests_in_publication(&pending.updated_lane_manifests, publication);
         self.reset_lane_scoped_runtime_state(&update.lanes_to_reset, persist_cursor_journal);
         let active_reset_lanes =
@@ -52975,6 +53013,7 @@ impl<'state> StateBlock<'state> {
                     entry_dataspaces: entry_dsid_bytes,
                     _source_inventory: Some(source_inventory),
                 });
+            self.bind_execution_output_witness(&witness)?;
             self.exec_witness = Some(witness);
         } else {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
@@ -55048,19 +55087,16 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        // TODO: replace this refusal only with the sole ValidBlock final witness,
-        // exact native carrier publication authorization and durable Apply gate.
-        // An empty old-merge authorization or authenticated replay flag cannot
-        // grant publication to a native execution prefix.
-        if self.native_lane_stage.is_some() {
-            error!("native stage has no canonical publication authorization yet");
-            return Err(TransactionsBlockError::MergeAdmission);
-        }
-        // TODO: the sole typed producer must resolve this linear plan and bind
-        // all actual outputs before publication. Dropping it is not completion.
-        if self.execution_output_plan.is_some() {
-            error!("execution output reservation has no completed producer seal");
-            return Err(TransactionsBlockError::ExecutionOutputCapacity);
+        if let Err(error) = self.verify_execution_output_publication() {
+            error!(
+                ?error,
+                "execution output publication authorization is invalid"
+            );
+            return Err(if self.native_lane_stage.is_some() {
+                TransactionsBlockError::MergeAdmission
+            } else {
+                TransactionsBlockError::ExecutionOutputCapacity
+            });
         }
         if let Err(error) = self.validate_canonical_runtime_projection() {
             error!(
@@ -55136,6 +55172,10 @@ impl<'state> StateBlock<'state> {
         let merge_runtime_effects = self.merge_execution_runtime_effects();
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
+            // Keep the linear finality/output and native-source owners alive
+            // through publication of every original journal below.
+            execution_output_plan: _publication_owner,
+            native_lane_stage: _native_source_owner,
             state_ref,
             runtime_policy,
             canonical_runtime,
@@ -55980,23 +56020,32 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
         let topology = self.verified_v2_apply_topology(block)?;
-        let (events, authorization) =
-            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
-        authorization.map(|()| events)
+        self.finalize_authorized_execution_outputs(block, |state| {
+            let (events, authorization) = state.apply_without_execution_inner(
+                block,
+                topology,
+                ApplyTopologyAuthority::V2Finality,
+            );
+            authorization.map(|()| events)
+        })
     }
-    /// Apply replayed block effects authenticated by Kura's exact v2 finality artifact.
-    ///
-    /// Replay advances the exact finality-authorized topology and every ordinary
-    /// post-execution state transition.
+    /// Apply replayed effects under the same exact finality and output owner as live Apply.
     #[must_use]
     pub(crate) fn apply_without_execution_with_verified_v2_finality_for_replay(
         &mut self,
         block: &CommittedBlock,
     ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
         let topology = self.verified_v2_apply_topology(block)?;
-        let (events, authorization) =
-            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::V2Finality);
-        authorization.map(|()| events)
+        self.finalize_authorized_execution_outputs(block, |state| {
+            state.authenticated_replay_commit = true;
+            state.replay_prevalidation = true;
+            let (events, authorization) = state.apply_without_execution_inner(
+                block,
+                topology,
+                ApplyTopologyAuthority::V2Finality,
+            );
+            authorization.map(|()| events)
+        })
     }
     fn verified_v2_apply_topology(
         &self,
@@ -58389,6 +58438,7 @@ mod tiered_snapshot_diff_tests {
         kura: Arc<Kura>,
     ) -> Result<Box<State>, norito::json::Error> {
         deserialize::KuraSeed {
+            lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura,
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -62163,6 +62213,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     let captured = crate::snapshot::CapturedStateSnapshot::capture(state)
         .wrap_err("failed to capture State for atomic replay prevalidation")?;
     let mut isolated = deserialize::KuraSeed {
+        lane_manifests: state.lane_manifests.read().clone(),
         kura: Arc::clone(kura),
         query_handle: state.query_handle.clone(),
         #[cfg(feature = "telemetry")]
@@ -62193,8 +62244,6 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     isolated.zk = state.zk.clone();
     isolated.gov = state.gov.clone();
     isolated.content = state.content.clone();
-    *isolated.lane_manifests.write() = state.lane_manifests.read().clone();
-    *isolated.lane_privacy_registry.write() = state.lane_privacy_registry.read().clone();
     *isolated.lane_compliance.write() = state.lane_compliance.read().clone();
     *isolated.da_commitments.write() = state.da_commitments.read().clone();
     *isolated.da_confidential_compute.write() = state.da_confidential_compute.read().clone();
@@ -62870,8 +62919,6 @@ fn replay_blocks_from_kura_range_inner(
                 finality.commit_qc.execution_commitment
             ));
         }
-        state_block.authenticated_replay_commit = true;
-        state_block.replay_prevalidation = true;
         if let Some(pending) = state_block.pending_autoscale_lifecycle.as_ref() {
             geometry.push(pending.clone());
         }
@@ -62902,6 +62949,12 @@ fn replay_blocks_from_kura_range_inner(
             });
         }
         log_replayed_signed_sources(height, committed_block.as_ref())?;
+        state_block
+            .authorize_execution_output_publication(&committed_block, &witness)
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| {
+                format!("failed to authorize replayed execution at block #{height}")
+            })?;
         let apply_without_execution_start = Instant::now();
         let _ = state_block
             .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)
@@ -64666,7 +64719,11 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn apply_consensus_effects(self) {
         if matches!(
             self.block_execution_output_plan,
-            Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
+            Some(
+                output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Authorized(_)
+                    | output_capacity::ExecutionOutputPlanState::Finalized(_)
+            )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.canonical_runtime.touched_value().is_some()
@@ -64690,7 +64747,11 @@ impl StateTransaction<'_, '_> {
     pub fn apply(self) {
         if matches!(
             self.block_execution_output_plan,
-            Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
+            Some(
+                output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Authorized(_)
+                    | output_capacity::ExecutionOutputPlanState::Finalized(_)
+            )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
         {

@@ -827,7 +827,10 @@ mod tests {
             let encoded = norito::encode_canonical(&witness).expect("encode witness");
             let decoded: ExecWitness = norito::decode_canonical(&encoded).expect("decode witness");
             assert_eq!(decoded, witness);
-            assert_eq!(witness.writes.len(), if include_receipts { 5 } else { 3 });
+            assert_eq!(witness.writes.len(), if include_receipts { 6 } else { 4 });
+            let (lane_contexts, lane_root) =
+                crate::state::LaneConsensusContextsWitnessV1::from_witness(&decoded)
+                    .expect("actual complete lane-context proof");
             let (fee, fee_root) =
                 validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
             let (casting, casting_root) = parliament_timed_ovn_casting_witness_proof_v1(&decoded)
@@ -836,6 +839,8 @@ mod tests {
                 .expect("casting writes must not be decoded as receipts");
             assert_eq!(fee_root, casting_root);
             assert_eq!(fee_root, receipt_root);
+            assert_eq!(fee_root, lane_root);
+            assert!(lane_contexts.verify(*state.network_id_ref(), 1, fee_root));
             assert!(fee.verify(fee_root));
             assert!(casting.verify(fee_root));
             assert_eq!(proofs.len(), if include_receipts { 2 } else { 0 });
