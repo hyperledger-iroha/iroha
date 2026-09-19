@@ -20,8 +20,15 @@ MODELS = (
     "SumeragiV2AutonomousReservationCarrier",
 )
 MEMBERSHIP_BINDINGS = (
+    (STORAGE, "struct", "TransactionsStorage", (
+        "write_lock: Mutex<Arc<()>>", "released: mv::ReleaseNotification",
+    )),
+    (STORAGE, "method", "TransactionsStorage::block_impl", (
+        "let guard = self.released.guard(self.write_lock.lock());",
+        "_guard: guard",
+    )),
     (STORAGE, "struct", "TransactionsBlock", (
-        "_guard: MutexGuard<'storage, RawMutex, Arc<()>>",
+        "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
         "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
         "blocks_ref: &'storage DashMap<Key, Value>",
     )),
@@ -52,7 +59,7 @@ MEMBERSHIP_BINDINGS = (
     (STORAGE, "method", "PreparedTransactionsBlock::publish", (
         "fn publish(self)", "mut block,", "publication,", "next_identity",
         "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
-        "if changes_identity", "*block._guard = next_identity;",
+        "if changes_identity", "**block._guard = next_identity;",
         "MembershipPublication::Repeated", "MembershipPublication::Replace",
         ".retain(|_, height| *height < current.height)",
         "MembershipPublication::Advance", "if let Some(previous) = previous",
@@ -71,8 +78,17 @@ MEMBERSHIP_BINDINGS = (
     )),
     (STORAGE, "method", "DetachedTransactionsBlock::observe_predecessor", (
         "storage.write_lock.try_lock()", "MembershipPredecessorStatus::Busy",
+        "let guard = storage.released.guard(guard);",
         "Arc::ptr_eq(&guard, &self.predecessor_identity)",
         "MembershipPredecessorStatus::Current", "MembershipPredecessorStatus::Changed",
+    )),
+    (STORAGE, "method", "DetachedTransactionsBlock::try_prepare_publication", (
+        "let wait = storage.released.observe();", "self.observe_predecessor(storage)",
+        "mv::PublicationPreparationError::after_failed_acquisition(wait)",
+        "let installation = match admit(&self, storage)",
+        "storage.write_lock.try_lock()", "let guard = storage.released.guard(guard);",
+        "Arc::ptr_eq(&guard, &self.predecessor_identity)", "_guard: guard",
+        "PreparedDetachedTransactionsBlock", "installation,",
     )),
 )
 MEMBERSHIP_SOURCE_RELATIVES = (
@@ -126,8 +142,14 @@ def validate_membership_contract(
     require("PreparedTransactionsBlock::publish",
             "let Self { mut block, publication, next_identity, } = self;")
     require("PreparedTransactionsBlock::publish",
-            "if changes_identity { *block._guard = next_identity; }")
+            "if changes_identity { **block._guard = next_identity; }")
     require("PreparedTransactionsBlock::detach", "drop(block); detached")
+    require("DetachedTransactionsBlock::observe_predecessor",
+            "let Some(guard) = storage.write_lock.try_lock() else { return MembershipPredecessorStatus::Busy; }; let guard = storage.released.guard(guard); if Arc::ptr_eq(&guard, &self.predecessor_identity)")
+    require("DetachedTransactionsBlock::try_prepare_publication",
+            "let wait = storage.released.observe(); match self.observe_predecessor(storage)")
+    require("DetachedTransactionsBlock::try_prepare_publication",
+            "let wait = storage.released.observe(); let Some(guard) = storage.write_lock.try_lock() else { return Err((self, mv::PublicationPreparationError::after_failed_acquisition(wait),)); }; let guard = storage.released.guard(guard); if !Arc::ptr_eq(&guard, &self.predecessor_identity)")
     require("PreparedTransactionsBlock::as_block",
             "fn as_block(&self) -> &TransactionsBlock<'storage> { &self.block }")
 
@@ -137,7 +159,7 @@ def validate_membership_contract(
     detached = raw_items.get("DetachedTransactionsBlock", "")
     if re.search(r"(?m)^\s*pub(?:\([^)]*\))?\s+\w+\s*:", detached) or "&mut" in detached:
         errors.append("membership detached owner exposes mutable authority")
-    if "MutexGuard" in detached or ": TransactionsBlock<" in detached:
+    if any(owner in detached for owner in ("MutexGuard", "ReleaseGuard", ": TransactionsBlock<")):
         errors.append("membership detached owner retains a physical writer")
     for forbidden in ("admit_publication(", "validate_commit(", "prepare_commit(",
                       "load_full(", "Err(", "Result<", "?", ".lock("):

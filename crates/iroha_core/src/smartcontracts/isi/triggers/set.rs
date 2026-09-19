@@ -10,7 +10,7 @@ pub(crate) mod invocation_identity;
 
 #[path = "set_detachment.rs"]
 mod detachment;
-pub(crate) use detachment::{DetachError, DetachedSet};
+pub(crate) use detachment::{DetachError, DetachedSet, PreparedSet, SetPublicationError};
 
 use super::{
     data_trigger_global_permission_grantee, data_trigger_scope_authorization_is_well_formed,

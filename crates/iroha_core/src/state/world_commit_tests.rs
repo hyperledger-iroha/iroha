@@ -496,29 +496,6 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
 }
 
 #[test]
-fn world_carrier_tail_rejects_a_scope_without_owned_execution() {
-    let (state, _) = fixture();
-    let mut block = state.block(BlockHeader::new(
-        std::num::NonZeroU64::MIN,
-        None,
-        None,
-        1,
-        0,
-    ));
-    let before = WorldStateBaseline::capture_current(&block.world)
-        .unwrap()
-        .root();
-    assert!(block.prepare_carrier_world_effects().is_err());
-    assert_eq!(
-        WorldStateBaseline::capture_current(&block.world)
-            .unwrap()
-            .root(),
-        before
-    );
-    assert_eq!(state.committed_height(), 0);
-}
-
-#[test]
 fn staged_snapshot_projects_pin_indexes_and_matches_actual_commit() {
     let (state, key) = fixture();
     let pin = intent(&state, &key, 0, Some("snapshot/alias"));

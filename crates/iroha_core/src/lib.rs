@@ -140,6 +140,7 @@ pub mod privacy_state;
 pub(crate) mod privacy_verifier;
 /// Atomic private-settlement runtime helpers.
 pub mod private_settlement;
+pub(crate) mod publication_lock;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.
@@ -1393,6 +1394,20 @@ mod execute_trigger_events_tests;
 pub(crate) mod execution_output_test_support;
 #[cfg(test)]
 mod frame_identity_tests;
+// Governance height/custody fixtures use explicit synthetic publication,
+// so they share this nonshipping harness rather than exporting that authority.
+#[cfg(test)]
+#[path = "../tests/gov_plain_referendum_open_event.rs"]
+mod gov_plain_referendum_open_event_tests;
+#[cfg(test)]
+#[path = "../tests/gov_referendum_open_close.rs"]
+mod gov_referendum_open_close_tests;
+#[cfg(test)]
+#[path = "../tests/gov_slash_and_restitute.rs"]
+mod gov_slash_and_restitute_tests;
+#[cfg(test)]
+#[path = "../tests/gov_unlock_sweep.rs"]
+mod gov_unlock_sweep_tests;
 #[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
 mod isi_gas_fees_tests;

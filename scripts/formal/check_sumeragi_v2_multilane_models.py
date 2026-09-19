@@ -2027,6 +2027,72 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         ),
     ),
     (
+        "crates/iroha_core/src/publication_lock.rs",
+        "struct",
+        "PublicationMutex",
+        (
+            "inner: parking_lot::Mutex<()>,",
+            "released: mv::ReleaseNotification,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "struct",
+        "PublicationGuard",
+        (
+            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "struct",
+        "PhysicalPublicationGuard",
+        (
+            "guard: Option<parking_lot::MutexGuard<'state, ()>>,",
+            "fair: bool,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "method",
+        "PublicationMutex::wrap",
+        (
+            "guard: parking_lot::MutexGuard<'state, ()>",
+            "inner: self.released.guard(PhysicalPublicationGuard {",
+            "guard: Some(guard),",
+            "fair: false,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "method",
+        "PublicationMutex::lock",
+        (
+            "self.wrap(self.inner.lock())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "method",
+        "PublicationGuard<'_>::unlock_fair",
+        (
+            "self.inner.fair = true;",
+            "drop(self);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/publication_lock.rs",
+        "method",
+        "PhysicalPublicationGuard<'_>::drop",
+        (
+            "if let Some(guard) = self.guard.take() {",
+            "if self.fair {",
+            "parking_lot::MutexGuard::unlock_fair(guard);",
+            "} else {",
+            "drop(guard);",
+        ),
+    ),
+    (
         "crates/iroha_core/src/state.rs",
         "fn",
         "persist_classified_queue_plan_admission",
@@ -2049,7 +2115,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "drop(state_view);",
             "try_queue_plan_publication_at_height(committed_height)",
             "Ok(None) => {",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "state_commit.unlock_fair();",
             "self.kura.wait_for_queue_plan_publication();",
             "Ok(Some(publication)) =>",
             "publication.retire(hash)?;",
@@ -2083,7 +2149,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "wait_for_queue_plan_publication",
         (
-            "parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());",
+            "self.canonical_chain_lock.lock().unlock_fair();",
         ),
     ),
     (
@@ -2313,7 +2379,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "KuraQueuePlanPublicationGuard",
         (
             "kura: &'a Kura,",
-            "_guard: parking_lot::MutexGuard<'a, ()>,",
+            "_guard: PublicationGuard<'a>,",
         ),
     ),
     (
@@ -2640,14 +2706,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "let persistence_result = match self",
             ".try_queue_plan_publication_at_height(committed_height)",
             "Ok(None) => {",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    #[cfg(test)]",
+            "state_commit.unlock_fair();\n                    #[cfg(test)]",
             "self.kura.wait_for_queue_plan_publication();\n                    continue;",
             "Ok(Some(publication)) =>",
             "publication.retire(hash)?;",
             "publication.persist(bytes)",
             "match persistence_result {",
             "one_ahead != Some(actual_durable_height)",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    let deadline =",
+            "state_commit.unlock_fair();\n                    let deadline =",
             ".get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT)",
             "Instant::now() >= *deadline",
             "std::thread::yield_now();",

@@ -35,7 +35,7 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
     // Build a signed block header at H=1
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let rid = "rid-revote".to_string();

@@ -164,6 +164,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         kura_relative,
         *KURA_PRODUCTION_COMPONENT_FILES,
         lane_geometry_relative,
+        Path("crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs"),
         release_relative,
     ):
         destination = fidelity_root / relative

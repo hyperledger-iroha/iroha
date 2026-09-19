@@ -76,6 +76,7 @@ impl State {
             let Some(journal) = self.block_hashes.inner.try_read() else {
                 return Err(TelemetryStatusSourceError::Busy);
             };
+            let journal = self.block_hashes.released.guard(journal);
             let Some(nexus) = self.nexus.try_read() else {
                 return Err(TelemetryStatusSourceError::Busy);
             };
@@ -116,6 +117,7 @@ impl State {
             let Some(journal) = self.block_hashes.inner.try_read() else {
                 return Err(TelemetryStatusSourceError::Busy);
             };
+            let journal = self.block_hashes.released.guard(journal);
             let hashes = journal.as_slice();
             if hashes.len() < target.height
                 || target

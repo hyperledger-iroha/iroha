@@ -1112,19 +1112,28 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     )
 }
 
-fn autonomous_merge_commit_authorization_fixture_with_beacon(
+/// Exact certified source and carrier before output validation or durability.
+/// This grants no global finality, output seal or publication authorization.
+struct UnpersistedAutonomousMergeFixture {
+    state: State,
+    entry: MergeLedgerEntry,
+    carrier: SignedBlock,
+    parent: SignedBlock,
+    validator_keypairs: Vec<KeyPair>,
+    expired_axt_replay_key: Option<AxtHandleReplayKey>,
+    requested_beacon: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+}
+
+/// Produce the same actual RS16 source and certified merge candidate used by
+/// the full fixture, stopping before its separately owned carrier output phase.
+fn unpersisted_autonomous_merge_commit_fixture(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
     transfer_fixture: Option<QueuePlanTransferFixture>,
     wrap_in_sealed_reveal: bool,
     runtime_effect: Option<AutonomousRuntimeEffectFixture>,
     with_beacon: bool,
-) -> (
-    State,
-    MergeLedgerEntry,
-    SignedBlock,
-    Option<AxtHandleReplayKey>,
-) {
+) -> UnpersistedAutonomousMergeFixture {
     let (mut state, validator_keypairs, commit_keypairs, parent) = if runtime_effect.is_some() {
         configured_runtime_effect_queue_plan_state()
     } else {
@@ -1308,7 +1317,47 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
         .expect("fixture autonomous execution candidate is valid");
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
-    let mut carrier = certified_merge_carrier_after(&parent, &entry);
+    let carrier = certified_merge_carrier_after(&parent, &entry);
+    UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        parent,
+        validator_keypairs,
+        expired_axt_replay_key,
+        requested_beacon,
+    }
+}
+
+fn autonomous_merge_commit_authorization_fixture_with_beacon(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
+    runtime_effect: Option<AutonomousRuntimeEffectFixture>,
+    with_beacon: bool,
+) -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    Option<AxtHandleReplayKey>,
+) {
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        mut carrier,
+        parent,
+        validator_keypairs,
+        expired_axt_replay_key,
+        requested_beacon,
+    } = unpersisted_autonomous_merge_commit_fixture(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        transfer_fixture,
+        wrap_in_sealed_reveal,
+        runtime_effect,
+        with_beacon,
+    );
     if transfer_fixture.is_some() || runtime_effect.is_some() || wrap_in_sealed_reveal {
         // Setting the certified execution context leaves a resultless proposal.
         // Only the actual execution owner may attach its rows, fragment count,

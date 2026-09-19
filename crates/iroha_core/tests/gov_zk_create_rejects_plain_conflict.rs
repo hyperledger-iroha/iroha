@@ -24,7 +24,7 @@ fn create_election_rejects_plain_conflict() {
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     let state = State::new_for_testing(world, kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Seed a Plain referendum with the same id

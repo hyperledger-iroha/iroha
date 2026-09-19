@@ -74,8 +74,10 @@ fn unowned_receipt_accumulator_refuses_before_and_after_finalizer() {
     }
 }
 
-fn seal_fixture() -> (State, SignedBlock) {
-    let state = fixture(65_536, None);
+// Keep the large fixture State out of caller frames containing execution overlays.
+#[inline(never)]
+fn seal_fixture() -> (Box<State>, SignedBlock) {
+    let state = Box::new(fixture(65_536, None));
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = parameters.get().block().execution_output();

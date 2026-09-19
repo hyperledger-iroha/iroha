@@ -15,7 +15,7 @@ enum NativeEconomicCase {
 }
 
 struct NativeEconomicFixture {
-    native: LaneContextVerifiedFixture,
+    native: LaneContextVerifiedFixture<Box<State>>,
     source: AssetId,
     destination: AssetId,
 }
@@ -50,6 +50,25 @@ fn native_economic_fixture_with_fee_policy(
     )
 }
 
+// Keep the World/State construction frame separate from every nested block
+// acquisition. A lexical scope alone does not reduce debug-build stack frames.
+// The returned Box is the original State; no snapshot, clone or replay is used.
+struct NativeEconomicStateSetup {
+    state: Box<State>,
+    kura: Arc<Kura>,
+    genesis: SignedBlock,
+    nexus: iroha_config::parameters::actual::Nexus,
+    configured_catalog_hash: Hash,
+    source_key: KeyPair,
+    source_account: AccountId,
+    destination_account: AccountId,
+    source: AssetId,
+    destination: AssetId,
+    fee_asset: AssetId,
+    // Fixture input consumed before transaction signing and first admission.
+    fee_intent: Option<iroha_data_model::transaction::FeePaymentIntent>,
+}
+
 fn native_economic_fixture_with_world_initializer(
     cases: &[NativeEconomicCase],
     atomic_group: bool,
@@ -57,11 +76,18 @@ fn native_economic_fixture_with_world_initializer(
     direct_fee: Option<NativeEconomicDirectFee>,
     initialize_world: impl FnOnce(&mut World),
 ) -> Box<NativeEconomicFixture> {
-    use iroha_data_model::transaction::signed::{
-        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
-    };
     assert!(!cases.is_empty() && cases.len() <= 2);
     assert!(!atomic_group || cases.len() == 1);
+    let setup = native_economic_state_setup(direct_fee, initialize_world);
+    native_economic_fixture_from_state(cases, atomic_group, genesis_layout, direct_fee, setup)
+}
+
+// Do not inline the large constructor into a caller that acquires WorldBlock.
+#[inline(never)]
+fn native_economic_state_setup(
+    direct_fee: Option<NativeEconomicDirectFee>,
+    initialize_world: impl FnOnce(&mut World),
+) -> NativeEconomicStateSetup {
     let source_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let destination_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).unwrap();
     let source_account = AccountId::new(source_key.public_key().clone());
@@ -152,14 +178,59 @@ fn native_economic_fixture_with_world_initializer(
         &nexus.configured_lane_catalog,
     )
     .expect("authenticate the actual configured catalog before opening fixture State");
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
-        world,
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        (*DEFAULT_TEST_CHAIN_ID).clone(),
-        NetworkId::from_genesis_hash(genesis.hash()),
-    )
-    .expect("construct State before authenticating its configured primary geometry");
+    let state = Box::new(
+        State::try_new_with_chain_and_network_id_with_default_telemetry(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            NetworkId::from_genesis_hash(genesis.hash()),
+        )
+        .expect("construct State before authenticating its configured primary geometry"),
+    );
+    NativeEconomicStateSetup {
+        state,
+        kura,
+        genesis,
+        nexus,
+        configured_catalog_hash,
+        source_key,
+        source_account,
+        destination_account,
+        source,
+        destination,
+        fee_asset,
+        fee_intent: None,
+    }
+}
+
+// Only pointer-sized State custody remains live while the actual genesis,
+// admission and finality producers acquire their original nested writers.
+#[inline(never)]
+fn native_economic_fixture_from_state(
+    cases: &[NativeEconomicCase],
+    atomic_group: bool,
+    genesis_layout: Option<DataAvailabilityLayout>,
+    direct_fee: Option<NativeEconomicDirectFee>,
+    setup: NativeEconomicStateSetup,
+) -> Box<NativeEconomicFixture> {
+    use iroha_data_model::transaction::signed::{
+        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+    };
+    let NativeEconomicStateSetup {
+        mut state,
+        kura,
+        genesis,
+        nexus,
+        configured_catalog_hash,
+        source_key,
+        source_account,
+        destination_account,
+        source,
+        destination,
+        fee_asset,
+        fee_intent,
+    } = setup;
     // Convenience State fixtures install default markers eagerly. Follow the
     // actual startup order here, then apply only the usual test runtime limits.
     state.configure_test_runtime_defaults();
@@ -254,19 +325,21 @@ fn native_economic_fixture_with_world_initializer(
     let mut first_binding = None;
     let mut shared_commitment = None;
     let mut first_ordered_reveal = None;
-    let fee_intent = direct_fee.map_or_else(
-        || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        |policy| {
-            iroha_data_model::transaction::FeePaymentIntent::authority(
-                vec![iroha_data_model::transaction::FeeChargeLimit::new(
-                    iroha_data_model::transaction::FeeChargeKind::Nexus,
-                    fee_asset.definition().clone(),
-                    Quantity::from(policy.signed_max),
-                )],
-                None,
-            )
-        },
-    );
+    let fee_intent = fee_intent.unwrap_or_else(|| {
+        direct_fee.map_or_else(
+            || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            |policy| {
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                        iroha_data_model::transaction::FeeChargeKind::Nexus,
+                        fee_asset.definition().clone(),
+                        Quantity::from(policy.signed_max),
+                    )],
+                    None,
+                )
+            },
+        )
+    });
     for (index, case) in cases.iter().enumerate() {
         let mut builder =
             TransactionBuilder::new(state.network_id, source_account.clone(), fee_intent.clone());

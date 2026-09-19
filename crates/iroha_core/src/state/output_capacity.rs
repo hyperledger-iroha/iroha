@@ -101,11 +101,15 @@ pub(super) enum ExecutionOutputPlanState {
     Retained(producer::RetainedExecutionOutputs),
     Sealing,
     Sealed(producer::SealedExecutionOutputs),
+    // Actual sealed objects have moved into the private carrier owner. This
+    // closed marker still forbids every raw StateBlock publication path.
+    Captured,
     Poisoned,
 }
 
 #[path = "output_producer.rs"]
 mod producer;
+pub(super) use producer::SealedExecutionOutputs;
 pub(crate) use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 impl StateBlock<'_> {

@@ -9,7 +9,7 @@
 //! authorization before exposing the sole consuming publication operation.
 
 use super::super::*;
-use super::PreparedCarrier;
+use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};
 use crate::query::{
     provider_ingest_finalized::{PreparedProviderIngestCapture, ProviderIngestFinalizedArchiveV1},
     reputation_finalized::{PreparedReputationCapture, ReputationFinalizedArchive},
@@ -17,6 +17,9 @@ use crate::query::{
 
 #[path = "runtime_journals.rs"]
 mod runtime_journals;
+
+#[path = "decision_binding.rs"]
+pub(crate) mod decision_binding;
 #[cfg(test)]
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;
@@ -45,25 +48,35 @@ pub(crate) enum CarrierJournalPreparationError<E> {
     /// The captured geometry inputs differ from their original runtime owner.
     #[error("candidate geometry identity: {0}")]
     Geometry(#[from] LaneLifecycleError),
-    /// An internal preparation invariant was lost before the consuming handoff.
-    #[error("prepared carrier lost its execution witness")]
-    MissingWitness,
+}
+
+/// Borrowed complete candidate before any archive, geometry or journal capture.
+/// Source custody has already moved out of raw State and remains part of this
+/// one admission, including the original witness and actual invocation owners.
+pub(crate) struct CarrierJournalInputs<'owner, 'state> {
+    /// The original complete staged State journals and deterministic tail.
+    pub(crate) state: &'owner StateBlock<'state>,
+    /// Exact validated execution owners retained before that tail changed World.
+    pub(crate) prefix: &'owner ValidatedExecutionPrefix,
 }
 
 /// Original journals after candidate execution, deterministic tails and capture.
-/// Construction grants no finality; dropping the owner publishes nothing.
-pub(crate) struct PreparedCarrierJournals<Admission> {
-    valid: crate::block::ValidBlock,
+/// The default lifecycle is the original ValidBlock. Only the private consuming
+/// decision binder changes it to CommittedBlock; dropping either publishes nothing.
+pub(crate) struct PreparedCarrierJournals<
+    Admission,
+    Block = crate::block::ValidBlock,
+    Components = DetachedCarrierComponents,
+> {
+    valid: Block,
     context: Arc<iroha_data_model::block::consensus_v2::HeightContext>,
     execution_prefix: iroha_data_model::block::consensus_v2::ExecutionCommitment,
     native_amx_manifest: crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+    source_prefix: ValidatedExecutionPrefix,
     checkpoint: Hash,
     kura: Arc<Kura>,
-    world: world_journals::DetachedWorld<()>,
+    components: Components,
     world_effects: world_commit::PreparedWorldEffects,
-    transactions: storage_transactions::DetachedTransactionsBlock,
-    block_hashes: DetachedBlockHashes,
-    runtime: RuntimeJournals<()>,
     geometry: carrier_geometry_preparation::PreparedCarrierGeometry,
     provider_capture: Option<PreparedProviderIngestCapture>,
     reputation_capture: Option<PreparedReputationCapture>,
@@ -73,6 +86,15 @@ pub(crate) struct PreparedCarrierJournals<Admission> {
     // Rust drops fields in declaration order. Capacity outlives every retained
     // journal, archive plan and deferred effect, including partial publication.
     admission: Admission,
+}
+
+/// The four storage families which must acquire one joint original predecessor.
+/// This group has no publication authority independently of the complete carrier.
+pub(crate) struct DetachedCarrierComponents {
+    world: world_journals::DetachedWorld<()>,
+    transactions: storage_transactions::DetachedTransactionsBlock,
+    block_hashes: DetachedBlockHashes,
+    runtime: RuntimeJournals<()>,
 }
 
 /// Deferred effects and original proof owners needed by the consuming publisher.
@@ -85,18 +107,10 @@ struct RetainedCarrierEffects {
     pending_da_commitments: Option<PendingDaCommitmentBundle>,
     pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
     staged_merge_entry: Option<MergeLedgerEntry>,
-    native_lane_stage: Option<Box<lane_decision_batch::NativeLaneStageSealV1>>,
-    execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,
-    fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,
     canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,
     canonical_carrier_commit_metadata_authorization:
         Option<CanonicalCarrierCommitMetadataAuthorization>,
     merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
-    witness: ExecWitness,
-    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
-    parliament_timed_ovn_casting_bindings: Option<
-        Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
-    >,
     pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,
     #[cfg(feature = "telemetry")]
     pending_parliament_telemetry_events: Vec<(
@@ -112,14 +126,14 @@ impl<'state> PreparedCarrier<'state> {
     ///
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
-    /// The required admission callback sees the complete original StateBlock
+    /// The required admission callback sees the complete original StateBlock and retained execution prefix
     /// before any final journal value is copied. Its returned reservation stays
     /// alive until all journals and deferred effects have been released.
     pub(crate) fn prepare_journals<Admission, E>(
         self,
         provider_archive: Option<&Arc<ProviderIngestFinalizedArchiveV1>>,
         reputation_archive: Option<&Arc<ReputationFinalizedArchive>>,
-        admit_journals: impl FnOnce(&StateBlock<'state>) -> Result<Admission, E>,
+        admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>) -> Result<Admission, E>,
     ) -> Result<PreparedCarrierJournals<Admission>, CarrierJournalPreparationError<E>> {
         // Declare before the original owners: reverse local drop order must
         // release them before capacity on every early error, including archive
@@ -131,17 +145,21 @@ impl<'state> PreparedCarrier<'state> {
             context,
             execution_prefix,
             native_amx_manifest,
+            source_prefix,
             _world_effects: world_effects,
             _publication_events: publication_events,
             _tiered_snapshot: tiered_snapshot,
         } = self;
-        let geometry = state.prepare_carrier_geometry()?;
         // Admit capture overlap, retained originals/final values and eventual
-        // installation before projecting archives or detaching any journal.
-        // The callback can inspect the original typed World/runtime inputs; it
+        // installation before projecting geometry/archives or detaching a journal.
+        // The callback can inspect the original typed World/runtime/source inputs; it
         // cannot mutate them or treat this local reservation as finality.
-        admission =
-            admit_journals(&state).map_err(CarrierJournalPreparationError::JournalAdmission)?;
+        admission = admit_journals(CarrierJournalInputs {
+            state: &state,
+            prefix: &source_prefix,
+        })
+        .map_err(CarrierJournalPreparationError::JournalAdmission)?;
+        let geometry = state.prepare_carrier_geometry()?;
         // Fixed admission order: State journals -> provider -> reputation.
         // Each archive releases its writer once the exact insertion and logical
         // reservation are owned. Kura never takes an archive index writer.
@@ -169,15 +187,15 @@ impl<'state> PreparedCarrier<'state> {
             pending_da_commitments,
             pending_autoscale_lifecycle,
             staged_merge_entry,
-            native_lane_stage,
-            execution_output_plan,
-            fastpq_source_inventory,
+            native_lane_stage: _,
+            execution_output_plan: _,
+            fastpq_source_inventory: _,
             canonical_wsv_merge_commit_authorization,
             canonical_carrier_commit_metadata_authorization,
             merge_carrier_entrypoints,
-            exec_witness,
-            fastpq_witness_context,
-            parliament_timed_ovn_casting_bindings,
+            exec_witness: _,
+            fastpq_witness_context: _,
+            parliament_timed_ovn_casting_bindings: _,
             pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
             pending_parliament_telemetry_events,
@@ -185,7 +203,6 @@ impl<'state> PreparedCarrier<'state> {
             replay_prevalidation,
             ..
         } = *state;
-        let witness = exec_witness.ok_or(CarrierJournalPreparationError::MissingWitness)?;
         let world = world.try_detach_journals(|_| Ok::<(), std::convert::Infallible>(()))?;
         let runtime = RuntimeJournals::capture(
             canonical_runtime,
@@ -202,13 +219,16 @@ impl<'state> PreparedCarrier<'state> {
             context,
             execution_prefix,
             native_amx_manifest,
+            source_prefix,
             checkpoint,
             kura: Arc::clone(&state_ref.kura),
-            world,
+            components: DetachedCarrierComponents {
+                world,
+                transactions,
+                block_hashes,
+                runtime,
+            },
             world_effects,
-            transactions,
-            block_hashes,
-            runtime,
             provider_capture,
             reputation_capture,
             geometry,
@@ -223,15 +243,9 @@ impl<'state> PreparedCarrier<'state> {
                 pending_da_commitments,
                 pending_autoscale_lifecycle,
                 staged_merge_entry,
-                native_lane_stage,
-                execution_output_plan,
-                fastpq_source_inventory,
                 canonical_wsv_merge_commit_authorization,
                 canonical_carrier_commit_metadata_authorization,
                 merge_carrier_entrypoints,
-                witness,
-                fastpq_witness_context,
-                parliament_timed_ovn_casting_bindings,
                 pending_public_lane_slash_observability,
                 #[cfg(feature = "telemetry")]
                 pending_parliament_telemetry_events,
@@ -249,6 +263,68 @@ impl<Admission> PreparedCarrierJournals<Admission> {
         &self,
     ) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
         self.execution_prefix
+    }
+}
+
+impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Components> {
+    /// Borrow the original source owners after State journal detachment.
+    pub(super) fn source_prefix(&self) -> &ValidatedExecutionPrefix {
+        &self.source_prefix
+    }
+
+    /// Move the same complete carrier around one consuming storage transition.
+    /// Failed acquisition returns every original nonstorage owner unchanged too.
+    fn try_map_components<Next, E>(
+        self,
+        acquire: impl FnOnce(Components) -> Result<Next, (Components, E)>,
+    ) -> Result<PreparedCarrierJournals<Admission, Block, Next>, (Self, E)> {
+        // Capacity must outlive values on a panic inside component preparation.
+        let admission;
+        let Self {
+            valid,
+            context,
+            execution_prefix,
+            native_amx_manifest,
+            source_prefix,
+            checkpoint,
+            kura,
+            world_effects,
+            geometry,
+            provider_capture,
+            reputation_capture,
+            publication_events,
+            tiered_snapshot,
+            effects,
+            components,
+            admission: original_admission,
+        } = self;
+        admission = original_admission;
+        macro_rules! retain {
+            ($components:expr) => {
+                PreparedCarrierJournals {
+                    valid,
+                    context,
+                    execution_prefix,
+                    native_amx_manifest,
+                    source_prefix,
+                    checkpoint,
+                    kura,
+                    world_effects,
+                    geometry,
+                    provider_capture,
+                    reputation_capture,
+                    publication_events,
+                    tiered_snapshot,
+                    effects,
+                    components: $components,
+                    admission,
+                }
+            };
+        }
+        match acquire(components) {
+            Ok(components) => Ok(retain!(components)),
+            Err((components, error)) => Err((retain!(components), error)),
+        }
     }
 }
 

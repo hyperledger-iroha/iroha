@@ -409,6 +409,7 @@ pub(crate) use native_lane_batch_replay::{
     NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
 };
 mod lane_decision_execution;
+pub(crate) use lane_decision_execution::PreexecutedLaneDecisionGroupV1;
 mod lane_decision_group;
 mod lane_input_body;
 pub(crate) use lane_decision_group::{LaneDecisionGroupPreparationV1, VerifiedLaneDecisionGroupV1};
@@ -1504,6 +1505,10 @@ macro_rules! with_world_overlay_fields {
         )
     };
 }
+use crate::publication_lock::{PublicationGuard, PublicationMutex};
+#[cfg(test)]
+mod publication_lock_tests;
+
 mod world_commit;
 mod world_journals;
 pub(crate) mod world_projection;
@@ -1608,6 +1613,7 @@ macro_rules! build_world_view {
 pub struct BlockHashes {
     owner: Arc<BlockHashOwner>,
     inner: parking_lot::RwLock<BlockHashStorage>,
+    released: mv::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
@@ -1671,6 +1677,7 @@ impl BlockHashes {
         let committed_height = initial.len();
         Self {
             owner: Arc::new(BlockHashOwner),
+            released: mv::ReleaseNotification::default(),
             inner: parking_lot::RwLock::new(BlockHashStorage::Owned {
                 hashes: initial,
                 publication: Arc::new(BlockHashPublication),
@@ -1688,6 +1695,7 @@ impl BlockHashes {
         );
         Self {
             owner: Arc::new(BlockHashOwner),
+            released: mv::ReleaseNotification::default(),
             inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
             committed_height: AtomicUsize::new(committed_height),
         }
@@ -1714,7 +1722,7 @@ impl BlockHashes {
     /// Obtain a read-only snapshot of the committed hashes.
     pub fn view(&self) -> BlockHashesView<'_> {
         BlockHashesView {
-            guard: self.inner.read(),
+            guard: self.released.guard(self.inner.read()),
         }
     }
     /// Return the latest committed height without taking the block-hash read lock.
@@ -1728,15 +1736,15 @@ pub struct BlockHashesBlock<'a> {
     owner: Arc<BlockHashOwner>,
     publication: Arc<BlockHashPublication>,
     mode: mv::BlockMode,
-    guard: Option<parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
+    guard: Option<mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>>,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
 }
 impl<'a> BlockHashesBlock<'a> {
     fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
-        let guard = inner.inner.read();
-        let BlockHashStorage::Owned { publication, .. } = &*guard else {
+        let guard = inner.released.guard(inner.inner.read());
+        let BlockHashStorage::Owned { publication, .. } = &**guard else {
             panic!(
                 "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
             );
@@ -1833,11 +1841,11 @@ impl<'a> BlockHashesBlock<'a> {
         // hash write lock. A future aggregate publisher must admit/preallocate
         // this token and its installation storage before the publication cut.
         let publication = Arc::new(BlockHashPublication);
-        let mut guard = self.inner.inner.write();
+        let mut guard = self.inner.released.guard(self.inner.inner.write());
         let mut hashes = guard.as_slice().to_vec();
         hashes.truncate(visible_len);
         hashes.extend(pending);
-        *guard = BlockHashStorage::Owned {
+        **guard = BlockHashStorage::Owned {
             hashes,
             publication,
         };
@@ -1861,8 +1869,9 @@ impl std::ops::Deref for BlockHashesBlock<'_> {
 ///
 /// The exact owner/publication identity covers untouched hashes as well as the
 /// discarded tip in replacement mode. The original visible prefix and pending
-/// appends are retained without another chain copy. This move-only owner has no
-/// publication API and keeps no State or BlockHashes reference alive.
+/// appends are retained without another chain copy. This move-only owner keeps
+/// no State or BlockHashes reference alive. Publication preparation reacquires
+/// its exact predecessor and retains the writer for the aggregate publisher.
 ///
 /// TODO: join aggregate predecessor/resource/finality ownership and preallocate
 /// installation before adding a single consuming State publication operation.
@@ -1874,6 +1883,9 @@ pub(crate) struct DetachedBlockHashes {
     pending: Vec<HashOf<BlockHeader>>,
     visible: Vec<HashOf<BlockHeader>>,
 }
+
+#[path = "state/block_hashes_publication.rs"]
+mod block_hashes_publication;
 
 impl DetachedBlockHashes {
     /// Original ordinary or replacement acquisition mode.
@@ -1905,9 +1917,9 @@ impl DetachedBlockHashes {
         if !Arc::ptr_eq(&self.owner, &target.owner) {
             return false;
         }
-        let guard = target.inner.read();
+        let guard = target.released.guard(target.inner.read());
         matches!(
-            &*guard,
+            &**guard,
             BlockHashStorage::Owned { publication, .. }
                 if Arc::ptr_eq(&self.publication, publication)
         )
@@ -1951,7 +1963,7 @@ impl std::ops::Deref for BlockHashesTransaction<'_> {
 }
 /// Read-only view of the committed block hashes.
 pub struct BlockHashesView<'a> {
-    guard: parking_lot::RwLockReadGuard<'a, BlockHashStorage>,
+    guard: mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
 }
 impl std::ops::Deref for BlockHashesView<'_> {
     type Target = [HashOf<BlockHeader>];
@@ -3200,6 +3212,11 @@ pub enum MergeLedgerCommitError {
     /// The complete applying State changed or was busy during source observation.
     #[error("merge execution State observation changed; reacquire the source")]
     ExecutionObservationChanged,
+    /// Local execution attempted State access while already owning its recorder,
+    /// or attempted recording in a suppressed or unfinished capture scope.
+    /// This is a caller scheduling error, never evidence of an invalid input.
+    #[error("merge execution recorder ownership conflict: {0}")]
+    ExecutionRecorderConflict(String),
     /// The merge entry must contain settlement snapshots, an execution batch, or one drain certificate.
     #[error(
         "merge ledger entry must include a lane snapshot, execution batch, or drain certificate"
@@ -12584,7 +12601,7 @@ pub struct State {
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
-    lane_lifecycle_lock: parking_lot::Mutex<()>,
+    lane_lifecycle_lock: PublicationMutex,
     /// Outermost lock serializing QueuePlan sidecar snapshot-to-persistence operations.
     ///
     /// The admission path acquires this before `state_commit_lock`; block commit
@@ -12593,9 +12610,9 @@ pub struct State {
     /// to race from the same stale inventory snapshot.
     queue_plan_admission_persistence_lock: parking_lot::Mutex<()>,
     /// Lock serializing complete block commits across fallible pre-publication work.
-    state_commit_lock: Arc<parking_lot::Mutex<()>>,
+    state_commit_lock: Arc<PublicationMutex>,
     /// Lock serializing writer commit phases that mutate several state components.
-    state_write_lock: parking_lot::Mutex<()>,
+    state_write_lock: PublicationMutex,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
     /// Wakeup for retained work awaiting a stable committed State frontier.
@@ -13655,7 +13672,7 @@ pub struct StateBlock<'state> {
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
     /// Lock serializing multi-component writer commit phases.
-    state_write_lock: &'state parking_lot::Mutex<()>,
+    state_write_lock: &'state PublicationMutex,
     /// Ledger-derived DA commitments indexed while applying the block.
     pub(crate) da_commitments:
         &'state parking_lot::RwLock<crate::da::commitment_store::DaCommitmentStore>,
@@ -27745,7 +27762,7 @@ impl State {
     /// ownership`, so a queue operation either becomes visible before a drain
     /// closes or validates against the fully published post-transition
     /// catalog.
-    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
+    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> PublicationGuard<'_> {
         self.lane_lifecycle_lock.lock()
     }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
@@ -29865,10 +29882,10 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
-            lane_lifecycle_lock: parking_lot::Mutex::new(()),
+            lane_lifecycle_lock: PublicationMutex::default(),
             queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
-            state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
-            state_write_lock: parking_lot::Mutex::new(()),
+            state_commit_lock: Arc::new(PublicationMutex::default()),
+            state_write_lock: PublicationMutex::default(),
             view_generation: AtomicU64::new(0),
             publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -32571,7 +32588,7 @@ impl State {
     }
     /// Exclude committed State publication while consensus consumes a
     /// generation-bound validation result and performs its private-key action.
-    pub(crate) fn consensus_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+    pub(crate) fn consensus_publication_lease(&self) -> PublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
     #[inline]
@@ -36799,7 +36816,7 @@ impl State {
                     // writer. The waited lock is released before this loop takes
                     // State again; neither old classification nor old Kura authority
                     // survives the released interval.
-                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    state_commit.unlock_fair();
                     #[cfg(test)]
                     queue_plan_publication_wait_observer::notify();
                     self.kura.wait_for_queue_plan_publication();
@@ -36859,7 +36876,7 @@ impl State {
                         return Err(error.into());
                     }
 
-                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    state_commit.unlock_fair();
                     let deadline = reconciliation_deadline
                         .get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT);
                     if Instant::now() >= *deadline {
@@ -53531,22 +53548,32 @@ impl<'state> StateBlock<'state> {
             &mut self._curr_block,
             batch.application_block_header.clone(),
         );
-        let execution =
-            State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay);
+        // Runtime catalog incarnations are derived by actual execution under
+        // this certified application header. Keep that same header through
+        // pristine surface and application-root validation; the fully staged
+        // merge entry is not available as a later derivation owner yet.
+        let execution = (|| {
+            let actual_lanes =
+                State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay)?;
+            if actual_lanes != batch.lanes {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "ordered execution results or derived settlement evidence differ".to_owned(),
+                ));
+            }
+            self.update_merge_metadata(entry);
+            self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
+            if self.merge_execution_write_set_root() != batch.application_write_set_root {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "canonical application write set differs".to_owned(),
+                ));
+            }
+            Ok(())
+        })();
+        // Restore on every Result exit, including execution/surface/root refusal.
+        // Marker staging and the final carrier authorization below still bind
+        // the exact outer header, whose application projection was checked above.
         self._curr_block = carrier_header;
-        let actual_lanes = execution?;
-        if actual_lanes != batch.lanes {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "ordered execution results or derived settlement evidence differ".to_owned(),
-            ));
-        }
-        self.update_merge_metadata(entry);
-        self.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)?;
-        if self.merge_execution_write_set_root() != batch.application_write_set_root {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "canonical application write set differs".to_owned(),
-            ));
-        }
+        execution?;
         self.stage_merge_execution_markers(entry.epoch_id, batch)?;
         let actual_write_set_root = self.merge_execution_write_set_root();
         let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
@@ -64634,7 +64661,10 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn apply_consensus_effects(self) {
         if matches!(
             self.block_execution_output_plan,
-            Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
+            Some(
+                output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Captured
+            )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.canonical_runtime.touched_value().is_some()
@@ -64658,7 +64688,10 @@ impl StateTransaction<'_, '_> {
     pub fn apply(self) {
         if matches!(
             self.block_execution_output_plan,
-            Some(output_capacity::ExecutionOutputPlanState::Sealed(_))
+            Some(
+                output_capacity::ExecutionOutputPlanState::Sealed(_)
+                    | output_capacity::ExecutionOutputPlanState::Captured
+            )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
         {

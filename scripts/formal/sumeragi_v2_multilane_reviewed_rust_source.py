@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "cbcd49cc2768b505d521b6ed6ae4ae5b6ed4edae74e08d95f8ca37a7fbbdda28"
+    "72faf63eda594c378e8672a1e843ecdeebbea8c4496373c766896fd397e53429"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (

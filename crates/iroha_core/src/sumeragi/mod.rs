@@ -531,6 +531,8 @@ pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
 // TODO: native wire evidence becomes live only through the shared lane reducer driver.
 pub(crate) mod v2_lane_body_store;
+pub(crate) mod v2_lane_driver;
+pub(crate) mod v2_lane_frame_bounds;
 pub(crate) mod v2_lane_instance;
 pub(crate) mod v2_lane_payload;
 pub(crate) mod v2_lane_wal;

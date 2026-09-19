@@ -10,6 +10,10 @@
 use super::*;
 use mv::storage::Detached as DetachedStorage;
 
+#[path = "set_publication.rs"]
+mod publication;
+pub(crate) use publication::{PreparedSet, SetPublicationError};
+
 /// Capture refusal leaves every original trigger writer unpublished and released.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DetachError<E> {
@@ -36,7 +40,8 @@ pub(crate) enum DetachError<E> {
 /// caller's resource guard drops after all retained payloads.
 ///
 /// TODO: compose with the remaining World/State journals, resource admission and
-/// finality under one consuming publisher; this type has no reattachment API.
+/// finality under one consuming publisher. Prepared component publication alone
+/// is not aggregate State authority.
 pub(crate) struct DetachedSet<Admission> {
     mode: mv::BlockMode,
     data_triggers: DetachedStorage<TriggerId, LoadedAction<DataEventFilter>, ()>,

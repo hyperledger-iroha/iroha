@@ -1,4 +1,4 @@
-// Same-thread standalone scratch work must not join an unrelated live recorder.
+// Standalone scratch refuses an unrelated live recorder before acquiring State.
 // All transcripts below come from actual authenticated State transfers/hooks.
 
 const NATIVE_SCRATCH_UNLOCK: &str = "native-scratch-witness-unlock";
@@ -95,12 +95,29 @@ fn native_scratch_owned_start(state: &State, header: BlockHeader) -> Box<StateBl
 }
 
 #[inline(never)]
+fn native_scratch_recorded_start(
+    state: &State,
+    header: BlockHeader,
+) -> (
+    Box<StateBlock<'_>>,
+    crate::sumeragi::witness::ExecWitnessGuard,
+) {
+    // The actual constructor retains the State writers before opening capture,
+    // so the hook and following transfers share the proper lock order too.
+    state
+        .block_with_owned_start_stages(
+            header,
+            |_| crate::sumeragi::witness::begin_exec_witness_capture(),
+            |_, guard| Ok(guard),
+        )
+        .unwrap()
+}
+
+#[inline(never)]
 fn native_scratch_prove_due_hook_records(fixture: &NativeEconomicFixture) {
     use crate::sumeragi::witness;
-    let _owner = witness::exec_witness_guard();
-    witness::start_block();
     let header = empty_global_block_after(Some(&fixture.native.block)).header();
-    let overlay = native_scratch_owned_start(&fixture.native.state, header);
+    let (overlay, _owner) = native_scratch_recorded_start(&fixture.native.state, header);
     assert_eq!(header.height().get(), 7);
     assert!(
         overlay
@@ -149,10 +166,8 @@ fn native_scratch_capture_around(
     mut scratch: impl FnMut(),
 ) -> Vec<u8> {
     use crate::sumeragi::witness;
-    let _owner = witness::exec_witness_guard();
-    witness::start_block();
     let header = empty_global_block_after(Some(&owner.native.block)).header();
-    let mut overlay = native_scratch_owned_start(&owner.native.state, header);
+    let (mut overlay, _owner) = native_scratch_recorded_start(&owner.native.state, header);
     native_scratch_owner_transfer(&mut overlay, owner);
     let before = witness::snapshot_exec_witness();
     assert!(!before.fastpq_transcripts.is_empty());
@@ -201,19 +216,26 @@ state_test! { sync native_scratch_due_hooks_and_markers_preserve_unrelated_same_
     native_scratch_prove_due_hook_records(&fixture);
     let expected = native_scratch_capture_around(&owner, || {});
     for with_markers in [false, true] {
+        // Actual scratch economics still runs and rolls back outside a capture.
+        if with_markers {
+            let prepared = fixture.native.state.prepare_native_batch_on_carrier(header, groups.clone()).unwrap();
+            assert!(prepared.executions()[0].result.is_ok());
+            assert_native_scratch_unlock_applied(prepared.overlay(), &fixture);
+            assert!(prepared.overlay().native_lane_stage.is_some());
+            drop(prepared);
+        } else {
+            let (overlay, executions) = fixture.native.state.preexecute_lane_decision_groups(header, &groups).unwrap();
+            assert!(executions[0].result.is_ok());
+            assert_native_scratch_unlock_applied(&overlay, &fixture);
+            drop(overlay);
+        }
         let actual = native_scratch_capture_around(&owner, || {
-            if with_markers {
-                let prepared = fixture.native.state.prepare_native_batch_on_carrier(header, &groups).unwrap();
-                assert!(prepared.executions()[0].result.is_ok());
-                assert_native_scratch_unlock_applied(prepared.overlay(), &fixture);
-                assert!(prepared.overlay().native_lane_stage.is_some());
-                drop(prepared);
+            let error = if with_markers {
+                fixture.native.state.prepare_native_batch_on_carrier(header, groups.clone()).err()
             } else {
-                let (overlay, executions) = fixture.native.state.preexecute_lane_decision_groups(header, &groups).unwrap();
-                assert!(executions[0].result.is_ok());
-                assert_native_scratch_unlock_applied(&overlay, &fixture);
-                drop(overlay);
-            }
+                fixture.native.state.preexecute_lane_decision_groups(header, &groups).err()
+            }.expect("nested scratch must refuse before State acquisition");
+            assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
         });
         assert_eq!(actual, expected, "same real owner bytes with wrapper markers={with_markers}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
@@ -229,13 +251,19 @@ state_test! { sync native_scratch_constructor_failure_preserves_unrelated_same_t
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot");
     let expected = native_scratch_capture_around(&owner, || {});
     for with_markers in [false, true] {
+        let error = if with_markers {
+            fixture.native.state.prepare_native_batch_on_carrier(foreign_parent, groups.clone()).err()
+        } else {
+            fixture.native.state.preexecute_lane_decision_groups(foreign_parent, &groups).err()
+        }.expect("pre-State constructor must refuse another parent");
+        assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
         let actual = native_scratch_capture_around(&owner, || {
             let error = if with_markers {
-                fixture.native.state.prepare_native_batch_on_carrier(foreign_parent, &groups).err()
+                fixture.native.state.prepare_native_batch_on_carrier(foreign_parent, groups.clone()).err()
             } else {
                 fixture.native.state.preexecute_lane_decision_groups(foreign_parent, &groups).err()
-            }.expect("pre-State constructor must refuse another parent");
-            assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+            }.expect("nested scratch must refuse before inspecting the parent");
+            assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
         });
         assert_eq!(actual, expected);
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
@@ -254,10 +282,12 @@ state_test! { sync native_scratch_late_marker_failure_rolls_back_hook_and_preser
     storage.commit();
     let header = empty_global_block_after(Some(&fixture.native.block)).header();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot");
+    let error = fixture.native.state.prepare_native_batch_on_carrier(header, groups.clone()).err().expect("late native marker collision");
+    assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     let expected = native_scratch_capture_around(&owner, || {});
     let actual = native_scratch_capture_around(&owner, || {
-        let error = fixture.native.state.prepare_native_batch_on_carrier(header, &groups).err().expect("late native marker collision");
-        assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
+        let error = fixture.native.state.prepare_native_batch_on_carrier(header, groups.clone()).err().expect("nested scratch must refuse before inspecting markers");
+        assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
     });
     assert_eq!(actual, expected);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.native.state).expect("stable valid fixture snapshot"), before);
@@ -265,4 +295,71 @@ state_test! { sync native_scratch_late_marker_failure_rolls_back_hook_and_preser
     assert!(world.governance_locks.get(NATIVE_SCRATCH_UNLOCK).is_some());
     assert_eq!(world.assets.get(&fixture.source).unwrap().0, Quantity::from(90u32));
     assert_eq!(world.assets.get(&fixture.destination).unwrap().0, Quantity::from(10u32));
+}
+
+state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_for_state
+    use super::NativeLaneBatchSourcePreparationV1;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::sumeragi::witness;
+    let (fixture, finalized_carrier, included) = retained_native_batch_fixture();
+    let carrier = finalized_carrier.canonical_resultless_proposal();
+    let state = &fixture.native.state;
+    let groups = native_economic_groups(&fixture);
+    let batch = state.prepare_lane_decision_batch(&groups).unwrap();
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        else { panic!("original source"); };
+    let header = carrier.header();
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let guard = witness::begin_exec_witness_capture().unwrap();
+    witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
+    let witness_before = norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap();
+    let released = AtomicBool::new(false);
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let released = &released;
+        let holder = scope.spawn(move || {
+            let overlay = native_scratch_owned_start(state, header);
+            held_tx.send(()).unwrap();
+            // A missing early check fails finitely. Never acquire the recorder
+            // here: the timeout must be able to release the State writer.
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+            released.store(true, Ordering::Release);
+            drop(overlay);
+        });
+        held_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        // Suppression does not waive recorder ownership. Each wrapper must
+        // refuse before its own observation, snapshot, context or State writer.
+        let suppression = witness::suppress_recording_for_current_thread();
+        let errors = [
+            state.preexecute_lane_decision_groups(header, &groups).err(),
+            state.prepare_native_batch_on_carrier(header, groups.clone()).err(),
+            state.prepare_lane_decision_batch(&groups).err(),
+            state.replay_lane_decision_batch(&header, &batch, groups.clone()).err(),
+            source.stage_with_start_hooks().err(),
+            state.replay_proposed_native_lane_batch(&carrier, &[]).err(),
+            state.replay_finalized_native_lane_batch(&included, &[]).err(),
+        ];
+        let source_errors = [
+            state.prepare_proposed_native_lane_batch_source(&carrier, &[]).err(),
+            state.prepare_finalized_native_lane_batch_source(&included, &[]).err(),
+        ];
+        let refused_while_held = !released.load(Ordering::Acquire);
+        drop(suppression);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        for (index, error) in errors.into_iter().enumerate() {
+            assert!(matches!(error, Some(MergeLedgerCommitError::ExecutionRecorderConflict(_))), "entry {index}: {error:?}");
+        }
+        for error in source_errors {
+            assert!(error.unwrap().contains("already belongs"));
+        }
+        assert!(refused_while_held, "all Native entries must refuse before waiting for State");
+    });
+    assert_eq!(norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap(), witness_before);
+    witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    drop(guard);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
 }

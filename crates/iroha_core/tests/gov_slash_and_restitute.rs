@@ -84,7 +84,7 @@ fn seed_slash_snapshot(
     escrow_asset_id: &AssetId,
     slash_asset_id: &AssetId,
 ) {
-    let mut seed_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut seed_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut seed_tx = seed_block.transaction();
     seed_tx.world.governance_referenda_mut().insert(
         rid.to_owned(),
@@ -257,8 +257,10 @@ fn double_vote_slashes_plain_lock() {
         .last()
         .copied()
         .expect("signed genesis block hash");
+    let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(sealed_commitment);
+    let commitment_hash = commitment_entrypoint.hash();
     let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked_entrypoint(
-        Cow::Owned(TransactionEntrypoint::SealedCommitment(sealed_commitment)),
+        Cow::Owned(commitment_entrypoint),
     )])
     .chain_with_parent_hash(0, 1, parent_hash)
     .sign(ALICE_KEYPAIR.private_key())
@@ -267,12 +269,22 @@ fn double_vote_slashes_plain_lock() {
     let valid = block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-    let commitment_results = valid.as_ref().entrypoint_results().collect::<Vec<_>>();
-    assert_eq!(commitment_results.len(), 1);
+    valid
+        .as_ref()
+        .validate_output_merkle_cache()
+        .expect("complete commitment outputs");
+    assert_eq!(
+        valid.as_ref().network_input_hashes().collect::<Vec<_>>(),
+        [commitment_hash]
+    );
+    let (_, commitment_output) = valid
+        .as_ref()
+        .network_output_at(0)
+        .expect("exact commitment Network output");
     assert!(
-        commitment_results[0].2.0.is_ok(),
+        commitment_output.result.is_ok(),
         "sealed commitment must be retained before reveal: {:?}",
-        commitment_results[0].2.0
+        commitment_output.result
     );
     let committed = valid.commit_unchecked().unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
@@ -304,11 +316,20 @@ fn double_vote_slashes_plain_lock() {
     let valid = block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-    let reveal_results = valid.as_ref().entrypoint_results().collect::<Vec<_>>();
-    assert_eq!(reveal_results.len(), 1);
-    let rejection = reveal_results[0]
-        .2
-        .0
+    valid
+        .as_ref()
+        .validate_output_merkle_cache()
+        .expect("complete reveal outputs");
+    assert_eq!(
+        valid.as_ref().network_input_hashes().collect::<Vec<_>>(),
+        [reveal_hash]
+    );
+    let (_, reveal_output) = valid
+        .as_ref()
+        .network_output_at(0)
+        .expect("exact reveal Network output");
+    let rejection = reveal_output
+        .result
         .as_ref()
         .expect_err("conflicting sealed ballot must remain rejected");
     assert!(
@@ -355,7 +376,7 @@ fn double_vote_slashes_plain_lock() {
     assert_eq!(escrow_balance.clone(), Quantity::from(16_u64));
     assert_eq!(slash_balance.clone(), Quantity::from(4_u64));
     drop(view);
-    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut sblock4 = state.block(header4);
     let mut stx4 = sblock4.transaction();
     let unresolved_revote = iroha_data_model::isi::governance::CastPlainBallot {
@@ -422,7 +443,7 @@ fn restitution_restores_slashed_balance() {
     // Pre-seed a lock with a recorded slash (amount=60 active, 40 slashed) and matching balances.
     seed_slash_snapshot(&mut state, &rid, &escrow_asset_id, &slash_asset_id);
     {
-        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
         // Grant restitution permission to ALICE.
@@ -453,7 +474,9 @@ fn restitution_restores_slashed_balance() {
             )
         }));
         stx.apply();
-        let _ = sblock.commit_world_overlay_for_testing();
+        sblock
+            .commit_world_overlay_for_testing()
+            .expect("commit restitution fixture");
     }
     let view = state.view();
     let lock = view
@@ -498,7 +521,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     let slash_asset_id = AssetId::new(def_id, slash_id);
     seed_slash_snapshot(&mut state, referendum_id, &escrow_asset_id, &slash_asset_id);
     {
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_transaction = block.transaction();
         state_transaction
@@ -514,9 +537,11 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
         .execute(&ALICE_ID, &mut state_transaction)
         .expect("grant restitution permission");
         state_transaction.apply();
-        let _ = block.commit_empty_block_for_testing();
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit restitution fixture block");
     }
-    let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut state_transaction = block.transaction();
     let error = iroha_data_model::isi::governance::RestituteGovernanceLock {
@@ -531,7 +556,9 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     // Deliberately apply the errored overlay to prove the helper itself did not
     // stage any custody or lock mutation before its ledger preflight failed.
     state_transaction.apply();
-    let _ = block.commit_empty_block_for_testing();
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit restitution fixture block");
     let view = state.view();
     let lock = view
         .world()
@@ -626,7 +653,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
         bond_escrow_account: old_escrow,
         slash_receiver_account: old_receiver,
     };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.world.governance_referenda_mut().insert(

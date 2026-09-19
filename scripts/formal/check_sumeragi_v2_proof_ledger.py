@@ -70664,10 +70664,12 @@ let fixed_progress_pairs: [(&Path, &Path, &str); {pair_count}] = [
         lane_geometry_path,
         retirement,
         """
-let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
-    &lane_artifacts,
+let lane_artifacts_guard = self.maintain_lane_retirement_route_locked(
+    pending_canonical_bytes,
+    storage_lane_id,
+    &entry,
+    &retiring,
     &fixed_progress_pairs,
-    "first-release lane retirement",
 )?;
 let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
     &lane_artifacts_guard,
@@ -70679,6 +70681,69 @@ let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
         "immutable snapshot",
         errors,
     )
+
+    # Maintenance owns recovery/compaction; the scanner receives its original
+    # authenticated directory. Bind both real owners, including the live module
+    # declaration, so an unused helper or a direct reopen cannot satisfy this gate.
+    maintenance_module = [
+        statement for statement in rust_top_level_statements(source)
+        if "retirement_maintenance" in statement.tokens
+    ]
+    if (
+        len(maintenance_module) != 1
+        or maintenance_module[0].tokens != ("mod", "retirement_maintenance", ";")
+        or maintenance_module[0].ancestor_inner_attributes
+    ):
+        errors.append(f"{lane_geometry_path}: retirement maintenance must be one unconditional production module")
+    maintenance_path = lane_geometry_path.parent / "lane_geometry" / "retirement_maintenance.rs"
+    if not maintenance_path.is_file() or maintenance_path.is_symlink():
+        errors.append(f"{maintenance_path}: retirement maintenance owner must be a regular file")
+        return errors
+    maintenance = _require_qualified_rust_item(
+        maintenance_path, maintenance_path.read_text(encoding="utf-8"),
+        "Kura", "maintain_lane_retirement_route_locked", errors,
+        "production retirement maintenance owner",
+    )
+    for fragment, description in (
+        ("""
+pub(super) fn maintain_lane_retirement_route_locked(
+    &self,
+    pending_canonical_bytes: u64,
+    storage_lane_id: LaneId,
+    entry: &LaneStorageEntry,
+    retiring: &BTreeSet<LaneRetirementIdentity>,
+    fixed_progress_pairs: &[(&Path, &Path, &str); 7],
+) -> Result<BoundProgressDirectory> {
+""", "retirement maintenance must retain exact route, capacity and seven-pair inputs"),
+        ("""
+let lane_artifacts = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+""", "retirement maintenance must use the original storage entry namespace"),
+        ("""
+self.recover_geometry_progress_pairs_before_snapshot(
+    &lane_artifacts,
+    fixed_progress_pairs,
+    "first-release lane retirement",
+)
+}
+""", "retirement maintenance must return complete authenticated progress recovery"),
+    ):
+        _require_rust_token_sequence(maintenance_path, maintenance, fragment, description, errors)
+    if maintenance is not None:
+        tokens = rust_code_tokens(maintenance.source)
+        anchors = (
+            "read_latest_certified_lane_block_frontier_locked(entry, true)?",
+            "recover_certified_lane_block_pair_from_frontier_locked(",
+            "confirm_latest_certified_lane_block_frontier_read_locked(",
+            "note_certified_frontier_artifact_validation(",
+            "if retiring.contains(&frontier_identity)",
+            "compact_lane_histories_through_merge_frontier_locked(pending_canonical_bytes, entry, &frontier,)?",
+            "self.recover_geometry_progress_pairs_before_snapshot(",
+        )
+        positions = [_token_sequence_positions(tokens, rust_code_tokens(anchor)) for anchor in anchors]
+        if any(len(found) != 1 for found in positions) or positions != sorted(positions):
+            errors.append(f"{maintenance_path}:{maintenance.line}: retirement maintenance must retain recovery, confirmation, compaction and snapshot order")
+        if _token_sequence_positions(tokens, rust_code_tokens(".lock(")):
+            errors.append(f"{maintenance_path}:{maintenance.line}: retirement maintenance must not reacquire inherited locks")
 
     # Unlike the general code-token checks, this complete array contract
     # retains string contents and constant expressions. No unrecognized tuple
@@ -70859,7 +70924,7 @@ if recovery_directory.expected_path != immutable_directory.expected_path
         )
         _require_exact_rust_tokens(replica_path, path_owner, """
 fn canonical_autonomous_lane_replica_paths_for_entry(
-    entry: &LaneConfigEntry, store_root: &Path,
+    entry: &LaneStorageEntry, store_root: &Path,
 ) -> (PathBuf, PathBuf) {
     let directory = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
     (

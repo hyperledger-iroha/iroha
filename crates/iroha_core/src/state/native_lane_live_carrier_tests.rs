@@ -171,7 +171,7 @@ state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actua
     let groups = native_economic_groups(&fixture);
     let prepared = state.prepare_native_batch_on_carrier(
         carrier.header(),
-        &groups,
+        groups.clone(),
     ).unwrap();
     attach_actual_native_prefix_results_for_test(&mut executed, &prepared);
     drop(prepared);
@@ -255,10 +255,10 @@ state_test! { sync live_native_batch_retains_exact_completed_first_sources_acros
     assert!(matches!(state.replay_proposed_native_lane_batch(&carrier, &[]).unwrap(), NativeLaneBatchReplayV1::FirstInputRecoveryRequired { execution_index: 0, .. }), "resultless completion never populates executed-wire storage");
 }
 
-// Keep the large State move out of the race test frame on the default stack.
+// Consume the original heap State without moving its value onto the test stack.
 fn proposed_native_batch_shared_state_fixture() -> (Arc<State>, SignedBlock) {
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
-    (Arc::new(fixture.native.state), carrier)
+    (Arc::from(fixture.native.state), carrier)
 }
 
 state_test! { sync live_native_batch_discards_a_changed_publication_during_finality_io
@@ -293,7 +293,7 @@ fn store_native_control_carrier_for_test(
     let state = &fixture.native.state;
     let groups = native_economic_groups(fixture);
     let prepared = state
-        .prepare_native_batch_on_carrier(carrier.header(), &groups)
+        .prepare_native_batch_on_carrier(carrier.header(), groups.clone())
         .unwrap();
     attach_actual_native_prefix_results_for_test(carrier, &prepared);
     drop(prepared);

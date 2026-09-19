@@ -43,6 +43,21 @@ pub(in crate::state) struct SealedExecutionOutputs {
     // Actual canonical World net changes at attachment, including finalizer
     // effects. This is only one component of the still-unfinished State proof.
     world_delta: crate::state::world_projection::WorldNetDelta,
+    // Preserve the actual complete invocation owner after inventory derivation;
+    // a projection or caller-supplied row list cannot replace these sources.
+    sources: OwnedExecutionSources,
+}
+
+impl SealedExecutionOutputs {
+    /// Borrow actual invocation custody retained by the sole output producer.
+    pub(in crate::state) fn sources(&self) -> &OwnedExecutionSources {
+        &self.sources
+    }
+
+    /// Exact proposal whose result-bearing wire and World prefix were sealed.
+    pub(in crate::state) fn proposal(&self) -> HashOf<iroha_data_model::block::BlockHeader> {
+        self.proposal
+    }
 }
 
 /// Owns both the State borrow and its only mutable output budget. It cannot be

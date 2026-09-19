@@ -32,6 +32,11 @@ impl StateBlock<'_> {
                 "native producer differs from its exact after-start overlay".into(),
             ));
         }
+        // Pin expiry is part of the actual carrier pre-execution maintenance,
+        // after shared start hooks and before any Network/Pipeline/Time work.
+        // Both scratch and recorded Native execution use this same transition.
+        crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(self)
+            .map_err(|error| invalid(format!("Native SoraFS pin expiry failed: {error}")))?;
         self.reserve_native_execution_outputs(groups)
             .map_err(invalid)?;
         let mut producer = ExecutionOutputProducer::new(self, source).map_err(invalid)?;

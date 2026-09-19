@@ -106,6 +106,9 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    'crates/iroha_core/src/block/post_execution_tail.rs': (
+        'native_execution_metadata.rs',
+    ),
     'crates/iroha_core/src/block.rs': (
         'block/carrier_preparation.rs',
         'block/post_execution_tail.rs',

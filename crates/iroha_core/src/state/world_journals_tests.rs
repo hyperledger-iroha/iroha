@@ -24,6 +24,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "world_publication_tests.rs"]
+mod publication_tests;
+
 fn path(value: &str) -> StatePath {
     value.parse().unwrap()
 }

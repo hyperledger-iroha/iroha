@@ -10212,6 +10212,8 @@ include!("pipeline_outcome_ownership_tests.rs");
 include!("native_lane_batch_replay_tests.rs");
 include!("native_lane_live_carrier_tests.rs");
 include!("native_lane_consumer_stage_tests.rs");
+include!("native_lane_recorded_execution_tests.rs");
+include!("native_lane_economic_relay_tests.rs");
 include!("lane_instance_tests.rs");
 include!("lane_instance_body_tests.rs");
 include!("lane_instance_persistence_tests.rs");
@@ -26120,16 +26122,27 @@ lane_relay_state_test! { lane_relay_publication_retains_lifecycle_fence_through_
         }
         // The publisher has updated State but cannot yet update status. A
         // lifecycle reset must remain excluded across this publication cut.
-        let held = inserted
-            && state
-                .lane_lifecycle_lock
-                .try_lock_for(Duration::from_secs(1))
-                .is_none();
+        let mut release = inserted
+            .then(|| state.lane_lifecycle_lock.try_lock_or_wait().err())
+            .flatten()
+            .map(|wait| wait.wait_for_release());
+        let poll = |wait: &mut mv::ReleaseFuture| {
+            std::future::Future::poll(
+                std::pin::Pin::new(wait),
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            )
+        };
+        let held = release.as_mut().is_some_and(|wait| poll(wait).is_pending());
         drop(publication_guard);
         let result = publisher.join().expect("relay publisher completed");
         assert!(inserted, "publisher must reach the State cache before status");
         assert!(held, "lifecycle reset must wait for relay status publication");
         assert_eq!(result.expect("publish both relay caches"), LaneRelayInsert::Inserted);
+        assert!(
+            release.as_mut().is_some_and(|wait| poll(wait).is_ready()),
+            "finishing status publication must wake the actual lifecycle waiter",
+        );
+        assert!(state.lane_lifecycle_lock.try_lock_or_wait().is_ok());
     });
     assert_eq!(
         crate::sumeragi::status::lane_relay_envelopes_snapshot(),

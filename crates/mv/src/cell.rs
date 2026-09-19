@@ -1,11 +1,14 @@
 use crate::{
-    BlockMode, PublicationPreparationError, Value,
+    BlockMode, PublicationPreparationError, PublicationPreparationResult, ReleaseGuard,
+    ReleaseNotification, Value,
     publication::{CapturedPublication, NextPublication, Publication},
 };
 /// Multi-version storage for single value
 pub struct Cell<V: Value> {
     /// Process-local identity of the jointly published current/undo pair.
     pub(crate) publication: Publication,
+    pub(crate) revert_released: ReleaseNotification,
+    pub(crate) blocks_released: ReleaseNotification,
     /// Previous version of value, required to perform revert of the latest changes
     pub(crate) revert: EbrCell<Option<V>>,
     /// Value which represent aggregated changes of multiple blocks
@@ -16,6 +19,8 @@ impl<V: Value> Cell<V> {
     pub fn new(v: V) -> Self {
         Self {
             publication: Publication::new(),
+            revert_released: ReleaseNotification::default(),
+            blocks_released: ReleaseNotification::default(),
             revert: EbrCell::new(None),
             blocks: EbrCell::new(v),
         }
@@ -47,15 +52,16 @@ impl<V: Value> Cell<V> {
     /// Both writers are acquired in the same order as block scopes; no observer
     /// can mutate predecessor storage concurrently with this current replacement.
     pub fn replace_current_preserving_predecessor(&self, value: V) {
-        let _revert = self.revert.write();
-        let mut blocks = self.blocks.write();
+        let _revert = self.revert_released.poisoning_guard(self.revert.write());
+        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
         *blocks.get_mut() = value;
-        self.publication.publish(|| blocks.commit());
+        self.publication
+            .publish(|| blocks.release_with(|guard| guard.commit()));
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> Block<'_, V> {
-        let mut revert = self.revert.write();
-        let blocks = self.blocks.write();
+        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
+        let blocks = self.blocks_released.poisoning_guard(self.blocks.write());
         let predecessor = self.publication.capture();
         *revert.get_mut() = None;
         Block::new(
@@ -69,8 +75,8 @@ impl<V: Value> Cell<V> {
     }
     /// Create block to aggregate updates and revert changes made in latest block
     pub fn block_and_revert(&self) -> Block<'_, V> {
-        let mut revert = self.revert.write();
-        let mut blocks = self.blocks.write();
+        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
+        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
         let predecessor = self.publication.capture();
         {
             let revert = core::mem::take(revert.get_mut());
@@ -202,32 +208,43 @@ impl<V: Value, Admission> Detached<V, Admission> {
         self,
         target: &'target Cell<V>,
         admit: impl FnOnce(&Self, &Cell<V>) -> Result<Installation, E>,
-    ) -> Result<
+    ) -> PublicationPreparationResult<
         PreparedPublication<'target, V, Admission, Installation>,
-        (Self, PublicationPreparationError<E>),
+        Self,
+        E,
     > {
-        if !self.predecessor.matches(&target.publication) {
-            return Err((self, PublicationPreparationError::Changed));
+        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
+            return Err((self, error));
         }
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
             Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
         };
-        let Some(mut revert) = target.revert.try_write() else {
-            return Err((self, PublicationPreparationError::Busy));
+        let wait = target.revert_released.observe();
+        let Some(revert) = target.revert.try_write() else {
+            return Err((
+                self,
+                PublicationPreparationError::after_failed_acquisition(wait),
+            ));
         };
-        let Some(mut blocks) = target.blocks.try_write() else {
-            return Err((self, PublicationPreparationError::Busy));
+        let mut revert = target.revert_released.poisoning_guard(revert);
+        let wait = target.blocks_released.observe();
+        let Some(blocks) = target.blocks.try_write() else {
+            return Err((
+                self,
+                PublicationPreparationError::after_failed_acquisition(wait),
+            ));
         };
-        if !self.predecessor.matches(&target.publication) {
-            return Err((self, PublicationPreparationError::Changed));
+        let mut blocks = target.blocks_released.poisoning_guard(blocks);
+        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
+            return Err((self, error));
         }
         let next = NextPublication::new();
         let old_undo = revert.get_mut().take();
-        if self.mode == BlockMode::Replace {
-            if let Some(value) = old_undo {
-                *blocks.get_mut() = value;
-            }
+        if self.mode == BlockMode::Replace
+            && let Some(value) = old_undo
+        {
+            *blocks.get_mut() = value;
         }
         if let Some((before, after)) = &self.change {
             *revert.get_mut() = Some(before.clone());
@@ -248,8 +265,8 @@ impl<V: Value, Admission> Detached<V, Admission> {
 /// Drop or [`Self::abort`] publishes nothing. There is no mutable block interface.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
 pub struct PreparedPublication<'target, V: Value, Admission, Installation> {
-    revert: concread::ebrcell::EbrCellWriteTxn<'target, Option<V>>,
-    blocks: concread::ebrcell::EbrCellWriteTxn<'target, V>,
+    revert: ReleaseGuard<'target, concread::ebrcell::EbrCellWriteTxn<'target, Option<V>>>,
+    blocks: ReleaseGuard<'target, concread::ebrcell::EbrCellWriteTxn<'target, V>>,
     publication: &'target Publication,
     next: NextPublication,
     journal: Detached<V, Admission>,
@@ -299,9 +316,9 @@ impl<V: Value, Admission, Installation> PreparedPublication<'_, V, Admission, In
         } = journal;
         publication.publish_prepared(next, || {
             if dirty {
-                blocks.commit();
+                blocks.release_with(|guard| guard.commit());
             }
-            revert.commit();
+            revert.release_with(|guard| guard.commit());
         });
         drop(change);
         (admission, installation)
@@ -319,8 +336,8 @@ mod block {
     use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
     pub struct Block<'storage, V: Value> {
-        pub(crate) revert: EbrCellWriteTxn<'storage, Option<V>>,
-        pub(crate) blocks: EbrCellWriteTxn<'storage, V>,
+        pub(crate) revert: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, Option<V>>>,
+        pub(crate) blocks: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, V>>,
         pub(super) dirty: bool,
         pub(super) publication: &'storage Publication,
         pub(super) predecessor: CapturedPublication,
@@ -328,8 +345,8 @@ mod block {
     }
     impl<'storage, V: Value> Block<'storage, V> {
         pub(super) fn new(
-            revert: EbrCellWriteTxn<'storage, Option<V>>,
-            blocks: EbrCellWriteTxn<'storage, V>,
+            revert: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, Option<V>>>,
+            blocks: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, V>>,
             dirty: bool,
             publication: &'storage Publication,
             predecessor: CapturedPublication,
@@ -370,9 +387,9 @@ mod block {
                 // Commit fields in the inverse order. Even an untouched block
                 // publishes its clear-undo transition and changes pair identity.
                 if dirty {
-                    blocks.commit();
+                    blocks.release_with(|guard| guard.commit());
                 }
-                revert.commit();
+                revert.release_with(|guard| guard.commit());
             });
         }
 

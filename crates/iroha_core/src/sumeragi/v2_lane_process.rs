@@ -398,6 +398,22 @@ impl LaneProcessOwner {
     pub(crate) fn instance(&self, id: HeightContextId) -> Option<&LaneInstance> {
         self.entries.get(&id).and_then(Entry::instance)
     }
+    /// Only the original active owner accepts productive input. Closed custody
+    /// remains inspectable through `instance` without becoming a fresh signer.
+    pub(crate) fn is_productive(&self, id: HeightContextId) -> bool {
+        self.entries
+            .get(&id)
+            .is_some_and(|entry| matches!(entry.owner, Owner::Active(_)))
+    }
+    /// Transfer one actual diagnostic effect to its explicit reporting consumer.
+    /// This never acknowledges a Decision, Apply, body or transport effect.
+    pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<reducer::Effect> {
+        match self.entries.get_mut(&id).map(|entry| &mut entry.owner) {
+            Some(Owner::Active(owner) | Owner::Closing(owner)) => owner.take_diagnostic(),
+            Some(Owner::Closed(closed)) => closed.owner.take_diagnostic(),
+            _ => None,
+        }
+    }
     /// Actual owned identities, including opening/closing/drain occurrences.
     pub(crate) fn instance_ids(&self) -> impl Iterator<Item = HeightContextId> + '_ {
         self.entries.keys().copied()
