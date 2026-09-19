@@ -1502,8 +1502,12 @@ STAGES += (("genesis-rooted four-validator committed height observation", (
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_deadline_prevents_dispatch_and_late_completion',
 )), )
 
-TEST_NETWORK_STAGES += (("separate authenticated Taira bootstrap executable", (
+TEST_NETWORK_STAGES += (("prebuilt binary portability and authenticated Taira bootstrap", (
     "tests::release_prebuilt_taira_launcher_is_mandatory_and_separately_bound",
+    "tests::program_absolute_prebuilt_override_does_not_require_checkout",
+    "tests::program_discovery_requires_checkout_with_context",
+    "tests::program_absolute_prebuilt_override_rejects_partial_release_identity",
+    "tests::program_absolute_prebuilt_override_requires_active_release_checkout",
 )), )
 
 
