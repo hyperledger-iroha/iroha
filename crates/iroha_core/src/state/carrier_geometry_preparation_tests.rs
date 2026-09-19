@@ -149,3 +149,359 @@ fn carrier_geometry_replacement_uses_actual_undo_including_retired_lineage() {
         &Some(predecessor)
     );
 }
+
+fn storage_fixture() -> (tempfile::TempDir, Box<State>, PreparedCarrierGeometry) {
+    let temporary = tempfile::tempdir().unwrap();
+    let state = Box::new(State::new_with_pre_genesis_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus::default(),
+        LiveQueryStore::start_test(),
+    ));
+    state
+        .tiered_backend
+        .lock()
+        .reconfigure_without_storage_effects(
+            true,
+            0,
+            0,
+            0,
+            Some(temporary.path().join("cold")),
+            None,
+            0,
+            0,
+        );
+    let geometry = {
+        let mut block = state.merge_preexecution_block(header());
+        stage_structural_manual_addition(&mut block);
+        block.prepare_carrier_geometry().unwrap()
+    };
+    (temporary, state, geometry)
+}
+
+#[test]
+fn carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects() {
+    let (temporary, state, mut geometry) = storage_fixture();
+    let foreign = Kura::blank_kura_for_testing();
+    let lease = foreign.try_publication_lease().unwrap();
+    let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
+    assert!(
+        geometry
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert!(geometry.raw.is_none());
+    assert!(geometry.tiered.is_none());
+    assert!(!temporary.path().join("cold").exists());
+    assert_eq!(
+        std::fs::read(state.kura.lane_geometry_journal_path()).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn carrier_geometry_preparation_is_pure_and_root_change_refuses_before_raw_effects() {
+    let (temporary, state, mut geometry) = storage_fixture();
+    let lease = state.kura.try_publication_lease().unwrap();
+    let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::Captured
+    );
+    assert!(!geometry.tiered.as_ref().unwrap().is_applied());
+    let cold = temporary.path().join("cold");
+    assert!(!cold.exists());
+    let mut foreign = tiered::TieredStateBackend::default();
+    let foreign_root = temporary.path().join("foreign");
+    foreign.reconfigure_without_storage_effects(
+        true,
+        0,
+        0,
+        0,
+        Some(foreign_root.clone()),
+        None,
+        0,
+        0,
+    );
+    assert!(geometry.resume_under(&mut foreign, &lease).is_err());
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::Captured
+    );
+    assert_eq!(
+        std::fs::read(state.kura.lane_geometry_journal_path()).unwrap(),
+        before
+    );
+    assert!(!cold.exists());
+    assert!(!foreign_root.exists());
+    // Repeating preparation must reuse its still-exclusive original claim.
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+}
+
+#[test]
+fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publication() {
+    let (temporary, state, mut geometry) = storage_fixture();
+    let runtime = state.canonical_runtime.view().get().clone();
+    let world = norito::json::to_json(&state.world).unwrap();
+    let cursors = format!("{:?}", state.da_shard_cursors.read());
+    let manifests = Arc::clone(&state.lane_manifests.read());
+    let generation = state.state_view_generation();
+    let lease = state.kura.try_publication_lease().unwrap();
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    assert!(
+        geometry
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
+    assert!(!geometry.tiered.as_ref().unwrap().is_applied());
+    assert!(!temporary.path().join("cold").exists());
+    drop(lease);
+    let lease = state.kura.try_publication_lease().unwrap();
+    // No nested acquisition: this lease remains held throughout the exact retry.
+    geometry
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .unwrap();
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::FilesApplied
+    );
+    assert!(!geometry.raw.as_ref().unwrap().has_pending_journal_write());
+    assert!(geometry.tiered.as_ref().unwrap().is_applied());
+    let entry = geometry
+        ._pending
+        .as_ref()
+        .unwrap()
+        .catalog_update
+        .updated_lane_config
+        .entry(LaneId::new(1))
+        .unwrap();
+    assert!(
+        temporary
+            .path()
+            .join("cold/lanes")
+            .join(&entry.kura_segment)
+            .is_dir()
+    );
+    geometry
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .unwrap();
+    assert_eq!(state.canonical_runtime.view().get(), &runtime);
+    assert_eq!(norito::json::to_json(&state.world).unwrap(), world);
+    assert_eq!(format!("{:?}", state.da_shard_cursors.read()), cursors);
+    assert!(Arc::ptr_eq(&state.lane_manifests.read(), &manifests));
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.committed_height(), 0);
+    // Qualification does not mint source/catalog authority. Undo only the exact
+    // fixture-owned effects so its unfinished raw claim is not abandoned.
+    geometry
+        .tiered
+        .as_mut()
+        .unwrap()
+        .rollback(&mut state.tiered_backend.lock())
+        .unwrap();
+    geometry
+        .raw
+        .as_mut()
+        .unwrap()
+        .rollback_under(&lease)
+        .unwrap();
+}
+
+#[test]
+fn carrier_geometry_completion_requires_original_prepared_descriptors() {
+    let (temporary, state, mut geometry) = storage_fixture();
+    let lease = state.kura.try_publication_lease().unwrap();
+    let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
+    assert!(
+        geometry
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert!(geometry.raw.is_none());
+    assert!(geometry.tiered.is_none());
+    assert!(!temporary.path().join("cold").exists());
+    assert_eq!(
+        std::fs::read(state.kura.lane_geometry_journal_path()).unwrap(),
+        before
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
+    use std::os::unix::fs::MetadataExt;
+
+    let (_temporary, state, mut geometry) = storage_fixture();
+    let runtime = state.canonical_runtime.view().get().clone();
+    let world = norito::json::to_json(&state.world).unwrap();
+    let cursors = format!("{:?}", state.da_shard_cursors.read());
+    let manifests = Arc::clone(&state.lane_manifests.read());
+    let generation = state.state_view_generation();
+    let mapping: *const LaneConfig = &geometry
+        ._pending
+        .as_ref()
+        .unwrap()
+        .catalog_update
+        .updated_lane_config;
+    let lease = state.kura.try_publication_lease().unwrap();
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+    geometry
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .unwrap();
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::PublishingCatalog
+    );
+    assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
+    assert!(geometry.tiered.as_ref().unwrap().is_applied());
+    let journal_path = state.kura.lane_geometry_journal_path();
+    let pending_bytes = std::fs::read(&journal_path).unwrap();
+    let pending_inode = std::fs::metadata(&journal_path).unwrap().ino();
+    drop(lease);
+
+    let foreign = Kura::blank_kura_for_testing();
+    let foreign_lease = foreign.try_publication_lease().unwrap();
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &foreign_lease)
+            .is_err()
+    );
+    assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
+    assert_eq!(std::fs::read(&journal_path).unwrap(), pending_bytes);
+    drop(foreign_lease);
+
+    let lease = state.kura.try_publication_lease().unwrap();
+    {
+        let completed = geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .unwrap();
+        assert!(std::ptr::eq(
+            completed.updated_da_mapping().unwrap(),
+            mapping
+        ));
+    }
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::CatalogPublished
+    );
+    assert!(!geometry.raw.as_ref().unwrap().has_pending_journal_write());
+    assert_eq!(
+        std::fs::metadata(&journal_path).unwrap().ino(),
+        pending_inode
+    );
+    assert_eq!(std::fs::read(&journal_path).unwrap(), pending_bytes);
+    let completed_metadata = std::fs::metadata(&journal_path).unwrap();
+    // Completion retries read the retained original descriptor and installed map;
+    // they cannot replace the journal or reconstruct the mapping from live State.
+    {
+        let completed = geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .unwrap();
+        assert!(std::ptr::eq(
+            completed.updated_da_mapping().unwrap(),
+            mapping
+        ));
+    }
+    let retry_metadata = std::fs::metadata(&journal_path).unwrap();
+    assert_eq!(retry_metadata.ino(), completed_metadata.ino());
+    assert_eq!(
+        retry_metadata.modified().unwrap(),
+        completed_metadata.modified().unwrap()
+    );
+    assert_eq!(std::fs::read(&journal_path).unwrap(), pending_bytes);
+    assert_eq!(state.canonical_runtime.view().get(), &runtime);
+    assert_eq!(norito::json::to_json(&state.world).unwrap(), world);
+    assert_eq!(format!("{:?}", state.da_shard_cursors.read()), cursors);
+    assert!(Arc::ptr_eq(&state.lane_manifests.read(), &manifests));
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.committed_height(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
+    use std::os::unix::fs::MetadataExt;
+
+    let (_temporary, state, mut geometry) = storage_fixture();
+    let lease = state.kura.try_publication_lease().unwrap();
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+    geometry
+        .complete_under(&mut state.tiered_backend.lock(), &lease)
+        .unwrap();
+    let journal_path = state.kura.lane_geometry_journal_path();
+    let original_bytes = std::fs::read(&journal_path).unwrap();
+    let original_inode = std::fs::metadata(&journal_path).unwrap().ino();
+    let original_path = journal_path.with_extension("original-test-owner");
+    std::fs::rename(&journal_path, &original_path).unwrap();
+    std::fs::write(&journal_path, &original_bytes).unwrap();
+    assert_ne!(
+        std::fs::metadata(&journal_path).unwrap().ino(),
+        original_inode
+    );
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::CatalogPublished
+    );
+    assert_eq!(std::fs::read(&journal_path).unwrap(), original_bytes);
+    assert_eq!(state.committed_height(), 0);
+    // Even restoring its name must not refresh the original file's metadata
+    // baseline: an external rename changes ctime and requires storage recovery.
+    std::fs::remove_file(&journal_path).unwrap();
+    std::fs::rename(&original_path, &journal_path).unwrap();
+    assert_eq!(
+        std::fs::metadata(&journal_path).unwrap().ino(),
+        original_inode
+    );
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .is_err()
+    );
+}
+
+#[test]
+fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
+    let state = state();
+    let mut geometry = state
+        .merge_preexecution_block(header())
+        .prepare_carrier_geometry()
+        .unwrap();
+    let lease = state.kura.try_publication_lease().unwrap();
+    assert!(
+        geometry
+            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .unwrap()
+            .updated_da_mapping()
+            .is_none()
+    );
+    assert!(geometry.raw.is_none());
+    assert!(geometry.tiered.is_none());
+}

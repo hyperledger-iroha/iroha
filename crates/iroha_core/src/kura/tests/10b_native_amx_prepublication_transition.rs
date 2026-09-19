@@ -1329,7 +1329,11 @@ fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable()
     assert!(
         matches!(
             &error,
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalCapacity {
+                required,
+                limit,
+            } if *required == u64::try_from(largest_pair).unwrap()
+                && *limit == u64::try_from(largest_pair - 1).unwrap()
         ) && error
             .to_string()
             .contains("configured shared stable aggregate"),
@@ -1347,6 +1351,21 @@ fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
         )
         .expect_err("empty Native manifest framing must fail closed");
     assert!(empty.to_string().contains("manifest framing is empty"));
+    assert!(matches!(
+        empty,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+    ));
+    let empty_receipt = kura
+        .validate_native_amx_participant_application_pair_byte_lengths(
+            1,
+            0,
+            STRICT_INIT_MAX_BLOCK_BYTES,
+        )
+        .expect_err("empty Native receipt framing is deterministic invalidity");
+    assert!(matches!(
+        empty_receipt,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+    ));
     let standalone = kura
         .validate_native_amx_participant_application_pair_byte_lengths(2, 1, 1)
         .expect_err("an individually oversized Native manifest must fail closed");
@@ -1355,9 +1374,24 @@ fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
             .to_string()
             .contains("manifest is 2 bytes, exceeding the standalone payload budget")
     );
+    assert!(matches!(
+        standalone,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+    ));
+    let oversized_receipt = kura
+        .validate_native_amx_participant_application_pair_byte_lengths(1, 2, 1)
+        .expect_err("an individually oversized Native receipt is deterministic invalidity");
+    assert!(matches!(
+        oversized_receipt,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+    ));
     let overflow = checked_native_amx_participant_application_pair_bytes(u64::MAX, 1)
         .expect_err("Native pair length overflow must fail closed");
     assert!(overflow.to_string().contains("byte length overflowed"));
+    assert!(matches!(
+        overflow,
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+    ));
 }
 #[test]
 fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion() {

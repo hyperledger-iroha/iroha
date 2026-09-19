@@ -1,6 +1,9 @@
 /// Fail-closed application or recovery failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2ApplyError {
+    /// Local resource ownership cannot authorize deterministic proposal rejection.
+    #[error(transparent)]
+    LocalValidation(#[from] super::v2_body_store::LocalValidationRefusal),
     /// A complete committed snapshot identity could not be acquired.
     #[error(transparent)]
     SnapshotCapture(#[from] crate::snapshot::SnapshotCaptureError),
@@ -82,6 +85,11 @@ pub(crate) enum V2ApplyError {
         /// Underlying persistence diagnostic.
         detail: String,
     },
+    /// State refused publication after Kura committed; retain the original local owner diagnostic.
+    #[error(
+        "Sumeragi v2 committed transition requires restart recovery at WSV publication after Kura commit: {0}"
+    )]
+    CommittedStatePublication(#[source] crate::state::storage_transactions::TransactionsBlockError),
     /// Test-only crash boundary after Kura commits and before WSV publication.
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
@@ -111,7 +119,11 @@ impl V2ApplyError {
     pub(crate) const fn requires_restart_recovery(&self) -> bool {
         match self {
             Self::Kura(error) => error.requires_restart_recovery(),
-            Self::CommittedRecoveryRequired { .. }
+            Self::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_),
+            )
+            | Self::CommittedRecoveryRequired { .. }
+            | Self::CommittedStatePublication(_)
             | Self::CanonicalStorageRead(_)
             | Self::StateAheadOfKura => true,
             #[cfg(test)]
@@ -124,6 +136,27 @@ impl V2ApplyError {
     }
 }
 impl BodyValidationError for V2ApplyError {
+    fn local_refusal(&self) -> Option<super::v2_body_store::LocalValidationRefusal> {
+        use super::v2_body_store::LocalValidationRefusal;
+        match self {
+            Self::LocalValidation(refusal) => Some(refusal.clone()),
+            Self::Kura(_)
+            | Self::CanonicalStorageRead(_)
+            | Self::SnapshotCapture(_)
+            | Self::StateAhead { .. }
+            | Self::StateGap { .. }
+            | Self::StateAheadOfKura
+            | Self::CommittedRecoveryRequired { .. }
+            | Self::CommittedStatePublication(_) => {
+                Some(LocalValidationRefusal::RecoveryRequired(self.to_string()))
+            }
+            Self::Body(super::v2_body_store::V2BodyStoreError::LocalValidation(refusal)) => {
+                Some(refusal.clone())
+            }
+            Self::Body(_) => Some(LocalValidationRefusal::RecoveryRequired(self.to_string())),
+            _ => None,
+        }
+    }
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {
             Self::MissingCertifiedMergeSidecar { reference } => Some(reference),

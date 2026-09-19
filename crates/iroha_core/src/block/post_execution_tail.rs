@@ -107,11 +107,7 @@ impl ValidBlock {
         })?;
         state
             .evaluate_nexus_autoscale(block, fragments)
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to evaluate Nexus autoscale: {error}"
-                ))
-            })?;
+            .map_err(BlockValidationError::from_autoscale_lifecycle_error)?;
         state
             .finalize_axt_policy_transition_ratchets()
             .map_err(|error| {

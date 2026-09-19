@@ -2194,3 +2194,48 @@ impl LifecycleLedgerRecordV1 {
         self
     }
 }
+
+impl LifecycleLedgerV1 {
+    /// Assert inherited Apply ownership without exposing private ledger rows.
+    pub(in crate::sumeragi) fn assert_pending_kura_linked_owner_for_test(&self, ordinal: u128) {
+        let apply = self
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == ordinal)
+            .expect("retained canonical linked Apply");
+        assert_eq!(apply.work_class(), Some(LifecycleWorkClass::Apply));
+        assert_ne!(apply.owner().first_admission_ordinal(), ordinal);
+    }
+
+    /// Persist one structurally valid authority substitution in a real linked crash prefix.
+    pub(in crate::sumeragi) fn persist_pending_kura_corruption_for_test(
+        &self,
+        root: &std::path::Path,
+        corrupt_parent: bool,
+    ) {
+        let mut changed = self.clone();
+        let class = if corrupt_parent {
+            LifecycleWorkClass::Validate
+        } else {
+            LifecycleWorkClass::Apply
+        };
+        let row = changed
+            .records
+            .iter_mut()
+            .find(|row| row.work_class() == Some(class))
+            .expect("genuine linked Apply has its exact predecessor and child");
+        row.replay_authority = row
+            .replay_authority
+            .with_pending_kura_corruption_for_test(corrupt_parent)
+            .expect("the selected source supports exactly one corruption");
+        assert_ne!(&changed, self);
+        changed
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("corruption retains the complete structural ledger contract");
+        let (store, _) = LifecycleLedgerStoreV1::open(root, self.context())
+            .expect("open retained linked crash prefix");
+        store
+            .persist(&changed)
+            .expect("persist the negative authority input");
+    }
+}

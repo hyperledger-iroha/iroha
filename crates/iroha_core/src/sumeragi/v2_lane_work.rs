@@ -17811,22 +17811,30 @@ impl V2LaneWorkAdapter {
         let Some(queue) = self.lane_drain_queue.as_ref() else {
             return true;
         };
-        if self.state.lane_has_drain_blocking_evidence(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || queue.lane_has_pending_work(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || self.lane_sessions.has_undrained_work_for_lane(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || self
-            .pending_committed_lanes
-            .iter()
-            .any(|session| proposal_matches(&session.proposal))
+        // A local observation failure suppresses signing; canonical validation
+        // separately retains and propagates the typed storage failure.
+        if self
+            .state
+            .lane_has_drain_blocking_evidence(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            .unwrap_or(true)
+            || queue.lane_has_pending_work(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            || self.lane_sessions.has_undrained_work_for_lane(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            || self
+                .pending_committed_lanes
+                .iter()
+                .any(|session| proposal_matches(&session.proposal))
             || self
                 .historical_recovery_sessions
                 .iter()
@@ -21469,13 +21477,28 @@ pub(super) mod tests {
             block.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
             block.commit();
         }
-        let mut state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             chain_id,
             network_id,
-        );
+        )
+        .expect("construct lane-work State without provisioning unauthenticated lane markers");
+        // Canonical-only Kura opens no active lane instance. Follow the same
+        // authenticated H0 anchor and configured-catalog handoff as startup
+        // before constructing parent blocks or freezing the lane context.
+        let startup_nexus = state.nexus_snapshot();
+        state
+            .prepare_configured_primary_geometry_anchor(&startup_nexus.configured_lane_catalog)
+            .expect("authenticate lane-work configured-primary geometry");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore lane-work configured-primary journal reference");
+        state
+            .set_nexus_from_config(startup_nexus)
+            .expect("install lane-work configured Nexus before genesis");
+        state.configure_test_runtime_defaults();
         if let Some(lane) = &initial_lane {
             // Establish State and both physical lane namespaces before freezing
             // the HeightContext or opening any durable signing guard.
@@ -21491,7 +21514,7 @@ pub(super) mod tests {
             ])
             .expect("Native signing fixture dataspace catalog");
             state
-                .set_nexus(nexus)
+                .set_nexus_from_config(nexus)
                 .expect("install dataspace before genesis");
             state
                 .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {

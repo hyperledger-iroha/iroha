@@ -238,7 +238,13 @@ impl RecoveredPendingKuraApplyReplayV1 {
         };
         let apply_pending =
             fetch_pending.project_decision_fetch_apply_source(&self.fetch.effect, &apply)?;
-        lineage.project_pending_kura_comparison(verified, self.expected, &apply, &apply_pending)
+        lineage.project_pending_kura_comparison(
+            verified,
+            self.expected,
+            &apply,
+            &apply_pending,
+            validated,
+        )
     }
 }
 

@@ -429,10 +429,10 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
                 block.execution_output_plan,
                 Some(ExecutionOutputPlanState::Poisoned)
             ));
-            assert_eq!(
+            assert!(matches!(
                 block.commit().unwrap_err(),
                 TransactionsBlockError::ExecutionOutputCapacity
-            );
+            ));
         }
     }
 }
@@ -496,8 +496,8 @@ fn unwinding_before_root_close_cannot_publish_already_staged_effects() {
         block.execution_output_plan,
         Some(ExecutionOutputPlanState::Poisoned)
     ));
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }

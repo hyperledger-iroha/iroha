@@ -218,7 +218,21 @@ impl StateBlock<'_> {
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
         self.stage_native_amx_participant_frontiers(signed_block)?;
         self.evaluate_nexus_autoscale(signed_block, committed_fragment_count)
-            .map_err(|error| invalid(&format!("autoscale inputs: {error}")))?;
+            .map_err(|error| match error {
+                LaneLifecycleError::DrainObservation(error) => {
+                    MergeLedgerCommitError::LocalDrainObservation(Box::new(error))
+                }
+                LaneLifecycleError::GeometryStorage(error) => {
+                    MergeLedgerCommitError::Persistence(error)
+                }
+                local @ (LaneLifecycleError::Storage(_)
+                | LaneLifecycleError::PublicationBusy { .. }) => {
+                    MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                        MergeLedgerCommitError::ExecutionMarkerConflict(local.to_string()),
+                    ))
+                }
+                other => invalid(&format!("autoscale inputs: {other}")),
+            })?;
         self.axt_authorization_transitioned = transitions.clone();
         self.replace_axt_policy_projection(snapshot);
         self.finalize_axt_policy_transition_ratchets()

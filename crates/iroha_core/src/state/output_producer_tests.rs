@@ -178,10 +178,10 @@ fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
             .produce_ordinary_execution_outputs(&source, |_| panic!("cannot execute twice"))
             .is_err()
     );
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -299,10 +299,10 @@ fn duplicate_or_foreign_network_index_never_executes_and_poison_is_sticky() {
             Some(ExecutionOutputPlanState::Poisoned)
         ));
         assert!(block.reserve_ordinary_execution_outputs(&source).is_err());
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
     }
 }
 
@@ -433,10 +433,10 @@ fn unwind_rolls_back_side_channels_and_cannot_reopen_publication() {
     ));
     #[cfg(feature = "zk-preverify")]
     assert!(block.zk_dedup.check_and_insert(&proof()));
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]

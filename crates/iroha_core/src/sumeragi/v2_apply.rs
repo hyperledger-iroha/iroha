@@ -3515,6 +3515,10 @@ fn submit_fastpq_witness_job(
     }
 }
 
+/// Typed candidate custody awaiting the complete reserved publisher integration.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) mod validation_custody;
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -4005,7 +4009,8 @@ impl V2ApplyService {
         }
         Ok(())
     }
-    fn classify_native_amx_evidence_byte_budget_error(
+    /// Preserve local configured capacity separately from immutable protocol bounds.
+    pub(super) fn classify_native_amx_evidence_byte_budget_error(
         error: NativeAmxParticipantApplicationEvidenceByteBudgetError,
     ) -> V2ApplyError {
         match &error {
@@ -4013,16 +4018,29 @@ impl V2ApplyService {
             | NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming(_) => {
                 V2ApplyError::ExecutionCommitment(error.to_string())
             }
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalCapacity { .. } => {
+                V2ApplyError::LocalValidation(
+                    super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                        error.to_string(),
+                    ),
+                )
+            }
             NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_) => {
                 V2ApplyError::Validation(error.to_string())
             }
         }
     }
-    fn classify_candidate_validation_error(
+    /// Preserve local candidate readiness separately from deterministic invalidity.
+    pub(super) fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.clone()),
+            );
+        }
         if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
             return match merge_reference {
                 Some(reference) if reference.entry_hash == *entry_hash => {
@@ -4950,6 +4968,23 @@ impl V2ApplyService {
             )?;
         Ok(())
     }
+    fn classify_lane_lifecycle_validation_error(
+        error: crate::state::LaneLifecycleError,
+    ) -> V2ApplyError {
+        match error {
+            crate::state::LaneLifecycleError::Storage(_)
+            | crate::state::LaneLifecycleError::GeometryStorage(_)
+            | crate::state::LaneLifecycleError::DrainObservation(_)
+            | crate::state::LaneLifecycleError::PublicationBusy { .. } => {
+                V2ApplyError::LocalValidation(
+                    super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                        error.to_string(),
+                    ),
+                )
+            }
+            _ => V2ApplyError::Validation(error.to_string()),
+        }
+    }
     fn validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
@@ -4959,12 +4994,12 @@ impl V2ApplyService {
         let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
         let pending_binding = state_block
             .pending_autoscale_retirement_binding()
-            .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+            .map_err(Self::classify_lane_lifecycle_validation_error)?;
         let binding = match pending_binding {
             Some(binding) => Some(binding),
             None => state_block
                 .prospective_autoscale_retirement_binding(block)
-                .map_err(|error| V2ApplyError::Validation(error.to_string()))?,
+                .map_err(Self::classify_lane_lifecycle_validation_error)?,
         };
         let Some((lane_id, dataspace_id, lane_incarnation)) = binding else {
             return Ok(());
@@ -4982,16 +5017,17 @@ impl V2ApplyService {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> Result<(), V2ApplyError> {
-        if queue_retirement_observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
-        {
-            return Err(V2ApplyError::Validation(format!(
-                "autoscale retirement for lane {} dataspace {} incarnation {} is blocked by local Queue ownership",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                hex::encode(lane_incarnation.as_ref()),
-            )));
+        use super::v2_body_store::LocalValidationRefusal;
+        match queue_retirement_observer.lane_pending_work_release(
+            lane_id, dataspace_id, lane_incarnation,
+        ) {
+            Ok(None) => Ok(()),
+            Ok(Some(wait)) => Err(LocalValidationRefusal::QueueRelease(wait).into()),
+            Err(error) => Err(LocalValidationRefusal::RecoveryRequired(format!(
+                "autoscale retirement Queue observation failed for lane {} dataspace {} incarnation {}: {error:?}",
+                lane_id.as_u32(), dataspace_id.as_u64(), hex::encode(lane_incarnation.as_ref()),
+            )).into()),
         }
-        Ok(())
     }
     /// Run the exact production proposal validator without applying its state
     /// overlay.
@@ -5450,9 +5486,7 @@ impl V2ApplyService {
         } else {
             state_block.commit_with_state_commit_authorization(state_commit_authorization)
         };
-        commit_result.map_err(|error| {
-            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
-        })?;
+        commit_result.map_err(V2ApplyError::CommittedStatePublication)?;
         timings.record();
         #[cfg(feature = "test-network-native-amx-fault-injection")]
         for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {

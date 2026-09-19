@@ -1281,6 +1281,11 @@ mod tests {
                 Self::AwaitingApplyCompletion,
                 Completion::LifecycleDecisionApplyCompletionDeferred,
             ) => Ok(Self::AwaitingApplyCompletion),
+            (
+                Self::Eligible | Self::AwaitingCompletion,
+                Completion::LifecycleValidateLocalWaiting
+                    | Completion::LifecycleValidateLocalRequeued,
+            ) => Ok(Self::AwaitingCompletion),
             (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
                 Ok(Self::AwaitingCompletion)
             }

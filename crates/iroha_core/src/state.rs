@@ -377,10 +377,12 @@ mod block_proofs;
 mod bounded_authority;
 mod callback_journal;
 mod canonical_history;
+mod carrier_da_effects;
 mod carrier_geometry_preparation;
+mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::PreparedCarrier;
+pub(crate) use carrier_preparation::{PreparedCarrier, PreparedCarrierJournals};
 mod committed_hash_journal;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod committed_transaction_context;
@@ -3210,6 +3212,10 @@ pub(crate) fn certified_merge_queue_reservations(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Local lane-drain evidence could not be observed or authenticated.
+    /// This provenance never authorizes a deterministic proposal rejection.
+    #[error("local lane drain observation requires recovery: {0}")]
+    LocalDrainObservation(#[source] Box<MergeLedgerCommitError>),
     /// The complete applying State changed or was busy during source observation.
     #[error("merge execution State observation changed; reacquire the source")]
     ExecutionObservationChanged,
@@ -4437,6 +4443,20 @@ pub enum LaneLifecycleError {
     /// Storage or shard/topology reconciliation failed while applying the lifecycle update.
     #[error("failed to reconcile lane storage: {0}")]
     Storage(String),
+    /// The original Kura geometry attempt remains owned after a local storage refusal.
+    #[error("retained lane geometry storage operation: {0}")]
+    GeometryStorage(#[source] crate::kura::Error),
+    /// Exact durable drain evidence could not be read or authenticated locally.
+    #[error("lane drain evidence observation failed: {0}")]
+    DrainObservation(#[source] MergeLedgerCommitError),
+    /// A physical publication owner must release before the retained attempt can resume.
+    #[error("lane geometry publication is waiting for {field}")]
+    PublicationBusy {
+        /// Original physical lock which prevented acquisition.
+        field: &'static str,
+        /// Release observation captured before probing that lock.
+        wait: mv::ReleaseWait,
+    },
 }
 /// Errors surfaced while installing runtime ZK configuration into committed state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
@@ -12269,7 +12289,7 @@ struct TieredSnapshotWorker {
     background_enabled: bool,
 }
 struct TieredSnapshotWorkerInner {
-    backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+    backend: Arc<PublicationMutex<TieredStateBackend>>,
     pending: parking_lot::Mutex<TieredSnapshotPending>,
     cvar: parking_lot::Condvar,
     shutdown: AtomicBool,
@@ -12287,7 +12307,7 @@ std::thread_local! {
 }
 impl TieredSnapshotWorker {
     fn inert(
-        backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+        backend: Arc<PublicationMutex<TieredStateBackend>>,
         #[cfg(feature = "telemetry")] telemetry: Option<StateTelemetry>,
     ) -> Self {
         Self {
@@ -12303,7 +12323,7 @@ impl TieredSnapshotWorker {
         }
     }
     fn new(
-        backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+        backend: Arc<PublicationMutex<TieredStateBackend>>,
         #[cfg(feature = "telemetry")] telemetry: Option<StateTelemetry>,
     ) -> Self {
         #[cfg(test)]
@@ -12567,7 +12587,7 @@ pub struct State {
     /// Last block height where Nexus storage budget enforcement ran.
     nexus_storage_budget_last_check_height: AtomicU64,
     /// Tiered state backend coordinating hot/cold snapshots.
-    pub tiered_backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+    pub(crate) tiered_backend: Arc<PublicationMutex<TieredStateBackend>>,
     /// Background worker for tiered snapshot processing.
     tiered_snapshot_worker: TieredSnapshotWorker,
     /// Fraud monitoring configuration snapshot.
@@ -12603,6 +12623,12 @@ pub struct State {
     pub telemetry: StateTelemetry,
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
     lane_lifecycle_lock: PublicationMutex,
+    /// Original geometry work retained across local storage failures.
+    geometry_publication: parking_lot::Mutex<Option<LaneGeometryPublication>>,
+    /// Complete prevalidated startup image and receipt cursor retained until installation.
+    pending_replay_publication: Option<Box<PreparedReplayPublication>>,
+    /// Startup directory restoration retains its original filesystem operation plan.
+    tiered_startup_geometry: Option<TieredStartupGeometry>,
     /// Outermost lock serializing QueuePlan sidecar snapshot-to-persistence operations.
     ///
     /// The admission path acquires this before `state_commit_lock`; block commit
@@ -13697,6 +13723,8 @@ pub struct StateBlock<'state> {
     autoscale_sample_history_dirty: bool,
     /// Canonical raw fragment count used for this block's one autoscale decision.
     autoscale_evaluated_committed_fragment_count: Option<u64>,
+    /// Whether the original sampled input completed its fallible lifecycle observation.
+    autoscale_lifecycle_evaluated: bool,
     /// Certified merge entrypoints staged for membership in the canonical carrier block.
     merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,
     /// Resolved certified merge entry staged before ordinary carrier-block effects.
@@ -28146,14 +28174,19 @@ impl State {
         DaShardCursorJournal::journal_path(&root)
     }
     fn persist_da_shard_cursor_journal(&self) {
+        self.persist_da_shard_cursor_journal_with_config(&self.nexus_snapshot().lane_config);
+    }
+    fn persist_da_shard_cursor_journal_with_config(
+        &self,
+        lane_config: &iroha_config::parameters::actual::LaneConfig,
+    ) {
         let path = self.da_shard_cursor_journal_path();
         if path.as_os_str().is_empty() {
             return;
         }
-        let lane_config = self.nexus_snapshot().lane_config.clone();
         let snapshot = {
             let cursors = self.da_shard_cursors.read().clone();
-            DaShardCursorJournal::from_index(&lane_config, &cursors, &path)
+            DaShardCursorJournal::from_index(lane_config, &cursors, &path)
         };
         if let Err(err) = snapshot.persist() {
             warn!(
@@ -29557,7 +29590,7 @@ impl State {
         let latest_block_header = NonZeroUsize::new(durable_height)
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header());
-        let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
+        let tiered_backend = Arc::new(PublicationMutex::new(TieredStateBackend::default()));
         let tiered_snapshot_worker = TieredSnapshotWorker::new(
             Arc::clone(&tiered_backend),
             #[cfg(feature = "telemetry")]
@@ -29884,6 +29917,9 @@ impl State {
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             lane_lifecycle_lock: PublicationMutex::default(),
+            geometry_publication: parking_lot::Mutex::new(None),
+            pending_replay_publication: None,
+            tiered_startup_geometry: None,
             queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
             state_commit_lock: Arc::new(PublicationMutex::default()),
             state_write_lock: PublicationMutex::default(),
@@ -30475,7 +30511,8 @@ impl State {
         state.configure_test_runtime_defaults();
         state
     }
-    fn configure_test_runtime_defaults(&mut self) {
+    /// Apply shared unit-test runtime policy after a fixture authenticates its storage.
+    pub(crate) fn configure_test_runtime_defaults(&mut self) {
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         self.pipeline.dynamic_prepass = true;
@@ -30729,6 +30766,7 @@ impl State {
             autoscale_sample_history: projection.samples,
             autoscale_sample_history_dirty: false,
             autoscale_evaluated_committed_fragment_count: None,
+            autoscale_lifecycle_evaluated: false,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             native_lane_stage: None,
@@ -31443,6 +31481,7 @@ impl State {
             autoscale_sample_history: projection.samples,
             autoscale_sample_history_dirty: false,
             autoscale_evaluated_committed_fragment_count: None,
+            autoscale_lifecycle_evaluated: false,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             native_lane_stage: None,
@@ -31597,6 +31636,7 @@ impl State {
             pending_public_lane_slash_observability: Vec::new(),
             autoscale_sample_history_dirty: false,
             autoscale_evaluated_committed_fragment_count: None,
+            autoscale_lifecycle_evaluated: false,
             merge_carrier_entrypoints: HashSet::new(),
             staged_merge_entry: None,
             native_lane_stage: None,
@@ -33629,6 +33669,18 @@ impl State {
         if lanes_to_reset.is_empty() {
             return;
         }
+        self.reset_lane_scoped_runtime_indexes(lanes_to_reset);
+        if publish_process_runtime {
+            self.publish_lane_scoped_runtime_reset(lanes_to_reset);
+            if self.da_indexes_hydrated.read().is_some() {
+                self.persist_da_shard_cursor_journal();
+            }
+        }
+    }
+    fn reset_lane_scoped_runtime_indexes(&self, lanes_to_reset: &BTreeSet<LaneId>) {
+        if lanes_to_reset.is_empty() {
+            return;
+        }
         self.prune_merge_admission_lane_progress(lanes_to_reset);
         self.lane_relays.write().prune_lanes(lanes_to_reset);
         self.da_commitments.write().prune_lanes(lanes_to_reset);
@@ -33641,16 +33693,16 @@ impl State {
             let mut cursors = self.da_shard_cursors.write();
             cursors.prune_lanes(lanes_to_reset);
         }
-        if publish_process_runtime {
-            #[cfg(feature = "telemetry")]
-            self.telemetry
-                .prune_da_receipt_lanes(lanes_to_reset.iter().map(|lane| lane.as_u32()));
-            crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
-            crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
+    }
+    fn publish_lane_scoped_runtime_reset(&self, lanes_to_reset: &BTreeSet<LaneId>) {
+        if lanes_to_reset.is_empty() {
+            return;
         }
-        if publish_process_runtime && self.da_indexes_hydrated.read().is_some() {
-            self.persist_da_shard_cursor_journal();
-        }
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .prune_da_receipt_lanes(lanes_to_reset.iter().map(|lane| lane.as_u32()));
+        crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
+        crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
     }
     fn prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
         &self,
@@ -33678,23 +33730,25 @@ impl State {
     }
     /// Install the lane manifest registry snapshot used for lane-relay validation.
     pub fn install_lane_manifests(&self, manifests: &LaneManifestRegistryHandle) {
+        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
+        let manifests = Arc::clone(manifests);
         let _state_write_lock = self.state_write_lock.lock();
         let publication = self.begin_state_view_write();
-        self.install_lane_manifests_in_publication(manifests, &publication);
+        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication);
     }
     /// Publish manifest and privacy projections inside one existing State generation.
-    fn install_lane_manifests_in_publication(
+    fn install_prepared_lane_manifests_in_publication(
         &self,
-        manifests: &LaneManifestRegistryHandle,
+        manifests: LaneManifestRegistryHandle,
+        privacy: LanePrivacyRegistryHandle,
         _publication: &StateViewGenerationWriteGuard<'_>,
     ) {
         {
             let mut guard = self.lane_manifests.write();
-            *guard = Arc::clone(manifests);
+            *guard = manifests;
         }
-        let privacy = LanePrivacyRegistry::from_manifest_registry(manifests.as_ref());
         let mut privacy_guard = self.lane_privacy_registry.write();
-        *privacy_guard = Arc::new(privacy);
+        *privacy_guard = privacy;
     }
     /// Install the lane compliance engine snapshot (consensus-critical when configured).
     pub fn install_lane_compliance_engine(&self, engine: Option<Arc<LaneComplianceEngine>>) {
@@ -36017,57 +36071,54 @@ impl State {
     /// Return whether exact durable or recoverable evidence still owns work
     /// for one lane incarnation.
     ///
-    /// Read or decode failures conservatively block drain progress. Keeping
-    /// this predicate separate from body derivation lets the vote collector
-    /// retain same-intent equivocation history while evidence is repaired.
+    /// Read or decode failures retain their source instead of becoming evidence
+    /// of pending work. Proposal planners may defer on either result, while
+    /// canonical validation must preserve the local recovery condition.
     pub(crate) fn lane_has_drain_blocking_evidence(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> bool {
-        self.unmerged_merge_admissible_relay_progress(lane_id, dataspace_id)
+    ) -> Result<bool, MergeLedgerCommitError> {
+        Ok(self
+            .unmerged_merge_admissible_relay_progress(lane_id, dataspace_id)
             .is_some()
             || self
-                .unapplied_lane_block_artifact_heights_snapshot_cached()
-                .map_or(true, |pending| {
-                    pending.contains_key(&(lane_id, dataspace_id))
-                })
+                .unapplied_lane_block_artifact_heights_snapshot_cached()?
+                .contains_key(&(lane_id, dataspace_id))
             || self
-                .unapplied_certified_lane_block_heights_snapshot_cached()
-                .map_or(true, |pending| {
-                    pending.contains_key(&(lane_id, dataspace_id))
-                })
+                .unapplied_certified_lane_block_heights_snapshot_cached()?
+                .contains_key(&(lane_id, dataspace_id))
             || self
-                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
-                .map_or(true, |markers| {
-                    markers.iter().any(|marker| {
-                        marker.lane_id == lane_id
-                            && marker.dataspace_id == dataspace_id
-                            && marker.lane_incarnation == lane_incarnation
-                    })
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()?
+                .iter()
+                .any(|marker| {
+                    marker.lane_id == lane_id
+                        && marker.dataspace_id == dataspace_id
+                        && marker.lane_incarnation == lane_incarnation
                 })
             || self.pending_queue_plan_admission_blocks_lane_drain(
                 lane_id,
                 dataspace_id,
                 lane_incarnation,
-            )
+            )?
             || self.queue_plan_pending_route_obligation_blocks_lane_drain(
                 lane_id,
                 dataspace_id,
                 lane_incarnation,
-            )
-            || self
-                .kura
-                .pending_certified_merge_work_for_lane(lane_id, dataspace_id, lane_incarnation)
-                .unwrap_or(true)
+            )?
+            || self.kura.pending_certified_merge_work_for_lane(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )?)
     }
     fn queue_plan_pending_route_obligation_blocks_lane_drain(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
             &self.world.view(),
             lane_id,
@@ -36080,7 +36131,7 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> bool {
+    ) -> Result<bool, MergeLedgerCommitError> {
         let route = QueuePlanPendingObligationRouteV1 {
             version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
             lane_id,
@@ -36088,7 +36139,7 @@ impl State {
             lane_incarnation,
         };
         Self::queue_plan_pending_route_obligation_count_from_world(world, route)
-            .map_or(true, |count| count > 0)
+            .map(|count| count > 0)
     }
     /// Return whether a durable, not-yet-applied QueuePlan admission certificate
     /// still binds one exact coordinator or participant lane incarnation.
@@ -36105,25 +36156,23 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> bool {
-        let pending = match self.kura.pending_queue_plan_admission_certificates_bounded(
-            self.kura.pending_queue_plan_admission_capacity(),
-        ) {
-            Ok(pending) => pending,
-            Err(_) => return true,
-        };
-        let Some(carrier_height) = u64::try_from(self.committed_height())
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )?;
+        let carrier_height = u64::try_from(self.committed_height())
             .ok()
             .and_then(|height| height.checked_add(1))
-        else {
-            return true;
-        };
-        pending.into_iter().any(|(_, bytes)| {
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "lane drain observation carrier height overflow".to_owned(),
+                )
+            })?;
+        for (_, bytes) in pending {
             let (admission, disposition) =
-                match self.classify_pending_queue_plan_admission(&bytes, carrier_height) {
-                    Ok(validated) => validated,
-                    Err(_) => return true,
-                };
+                self.classify_pending_queue_plan_admission(&bytes, carrier_height)?;
             if matches!(
                 disposition,
                 PendingQueuePlanAdmissionDisposition::ExactPending
@@ -36131,9 +36180,9 @@ impl State {
                     | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
                     | PendingQueuePlanAdmissionDisposition::Stale
             ) {
-                return false;
+                continue;
             }
-            admission
+            if admission
                 .certificate
                 .binding
                 .admission_context
@@ -36144,7 +36193,11 @@ impl State {
                         && bound.leg.route.dataspace_id == dataspace_id
                         && bound.lane_incarnation == lane_incarnation
                 })
-        })
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     /// Build and validate a certificate-only merge candidate for the exact
     /// next global carrier round.
@@ -36170,7 +36223,7 @@ impl State {
             body.intent.lane_id,
             body.intent.dataspace_id,
             body.intent.lane_incarnation,
-        ) {
+        )? {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate still has unapplied or unverifiable durable evidence"
                     .to_owned(),
@@ -37082,7 +37135,8 @@ impl State {
                 intent.lane_id,
                 intent.dataspace_id,
                 intent.lane_incarnation,
-            )?
+            )
+            .map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?
         };
         if frontier != certificate.body.final_frontier {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -37096,28 +37150,28 @@ impl State {
                 intent.lane_id,
                 intent.dataspace_id,
                 intent.lane_incarnation,
-            )
+            )?
         } else {
             self.lane_has_drain_blocking_evidence(
                 intent.lane_id,
                 intent.dataspace_id,
                 intent.lane_incarnation,
             )
+            .map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?
         };
         if blocked {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate still has unresolved durable evidence".to_owned(),
             ));
         }
-        let pending = if replay.is_some() {
+        // Reuse the exact authenticated observation. A second local evidence
+        // read must not turn an I/O failure into an absent committed intent.
+        let pending =
             self.pending_autoscale_lane_drain_body_with_frontier(|lane, dataspace, incarnation| {
                 frontier
                     .matches_route(lane, dataspace, incarnation)
                     .then_some(frontier)
-            })
-        } else {
-            self.pending_autoscale_lane_drain_body()
-        };
+            });
         let (body, committee) = pending.ok_or_else(|| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate has no unique matching committed intent".to_owned(),
@@ -46295,6 +46349,11 @@ impl State {
     ) -> core::result::Result<(), LaneLifecycleError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let (lanes_to_reset, active_lane_ids) = {
+            // A prebuilt StateBlock owns these MV writers before it takes the
+            // commit fence. Wait for that original owner before taking State
+            // fences, then consume this replacement inside the same visibility
+            // boundary. It must not survive into the World cleanup below.
+            let runtime = self.acquire_canonical_runtime_replacement();
             let _state_commit_lock = self.state_commit_lock.lock();
             let _lifecycle_lock = self.lane_lifecycle_lock.lock();
             let current_block_height = self.block_hashes.view().len() as u64;
@@ -46383,6 +46442,9 @@ impl State {
                 )?;
                 (lifecycle_update, updated_lane_manifests)
             };
+            let updated_lane_privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+                &updated_lane_manifests,
+            ));
             let active_reset_lanes = Self::active_reset_lanes(
                 &lifecycle_update.lanes_to_reset,
                 &lifecycle_update.updated_lane_config,
@@ -46447,14 +46509,16 @@ impl State {
                     let mut nexus = self.nexus_snapshot();
                     nexus.lane_catalog = lifecycle_update.updated_catalog;
                     nexus.lane_config = lifecycle_update.updated_lane_config;
-                    self.install_canonical_runtime_projection(
+                    Self::install_canonical_runtime_projection_with_owner(
+                        runtime,
                         &nexus,
                         &lifecycle_update.updated_lane_incarnation_lineage,
                         &self.autoscale_sample_history_snapshot(),
                     )?;
                 }
-                self.install_lane_manifests_in_publication(
-                    &updated_lane_manifests,
+                self.install_prepared_lane_manifests_in_publication(
+                    updated_lane_manifests,
+                    updated_lane_privacy,
                     &_view_generation,
                 );
                 if !lanes_to_reset.is_empty() {
@@ -46627,90 +46691,27 @@ impl State {
         transition_height: u64,
         replay_transition: Option<&mut crate::kura::StartupReplayGeometryTransition>,
     ) -> Result<(), LaneLifecycleError> {
-        let diff = lane_topology_diff(previous, current, replaced_lane_ids);
-        self.preflight_lane_geometry_updates(previous, current, &diff)?;
-        if let Some(transition) = replay_transition {
-            if !certified_frontiers.is_empty() {
-                return Err(LaneLifecycleError::Storage(
-                    "startup replay cannot replace live certified drain ownership".to_owned(),
-                ));
-            }
-            let request = crate::kura::ReplayGeometryBindingRequest {
-                previous,
-                updated: current,
-                previous_incarnations,
-                updated_incarnations: current_incarnations,
-                previous_activation_heights,
-                updated_activation_heights: current_activation_heights,
-                previous_lineage_root: lane_incarnation_lineage_root(
-                    &self.network_id,
-                    previous_lineage,
-                ),
-                updated_lineage_root: lane_incarnation_lineage_root(
-                    &self.network_id,
-                    current_lineage,
-                ),
-                transition_height,
-            };
-            self.kura
-                .apply_startup_replay_geometry_transition(&request, replaced_lane_ids, transition)
-                .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
-        } else {
-            self.kura
-            .apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_drain_frontiers(
-                previous,
-                current,
-                previous_incarnations,
-                current_incarnations,
-                previous_activation_heights,
-                current_activation_heights,
-                lane_incarnation_lineage_root(&self.network_id, previous_lineage),
-                lane_incarnation_lineage_root(&self.network_id, current_lineage),
-                replaced_lane_ids,
-                certified_frontiers,
-                transition_height,
-            )
-            .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
-        }
-        let tiered_result = (|| {
-            let mut backend = self.tiered_backend.lock();
-            backend
-                .reconcile_lane_geometry(previous, current, &diff.replacements)
-                .map_err(|err| LaneLifecycleError::Storage(format!("tiered: {err:?}")))?;
-            if !diff.relabelled.is_empty() {
-                backend
-                    .relabel_lane_geometry(&diff.relabelled)
-                    .map_err(|err| {
-                        LaneLifecycleError::Storage(format!("tiered relabel: {err:?}"))
-                    })?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = tiered_result {
-            self.kura
-                .recover_lane_geometry_journal_before_transition_with_lineage_root(
-                    previous,
-                    previous_incarnations,
-                    previous_activation_heights,
-                    lane_incarnation_lineage_root(&self.network_id, previous_lineage),
-                    transition_height,
-                )
-                .map_err(|rollback| {
-                    LaneLifecycleError::Storage(format!(
-                        "{error}; Kura geometry rollback also failed: {rollback}"
-                    ))
-                })?;
-            return Err(error);
-        }
-        let should_persist = {
-            let mut cursors = self.da_shard_cursors.write();
-            cursors.sync_mapping(current);
-            self.da_indexes_hydrated.read().is_some()
+        let request = crate::kura::ReplayGeometryBindingRequest {
+            previous,
+            updated: current,
+            previous_incarnations,
+            updated_incarnations: current_incarnations,
+            previous_activation_heights,
+            updated_activation_heights: current_activation_heights,
+            previous_lineage_root: lane_incarnation_lineage_root(
+                &self.network_id,
+                previous_lineage,
+            ),
+            updated_lineage_root: lane_incarnation_lineage_root(&self.network_id, current_lineage),
+            transition_height,
         };
-        if should_persist {
-            self.persist_da_shard_cursor_journal();
-        }
-        Ok(())
+        self.resume_lane_geometry_publication(
+            &request,
+            replaced_lane_ids,
+            certified_frontiers,
+            replay_transition,
+            true,
+        )
     }
     fn preflight_lane_geometry_updates(
         &self,
@@ -46718,6 +46719,19 @@ impl State {
         current: &iroha_config::parameters::actual::LaneConfig,
         diff: &LaneTopologyDiff,
     ) -> Result<(), LaneLifecycleError> {
+        if let Some(original) = self.geometry_publication.lock().as_ref() {
+            if lane_config_entries_match(&original.previous, previous)
+                && lane_config_entries_match(&original.current, current)
+            {
+                // The retained tiered plan authenticates its original physical
+                // objects while resuming. Re-preflighting moved paths would
+                // incorrectly reject the very operation that owns those moves.
+                return Ok(());
+            }
+            return Err(LaneLifecycleError::Storage(
+                "lane geometry preflight conflicts with a retained operation".to_owned(),
+            ));
+        }
         // Kura admits exact instance paths inside its authenticated geometry
         // preparation, before this transition writes any tiered state. Aliases
         // are display metadata and cannot be preflighted as storage addresses.
@@ -46737,24 +46751,14 @@ impl State {
         lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         configured_baseline: Option<Hash>,
     ) -> Result<(), LaneGeometryCatalogPublicationFailure> {
-        self.kura
-            .mark_lane_geometry_catalog_published_with_lineage_root(
-                lane_config,
-                incarnations,
-                activation_heights,
-                lane_incarnation_lineage_root(&self.network_id, lineage),
-                configured_baseline,
-            )
-            .map_err(|err| {
-                let rollback_safe = !matches!(
-                    &err,
-                    crate::kura::Error::LaneGeometryPublicationRestoreFailed { .. }
-                );
-                LaneGeometryCatalogPublicationFailure {
-                    error: LaneLifecycleError::Storage(format!("kura catalog publication: {err}")),
-                    rollback_safe,
-                }
-            })
+        self.finish_lane_geometry_publication(
+            lane_config,
+            incarnations,
+            activation_heights,
+            lane_incarnation_lineage_root(&self.network_id, lineage),
+            configured_baseline,
+            None,
+        )
     }
     fn rollback_lane_geometry_updates(
         &self,
@@ -46766,87 +46770,15 @@ impl State {
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
-        self.kura
-            .recover_lane_geometry_journal_before_transition_with_lineage_root(
-                previous,
-                previous_incarnations,
-                previous_activation_heights,
-                lane_incarnation_lineage_root(&self.network_id, previous_lineage),
-                transition_height,
-            )
-            .map_err(|err| LaneLifecycleError::Storage(format!("kura rollback: {err}")))?;
-        let reverse = lane_topology_diff(current, previous, replaced_lane_ids);
-        {
-            let mut backend = self.tiered_backend.lock();
-            backend
-                .preflight_lane_geometry(
-                    current,
-                    previous,
-                    &reverse.replacements,
-                    &reverse.relabelled,
-                )
-                .map_err(|err| {
-                    LaneLifecycleError::Storage(format!("tiered rollback preflight: {err:?}"))
-                })?;
-            backend
-                .reconcile_lane_geometry(current, previous, &reverse.replacements)
-                .map_err(|err| LaneLifecycleError::Storage(format!("tiered rollback: {err:?}")))?;
-            if !reverse.relabelled.is_empty() {
-                backend
-                    .relabel_lane_geometry(&reverse.relabelled)
-                    .map_err(|err| {
-                        LaneLifecycleError::Storage(format!("tiered rollback relabel: {err:?}"))
-                    })?;
-            }
-        }
-        let should_persist = {
-            let mut cursors = self.da_shard_cursors.write();
-            cursors.sync_mapping(previous);
-            self.da_indexes_hydrated.read().is_some()
-        };
-        if should_persist {
-            self.persist_da_shard_cursor_journal();
-        }
-        Ok(())
-    }
-    fn apply_committed_autoscale_lane_lifecycle(
-        &self,
-        pending: &PendingAutoscaleLaneLifecycle,
-        persist_cursor_journal: bool,
-        publication: &StateViewGenerationWriteGuard<'_>,
-    ) {
-        let update = &pending.catalog_update;
-        self.install_lane_manifests_in_publication(&pending.updated_lane_manifests, publication);
-        self.reset_lane_scoped_runtime_state(&update.lanes_to_reset, persist_cursor_journal);
-        let active_reset_lanes =
-            Self::active_reset_lanes(&update.lanes_to_reset, &update.updated_lane_config);
-        if persist_cursor_journal {
-            self.record_da_lane_reset_watermarks(&active_reset_lanes, pending.transition_height);
-        } else if !active_reset_lanes.is_empty() && pending.transition_height != 0 {
-            self.da_shard_cursors
-                .write()
-                .mark_lanes_canonically_reset(&active_reset_lanes, pending.transition_height);
-        }
-        #[cfg(feature = "telemetry")]
-        {
-            let nexus = self.nexus_snapshot();
-            self.telemetry
-                .set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
-            if let Some(event) = self.telemetry.record_nexus_config_diff(&nexus) {
-                match norito::json::to_string(&event) {
-                    Ok(payload) => {
-                        iroha_logger::telemetry!(msg = "nexus.config.diff", event = payload);
-                    }
-                    Err(err) => {
-                        iroha_logger::error!(
-                            ?err,
-                            "failed to serialize autoscale nexus config diff event for telemetry log"
-                        );
-                    }
-                }
-            }
-        }
-        pending.transition.log(pending.transition_height);
+        self.rollback_owned_lane_geometry(
+            previous,
+            current,
+            previous_incarnations,
+            previous_activation_heights,
+            lane_incarnation_lineage_root(&self.network_id, previous_lineage),
+            replaced_lane_ids,
+            transition_height,
+        )
     }
     fn apply_committed_autoscale_lane_geometry(
         &self,
@@ -47203,13 +47135,15 @@ impl State {
                 previous_lane.dataspace_id,
                 incarnation,
             )
-            .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
+            .map_err(LaneLifecycleError::DrainObservation)?;
             if frontier != commitment.frontier
-                || self.lane_has_drain_blocking_evidence(
-                    *lane,
-                    previous_lane.dataspace_id,
-                    incarnation,
-                )
+                || self
+                    .lane_has_drain_blocking_evidence(
+                        *lane,
+                        previous_lane.dataspace_id,
+                        incarnation,
+                    )
+                    .map_err(LaneLifecycleError::DrainObservation)?
             {
                 return Err(LaneLifecycleError::UnsafeRetirement {
                     lane: *lane,
@@ -47484,118 +47418,6 @@ impl State {
             &nexus.dataspace_catalog,
         )
     }
-    fn active_da_commitments_for_current_nexus(
-        &self,
-        block_height: u64,
-        records: &[DaCommitmentRecord],
-    ) -> Vec<DaCommitmentRecord> {
-        let nexus = self.nexus_snapshot();
-        let policy_context = crate::da::ActiveLaneProofPolicyContext::new(&nexus);
-        records
-            .iter()
-            .filter_map(|record| {
-                let validation = policy_context
-                    .enforce_commitment_at_height(record, block_height)
-                    .map_err(crate::da::DaCommitmentValidationError::from)
-                    .and_then(|()| {
-                        crate::da::validate_confidential_compute_record(&nexus.lane_config, record)
-                            .map(|_| ())
-                            .map_err(crate::da::DaCommitmentValidationError::from)
-                    });
-                match validation {
-                    Ok(()) if self.da_lane_visible_after_reset(block_height, record.lane_id) => {
-                        Some(record.clone())
-                    }
-                    Ok(()) => {
-                        warn!(
-                            height = block_height,
-                            lane = %record.lane_id.as_u32(),
-                            epoch = record.epoch,
-                            sequence = record.sequence,
-                            "skipping DA commitment index materialization for an earlier lane incarnation"
-                        );
-                        None
-                    }
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            height = block_height,
-                            lane = %record.lane_id.as_u32(),
-                            epoch = record.epoch,
-                            sequence = record.sequence,
-                            "skipping DA commitment index materialization for inactive lane after lifecycle update"
-                        );
-                        None
-                    }
-                }
-            })
-            .collect()
-    }
-    fn apply_committed_da_commitment_bundle(
-        &self,
-        pending: &PendingDaCommitmentBundle,
-        persist_cursor_journal: bool,
-    ) {
-        let height = pending.block_height;
-        let bundle = &pending.bundle;
-        let nexus = self.nexus_snapshot();
-        let active_commitments =
-            self.active_da_commitments_for_current_nexus(height, &bundle.commitments);
-        let query_visible_keys: BTreeSet<_> = active_commitments
-            .iter()
-            .map(DaCommitmentKey::from_record)
-            .collect();
-        let identity_visible_keys: BTreeSet<_> = bundle
-            .commitments
-            .iter()
-            .filter(|record| {
-                let key = DaCommitmentKey::from_record(record);
-                self.da_lane_visible_after_reset(height, record.lane_id)
-                    && (query_visible_keys.contains(&key)
-                        || nexus
-                            .lane_catalog
-                            .lanes()
-                            .iter()
-                            .all(|lane| lane.id != record.lane_id))
-            })
-            .map(DaCommitmentKey::from_record)
-            .collect();
-        {
-            let mut store = self.da_commitments.write();
-            store.insert_bundle_with_visibility_filter(
-                height,
-                bundle.clone(),
-                |record| identity_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-                |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-            );
-        }
-        match self.advance_da_shard_cursors_from_bundle(height, &active_commitments) {
-            Ok(()) if persist_cursor_journal => self.schedule_da_shard_cursor_journal_persist(),
-            Ok(()) => {}
-            Err(err) => {
-                warn!(
-                    ?err,
-                    height, "failed to advance DA shard cursor index during block commit"
-                );
-            }
-        }
-        if let Err(err) = self.advance_da_receipt_cursors_from_bundle(height, &active_commitments) {
-            warn!(
-                ?err,
-                height, "failed to advance DA receipt cursor index during block commit"
-            );
-        }
-        if let Err(err) = self.record_confidential_compute_from_bundle_with_filter(
-            height,
-            &bundle.commitments,
-            |record| query_visible_keys.contains(&DaCommitmentKey::from_record(record)),
-        ) {
-            warn!(
-                ?err,
-                height, "failed to index confidential-compute receipts during block commit"
-            );
-        }
-    }
     /// Update tiered state backend settings and restore effective lane geometry.
     ///
     /// # Errors
@@ -47610,30 +47432,52 @@ impl State {
         let effective_lane_config = self.nexus_snapshot().lane_config;
         let baseline_lane_config = iroha_config::parameters::actual::LaneConfig::default();
         let mut backend = self.tiered_backend.lock();
-        backend.reconfigure(
-            cfg.enabled,
-            cfg.hot_retained_keys,
-            cfg.hot_retained_bytes.get(),
-            cfg.hot_retained_grace_snapshots,
-            cfg.cold_store_root.clone(),
-            cfg.da_store_root.clone(),
-            cfg.max_snapshots,
-            cfg.max_cold_bytes.get(),
-        );
-        backend
-            .preflight_lane_geometry(&baseline_lane_config, &effective_lane_config, &[], &[])
-            .map_err(|err| {
-                LaneLifecycleError::Storage(format!(
-                    "tiered startup lane geometry preflight: {err:?}"
-                ))
+        if let Some(original) = self.tiered_startup_geometry.as_ref() {
+            if !original.matches(cfg, &effective_lane_config) {
+                return Err(LaneLifecycleError::Storage(
+                    "tiered startup retry changed its original configuration or lanes".to_owned(),
+                ));
+            }
+        } else {
+            backend.reconfigure_without_storage_effects(
+                cfg.enabled,
+                cfg.hot_retained_keys,
+                cfg.hot_retained_bytes.get(),
+                cfg.hot_retained_grace_snapshots,
+                cfg.cold_store_root.clone(),
+                cfg.da_store_root.clone(),
+                cfg.max_snapshots,
+                cfg.max_cold_bytes.get(),
+            );
+            let attempt = backend
+                .prepare_lane_geometry_attempt(
+                    &baseline_lane_config,
+                    &effective_lane_config,
+                    &[],
+                    &[],
+                )
+                .map_err(|error| {
+                    LaneLifecycleError::Storage(format!(
+                        "tiered startup geometry preparation: {error:#}"
+                    ))
+                })?;
+            self.tiered_startup_geometry = Some(TieredStartupGeometry {
+                configuration: cfg.clone(),
+                lanes: effective_lane_config,
+                attempt,
+            });
+        }
+        self.tiered_startup_geometry
+            .as_mut()
+            .ok_or_else(|| {
+                LaneLifecycleError::Storage("missing startup tiered geometry owner".to_owned())
+            })?
+            .attempt
+            .resume(&mut backend)
+            .map_err(|error| {
+                LaneLifecycleError::Storage(format!("retained tiered startup geometry: {error:#}"))
             })?;
-        backend
-            .reconcile_lane_geometry(&baseline_lane_config, &effective_lane_config, &[])
-            .map_err(|err| {
-                LaneLifecycleError::Storage(format!(
-                    "tiered startup lane geometry reconciliation: {err:?}"
-                ))
-            })?;
+        self.tiered_startup_geometry = None;
         Ok(())
     }
     /// Update fraud monitoring settings using loaded configuration.
@@ -48166,6 +48010,7 @@ impl State {
     }
 }
 include!("state/lane_lifecycle_support.rs");
+include!("state/geometry_publication.rs");
 include!("state/runtime_catalog.rs");
 include!("state/runtime_catalog_startup.rs");
 include!("state/runtime_catalog_commit.rs");
@@ -53495,10 +53340,13 @@ impl<'state> StateBlock<'state> {
         let Some(batch) = entry.execution_batch.as_ref() else {
             if !entry.lane_drain_certificates.is_empty() {
                 self.stage_autoscale_lane_drain_commitment(entry, replay)
-                    .map_err(|err| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "failed to stage lane drain commitment: {err}"
-                        ))
+                    .map_err(|err| match err {
+                        LaneLifecycleError::DrainObservation(error) => {
+                            MergeLedgerCommitError::LocalDrainObservation(Box::new(error))
+                        }
+                        other => MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "failed to stage lane drain commitment: {other}"
+                        )),
                     })?;
             }
             self.stage_merge_lane_frontier_markers(
@@ -55053,10 +54901,23 @@ impl<'state> StateBlock<'state> {
             error!("native stage has no canonical publication authorization yet");
             return Err(TransactionsBlockError::MergeAdmission);
         }
-        // TODO: the sole typed producer must resolve this linear plan and bind
-        // all actual outputs before publication. Dropping it is not completion.
-        if self.execution_output_plan.is_some() {
-            error!("execution output reservation has no completed producer seal");
+        // TODO: the sole consuming publisher must retain this linear output
+        // owner through exact source and durability authorization. Even a
+        // completed producer seal cannot authorize raw StateBlock publication.
+        if let Some(plan) = self.execution_output_plan.as_ref() {
+            let output_stage = match plan {
+                output_capacity::ExecutionOutputPlanState::Reserved(_) => "reserved",
+                output_capacity::ExecutionOutputPlanState::Running => "running",
+                output_capacity::ExecutionOutputPlanState::Retained(_) => "retained",
+                output_capacity::ExecutionOutputPlanState::Sealing => "sealing",
+                output_capacity::ExecutionOutputPlanState::Sealed(_) => "sealed",
+                output_capacity::ExecutionOutputPlanState::Captured => "captured",
+                output_capacity::ExecutionOutputPlanState::Poisoned => "poisoned",
+            };
+            error!(
+                output_stage,
+                "execution outputs require their canonical consuming publication owner"
+            );
             return Err(TransactionsBlockError::ExecutionOutputCapacity);
         }
         if let Err(error) = self.validate_canonical_runtime_projection() {
@@ -55519,6 +55380,16 @@ impl<'state> StateBlock<'state> {
                 None => {}
             }
         }
+        let da_effects = pending_da_commitments.map(|pending| {
+            carrier_da_effects::PreparedDaCommitmentEffects::prepare(
+                pending,
+                &nexus,
+                canonical_runtime.get(),
+            )
+        });
+        let lifecycle_effects = pending_autoscale_lifecycle.as_ref().map(|pending| {
+            carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &nexus)
+        });
         let autoscale_storage_hold = if let Some(pending) = &pending_autoscale_lifecycle {
             let autoscale_start = Instant::now();
             let geometry_result = if replay_prevalidation {
@@ -55543,12 +55414,14 @@ impl<'state> StateBlock<'state> {
                     replay_prevalidation,
                     "failed to validate staged autoscale lane storage during state commit"
                 );
-                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+                return Err(TransactionsBlockError::from(err));
             }
             autoscale_start.elapsed()
         } else {
             Duration::ZERO
         };
+        let mut da_post_publication = None;
+        let mut lifecycle_post_publication = None;
         block_hashes.prepare_commit();
         {
             let state_write_lock_wait_start = Instant::now();
@@ -55563,20 +55436,24 @@ impl<'state> StateBlock<'state> {
             // Membership was admitted before every fallible resource step.
             // The exact retained journals now publish under one State writer.
             canonical_runtime.commit();
-            let autoscale_hold = if let Some(pending) = &pending_autoscale_lifecycle {
+            let autoscale_hold = if let Some(prepared) = lifecycle_effects {
                 let autoscale_start = Instant::now();
-                state_ref.apply_committed_autoscale_lane_lifecycle(
-                    pending,
-                    !replay_prevalidation,
+                lifecycle_post_publication = Some(prepared.publish(
+                    state_ref,
                     &_view_generation,
-                );
+                    !replay_prevalidation,
+                ));
                 autoscale_storage_hold + autoscale_start.elapsed()
             } else {
                 autoscale_storage_hold
             };
-            let da_commitments_hold = if let Some(pending) = &pending_da_commitments {
+            let da_commitments_hold = if let Some(effects) = da_effects {
                 let da_start = Instant::now();
-                state_ref.apply_committed_da_commitment_bundle(pending, !replay_prevalidation);
+                da_post_publication = Some(effects.publish(
+                    state_ref,
+                    &_view_generation,
+                    !replay_prevalidation,
+                ));
                 da_start.elapsed()
             } else {
                 Duration::ZERO
@@ -55685,6 +55562,12 @@ impl<'state> StateBlock<'state> {
                     "state write lock held (block commit)"
                 );
             }
+        }
+        if let Some(post) = lifecycle_post_publication {
+            post.publish(state_ref);
+        }
+        if let Some(post) = da_post_publication {
+            post.publish(state_ref);
         }
         drop(autoscale_lifecycle_guard);
         if !replay_prevalidation && !authenticated_replay_commit {
@@ -56535,10 +56418,7 @@ impl<'state> StateBlock<'state> {
                 previous.intent.lane_incarnation,
             )
         }
-        .map_err(|_| LaneLifecycleError::InvalidAutoscaleManagedLane {
-            lane: lane_id,
-            reason: "drain commitment frontier evidence cannot be revalidated",
-        })?;
+        .map_err(LaneLifecycleError::DrainObservation)?;
         let blocked = if replay.is_some() {
             State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
                 &self.world,
@@ -56546,12 +56426,15 @@ impl<'state> StateBlock<'state> {
                 previous.intent.dataspace_id,
                 previous.intent.lane_incarnation,
             )
+            .map_err(LaneLifecycleError::DrainObservation)?
         } else {
-            self.state_ref.lane_has_drain_blocking_evidence(
-                lane_id,
-                previous.intent.dataspace_id,
-                previous.intent.lane_incarnation,
-            )
+            self.state_ref
+                .lane_has_drain_blocking_evidence(
+                    lane_id,
+                    previous.intent.dataspace_id,
+                    previous.intent.lane_incarnation,
+                )
+                .map_err(LaneLifecycleError::DrainObservation)?
         };
         if current_frontier != certificate.body.final_frontier || blocked {
             return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
@@ -56680,7 +56563,7 @@ impl<'state> StateBlock<'state> {
                 lane_config.dataspace_id,
                 incarnation,
             )
-            .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
+            .map_err(LaneLifecycleError::DrainObservation)?;
             if !autoscale_lane_drain_state_matches_context(
                 lane_config,
                 &drain_state,
@@ -56694,11 +56577,11 @@ impl<'state> StateBlock<'state> {
                     lane_config.dataspace_id,
                     incarnation,
                 )
-                || self.state_ref.lane_has_drain_blocking_evidence(
-                    *lane,
-                    lane_config.dataspace_id,
-                    incarnation,
-                )
+                .map_err(LaneLifecycleError::DrainObservation)?
+                || self
+                    .state_ref
+                    .lane_has_drain_blocking_evidence(*lane, lane_config.dataspace_id, incarnation)
+                    .map_err(LaneLifecycleError::DrainObservation)?
             {
                 return Err(LaneLifecycleError::UnsafeRetirement {
                     lane: *lane,
@@ -56838,11 +56721,16 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &SignedBlock,
         committed_fragment_count: u64,
-    ) -> Result<(), String> {
-        if !self.stage_autoscale_sample_record_for_count(block, committed_fragment_count)? {
+    ) -> Result<(), LaneLifecycleError> {
+        self.stage_autoscale_sample_record_for_count(block, committed_fragment_count)
+            .map_err(LaneLifecycleError::RuntimeCatalog)?;
+        if self.autoscale_lifecycle_evaluated {
             return Ok(());
         }
-        self.apply_staged_nexus_autoscale(block);
+        // The original sample/count remains owned on refusal. Retrying a local
+        // observation cannot accept different inputs or append another sample.
+        self.apply_staged_nexus_autoscale(block)?;
+        self.autoscale_lifecycle_evaluated = true;
         Ok(())
     }
     #[cfg(test)]
@@ -56852,7 +56740,10 @@ impl<'state> StateBlock<'state> {
         self.evaluate_nexus_autoscale(block.as_ref(), committed_fragment_count)
             .expect("test autoscale input must match its active StateBlock");
     }
-    fn apply_staged_nexus_autoscale(&mut self, block: &SignedBlock) {
+    fn apply_staged_nexus_autoscale(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Result<(), LaneLifecycleError> {
         if self
             .staged_merge_entry
             .as_ref()
@@ -56862,18 +56753,18 @@ impl<'state> StateBlock<'state> {
                 height = block.header().height().get(),
                 "deferring autoscale lifecycle transition on autonomous execution carrier"
             );
-            return;
+            return Ok(());
         }
         if self.pending_autoscale_lifecycle.is_some() {
             debug!(
                 height = block.header().height().get(),
                 "skipping autoscale because this block already staged a lane lifecycle transition"
             );
-            return;
+            return Ok(());
         }
         let autoscale = self.nexus.autoscale;
         if !autoscale.enabled {
-            return;
+            return Ok(());
         }
         let block_height = block.header().height().get();
         if let Err(err) = ensure_autoscale_runtime_lane_bounds(&autoscale) {
@@ -56881,14 +56772,14 @@ impl<'state> StateBlock<'state> {
                 ?err,
                 "skipping deterministic lane autoscale transition because runtime lane bounds are invalid"
             );
-            return;
+            return Ok(());
         }
         if let Err(err) = ensure_autoscale_runtime_elastic_range(&self.nexus) {
             warn!(
                 ?err,
                 "skipping deterministic lane autoscale transition because runtime elastic range is invalid"
             );
-            return;
+            return Ok(());
         }
         if let Err(err) =
             ensure_autoscale_managed_created_heights_not_future(&self.nexus, block_height)
@@ -56898,7 +56789,7 @@ impl<'state> StateBlock<'state> {
                 height = block_height,
                 "skipping deterministic lane autoscale transition because autoscale lane creation metadata is invalid"
             );
-            return;
+            return Ok(());
         }
         let autoscale_capacity_lanes = autoscale_default_route_capacity_lanes(
             &self.nexus.routing_policy,
@@ -56907,7 +56798,7 @@ impl<'state> StateBlock<'state> {
             autoscale.max_lane_id_exclusive.get(),
         );
         if autoscale_capacity_lanes == 0 {
-            return;
+            return Ok(());
         }
         let active_lanes = autoscale_capacity_lanes;
         let drain_in_progress = self
@@ -56922,15 +56813,17 @@ impl<'state> StateBlock<'state> {
                     .flatten()
                     .is_some()
             });
-        let scale_in_action = (autoscale_capacity_lanes > 1)
-            .then(|| self.select_autoscale_scale_in_action(block))
-            .flatten();
+        let scale_in_action = if autoscale_capacity_lanes > 1 {
+            self.select_autoscale_scale_in_action(block)?
+        } else {
+            None
+        };
         if drain_in_progress {
             let Some(AutoscaleScaleInAction::Retire(retire_lane_id)) = scale_in_action else {
                 // A committed drain is irreversible. Wait for its exact certificate
                 // and a strictly later global carrier instead of reopening it or
                 // applying an unrelated geometry decision.
-                return;
+                return Ok(());
             };
             let plan = iroha_data_model::nexus::LaneLifecyclePlan {
                 additions: Vec::new(),
@@ -56943,27 +56836,32 @@ impl<'state> StateBlock<'state> {
                 in_latency_ratio_permille: 0,
                 in_utilization_p95_permille: 0,
             };
-            if self
-                .apply_autoscale_lane_lifecycle(&plan, transition.clone())
-                .is_ok()
-            {
-                self.record_autoscale_transition_height(block_height);
-                transition.log(block_height);
-            } else {
-                warn!(
+            match self.apply_autoscale_lane_lifecycle(&plan, transition.clone()) {
+                Ok(()) => {
+                    self.record_autoscale_transition_height(block_height);
+                    transition.log(block_height);
+                }
+                Err(
+                    error @ (LaneLifecycleError::Storage(_)
+                    | LaneLifecycleError::GeometryStorage(_)
+                    | LaneLifecycleError::DrainObservation(_)
+                    | LaneLifecycleError::PublicationBusy { .. }),
+                ) => return Err(error),
+                Err(error) => warn!(
+                    ?error,
                     height = block_height,
                     lane = retire_lane_id.as_u32(),
                     "failed to apply certified deterministic lane autoscale retirement"
-                );
+                ),
             }
-            return;
+            return Ok(());
         }
         if autoscale_cooldown_active(
             autoscale.last_transition_height,
             autoscale.cooldown_blocks.get(),
             block_height,
         ) {
-            return;
+            return Ok(());
         }
         let next_scale_out_lane_id = self.next_autoscale_lane_id(
             autoscale.min_lane_id.get(),
@@ -56975,7 +56873,7 @@ impl<'state> StateBlock<'state> {
             Some(AutoscaleScaleInAction::RequestDrain(_))
         );
         if !can_scale_out && !can_scale_in {
-            return;
+            return Ok(());
         }
         let target_block_ms = autoscale.target_block_ms.get();
         let Some(thresholds) = autoscale_thresholds_permille(&autoscale) else {
@@ -56983,7 +56881,7 @@ impl<'state> StateBlock<'state> {
                 height = block_height,
                 "skipping deterministic lane autoscale transition because runtime thresholds are invalid"
             );
-            return;
+            return Ok(());
         };
         let (scale_out_triggered, out_latency_ratio_permille, out_utilization_p95_permille) =
             if can_scale_out {
@@ -57034,7 +56932,7 @@ impl<'state> StateBlock<'state> {
             };
         if scale_out_triggered {
             let Some(next_lane_id) = next_scale_out_lane_id else {
-                return;
+                return Ok(());
             };
             let Some(base_lane) = self
                 .nexus
@@ -57049,7 +56947,7 @@ impl<'state> StateBlock<'state> {
                     default_lane = self.nexus.routing_policy.default_lane.as_u32(),
                     "skipping deterministic lane autoscale scale-out because the routing default lane is absent"
                 );
-                return;
+                return Ok(());
             };
             let lane = match autoscale_elastic_lane_config_from_base(
                 next_lane_id,
@@ -57064,7 +56962,7 @@ impl<'state> StateBlock<'state> {
                         lane = next_lane_id.as_u32(),
                         "skipping deterministic lane autoscale scale-out because the routing base profile is ineligible"
                     );
-                    return;
+                    return Ok(());
                 }
             };
             let plan = iroha_data_model::nexus::LaneLifecyclePlan {
@@ -57078,24 +56976,29 @@ impl<'state> StateBlock<'state> {
                 out_latency_ratio_permille,
                 out_utilization_p95_permille: out_utilization_p95_permille.unwrap_or_default(),
             };
-            if self
-                .apply_autoscale_lane_lifecycle(&plan, transition.clone())
-                .is_ok()
-            {
-                self.record_autoscale_transition_height(block_height);
-                transition.log(block_height);
-            } else {
-                warn!(
+            match self.apply_autoscale_lane_lifecycle(&plan, transition.clone()) {
+                Ok(()) => {
+                    self.record_autoscale_transition_height(block_height);
+                    transition.log(block_height);
+                }
+                Err(
+                    error @ (LaneLifecycleError::Storage(_)
+                    | LaneLifecycleError::GeometryStorage(_)
+                    | LaneLifecycleError::DrainObservation(_)
+                    | LaneLifecycleError::PublicationBusy { .. }),
+                ) => return Err(error),
+                Err(error) => warn!(
+                    ?error,
                     height = block_height,
                     lane = next_lane_id.as_u32(),
                     "failed to apply deterministic lane autoscale scale-out transition"
-                );
+                ),
             }
-            return;
+            return Ok(());
         }
         if scale_in_triggered {
             let Some(AutoscaleScaleInAction::RequestDrain(drain_lane_id)) = scale_in_action else {
-                return;
+                return Ok(());
             };
             let transition = self.stage_autoscale_lane_drain_intent(
                 drain_lane_id,
@@ -57109,6 +57012,12 @@ impl<'state> StateBlock<'state> {
                     self.record_autoscale_transition_height(block_height);
                     transition.log(block_height);
                 }
+                Err(
+                    error @ (LaneLifecycleError::Storage(_)
+                    | LaneLifecycleError::GeometryStorage(_)
+                    | LaneLifecycleError::DrainObservation(_)
+                    | LaneLifecycleError::PublicationBusy { .. }),
+                ) => return Err(error),
                 Err(err) => {
                     warn!(
                         ?err,
@@ -57119,6 +57028,7 @@ impl<'state> StateBlock<'state> {
                 }
             }
         }
+        Ok(())
     }
     fn record_autoscale_transition_height(&mut self, block_height: u64) {
         self.nexus.autoscale.last_transition_height = block_height;
@@ -57203,37 +57113,46 @@ impl<'state> StateBlock<'state> {
     fn select_autoscale_scale_in_action(
         &self,
         block: &SignedBlock,
-    ) -> Option<AutoscaleScaleInAction> {
-        let candidate = autoscale_managed_lane_for_retire(
+    ) -> Result<Option<AutoscaleScaleInAction>, LaneLifecycleError> {
+        let Some(candidate) = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
             self.nexus.autoscale.min_lane_id.get(),
             self.nexus.autoscale.max_lane_id_exclusive.get(),
             self.nexus.routing_policy.default_dataspace,
-        )?;
-        let lane = self
+        ) else {
+            return Ok(None);
+        };
+        let Some(lane) = self
             .nexus
             .lane_catalog
             .lanes()
             .iter()
-            .find(|lane| lane.id == candidate)?;
+            .find(|lane| lane.id == candidate)
+        else {
+            return Ok(None);
+        };
         let drain_state = match decode_autoscale_lane_drain_state(lane) {
             Ok(Some(state)) => state,
-            Ok(None) => return Some(AutoscaleScaleInAction::RequestDrain(candidate)),
-            Err(_) => return None,
+            Ok(None) => return Ok(Some(AutoscaleScaleInAction::RequestDrain(candidate))),
+            Err(_) => return Ok(None),
         };
-        let incarnation = self.lane_incarnations.get(&candidate).copied()?;
+        let Some(incarnation) = self.lane_incarnations.get(&candidate).copied() else {
+            return Ok(None);
+        };
         if !autoscale_lane_drain_state_matches_context(
             lane,
             &drain_state,
             &self.network_id,
             incarnation,
         ) {
-            return None;
+            return Ok(None);
         }
-        let commitment = drain_state.commitment?;
+        let Some(commitment) = drain_state.commitment else {
+            return Ok(None);
+        };
         let block_height = self._curr_block.height().get();
         if commitment.carrier_height >= block_height {
-            return None;
+            return Ok(None);
         }
         let frontier = State::evidence_aware_lane_drain_frontier_from_world(
             &self.world,
@@ -57242,7 +57161,7 @@ impl<'state> StateBlock<'state> {
             lane.dataspace_id,
             incarnation,
         )
-        .ok()?;
+        .map_err(LaneLifecycleError::DrainObservation)?;
         if frontier != commitment.frontier
             || State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
                 &self.world,
@@ -57250,13 +57169,13 @@ impl<'state> StateBlock<'state> {
                 lane.dataspace_id,
                 incarnation,
             )
-            || self.state_ref.lane_has_drain_blocking_evidence(
-                candidate,
-                lane.dataspace_id,
-                incarnation,
-            )
+            .map_err(LaneLifecycleError::DrainObservation)?
+            || self
+                .state_ref
+                .lane_has_drain_blocking_evidence(candidate, lane.dataspace_id, incarnation)
+                .map_err(LaneLifecycleError::DrainObservation)?
         {
-            return None;
+            return Ok(None);
         }
         let owns_current_block_payload = block.execution_context().is_some_and(|context| {
             context
@@ -57270,9 +57189,9 @@ impl<'state> StateBlock<'state> {
                 dataspace = lane.dataspace_id.as_u64(),
                 "skipping deterministic lane autoscale scale-in because the retire candidate owns current-block work"
             );
-            return None;
+            return Ok(None);
         }
-        Some(AutoscaleScaleInAction::Retire(candidate))
+        Ok(Some(AutoscaleScaleInAction::Retire(candidate)))
     }
     /// Return the exact route/incarnation this already-executed block would
     /// retire during deterministic post-execution autoscale processing.
@@ -57313,7 +57232,7 @@ impl<'state> StateBlock<'state> {
             return Ok(None);
         }
         let Some(AutoscaleScaleInAction::Retire(lane_id)) =
-            self.select_autoscale_scale_in_action(block)
+            self.select_autoscale_scale_in_action(block)?
         else {
             return Ok(None);
         };
@@ -61974,19 +61893,21 @@ struct ReplayPublicationReceipt {
     geometry: Vec<PendingAutoscaleLaneLifecycle>,
     initial_state_hash: Hash,
 }
-#[derive(Debug, thiserror::Error)]
-enum ReplayPublicationError {
-    #[error(
-        "replay geometry catalog publication at height {height} entered an unrecoverable storage state: {source}; restart is required before State publication"
-    )]
-    FatalGeometryStorage {
-        height: u64,
-        #[source]
-        source: LaneLifecycleError,
-    },
+/// Original range, authenticated binding, execution receipt and geometry cursor.
+/// A cloneable startup plan never owns this executable publication operation.
+struct PreparedReplayPublication {
+    kura: Arc<Kura>,
+    binding: Option<crate::kura::V2StartupReplayStorageBinding>,
+    bundle: ReplayBundle,
+    receipt: Option<ReplayPublicationReceipt>,
+    transition: Option<crate::kura::StartupReplayGeometryTransition>,
+    geometry_cursor: usize,
+    preparation_complete: bool,
 }
 #[cfg(test)]
 std::thread_local! {
+    static REPLAY_PUBLICATION_PAUSE_PREPARATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
     static REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -62257,6 +62178,33 @@ pub(crate) fn replay_blocks_from_kura_range_with_binding(
     block_count: usize,
     binding: Option<&crate::kura::V2StartupReplayStorageBinding>,
 ) -> Result<Option<crate::kura::V2StartupReplayStorageBinding>> {
+    if !state.matches_kura_instance(kura) {
+        return Err(eyre!(
+            "startup replay storage is not the original State Kura instance"
+        ));
+    }
+    if let Some(prepared) = state.pending_replay_publication.as_ref() {
+        let binding_matches = match (&prepared.binding, binding) {
+            (None, None) => true,
+            (Some(original), Some(requested)) => original.original_owner_eq(requested),
+            _ => false,
+        };
+        if !Arc::ptr_eq(&prepared.kura, kura)
+            || prepared.bundle.start_height != start_height
+            || prepared.bundle.block_count != block_count
+            || !binding_matches
+        {
+            return Err(eyre!(
+                "startup replay already retains another original range, Kura or audit owner"
+            ));
+        }
+        return resume_prepared_replay_publication(state);
+    }
+    if state.geometry_publication.lock().is_some() || state.tiered_startup_geometry.is_some() {
+        return Err(eyre!(
+            "startup replay cannot replace another retained storage operation"
+        ));
+    }
     if block_count == 0 || start_height > block_count {
         return Ok(binding.cloned());
     }
@@ -62287,180 +62235,118 @@ pub(crate) fn replay_blocks_from_kura_range_with_binding(
     );
     *isolated.replay_merge_carriers.write() = isolated_previous_merge_carriers;
     dry_run.wrap_err("atomic replay prevalidation rejected the complete requested range")?;
-    bundle.verify_kura_boundary(kura.as_ref())?;
     let receipt = ReplayPublicationReceipt {
         final_state: isolated,
         geometry,
         initial_state_hash,
     };
-    publish_replay_receipt(kura, state, &bundle, receipt, binding)
+    state.pending_replay_publication = Some(Box::new(PreparedReplayPublication {
+        kura: Arc::clone(kura),
+        binding: binding.cloned(),
+        bundle,
+        receipt: Some(receipt),
+        transition: None,
+        geometry_cursor: 0,
+        preparation_complete: false,
+    }));
+    resume_prepared_replay_publication(state)
 }
-fn rollback_replay_geometry(
+fn replay_geometry_request<'a>(
     state: &State,
-    applied: &[PendingAutoscaleLaneLifecycle],
-    tiered_before: &TieredStateBackend,
-) -> Result<()> {
-    for pending in applied.iter().rev() {
-        let update = &pending.catalog_update;
-        state
-            .rollback_lane_geometry_updates(
-                &update.previous_lane_config,
-                &update.updated_lane_config,
-                &update.previous_lane_incarnations,
-                &update.previous_lane_incarnation_activation_heights,
-                &update.previous_lane_incarnation_lineage,
-                &update.replaced_lane_ids,
-                pending.transition_height,
-            )
-            .wrap_err_with(|| {
-                format!(
-                    "failed to roll back replay geometry at height {}",
-                    pending.transition_height
-                )
-            })?;
+    pending: &'a PendingAutoscaleLaneLifecycle,
+) -> crate::kura::ReplayGeometryBindingRequest<'a> {
+    let update = &pending.catalog_update;
+    crate::kura::ReplayGeometryBindingRequest {
+        previous: &update.previous_lane_config,
+        updated: &update.updated_lane_config,
+        previous_incarnations: &update.previous_lane_incarnations,
+        updated_incarnations: &update.updated_lane_incarnations,
+        previous_activation_heights: &update.previous_lane_incarnation_activation_heights,
+        updated_activation_heights: &update.updated_lane_incarnation_activation_heights,
+        previous_lineage_root: lane_incarnation_lineage_root(
+            &state.network_id,
+            &update.previous_lane_incarnation_lineage,
+        ),
+        updated_lineage_root: lane_incarnation_lineage_root(
+            &state.network_id,
+            &update.updated_lane_incarnation_lineage,
+        ),
+        transition_height: pending.transition_height,
     }
-    *state.tiered_backend.lock() = tiered_before.clone();
-    Ok(())
+}
+fn resume_prepared_replay_publication(
+    state: &mut State,
+) -> Result<Option<crate::kura::V2StartupReplayStorageBinding>> {
+    let mut prepared = state
+        .pending_replay_publication
+        .take()
+        .ok_or_else(|| eyre!("startup replay publication lost its original prepared owner"))?;
+    match publish_replay_receipt(state, &mut prepared) {
+        Ok(binding) => Ok(binding),
+        Err(error) => {
+            state.pending_replay_publication = Some(prepared);
+            Err(error)
+        }
+    }
 }
 fn apply_replay_geometry_receipts(
     state: &State,
     geometry: &[PendingAutoscaleLaneLifecycle],
+    cursor: &mut usize,
     mut replay_transition: Option<&mut crate::kura::StartupReplayGeometryTransition>,
 ) -> Result<()> {
-    for pending in geometry {
-        let update = &pending.catalog_update;
-        let diff = lane_topology_diff(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
-            &update.replaced_lane_ids,
-        );
-        state
-            .preflight_lane_geometry_updates(
-                &update.previous_lane_config,
-                &update.updated_lane_config,
-                &diff,
-            )
-            .wrap_err_with(|| {
-                format!(
-                    "replay geometry receipt preflight failed at height {}",
-                    pending.transition_height
-                )
-            })?;
-    }
-    let tiered_before = state.tiered_backend.lock().clone();
-    let mut applied: Vec<PendingAutoscaleLaneLifecycle> = Vec::with_capacity(geometry.len());
     #[cfg(test)]
     let injected_index =
         REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.replace(usize::MAX));
-    for (_receipt_index, pending) in geometry.iter().enumerate() {
+    while *cursor < geometry.len() {
+        let pending = &geometry[*cursor];
         #[cfg(test)]
-        if _receipt_index == injected_index {
-            let prefix_is_physically_published = applied.last().is_some_and(|prior| {
-                let update = &prior.catalog_update;
-                let diff = lane_topology_diff(
-                    &update.previous_lane_config,
-                    &update.updated_lane_config,
-                    &update.replaced_lane_ids,
-                );
-                state
+        if *cursor == injected_index {
+            let published_prefix = *cursor > 0
+                && state
                     .kura
                     .lane_geometry_journal_state_for_test()
-                    .is_ok_and(|(_, phases, _)| phases.last() == Some(&"catalog_published"))
-                    && diff.added.iter().all(|entry| {
-                        crate::kura::LaneStorageIdentity {
-                            network_id: state.network_id,
-                            lane_id: entry.lane_id,
-                            dataspace_id: entry.dataspace_id,
-                            incarnation: update.updated_lane_incarnations[&entry.lane_id],
-                            activation_height: update.updated_lane_incarnation_activation_heights
-                                [&entry.lane_id],
-                        }
-                        .blocks_dir(&state.kura.store_root())
-                        .is_dir()
-                    })
-            });
+                    .is_ok_and(|(_, phases, _)| phases.last() == Some(&"catalog_published"));
             REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX
-                .with(|observed| observed.set(prefix_is_physically_published));
-            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
-            return match rollback_result {
-                Ok(()) => Err(eyre!(
-                    "injected replay publication geometry failure at receipt {_receipt_index}, height {}",
-                    pending.transition_height
-                )),
-                Err(rollback) => Err(eyre!(
-                    "injected replay publication geometry failure at receipt {_receipt_index}, height {}; exact rollback also failed: {rollback:#}",
-                    pending.transition_height
-                )),
-            };
+                .with(|observed| observed.set(published_prefix));
+            return Err(eyre!(
+                "injected replay publication geometry failure at receipt {}, height {}",
+                *cursor,
+                pending.transition_height
+            ));
         }
-        let update = &pending.catalog_update;
-        if let Err(error) = state.apply_lane_geometry_updates_with_replay_receipt(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
-            &update.previous_lane_incarnations,
-            &update.updated_lane_incarnations,
-            &update.previous_lane_incarnation_activation_heights,
-            &update.updated_lane_incarnation_activation_heights,
-            &update.previous_lane_incarnation_lineage,
-            &update.updated_lane_incarnation_lineage,
-            &update.replaced_lane_ids,
-            &BTreeMap::new(),
-            pending.transition_height,
-            replay_transition.as_deref_mut(),
-        ) {
-            // A bound native namespace write can fail after the current files moved.
-            // Its exact retained cursor is rollback authority even before applied.push.
-            // Include that attempted receipt so owned empty-directory cleanup can run
-            // at the original archive, including errors inside the native creator.
-            let rollback_result = if replay_transition.is_some() {
-                let mut attempted = applied.clone();
-                attempted.push(pending.clone());
-                rollback_replay_geometry(state, &attempted, &tiered_before)
-            } else {
-                rollback_replay_geometry(state, &applied, &tiered_before)
-            };
-            return match rollback_result {
-                Ok(()) => Err(eyre!(error)).wrap_err_with(|| {
-                    format!(
-                        "failed to consume replay geometry receipt at height {}",
-                        pending.transition_height
-                    )
-                }),
-                Err(rollback) => Err(eyre!(
-                    "failed to consume replay geometry receipt at height {}: {error}; exact rollback also failed: {rollback:#}",
+        let request = replay_geometry_request(state, pending);
+        state
+            .resume_lane_geometry_publication(
+                &request,
+                &pending.catalog_update.replaced_lane_ids,
+                &BTreeMap::new(),
+                replay_transition.as_deref_mut(),
+                false,
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "retained replay geometry at height {}",
                     pending.transition_height
-                )),
-            };
-        }
-        applied.push(pending.clone());
-        if let Err(failure) = state.mark_lane_geometry_catalog_published(
-            &update.updated_lane_config,
-            &update.updated_lane_incarnations,
-            &update.updated_lane_incarnation_activation_heights,
-            &update.updated_lane_incarnation_lineage,
-            None,
-        ) {
-            if !failure.rollback_safe {
-                return Err(eyre!(ReplayPublicationError::FatalGeometryStorage {
-                    height: pending.transition_height,
-                    source: failure.error,
-                }));
-            }
-            let error = failure.error;
-            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
-            return match rollback_result {
-                Ok(()) => Err(eyre!(error)).wrap_err_with(|| {
-                    format!(
-                        "failed to publish replay geometry receipt at height {}",
-                        pending.transition_height
-                    )
-                }),
-                Err(rollback) => Err(eyre!(
-                    "failed to publish replay geometry receipt at height {}: {error}; exact rollback also failed: {rollback:#}",
+                )
+            })?;
+        state
+            .finish_lane_geometry_publication(
+                request.updated,
+                request.updated_incarnations,
+                request.updated_activation_heights,
+                request.updated_lineage_root,
+                None,
+                replay_transition.as_deref_mut(),
+            )
+            .map_err(|failure| failure.error)
+            .wrap_err_with(|| {
+                format!(
+                    "retained replay catalog publication at height {}",
                     pending.transition_height
-                )),
-            };
-        }
+                )
+            })?;
+        *cursor += 1;
     }
     Ok(())
 }
@@ -62565,104 +62451,97 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: Box<Sta
     core::mem::swap(state, final_state.as_mut());
 }
 fn publish_replay_receipt(
-    kura: &Arc<Kura>,
     state: &mut State,
-    bundle: &ReplayBundle,
-    receipt: ReplayPublicationReceipt,
-    binding: Option<&crate::kura::V2StartupReplayStorageBinding>,
+    prepared: &mut PreparedReplayPublication,
 ) -> Result<Option<crate::kura::V2StartupReplayStorageBinding>> {
-    // Startup owns `&mut State`, while the cloned lock also excludes mutation
-    // through every internally shared commit surface until the whole replay
-    // image is installed.
+    if !prepared.preparation_complete {
+        #[cfg(test)]
+        if REPLAY_PUBLICATION_PAUSE_PREPARATION.with(|pause| pause.replace(false)) {
+            return Err(eyre!(
+                "injected local replay preparation refusal after execution capture"
+            ));
+        }
+        let receipt = prepared
+            .receipt
+            .as_ref()
+            .ok_or_else(|| eyre!("startup replay receipt was already consumed"))?;
+        for pending in &receipt.geometry {
+            let update = &pending.catalog_update;
+            let diff = lane_topology_diff(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.replaced_lane_ids,
+            );
+            state.preflight_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &diff,
+            )?;
+        }
+        prepared.bundle.verify_kura_boundary(&prepared.kura)?;
+        prepared.transition = prepared
+            .binding
+            .as_ref()
+            .map(|binding| {
+                let requests = receipt
+                    .geometry
+                    .iter()
+                    .map(|pending| replay_geometry_request(state, pending))
+                    .collect::<Vec<_>>();
+                prepared
+                    .kura
+                    .begin_startup_replay_geometry_transition(binding, &requests)
+            })
+            .transpose()?;
+        prepared.preparation_complete = true;
+    }
     let state_commit_lock = Arc::clone(&state.state_commit_lock);
     let state_commit_guard = state_commit_lock.lock();
+    let receipt = prepared
+        .receipt
+        .as_ref()
+        .ok_or_else(|| eyre!("startup replay receipt was already consumed"))?;
     if crate::snapshot::canonical_state_snapshot_hash(state)? != receipt.initial_state_hash {
         return Err(eyre!(
             "live State changed after replay prevalidation and before publication"
         ));
     }
-    bundle.verify_kura_boundary(kura.as_ref())?;
-    let mut transition = binding
-        .map(|binding| {
-            let requests = receipt
-                .geometry
-                .iter()
-                .map(|pending| {
-                    let update = &pending.catalog_update;
-                    crate::kura::ReplayGeometryBindingRequest {
-                        previous: &update.previous_lane_config,
-                        updated: &update.updated_lane_config,
-                        previous_incarnations: &update.previous_lane_incarnations,
-                        updated_incarnations: &update.updated_lane_incarnations,
-                        previous_activation_heights: &update
-                            .previous_lane_incarnation_activation_heights,
-                        updated_activation_heights: &update
-                            .updated_lane_incarnation_activation_heights,
-                        previous_lineage_root: lane_incarnation_lineage_root(
-                            &state.network_id,
-                            &update.previous_lane_incarnation_lineage,
-                        ),
-                        updated_lineage_root: lane_incarnation_lineage_root(
-                            &state.network_id,
-                            &update.updated_lane_incarnation_lineage,
-                        ),
-                        transition_height: pending.transition_height,
-                    }
-                })
-                .collect::<Vec<_>>();
-            kura.begin_startup_replay_geometry_transition(binding, &requests)
+    prepared.bundle.verify_kura_boundary(&prepared.kura)?;
+    apply_replay_geometry_receipts(
+        state,
+        &receipt.geometry,
+        &mut prepared.geometry_cursor,
+        prepared.transition.as_mut(),
+    )?;
+    #[cfg(test)]
+    if REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL.with(|pause| pause.replace(false)) {
+        return Err(eyre!(
+            "injected local replay publication refusal before State installation"
+        ));
+    }
+    let kura_publication_lease = prepared
+        .kura
+        .try_publication_lease()
+        .map_err(geometry_lease_error)?;
+    prepared.bundle.verify_kura_boundary(&prepared.kura)?;
+    if state.geometry_publication.lock().is_some() || state.tiered_startup_geometry.is_some() {
+        return Err(eyre!(
+            "startup replay cannot discard an unrelated retained storage operation"
+        ));
+    }
+    let next_binding = prepared
+        .transition
+        .as_ref()
+        .map(|transition| {
+            kura_publication_lease.finish_startup_replay_geometry_transition(transition)
         })
         .transpose()?;
-    let tiered_before = state.tiered_backend.lock().clone();
-    if let Err(error) =
-        apply_replay_geometry_receipts(state, &receipt.geometry, transition.as_mut())
-    {
-        if let Some(transition) = transition.as_ref()
-            && let Err(cleanup) = kura.rollback_startup_replay_geometry_preparation(transition)
-        {
-            return Err(eyre!(
-                "replay geometry apply failed: {error:#}; exact prepared namespace cleanup failed: {cleanup}"
-            ));
-        }
-        return Err(error);
-    }
-    let kura_publication_lease = kura.canonical_publication_lease();
-    let checked_binding = (|| -> Result<_> {
-        bundle.verify_kura_boundary(kura.as_ref())?;
-        transition
-            .as_ref()
-            .map(|transition| kura.finish_startup_replay_geometry_transition(transition))
-            .transpose()
-            .map_err(Into::into)
-    })();
-    let next_binding = match checked_binding {
-        Ok(next_binding) => next_binding,
-        Err(error) => {
-            drop(kura_publication_lease);
-            let rollback = rollback_replay_geometry(state, &receipt.geometry, &tiered_before)
-                .and_then(|()| {
-                    transition
-                        .as_ref()
-                        .map(|transition| {
-                            kura.rollback_startup_replay_geometry_preparation(transition)
-                        })
-                        .transpose()
-                        .map(|_| ())
-                        .map_err(Into::into)
-                });
-            return match rollback {
-                Ok(()) => Err(error).wrap_err(
-                    "exact Kura replay boundary changed while consuming geometry receipts",
-                ),
-                Err(rollback) => Err(eyre!(
-                    "exact Kura replay boundary changed while consuming geometry receipts: {error:#}; exact geometry rollback also failed: {rollback:#}"
-                )),
-            };
-        }
-    };
-    // This is the sole live WSV publication point. Every operation above is
-    // fallible; every operation below is an infallible in-memory move or
-    // explicitly diagnostic maintenance.
+    let receipt = prepared
+        .receipt
+        .take()
+        .ok_or_else(|| eyre!("startup replay receipt was already consumed"))?;
+    // Sole WSV publication point: the original image moves exactly once after
+    // all retained geometry and final binding checks have completed.
     install_prevalidated_replay_state(state, receipt.final_state);
     drop(kura_publication_lease);
     for pending in &receipt.geometry {
@@ -62672,11 +62551,12 @@ fn publish_replay_receipt(
     }
     drop(state_commit_guard);
     state.persist_da_shard_cursor_journal();
-    state.persist_query_index_status(bundle.block_count_u64, state.latest_block_hash_fast());
-    // A bound startup still owns an exact replay plan. Maintenance may evict or move
-    // its evidence only after active-height recovery has consumed that plan.
+    state.persist_query_index_status(
+        prepared.bundle.block_count_u64,
+        state.latest_block_hash_fast(),
+    );
     if next_binding.is_none() {
-        state.enforce_nexus_storage_budget(bundle.block_count_u64);
+        state.enforce_nexus_storage_budget(prepared.bundle.block_count_u64);
     }
     Ok(next_binding)
 }

@@ -4,8 +4,11 @@ use crate::{
     publication::{CapturedPublication, NextPublication, Publication},
 };
 use concread::{
-    bptree::{BptreeMap, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn},
-    ebrcell::{EbrCell, EbrCellWriteTxn},
+    bptree::{
+        BptreeMap, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn,
+        OwnedWriteError,
+    },
+    ebrcell::{EbrCell, EbrCellOwned, EbrCellWriteTxn},
 };
 use std::{borrow::Borrow, collections::BTreeMap, ops::RangeBounds};
 /// Multi-version key value storage
@@ -37,8 +40,14 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> Block<'_, K, V> {
-        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
-        let blocks = self.blocks_released.poisoning_guard(self.blocks.write());
+        let mut revert = self.revert_released.poisoning_guard(
+            self.revert_released
+                .with_acquisition_unwind_notification(|| self.revert.write()),
+        );
+        let blocks = self.blocks_released.poisoning_guard(
+            self.blocks_released
+                .with_acquisition_unwind_notification(|| self.blocks.write()),
+        );
         let predecessor = self.publication.capture();
         // Clear revert
         revert.get_mut().clear();
@@ -53,7 +62,10 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
     /// Insert a value directly into the latest committed state.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
+        let mut blocks = self.blocks_released.poisoning_guard(
+            self.blocks_released
+                .with_acquisition_unwind_notification(|| self.blocks.write()),
+        );
         let prev_value = blocks.insert(key, value);
         self.publication
             .publish(|| blocks.release_with(|guard| guard.commit()));
@@ -61,8 +73,14 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
     /// Create block to aggregate updates and revert changes created in the latest block
     pub fn block_and_revert(&self) -> Block<'_, K, V> {
-        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
-        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
+        let mut revert = self.revert_released.poisoning_guard(
+            self.revert_released
+                .with_acquisition_unwind_notification(|| self.revert.write()),
+        );
+        let mut blocks = self.blocks_released.poisoning_guard(
+            self.blocks_released
+                .with_acquisition_unwind_notification(|| self.blocks.write()),
+        );
         let predecessor = self.publication.capture();
         {
             let revert = core::mem::take(revert.get_mut());
@@ -228,83 +246,78 @@ pub struct TouchedEntry<'a, K: Key, V: Value> {
     pub after: Option<&'a V>,
 }
 
-struct DetachedEntry<K, V> {
-    key: K,
-    before: Option<V>,
-    after: Option<V>,
+/// Exact original map and undo successors, without physical writer locks.
+///
+/// This move-only journal preserves the original nodes, keys and values, including
+/// no-op touches. The map owner also retains its original root and base reader
+/// generation so untouched shared nodes remain alive even if Storage is dropped.
+/// Replacement semantics are already staged by the original block. Publication
+/// reacquires and authenticates that same current/undo pair without rebuilding it.
+pub struct Detached<K: Key, V: Value, Admission> {
+    revert: EbrCellOwned<BTreeMap<K, Option<V>>>,
+    blocks: BptreeMapOwned<K, V>,
+    // Release metadata admission after the original successors and their pins.
+    metadata: DetachedMetadata<Admission>,
 }
 
-/// Owned touched entries and original current/undo identity, without writer locks.
-///
-/// This move-only journal preserves absence and no-op touches. It is not a full
-/// read view: untouched reads are bound by the captured publication identity.
-/// Replacement mode requires undoing the exact original tip before applying
-/// these candidate touches, including changes made only by that discarded tip.
-/// Publication preparation reacquires its original writers and checks that
-/// exact pair. Cross-field publication remains the caller's responsibility.
-pub struct Detached<K: Key, V: Value, Admission> {
+struct DetachedMetadata<Admission> {
     predecessor: CapturedPublication,
     mode: BlockMode,
     dirty: bool,
-    entries: Vec<DetachedEntry<K, V>>,
-    // Drop the reservation after the actual retained keys and values.
+    next: NextPublication,
     admission: Admission,
 }
 
 impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
     /// Return the actual original block's acquisition mode.
     pub fn mode(&self) -> BlockMode {
-        self.mode
+        self.metadata.mode
     }
 
-    /// Return whether current-map publication was required by the original block.
+    /// Return whether the original block requires current-map publication.
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.metadata.dirty
     }
 
-    /// Borrow exact candidate touches, including no-ops, in canonical key order.
+    /// Borrow original preimages and successors, including no-ops, in key order.
     pub fn touched_entries(
         &self,
     ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
-        self.entries.iter().map(|entry| TouchedEntry {
-            key: &entry.key,
-            before: entry.before.as_ref(),
-            after: entry.after.as_ref(),
+        self.revert.iter().map(|(key, before)| TouchedEntry {
+            key,
+            before: before.as_ref(),
+            after: self.blocks.get(key),
         })
     }
 
-    /// Borrow the caller's retained allocation reservation.
+    /// Borrow the caller's separate capture reservation.
+    /// Actual node, nested payload and reader-chain custody needs its own admission.
     pub fn admission(&self) -> &Admission {
-        &self.admission
+        &self.metadata.admission
     }
 
-    /// Observe equality with this owner's current published current/undo pair.
-    ///
-    /// The observation is not an exclusive lease or publication authority. A
-    /// complete State publisher must reacquire and jointly check all original
-    /// owners before any field is published. A stale local journal does not by
-    /// itself authorize rejection of a decided carrier.
+    /// Observe equality with the original published current/undo pair.
+    /// This momentary observation grants no publication authority.
     pub fn matches_current(&self, storage: &Storage<K, V>) -> bool {
-        self.predecessor.matches(&storage.publication)
+        self.metadata.predecessor.matches(&storage.publication)
     }
 
     /// Compare exact original owner/version and mode with an acquired block.
-    /// Matching is read-only and provides no reattachment or commit capability.
     pub fn matches_block_predecessor(&self, block: &Block<'_, K, V>) -> bool {
-        self.mode == block.mode && self.predecessor.same_as(&block.predecessor)
+        self.metadata.mode == block.mode && self.metadata.predecessor.same_as(&block.predecessor)
     }
 
-    /// Stage this exact journal under its original current/undo writers.
+    /// Reacquire both original writers around the exact retained successors.
     ///
-    /// The required callback admits COW writer acquisition, candidate copies,
-    /// replacement undo, next identity and eventual retained-reader publication
-    /// peak before either writer is acquired. Acquisition never waits. The
-    /// exact owner/version is rechecked under both writers before staging any
-    /// entry; all refusals return the original journal intact for its owner.
+    /// No key/value clone, delta reconstruction or successor allocation occurs.
+    /// The original next identity survives every refusal and abort. The callback
+    /// may retain separately prepaid temporary installation resources; it cannot
+    /// retroactively admit the original execution or nested allocations.
     ///
-    /// Preparing publishes nothing. The aggregate caller must prepare all
-    /// fields, retain their writers and join its external authorization before
-    /// publishing the first field. No mutable block or reconstruction API escapes.
+    /// Both MV pair identity and the map's exact root/base generation are checked.
+    /// Acquisition never waits and every refusal returns the original journal.
+    /// Aggregate publication and complete resource admission remain the caller's
+    /// responsibility; prepare every component before publishing the first one.
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target Storage<K, V>,
@@ -314,131 +327,142 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
         Self,
         E,
     > {
-        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
+        if let Err(error) = self
+            .metadata
+            .predecessor
+            .try_check_current(&target.publication)
+        {
             return Err((self, error));
         }
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
             Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
         };
+        let Self {
+            revert,
+            blocks,
+            metadata,
+        } = self;
         let wait = target.revert_released.observe();
-        let Some(revert) = target.revert.try_write() else {
-            return Err((
-                self,
-                PublicationPreparationError::after_failed_acquisition(wait),
-            ));
+        let revert = match target.revert.try_write_owned(revert) {
+            Ok(writer) => target.revert_released.poisoning_guard(writer),
+            Err(revert) => {
+                let error = if target.revert.is_poisoned() {
+                    PublicationPreparationError::Poisoned
+                } else {
+                    PublicationPreparationError::after_failed_acquisition(wait)
+                };
+                return Err((
+                    Self {
+                        revert,
+                        blocks,
+                        metadata,
+                    },
+                    error,
+                ));
+            }
         };
-        let mut revert = target.revert_released.poisoning_guard(revert);
         let wait = target.blocks_released.observe();
-        let Some(blocks) = target.blocks.try_write() else {
-            return Err((
-                self,
-                PublicationPreparationError::after_failed_acquisition(wait),
-            ));
+        let blocks = match target.blocks.try_write_owned(blocks) {
+            Ok(writer) => target.blocks_released.poisoning_guard(writer),
+            Err((blocks, error)) => {
+                let error = match error {
+                    OwnedWriteError::Busy => {
+                        PublicationPreparationError::after_failed_acquisition(wait)
+                    }
+                    OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
+                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                };
+                let revert = revert.release_with(|writer| writer.detach());
+                return Err((
+                    Self {
+                        revert,
+                        blocks,
+                        metadata,
+                    },
+                    error,
+                ));
+            }
         };
-        let mut blocks = target.blocks_released.poisoning_guard(blocks);
-        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
-            return Err((self, error));
-        }
-        let next = NextPublication::new();
-        let old_undo = core::mem::take(revert.get_mut());
-        if self.mode == BlockMode::Replace {
-            for (key, before) in old_undo {
-                match before {
-                    Some(value) => {
-                        blocks.insert(key, value);
-                    }
-                    None => {
-                        blocks.remove(&key);
-                    }
-                }
-            }
-        }
-        for entry in &self.entries {
-            revert
-                .get_mut()
-                .insert(entry.key.clone(), entry.before.clone());
-            match &entry.after {
-                Some(value) => {
-                    blocks.insert(entry.key.clone(), value.clone());
-                }
-                None => {
-                    blocks.remove(&entry.key);
-                }
-            }
-        }
-        Ok(PreparedPublication {
+        let prepared = PreparedPublication {
             revert,
             blocks,
             publication: &target.publication,
-            next,
-            journal: self,
+            metadata,
             installation,
-        })
+        };
+        if let Err(error) = prepared
+            .metadata
+            .predecessor
+            .try_check_current(&target.publication)
+        {
+            return Err((prepared.abort(), error));
+        }
+        Ok(prepared)
     }
 }
 
-/// Immutable staged map publication retaining both exact original writers.
-/// Dropping this owner or calling [`Self::abort`] leaves current and undo intact.
+/// Original map and undo successors held under both exact target writers.
+/// Drop abandons them without publication; abort returns the original owners.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
 pub struct PreparedPublication<'target, K: Key, V: Value, Admission, Installation> {
     revert: ReleaseGuard<'target, EbrCellWriteTxn<'target, BTreeMap<K, Option<V>>>>,
     blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V>>,
     publication: &'target Publication,
-    next: NextPublication,
-    journal: Detached<K, V, Admission>,
-    // Drop installation capacity after every retained/staged value and writer.
+    metadata: DetachedMetadata<Admission>,
+    // Release temporary resources after every retained successor and writer.
     installation: Installation,
 }
 
 impl<K: Key, V: Value, Admission, Installation>
     PreparedPublication<'_, K, V, Admission, Installation>
 {
-    /// Abort staging and release both writers, retaining the exact original delta.
+    /// Release physical writers and return the exact original successors.
     pub fn abort(self) -> Detached<K, V, Admission> {
         let Self {
             revert,
             blocks,
             publication: _,
-            next,
-            journal,
+            metadata,
             installation,
         } = self;
-        drop(blocks);
-        drop(revert);
-        drop(next);
+        let blocks = blocks.release_with(|writer| writer.detach());
+        let revert = revert.release_with(|writer| writer.detach());
         drop(installation);
-        journal
+        Detached {
+            revert,
+            blocks,
+            metadata,
+        }
     }
 
-    /// Publish the already prepared pair once and hand reservations back.
+    /// Publish the original prepared pair and return separate reservations.
     ///
-    /// This has no semantic refusal. It is not allocation-free: admission must
-    /// cover Concread's internal publication and delayed reclamation as well as
-    /// staging. The aggregate owner supplies joint visibility and finality.
+    /// Original map successors and the next identities were prepared before
+    /// detachment. This does not establish complete heap admission: nested data,
+    /// cursor/node custody and collector/control bookkeeping still need their own
+    /// policy. The aggregate owner supplies joint visibility and finality.
     pub fn publish(self) -> (Admission, Installation) {
         let Self {
             revert,
             blocks,
             publication,
-            next,
-            journal,
+            metadata,
             installation,
         } = self;
-        let Detached {
+        let DetachedMetadata {
             predecessor: _,
             mode: _,
             dirty,
-            entries,
+            next,
             admission,
-        } = journal;
+        } = metadata;
         publication.publish_prepared(next, || {
             if dirty {
                 blocks.release_with(|guard| guard.commit());
             }
             revert.release_with(|guard| guard.commit());
         });
-        drop(entries);
         (admission, installation)
     }
 }
@@ -509,28 +533,21 @@ mod block {
             });
         }
 
-        /// Admit the actual delta, detach it, and release both original writers.
+        /// Admit capture metadata, then retain the exact original successors.
         ///
-        /// The callback receives the immutable original block before capture
-        /// allocates its entry vector or clones final values. Its returned
-        /// reservation remains owned by the detached journal. Rejection drops
-        /// this block without publishing current values or undo history.
-        ///
-        /// Keys and preimages move from the original undo map; only touched
-        /// final values are cloned. No whole-map clone or EBR read pin survives.
-        /// The caller must admit that memory, capture overlap and any eventual
-        /// COW installation peak. No allocation-free installation is promised.
+        /// The callback runs before next-identity allocation. No key/value clone
+        /// or delta vector is needed: current and undo move with their original
+        /// allocation owners. The map retains its original root/base generation
+        /// to protect untouched shared nodes after releasing the physical writer.
+        /// Original execution, nested payload growth and retained-reader resources
+        /// require their own earlier admission; this callback cannot fund them
+        /// retroactively. Rejection abandons the block without publication.
         pub fn try_detach<Admission, E>(
-            mut self,
+            self,
             admit: impl FnOnce(&Self) -> Result<Admission, E>,
         ) -> Result<Detached<K, V, Admission>, E> {
             let admission = admit(&self)?;
-            let undo = core::mem::take(self.revert.get_mut());
-            let mut entries = Vec::with_capacity(undo.len());
-            for (key, before) in undo {
-                let after = self.blocks.get(&key).cloned();
-                entries.push(DetachedEntry { key, before, after });
-            }
+            let next = NextPublication::new();
             let Self {
                 revert,
                 blocks,
@@ -539,14 +556,18 @@ mod block {
                 mode,
                 publication: _,
             } = self;
-            drop(blocks);
-            drop(revert);
+            let blocks = blocks.release_with(|writer| writer.detach());
+            let revert = revert.release_with(|writer| writer.detach());
             Ok(Detached {
-                predecessor,
-                mode,
-                dirty,
-                entries,
-                admission,
+                revert,
+                blocks,
+                metadata: DetachedMetadata {
+                    predecessor,
+                    mode,
+                    dirty,
+                    next,
+                    admission,
+                },
             })
         }
         /// Read-only access to the block revert map (keys touched in this block).

@@ -24,6 +24,9 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+mod geometry_attempt;
+pub(crate) use geometry_attempt::TieredGeometryAttempt;
+
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
 const DA_CACHE_HIT: &str = "hit";
 const DA_CACHE_MISS: &str = "miss";
@@ -1375,6 +1378,41 @@ impl TieredStateBackend {
         max_snapshots: usize,
         max_cold_bytes: u64,
     ) {
+        let cold_root_changed = self.reconfigure_without_storage_effects(
+            enabled,
+            hot_retained_keys,
+            hot_retained_bytes,
+            hot_retained_grace_snapshots,
+            cold_store_root,
+            da_store_root,
+            max_snapshots,
+            max_cold_bytes,
+        );
+        if self.enabled && cold_root_changed {
+            if let Err(err) = self.ensure_cold_roots() {
+                iroha_logger::warn!(
+                    ?err,
+                    "tiered-state: failed to prepare cold tier root after reconfigure"
+                );
+            }
+        }
+    }
+    /// Update in-memory policy and caches without creating or changing storage.
+    ///
+    /// Returns whether either configured root changed. Startup uses this before
+    /// capturing a retained geometry owner so that owner performs every mkdir.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconfigure_without_storage_effects(
+        &mut self,
+        enabled: bool,
+        hot_retained_keys: usize,
+        hot_retained_bytes: u64,
+        hot_retained_grace_snapshots: u64,
+        cold_store_root: Option<PathBuf>,
+        da_store_root: Option<PathBuf>,
+        max_snapshots: usize,
+        max_cold_bytes: u64,
+    ) -> bool {
         let cold_root_changed =
             self.cold_store_root != cold_store_root || self.da_store_root != da_store_root;
         let grace_changed = self.hot_retained_grace_snapshots != hot_retained_grace_snapshots;
@@ -1396,19 +1434,10 @@ impl TieredStateBackend {
             self.entry_keys.clear();
             self.snapshot_counter = 0;
             self.snapshot_counter_seeded = false;
+            self.snapshot_baseline_ready = false;
             self.last_manifest = None;
         }
-        if !self.enabled {
-            return;
-        }
-        if cold_root_changed {
-            if let Err(err) = self.ensure_cold_roots() {
-                iroha_logger::warn!(
-                    ?err,
-                    "tiered-state: failed to prepare cold tier root after reconfigure"
-                );
-            }
-        }
+        cold_root_changed
     }
     /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
     ///
@@ -1499,187 +1528,16 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-    /// Ensure tiered snapshot directories reflect the configured lane geometry.
+    /// Test convenience around the same retained production geometry owner.
+    #[cfg(test)]
     pub fn reconcile_lane_geometry(
         &mut self,
         previous: &LaneConfig,
         current: &LaneConfig,
         replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let Some(root) = self.primary_cold_root().cloned() else {
-            return Ok(());
-        };
-        self.ensure_cold_roots()?;
-        let mut previous_map = BTreeMap::new();
-        for entry in previous.entries() {
-            previous_map.insert(entry.lane_id, entry);
-        }
-        let mut current_map = BTreeMap::new();
-        for entry in current.entries() {
-            current_map.insert(entry.lane_id, entry);
-        }
-        let replacement_ids: BTreeSet<_> = replacements
-            .iter()
-            .map(|(_, current)| current.lane_id)
-            .collect();
-        let added: Vec<&LaneConfigEntry> = current_map
-            .iter()
-            .filter(|(id, _)| !previous_map.contains_key(id) && !replacement_ids.contains(id))
-            .map(|(_, entry)| *entry)
-            .collect();
-        let retired: Vec<&LaneConfigEntry> = previous_map
-            .iter()
-            .filter(|(id, _)| !current_map.contains_key(id) && !replacement_ids.contains(id))
-            .map(|(_, entry)| *entry)
-            .collect();
-        let lanes_root = root.join("lanes");
-        fs::create_dir_all(&lanes_root).wrap_err_with(|| {
-            format!(
-                "failed to create tiered lanes root {path}",
-                path = lanes_root.display()
-            )
-        })?;
-        for (previous, _) in replacements {
-            self.retire_lane_snapshot_dir(&root, &lanes_root, previous)?;
-        }
-        for entry in added {
-            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
-        }
-        for entry in current.entries() {
-            if replacement_ids.contains(&entry.lane_id) {
-                continue;
-            }
-            let dir = lane_snapshot_dir(&lanes_root, entry);
-            if dir.exists() {
-                continue;
-            }
-            let has_prev_lane_dir = previous_map
-                .get(&entry.lane_id)
-                .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists());
-            if has_prev_lane_dir {
-                continue;
-            }
-            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
-        }
-        for (_, current) in replacements {
-            self.ensure_lane_snapshot_dir(&lanes_root, current)?;
-        }
-        for entry in retired {
-            self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
-        }
-        Ok(())
-    }
-    /// Relabel snapshot directories when lane aliases (and therefore slugs) change.
-    #[allow(clippy::too_many_lines)]
-    pub fn relabel_lane_geometry(
-        &mut self,
-        migrations: &[(&LaneConfigEntry, &LaneConfigEntry)],
-    ) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let Some(root) = self.primary_cold_root().cloned() else {
-            return Ok(());
-        };
-        if migrations.is_empty() {
-            return Ok(());
-        }
-        let lanes_root = root.join("lanes");
-        fs::create_dir_all(&lanes_root).wrap_err_with(|| {
-            format!(
-                "failed to create tiered lanes root {path}",
-                path = lanes_root.display()
-            )
-        })?;
-        for (previous, current) in migrations {
-            let old_dir = lane_snapshot_dir(&lanes_root, previous);
-            let new_dir = lane_snapshot_dir(&lanes_root, current);
-            if old_dir == new_dir || !old_dir.exists() {
-                continue;
-            }
-            if let Some(parent) = new_dir.parent() {
-                fs::create_dir_all(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to prepare parent {path} for lane snapshot relabel",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            if new_dir.exists() {
-                let retired_root = root.join("retired").join("lanes");
-                fs::create_dir_all(&retired_root).wrap_err_with(|| {
-                    format!(
-                        "failed to prepare retired lane root {path}",
-                        path = retired_root.display()
-                    )
-                })?;
-                let archive = unique_retired_lane_path(&retired_root, &current.kura_segment);
-                fs::rename(&new_dir, &archive).wrap_err_with(|| {
-                    format!(
-                        "failed to archive conflicting lane snapshot dir {path}",
-                        path = new_dir.display()
-                    )
-                })?;
-                let archive_parent = archive.parent();
-                let new_parent = new_dir.parent();
-                if let Some(parent) = archive_parent {
-                    Self::sync_dir(parent).wrap_err_with(|| {
-                        format!(
-                            "failed to sync retired lane snapshot dir {path}",
-                            path = parent.display()
-                        )
-                    })?;
-                }
-                if let Some(parent) = new_parent {
-                    if Some(parent) != archive_parent {
-                        Self::sync_dir(parent).wrap_err_with(|| {
-                            format!(
-                                "failed to sync lane snapshot directory {path}",
-                                path = parent.display()
-                            )
-                        })?;
-                    }
-                }
-            }
-            fs::rename(&old_dir, &new_dir).wrap_err_with(|| {
-                format!(
-                    "failed to relabel lane snapshot dir from {src} to {dst}",
-                    src = old_dir.display(),
-                    dst = new_dir.display()
-                )
-            })?;
-            let new_parent = new_dir.parent();
-            let old_parent = old_dir.parent();
-            if let Some(parent) = new_parent {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            if let Some(parent) = old_parent {
-                if Some(parent) != new_parent {
-                    Self::sync_dir(parent).wrap_err_with(|| {
-                        format!(
-                            "failed to sync lane snapshot directory {path}",
-                            path = parent.display()
-                        )
-                    })?;
-                }
-            }
-            iroha_logger::info!(
-                lane = %current.lane_id.as_u32(),
-                alias_before = previous.alias,
-                alias_after = current.alias,
-                dir = %new_dir.display(),
-                "tiered-state: lane snapshot directory relabelled"
-            );
-        }
-        Ok(())
+        self.prepare_lane_geometry_attempt(previous, current, replacements, &[])?
+            .resume(self)
     }
     fn ensure_cold_roots(&self) -> Result<()> {
         for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
@@ -1705,106 +1563,6 @@ impl TieredStateBackend {
                 path = path.display()
             ));
         }
-        Ok(())
-    }
-    #[allow(clippy::unused_self)]
-    fn ensure_lane_snapshot_dir(&self, lanes_root: &Path, entry: &LaneConfigEntry) -> Result<()> {
-        let dir = lane_snapshot_dir(lanes_root, entry);
-        fs::create_dir_all(&dir).wrap_err_with(|| {
-            format!(
-                "failed to prepare lane snapshot directory {path}",
-                path = dir.display()
-            )
-        })?;
-        iroha_logger::info!(
-            lane = %entry.lane_id.as_u32(),
-            alias = entry.alias,
-            dir = %dir.display(),
-            "tiered-state: lane snapshot directory provisioned"
-        );
-        Ok(())
-    }
-    #[allow(clippy::unused_self)]
-    fn retire_lane_snapshot_dir(
-        &mut self,
-        root: &Path,
-        lanes_root: &Path,
-        entry: &LaneConfigEntry,
-    ) -> Result<()> {
-        let dir = lane_snapshot_dir(lanes_root, entry);
-        if !dir.exists() {
-            return Ok(());
-        }
-        let retired_root = root.join("retired").join("lanes");
-        // Replay rollback can provision the same empty lane image that an earlier
-        // rollback already archived. Retain the first durable archive and remove
-        // only the redundant empty live image; any lane carrying state still
-        // follows the normal unique-archive path below.
-        if lane_snapshot_dir_is_empty(&dir)?
-            && has_matching_empty_retired_lane_snapshot(&retired_root, &entry.kura_segment)?
-        {
-            fs::remove_dir(&dir).wrap_err_with(|| {
-                format!(
-                    "failed to remove redundant empty lane snapshot directory {path}",
-                    path = dir.display()
-                )
-            })?;
-            if let Some(parent) = dir.parent() {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            iroha_logger::info!(
-                lane = %entry.lane_id.as_u32(),
-                alias = entry.alias,
-                source = %dir.display(),
-                "tiered-state: removed redundant empty lane snapshot directory"
-            );
-            return Ok(());
-        }
-        fs::create_dir_all(&retired_root).wrap_err_with(|| {
-            format!(
-                "failed to create retired lane directory {path}",
-                path = retired_root.display()
-            )
-        })?;
-        let dest = unique_retired_lane_path(&retired_root, &entry.kura_segment);
-        fs::rename(&dir, &dest).wrap_err_with(|| {
-            format!(
-                "failed to archive retired lane directory {path}",
-                path = dir.display()
-            )
-        })?;
-        let dest_parent = dest.parent();
-        let dir_parent = dir.parent();
-        if let Some(parent) = dest_parent {
-            Self::sync_dir(parent).wrap_err_with(|| {
-                format!(
-                    "failed to sync retired lane snapshot directory {path}",
-                    path = parent.display()
-                )
-            })?;
-        }
-        if let Some(parent) = dir_parent {
-            if Some(parent) != dest_parent {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-        }
-        iroha_logger::info!(
-            lane = %entry.lane_id.as_u32(),
-            alias = entry.alias,
-            source = %dir.display(),
-            target = %dest.display(),
-            "tiered-state: retired lane snapshot directory"
-        );
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
@@ -4100,78 +3858,6 @@ mod measured_bytes_impls {
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
     root.join(&entry.kura_segment)
 }
-fn lane_snapshot_dir_is_empty(path: &Path) -> Result<bool> {
-    Ok(fs::read_dir(path)
-        .wrap_err_with(|| {
-            format!(
-                "failed to inspect lane snapshot directory {path}",
-                path = path.display()
-            )
-        })?
-        .next()
-        .transpose()
-        .wrap_err_with(|| {
-            format!(
-                "failed to inspect lane snapshot entry below {path}",
-                path = path.display()
-            )
-        })?
-        .is_none())
-}
-fn has_matching_empty_retired_lane_snapshot(retired_root: &Path, stem: &str) -> Result<bool> {
-    if !retired_root.exists() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(retired_root).wrap_err_with(|| {
-        format!(
-            "failed to inspect retired lane snapshot directory {path}",
-            path = retired_root.display()
-        )
-    })? {
-        let entry = entry.wrap_err_with(|| {
-            format!(
-                "failed to inspect retired lane snapshot entry below {path}",
-                path = retired_root.display()
-            )
-        })?;
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        let Some(suffix) = name
-            .strip_prefix(stem)
-            .and_then(|suffix| suffix.strip_prefix('_'))
-        else {
-            continue;
-        };
-        let mut suffix_parts = suffix.split('_');
-        let Some(stamp) = suffix_parts.next() else {
-            continue;
-        };
-        let counter = suffix_parts.next();
-        if stamp.is_empty()
-            || !stamp.bytes().all(|byte| byte.is_ascii_digit())
-            || counter.is_some_and(|part| {
-                part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit())
-            })
-            || suffix_parts.next().is_some()
-            || !entry
-                .file_type()
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to inspect retired lane snapshot entry type at {path}",
-                        path = entry.path().display()
-                    )
-                })?
-                .is_dir()
-        {
-            continue;
-        }
-        if lane_snapshot_dir_is_empty(&entry.path())? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5580,16 +5266,9 @@ mod tests {
         use super::super::TieredSnapshotWorker;
         use std::sync::{Arc, mpsc};
         let temp = tempdir().unwrap();
-        let backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::new(
-            true,
-            0,
-            0,
-            0,
-            Some(temp.path().to_path_buf()),
-            None,
-            0,
-            0,
-        )));
+        let backend = Arc::new(crate::publication_lock::PublicationMutex::new(
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0),
+        ));
         backend
             .lock()
             .record_world_snapshot(&World::default())
@@ -5740,16 +5419,9 @@ mod tests {
         use super::super::TieredSnapshotWorker;
         use std::sync::{Arc, atomic::Ordering};
         let temp = tempdir().unwrap();
-        let backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::new(
-            true,
-            0,
-            0,
-            0,
-            Some(temp.path().to_path_buf()),
-            None,
-            0,
-            0,
-        )));
+        let backend = Arc::new(crate::publication_lock::PublicationMutex::new(
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0),
+        ));
         let inert = TieredSnapshotWorker::inert(
             Arc::clone(&backend),
             #[cfg(feature = "telemetry")]
@@ -7037,75 +6709,6 @@ mod tests {
         );
     }
     #[test]
-    fn repeated_empty_lane_retirement_reuses_exact_archive() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
-        let lane = LaneConfig {
-            id: LaneId::from(1),
-            alias: "retry".to_string(),
-            ..LaneConfig::default()
-        };
-        let expanded_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
-            .expect("expanded catalog");
-        let expanded_cfg = RuntimeLaneConfig::from_catalog(&expanded_catalog);
-        let baseline_cfg = RuntimeLaneConfig::default();
-        let lane_entry = expanded_cfg
-            .entry(LaneId::from(1))
-            .expect("expanded lane entry");
-        let lanes_root = temp.path().join("lanes");
-        let live_dir = lane_snapshot_dir(&lanes_root, lane_entry);
-        let retired_root = temp.path().join("retired").join("lanes");
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("provision lane");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("retire lane");
-        let initial_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").file_name())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(initial_archives.len(), 1);
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("reprovision lane");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("repeat lane retirement");
-        let retry_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").file_name())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            retry_archives, initial_archives,
-            "an exact empty retry must not create a rollback-only archive"
-        );
-        assert!(!live_dir.exists());
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("reprovision populated lane");
-        fs::write(live_dir.join("marker"), b"retained state").expect("seed retained state");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("retire populated lane");
-        let populated_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            populated_archives.len(),
-            initial_archives.len() + 1,
-            "a populated normal retirement must retain a distinct archive"
-        );
-        assert!(
-            populated_archives
-                .iter()
-                .any(|archive| archive.join("marker").is_file()),
-            "the populated retirement archive must preserve lane state"
-        );
-    }
-    #[test]
     fn lane_snapshot_dirs_relabel_on_alias_change() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
@@ -7148,7 +6751,14 @@ mod tests {
             .entry(LaneId::SINGLE)
             .expect("updated lane entry");
         backend
-            .relabel_lane_geometry(&[(old_entry, new_entry)])
+            .prepare_lane_geometry_attempt(
+                &initial_cfg,
+                &updated_cfg,
+                &[],
+                &[(old_entry, new_entry)],
+            )
+            .expect("capture snapshot relabel")
+            .resume(&mut backend)
             .expect("relabel snapshot directories");
         let new_dir = lane_snapshot_dir(&lanes_root, new_entry);
         assert!(

@@ -128,11 +128,21 @@ fn native_amx_prevote_byte_failures_have_precommit_error_classification() {
     assert!(!construction.requires_restart_recovery());
     let budget = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
         NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-            "configured Native AMX artifact pair is oversized".to_owned(),
+            "Native AMX artifact exceeds the hard protocol bound".to_owned(),
         ),
     );
     assert!(matches!(&budget, V2ApplyError::Validation(_)));
     assert!(!budget.requires_restart_recovery());
+    let local = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalCapacity {
+            required: 65,
+            limit: 64,
+        },
+    );
+    assert!(matches!(
+        local.local_refusal(),
+        Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+    ));
 }
 struct ApplyFixture {
     context: wire::HeightContext,
@@ -1451,15 +1461,26 @@ fn merge_entry_with_reservation(
 fn complete_empty_fixture_block(mut block: SignedBlock, key: &KeyPair) -> SignedBlock {
     assert_eq!(block.external_entrypoints_cloned().count(), 0);
     let already_complete = block.has_results().then(|| block.clone());
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-block.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach complete empty fixture execution results");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
+            &[],
+            Vec::new(),
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach complete empty fixture execution results");
     if let Some(already_complete) = already_complete {
         assert_eq!(
             block, already_complete,
@@ -2895,4 +2916,67 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         outcome_paths,
         _queue_root: queue_root,
     }
+}
+
+#[test]
+fn lane_lifecycle_local_storage_and_publication_busy_never_reject_proposals() {
+    use crate::state::LaneLifecycleError;
+    let release = mv::ReleaseNotification::default();
+    for error in [
+        LaneLifecycleError::Storage("tiered owner requires recovery".to_owned()),
+        LaneLifecycleError::GeometryStorage(crate::kura::Error::IO(
+            std::io::Error::other("retained journal failure"),
+            std::path::PathBuf::from("lane_geometry_journal.norito"),
+        )),
+        LaneLifecycleError::DrainObservation(crate::state::MergeLedgerCommitError::Persistence(
+            crate::kura::Error::IO(
+                std::io::Error::other("unreadable exact retirement marker"),
+                std::path::PathBuf::from(".lane-incarnation.norito"),
+            ),
+        )),
+        LaneLifecycleError::PublicationBusy {
+            field: "lane geometry guard",
+            wait: release.observe(),
+        },
+    ] {
+        let classified = V2ApplyService::classify_lane_lifecycle_validation_error(error);
+        assert!(matches!(
+            classified.local_refusal(),
+            Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert!(classified.requires_restart_recovery());
+    }
+}
+
+#[test]
+fn committed_state_geometry_refusal_retains_source_and_requires_recovery() {
+    use crate::state::{LaneLifecycleError, storage_transactions::TransactionsBlockError};
+    use std::error::Error as _;
+
+    let release = mv::ReleaseNotification::default();
+    let observation = release.observe();
+    let error = V2ApplyError::CommittedStatePublication(TransactionsBlockError::from(
+        LaneLifecycleError::PublicationBusy {
+            field: "State publication writer",
+            wait: observation.clone(),
+        },
+    ));
+    assert!(error.requires_restart_recovery());
+    assert!(matches!(
+        error.local_refusal(),
+        Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+    ));
+    let membership_error = error
+        .source()
+        .and_then(|source| source.downcast_ref::<TransactionsBlockError>())
+        .expect("post-Kura failure retains its exact State commit source");
+    let lifecycle_error = membership_error
+        .source()
+        .and_then(|source| source.downcast_ref::<LaneLifecycleError>())
+        .expect("State commit source retains its exact local geometry refusal");
+    assert!(matches!(
+        lifecycle_error,
+        LaneLifecycleError::PublicationBusy { field: "State publication writer", wait }
+            if wait == &observation
+    ));
 }

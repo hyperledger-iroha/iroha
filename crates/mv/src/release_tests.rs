@@ -144,6 +144,110 @@ fn inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases()
 }
 
 #[test]
+fn acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard() {
+    let source = ReleaseNotification::default();
+    let physical = Mutex::new(());
+    let mut wait = source.observe().wait_for_release();
+    let wake = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wake).is_pending());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        source.with_acquisition_unwind_notification(|| {
+            let _raw = physical.lock().unwrap();
+            panic!("clone failed before returning its acquired writer");
+        });
+    }));
+    assert!(failure.is_err());
+    assert!(matches!(
+        physical.try_lock(),
+        Err(std::sync::TryLockError::Poisoned(_))
+    ));
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut wait, &wake).is_ready());
+    assert!(matches!(
+        PublicationPreparationError::<()>::after_failed_acquisition(source.observe()),
+        PublicationPreparationError::Poisoned
+    ));
+
+    let source = ReleaseNotification::default();
+    let physical = Mutex::new(());
+    let mut wait = source.observe().wait_for_release();
+    let guard = source.with_acquisition_unwind_notification(|| physical.lock().unwrap());
+    let guard = source.poisoning_guard(guard);
+    assert!(poll(&mut wait, &wake).is_pending());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    drop(guard);
+    assert!(poll(&mut wait, &wake).is_ready());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn storage_first_undo_clone_panic_wakes_an_already_registered_retry() {
+    use std::sync::{Barrier, atomic::AtomicBool};
+
+    #[derive(Debug)]
+    struct CloneGate {
+        value: u64,
+        armed: Arc<AtomicBool>,
+        entered: Arc<Barrier>,
+        finish: Arc<Barrier>,
+    }
+    impl Clone for CloneGate {
+        fn clone(&self) -> Self {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.entered.wait();
+                self.finish.wait();
+                panic!("first undo clone failed while a retry was waiting");
+            }
+            Self {
+                value: self.value,
+                armed: Arc::clone(&self.armed),
+                entered: Arc::clone(&self.entered),
+                finish: Arc::clone(&self.finish),
+            }
+        }
+    }
+    let armed = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(Barrier::new(2));
+    let finish = Arc::new(Barrier::new(2));
+    let value = CloneGate {
+        value: 7,
+        armed: Arc::clone(&armed),
+        entered: Arc::clone(&entered),
+        finish: Arc::clone(&finish),
+    };
+    let target = Storage::from_iter([(1_u64, value.clone())]);
+    let mut tip = target.block();
+    let _ = tip.insert(1, value.clone());
+    tip.commit();
+    let mut block = target.block();
+    let _ = block.insert(1, value);
+    let original = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
+    armed.store(true, Ordering::SeqCst);
+    std::thread::scope(|scope| {
+        let failing = scope.spawn(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(target.block())))
+        });
+        entered.wait();
+        let (journal, error) = original
+            .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
+            .err()
+            .expect("raw undo writer remains held during its clone");
+        let mut wait = busy(error);
+        let wake = Arc::new(WakeCount::default());
+        assert!(poll(&mut wait, &wake).is_pending());
+        finish.wait();
+        assert!(failing.join().unwrap().is_err());
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut wait, &wake).is_ready());
+        let (_, error) = journal
+            .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
+            .err()
+            .expect("poison requires owner reconstruction");
+        assert!(matches!(error, PublicationPreparationError::Poisoned));
+    });
+}
+
+#[test]
 fn cell_abort_detach_and_publication_release_the_actual_busy_writer() {
     for finish in 0..5 {
         let target = Cell::new(10_u64);

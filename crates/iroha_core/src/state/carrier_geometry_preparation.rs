@@ -1,9 +1,10 @@
 //! Exact replicated geometry inputs retained before State journals are consumed.
 //!
 //! This owner binds the actual MV predecessor and accepted successor. It grants
-//! no storage publication authority. TODO: join a pure Kura retirement scan and
-//! retained route/resource reservation before exposing geometry persistence;
-//! the existing raw commit guards remain in force until that owner is complete.
+//! no storage publication authority. The private consuming carrier can retain
+//! exact raw/tiered progress under an already-held Kura lease. TODO: join source,
+//! retirement and complete pre-vote resource owners before exposing that consumer;
+//! physical custody alone cannot authorize geometry or State publication.
 
 use super::*;
 
@@ -17,6 +18,199 @@ pub(super) struct PreparedCarrierGeometry {
     _manifests: LaneManifestRegistryHandle,
     _pending: Option<PendingAutoscaleLaneLifecycle>,
     _certified_frontiers: BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
+    network_id: NetworkId,
+    raw: Option<crate::kura::RawGeometryAttempt>,
+    tiered: Option<tiered::TieredGeometryAttempt>,
+    // Keep the original Kura alive behind all captured physical custody.
+    kura: Arc<Kura>,
+}
+
+/// Borrowed storage completion at this exact held boundary, not State permission.
+/// Keeping both owners borrowed prevents a mapping handoff from outliving the
+/// original geometry or the lease which authenticated its completed catalog.
+pub(super) struct CompletedCarrierGeometry<'geometry, 'kura> {
+    geometry: &'geometry PreparedCarrierGeometry,
+    _lease: &'geometry crate::kura::KuraPublicationLease<'kura>,
+}
+
+impl CompletedCarrierGeometry<'_, '_> {
+    /// Original updated mapping for the enclosing admitted State-effect owner.
+    /// This does not mutate DA cursors or permit rebuilding a mapping from State.
+    pub(super) fn updated_da_mapping(&self) -> Option<&LaneConfig> {
+        self.geometry
+            ._pending
+            .as_ref()
+            .filter(|pending| pending.transition.requires_geometry())
+            .map(|pending| &pending.catalog_update.updated_lane_config)
+    }
+}
+
+impl PreparedCarrierGeometry {
+    /// Capture descriptors once without changing files, catalogs or State caches.
+    /// The enclosing owner must cover this preparation with retained capacity;
+    /// this seam supplies no admission policy or publication authorization.
+    pub(super) fn prepare_under(
+        &mut self,
+        backend: &tiered::TieredStateBackend,
+        lease: &crate::kura::KuraPublicationLease<'_>,
+    ) -> Result<(), LaneLifecycleError> {
+        if !lease.belongs_to(&self.kura) {
+            return Err(LaneLifecycleError::Storage(
+                "carrier geometry lease belongs to another original Kura".to_owned(),
+            ));
+        }
+        let Some(pending) = self
+            ._pending
+            .as_ref()
+            .filter(|pending| pending.transition.requires_geometry())
+        else {
+            return Ok(());
+        };
+        let update = &pending.catalog_update;
+        if self.tiered.is_none() {
+            let diff = lane_topology_diff(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.replaced_lane_ids,
+            );
+            self.tiered = Some(
+                backend
+                    .prepare_lane_geometry_attempt(
+                        &update.previous_lane_config,
+                        &update.updated_lane_config,
+                        &diff.replacements,
+                        &diff.relabelled,
+                    )
+                    .map_err(|error| {
+                        LaneLifecycleError::Storage(format!(
+                            "carrier tiered geometry preparation: {error:#}"
+                        ))
+                    })?,
+            );
+        }
+        self.tiered
+            .as_ref()
+            .expect("tiered descriptor was retained above")
+            .authenticate_backend(backend)
+            .map_err(|error| {
+                LaneLifecycleError::Storage(format!("carrier tiered geometry binding: {error:#}"))
+            })?;
+        if self.raw.is_none() {
+            let request = crate::kura::ReplayGeometryBindingRequest {
+                previous: &update.previous_lane_config,
+                updated: &update.updated_lane_config,
+                previous_incarnations: &update.previous_lane_incarnations,
+                updated_incarnations: &update.updated_lane_incarnations,
+                previous_activation_heights: &update.previous_lane_incarnation_activation_heights,
+                updated_activation_heights: &update.updated_lane_incarnation_activation_heights,
+                previous_lineage_root: lane_incarnation_lineage_root(
+                    &self.network_id,
+                    &update.previous_lane_incarnation_lineage,
+                ),
+                updated_lineage_root: lane_incarnation_lineage_root(
+                    &self.network_id,
+                    &update.updated_lane_incarnation_lineage,
+                ),
+                transition_height: self._header.height().get(),
+            };
+            self.raw = Some(
+                lease
+                    .begin_raw_geometry_attempt(
+                        &request,
+                        &update.replaced_lane_ids,
+                        &self._certified_frontiers,
+                    )
+                    .map_err(LaneLifecycleError::GeometryStorage)?,
+            );
+        }
+        Ok(())
+    }
+
+    /// Resume only previously prepared operations under the original Kura lease.
+    /// Only the private, eventually authorized carrier consumer may invoke this
+    /// seam. Success retains the raw claim at FilesApplied; it neither publishes
+    /// the catalog nor updates DA cursors, manifests, runtime cells or World.
+    /// A catalog retry only rechecks completed tiered work; it cannot return to
+    /// raw Apply or create replacement descriptors after choosing publication.
+    pub(super) fn resume_under(
+        &mut self,
+        backend: &mut tiered::TieredStateBackend,
+        lease: &crate::kura::KuraPublicationLease<'_>,
+    ) -> Result<(), LaneLifecycleError> {
+        if !lease.belongs_to(&self.kura) {
+            return Err(LaneLifecycleError::Storage(
+                "carrier geometry lease belongs to another original Kura".to_owned(),
+            ));
+        }
+        if !self
+            ._pending
+            .as_ref()
+            .is_some_and(|pending| pending.transition.requires_geometry())
+        {
+            return Ok(());
+        }
+        let tiered = self.tiered.as_mut().ok_or_else(|| {
+            LaneLifecycleError::Storage(
+                "carrier geometry has no previously prepared tiered owner".to_owned(),
+            )
+        })?;
+        let raw = self.raw.as_mut().ok_or_else(|| {
+            LaneLifecycleError::Storage(
+                "carrier geometry has no previously prepared raw owner".to_owned(),
+            )
+        })?;
+        tiered.authenticate_backend(backend).map_err(|error| {
+            LaneLifecycleError::Storage(format!("carrier tiered geometry binding: {error:#}"))
+        })?;
+        match raw.phase() {
+            crate::kura::RawGeometryPhase::PublishingCatalog
+            | crate::kura::RawGeometryPhase::CatalogPublished => {
+                tiered.authenticate_applied(backend).map_err(|error| {
+                    LaneLifecycleError::Storage(format!(
+                        "retained carrier completed tiered geometry: {error:#}"
+                    ))
+                })?;
+                if raw.phase() == crate::kura::RawGeometryPhase::CatalogPublished {
+                    raw.reauthenticate_catalog_under(lease)
+                        .map_err(LaneLifecycleError::GeometryStorage)?;
+                }
+            }
+            _ => {
+                raw.resume_under(lease)
+                    .map_err(LaneLifecycleError::GeometryStorage)?;
+                tiered.resume(backend).map_err(|error| {
+                    LaneLifecycleError::Storage(format!(
+                        "retained carrier tiered geometry: {error:#}"
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Finish the exact retained storage operation before any State visibility.
+    /// Refusal leaves every journal, pending sync and namespace receipt in this
+    /// owner. Success authenticates the original catalog under the same lease;
+    /// it grants no source, resource, retirement or State publication authority.
+    pub(super) fn complete_under<'geometry, 'kura>(
+        &'geometry mut self,
+        backend: &mut tiered::TieredStateBackend,
+        lease: &'geometry crate::kura::KuraPublicationLease<'kura>,
+    ) -> Result<CompletedCarrierGeometry<'geometry, 'kura>, LaneLifecycleError> {
+        self.resume_under(backend, lease)?;
+        if let Some(raw) = &mut self.raw {
+            if raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished {
+                raw.publish_catalog_under(lease, None)
+                    .map_err(LaneLifecycleError::GeometryStorage)?;
+            }
+            raw.reauthenticate_catalog_under(lease)
+                .map_err(LaneLifecycleError::GeometryStorage)?;
+        }
+        Ok(CompletedCarrierGeometry {
+            geometry: self,
+            _lease: lease,
+        })
+    }
 }
 
 impl StateBlock<'_> {
@@ -228,6 +422,10 @@ impl StateBlock<'_> {
             _manifests: Arc::clone(&self.lane_manifests),
             _pending: self.pending_autoscale_lifecycle.clone(),
             _certified_frontiers: certified_frontiers,
+            network_id: self.network_id,
+            raw: None,
+            tiered: None,
+            kura: Arc::clone(&self.state_ref.kura),
         })
     }
 }

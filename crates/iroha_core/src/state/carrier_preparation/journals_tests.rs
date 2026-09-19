@@ -4,6 +4,46 @@ use super::*;
 use crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveBoundsV1;
 use mv::storage::StorageReadOnly;
 
+fn reserve_provider_for_test(
+    archive: &Arc<ProviderIngestFinalizedArchiveV1>,
+    state: &State,
+    proposal: &iroha_data_model::block::SignedBlock,
+    context: &iroha_data_model::block::consensus_v2::HeightContext,
+) -> ProviderCandidateCapture {
+    archive
+        .try_reserve_candidate(
+            crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1::try_new(
+                context.network_id,
+                proposal.header().height().get(),
+                *proposal.hash().as_ref(),
+                proposal.header().creation_time_ms,
+            )
+            .unwrap(),
+            &state.kura,
+        )
+        .unwrap()
+}
+
+fn reserve_reputation_for_test(
+    archive: &Arc<ReputationFinalizedArchive>,
+    state: &State,
+    proposal: &iroha_data_model::block::SignedBlock,
+    context: &iroha_data_model::block::consensus_v2::HeightContext,
+) -> ReputationCandidateCapture {
+    archive
+        .try_reserve_candidate(
+            crate::query::reputation_finalized::ReputationFinalizedArchiveKeyV1::try_new(
+                context.network_id,
+                proposal.header().height().get(),
+                *proposal.hash().as_ref(),
+            )
+            .unwrap(),
+            proposal.header().creation_time_ms,
+            &state.kura,
+        )
+        .unwrap()
+}
+
 fn admit_runtime_for_test(
     inputs: RuntimeJournalInputs<'_, '_>,
 ) -> Result<(), std::convert::Infallible> {
@@ -31,8 +71,193 @@ fn admit_journals_for_test(
     Ok(())
 }
 
+fn enable_cold_tiered_capture(state: &mut State) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    *state.tiered_backend.lock() = TieredStateBackend::new(
+        true,
+        0,
+        0,
+        0,
+        Some(directory.path().to_path_buf()),
+        None,
+        0,
+        0,
+    );
+    state.tiered_snapshot_worker = TieredSnapshotWorker::inert(
+        Arc::clone(&state.tiered_backend),
+        #[cfg(feature = "telemetry")]
+        None,
+    );
+    directory
+}
+
 #[test]
-fn journal_admission_refusal_drops_the_complete_original_carrier() {
+fn retained_validation_match_binds_original_context_and_signed_proposal() {
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let journals = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"))
+        .prepare_journals(None, None, admit_journals_for_test)
+        .unwrap_or_else(|error| panic!("capture original candidate: {error}"));
+
+    assert!(journals.matches_validation_candidate(&context, &proposal));
+    assert!(journals.matches_validation_candidate(&context, journals.valid.as_ref()));
+    let mut other_context = context.clone();
+    other_context.roster[0].power += 1;
+    assert!(!journals.matches_validation_candidate(&other_context, &proposal));
+
+    let mut other_signed_proposal = proposal.clone();
+    let key =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xFC; 32], iroha_crypto::Algorithm::BlsNormal)
+            .unwrap();
+    other_signed_proposal.sign(key.private_key(), 99);
+    assert_eq!(proposal.hash(), other_signed_proposal.hash());
+    assert!(!journals.matches_validation_candidate(&context, &other_signed_proposal));
+    assert!(journals.matches_validation_candidate(&context, &proposal));
+    drop(journals);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn journal_admission_refusal_prevents_cold_tiered_capture() {
+    let (mut state, proposal, topology, context) = super::super::tests::fixture();
+    let directory = enable_cold_tiered_capture(&mut state);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    tiered_publication::capture_observer::observe(|counts| {
+        let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+            .unwrap_or_else(|(_, error)| panic!("prepare cold candidate: {error}"));
+        assert_eq!(counts.captured(), 0, "preparation must await admission");
+        let error = prepared
+            .prepare_journals(None, None, |original| {
+                assert_eq!(counts.captured(), 0);
+                assert_eq!(
+                    original.state.world.musubi_resolver_index_checkpoints.len(),
+                    1
+                );
+                Err::<(), _>("candidate memory exhausted")
+            })
+            .err()
+            .expect("journal admission must refuse");
+        assert!(matches!(
+            error,
+            CarrierJournalPreparationError::JournalAdmission {
+                error: "candidate memory exhausted",
+                ..
+            }
+        ));
+        drop(error);
+        assert_eq!(counts.captured(), 0, "refusal must not allocate a snapshot");
+        assert_eq!(counts.released(), 0);
+    });
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    assert!(state.block_hashes.inner.try_write().is_some());
+    drop(state.world.block());
+}
+
+#[test]
+fn admitted_cold_tiered_capture_retains_exact_world_and_drops_before_reservation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Reservation {
+        counts: Arc<tiered_publication::capture_observer::Counts>,
+        snapshots_released_first: Arc<AtomicUsize>,
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) {
+            self.snapshots_released_first
+                .store(self.counts.released(), Ordering::SeqCst);
+        }
+    }
+
+    let (mut state, proposal, topology, context) = super::super::tests::fixture();
+    let directory = enable_cold_tiered_capture(&mut state);
+    let key: StatePath = "admitted-cold-baseline".parse().unwrap();
+    state
+        .world
+        .smart_contract_state
+        .insert(key.clone(), vec![1_u8, 2, 3]);
+    let reference_directory = tempfile::tempdir().unwrap();
+    let mut reference = TieredStateBackend::new(
+        true,
+        0,
+        0,
+        0,
+        Some(reference_directory.path().to_path_buf()),
+        None,
+        0,
+        0,
+    );
+    tiered_publication::capture_observer::observe(|counts| {
+        let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
+            .unwrap_or_else(|(_, error)| panic!("prepare cold candidate: {error}"));
+        let events = prepared._publication_events.clone();
+        let prefix = prepared.execution_prefix_commitment();
+        let released_first = Arc::new(AtomicUsize::new(0));
+        let journals = prepared
+            .prepare_journals(None, None, |original| {
+                assert_eq!(counts.captured(), 0);
+                // Independent persistence of the exact immutable prepared World
+                // provides the full baseline reference, including untouched keys.
+                reference
+                    .record_world_snapshot_with_payload(
+                        &original
+                            .state
+                            .world
+                            .tiered_snapshot_payload_with_scope(true),
+                    )
+                    .unwrap();
+                admit_journals_for_test(original)?;
+                Ok::<_, std::convert::Infallible>(Reservation {
+                    counts: Arc::clone(&counts),
+                    snapshots_released_first: Arc::clone(&released_first),
+                })
+            })
+            .unwrap();
+        assert_eq!(counts.captured(), 1);
+        assert_eq!(counts.released(), 0);
+        assert_eq!(journals.publication_events, events);
+        assert_eq!(journals.execution_prefix_commitment(), prefix);
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.kura.blocks_count(), 0);
+        assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        let expected = norito::json::to_json(reference.last_manifest().unwrap()).unwrap();
+        // Change the live World only after detachment: the retained snapshot
+        // must contain the prepared candidate, never substitute current values.
+        let mut later = state.world.block();
+        later.smart_contract_state.insert(key, vec![91_u8, 92, 93]);
+        later.commit();
+        {
+            let mut backend = state.tiered_backend.lock();
+            backend
+                .record_world_snapshot_with_payload(
+                    journals
+                        .tiered_snapshot
+                        .payload_for_test()
+                        .expect("cold payload"),
+                )
+                .unwrap();
+            assert_eq!(
+                norito::json::to_json(backend.last_manifest().unwrap()).unwrap(),
+                expected
+            );
+        }
+        drop(journals);
+        assert_eq!(counts.released(), 1);
+        assert_eq!(released_first.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() {
     #[derive(Debug, PartialEq, Eq)]
     enum Capacity {
         Exhausted,
@@ -41,16 +266,19 @@ fn journal_admission_refusal_drops_the_complete_original_carrier() {
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let directory_path = directory.path().canonicalize().unwrap();
-    let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(1, 1, 1, 1, 1, 1, 1).unwrap();
+    let bounds =
+        ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
+            .unwrap();
     let archive = Arc::new(
         ProviderIngestFinalizedArchiveV1::try_open(directory_path.join("archive"), bounds).unwrap(),
     );
+    let original_archive = reserve_provider_for_test(&archive, &state, &proposal, &context);
     let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
     let mut called = false;
-    // This archive cannot admit even an empty projection. The whole-journal
-    // refusal must win before that projection or any retained-value capture.
-    let result = prepared.prepare_journals(Some(&archive), None, |original| {
+    let original_prefix = prepared.execution_prefix_commitment();
+    let original_state_pointer = std::ptr::from_ref(prepared.state.as_ref());
+    let result = prepared.prepare_journals(Some(original_archive), None, |original| {
         assert!(!called);
         called = true;
         assert_eq!(
@@ -71,12 +299,42 @@ fn journal_admission_refusal_drops_the_complete_original_carrier() {
         );
         Err::<(), _>(Capacity::Exhausted)
     });
-    assert!(matches!(
-        result,
-        Err(CarrierJournalPreparationError::JournalAdmission(
-            Capacity::Exhausted
-        ))
-    ));
+    let Err(CarrierJournalPreparationError::JournalAdmission {
+        carrier,
+        provider,
+        reputation,
+        error: Capacity::Exhausted,
+    }) = result
+    else {
+        panic!("resource refusal returns every original owner");
+    };
+    assert_eq!(
+        std::ptr::from_ref(carrier.state.as_ref()),
+        original_state_pointer
+    );
+    assert_eq!(carrier.execution_prefix_commitment(), original_prefix);
+    assert!(state.block_hashes.inner.try_write().is_none());
+    let reserved = archive
+        .try_reserve_candidate(
+            crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1::try_new(
+                context.network_id,
+                proposal.header().height().get(),
+                *proposal.hash().as_ref(),
+                proposal.header().creation_time_ms,
+            )
+            .unwrap(),
+            &state.kura,
+        )
+        .err()
+        .expect("returned predecessor remains reserved");
+    assert!(matches!(reserved,
+        crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. }));
+    // Retry synchronously on the original borrowed owner; no second execution.
+    let journals = carrier
+        .prepare_journals(provider, reputation, admit_journals_for_test)
+        .unwrap();
+    assert_eq!(journals.execution_prefix_commitment(), original_prefix);
+    drop(journals);
     assert!(called);
     assert_eq!(
         std::fs::read_dir(directory_path.join("archive/records"))
@@ -88,14 +346,7 @@ fn journal_admission_refusal_drops_the_complete_original_carrier() {
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    // Reacquire every State journal through the real candidate constructor.
-    let retry = super::super::tests::prepare(&state, proposal, &topology, &context)
-        .unwrap_or_else(|(_, error)| panic!("prepare after journal refusal: {error}"));
-    drop(
-        retry
-            .prepare_journals(None, None, admit_journals_for_test)
-            .unwrap(),
-    );
+    assert!(state.block_hashes.inner.try_write().is_some());
 }
 
 #[test]
@@ -302,6 +553,112 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     drop(retry);
 }
 
+#[cfg(feature = "telemetry")]
+#[test]
+fn prepared_journals_capture_dirty_telemetry_from_original_world() {
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let mut prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("prepare telemetry candidate: {error}"));
+    let counts = ParliamentAttemptCountsV1 {
+        status_counts: [1, 2, 3, 4, 5, 6],
+        stage_counts: [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+    };
+    // Exercise the capture component with distinct dirty values. This fixture
+    // does not publish or authorize the manually changed candidate journals.
+    *prepared.state.world.parliament_attempt_counts.get_mut() = counts;
+    let citizen = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    prepared.state.world.citizens.insert(
+        citizen.clone(),
+        CitizenshipRecord::new(citizen, Quantity::from(10_u64), 1),
+    );
+    *prepared
+        .state
+        .world
+        .musubi_replication_shortfall_releases
+        .get_mut() = 17;
+    let journals = prepared
+        .prepare_journals(None, None, |original| {
+            assert!(original.state.world.parliament_attempt_counts.is_dirty());
+            assert!(original.state.world.citizens.is_dirty());
+            assert_eq!(
+                *original.state.world.parliament_attempt_counts.get(),
+                counts
+            );
+            assert_eq!(original.state.world.citizens.len(), 1);
+            admit_journals_for_test(original)
+        })
+        .unwrap();
+    assert_eq!(
+        journals.effects.committed_parliament_attempt_counts,
+        Some(counts)
+    );
+    assert_eq!(journals.effects.committed_citizens_total, Some(1));
+    assert_eq!(
+        journals
+            .effects
+            .committed_musubi_replication_shortfall_releases,
+        17
+    );
+    assert!(state.world.citizens.view().is_empty());
+    assert_eq!(
+        *state.world.parliament_attempt_counts.view().get(),
+        ParliamentAttemptCountsV1::default()
+    );
+
+    // A later live World cannot replace the exact values retained at capture.
+    let mut later = state.world.block();
+    *later.parliament_attempt_counts.get_mut() = ParliamentAttemptCountsV1::default();
+    *later.musubi_replication_shortfall_releases.get_mut() = 99;
+    later.commit();
+    assert_eq!(
+        journals.effects.committed_parliament_attempt_counts,
+        Some(counts)
+    );
+    assert_eq!(journals.effects.committed_citizens_total, Some(1));
+    assert_eq!(
+        journals
+            .effects
+            .committed_musubi_replication_shortfall_releases,
+        17
+    );
+    drop(journals);
+    assert!(state.world.citizens.view().is_empty());
+    assert_eq!(
+        *state
+            .world
+            .musubi_replication_shortfall_releases
+            .view()
+            .get(),
+        99
+    );
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn prepared_journals_preserve_clean_parliament_gauge_suppression() {
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("prepare clean telemetry candidate: {error}"));
+    assert!(!prepared.state.world.parliament_attempt_counts.is_dirty());
+    assert!(!prepared.state.world.citizens.is_dirty());
+    let shortfall = *prepared
+        .state
+        .world
+        .musubi_replication_shortfall_releases
+        .get();
+    let journals = prepared
+        .prepare_journals(None, None, admit_journals_for_test)
+        .unwrap();
+    assert_eq!(journals.effects.committed_parliament_attempt_counts, None);
+    assert_eq!(journals.effects.committed_citizens_total, None);
+    assert_eq!(
+        journals
+            .effects
+            .committed_musubi_replication_shortfall_releases,
+        shortfall
+    );
+}
+
 #[test]
 fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_dropped() {
     fn assert_static_send<T: Send + 'static>() {}
@@ -337,57 +694,57 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
 }
 
 #[test]
-fn archive_capacity_failure_drops_candidate_journals_without_artifact_writes() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    struct Reservation<'a> {
-        state: &'a State,
-        released: Arc<AtomicUsize>,
-        originals_released_first: Arc<AtomicBool>,
-    }
-    impl Drop for Reservation<'_> {
+fn archive_capacity_failure_retains_static_original_journals_without_artifact_writes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Reservation(Arc<AtomicBool>);
+    impl Drop for Reservation {
         fn drop(&mut self) {
-            self.originals_released_first.store(
-                self.state.block_hashes.inner.try_write().is_some(),
-                Ordering::SeqCst,
-            );
-            self.released.fetch_add(1, Ordering::SeqCst);
+            self.0.store(true, Ordering::SeqCst);
         }
     }
+    fn assert_static_send<T: Send + 'static>() {}
+    assert_static_send::<StagedCarrierCapture<Reservation>>();
     let (state, proposal, topology, context) = super::super::tests::fixture();
+    let state: Arc<State> = Arc::from(state);
+    let original_state = Arc::downgrade(&state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let directory_path = directory.path().canonicalize().unwrap();
-    // One byte cannot encode even the empty provider projection. The configured
-    // archive accepts the bound, but capture must refuse before any durable write.
     let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(1, 1, 1, 1, 1, 1, 1).unwrap();
     let archive = Arc::new(
         ProviderIngestFinalizedArchiveV1::try_open(directory_path.join("archive"), bounds).unwrap(),
     );
-    let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
+    let predecessor = reserve_provider_for_test(&archive, &state, &proposal, &context);
+    let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
-    assert!(state.block_hashes.inner.try_write().is_none());
-    let released = Arc::new(AtomicUsize::new(0));
-    let originals_released_first = Arc::new(AtomicBool::new(false));
-    let error = prepared
-        .prepare_journals(Some(&archive), None, |original| {
-            admit_journals_for_test(original)?;
-            Ok::<_, std::convert::Infallible>(Reservation {
-                state: &state,
-                released: Arc::clone(&released),
-                originals_released_first: Arc::clone(&originals_released_first),
+    let prefix = prepared.execution_prefix_commitment();
+    let released = Arc::new(AtomicBool::new(false));
+    let (carrier, error) = {
+        let failure = prepared
+            .prepare_journals(Some(predecessor), None, |_| {
+                Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released)))
             })
-        })
-        .err()
-        .unwrap();
-    assert_eq!(released.load(Ordering::SeqCst), 1);
-    assert!(originals_released_first.load(Ordering::SeqCst));
-    assert!(
-        matches!(error, CarrierJournalPreparationError::Provider(
-        crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::RecordTooLarge {
-            observed, maximum: 1,
+            .err()
+            .expect("configured archive bound refuses");
+        match failure {
+            CarrierJournalPreparationError::ArchivePreparation { carrier, error } => {
+                (carrier, error)
+            }
+            _ => panic!("archive refusal must retain static execution"),
         }
-    ) if observed > 1),
+    };
+    assert!(
+        matches!(&error, CarrierArchivePreparationError::Provider(error)
+        if matches!(error.as_ref(), crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::RecordTooLarge { observed, maximum: 1 } if *observed > 1)),
         "{error}"
+    );
+    assert!(!released.load(Ordering::SeqCst));
+    assert!(state.block_hashes.inner.try_write().is_some());
+    drop(state.world.block());
+    drop(state.transactions.block());
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
     );
     assert_eq!(
         std::fs::read_dir(directory_path.join("archive/records"))
@@ -395,22 +752,32 @@ fn archive_capacity_failure_drops_candidate_journals_without_artifact_writes() {
             .count(),
         0
     );
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
-        before
-    );
-    assert_eq!(state.transactions.latest_height(), 0);
-    assert_eq!(state.kura.blocks_count(), 0);
-    let retry = super::super::tests::prepare(&state, proposal, &topology, &context)
-        .unwrap_or_else(|(_, error)| panic!("prepare after resource refusal: {error}"));
-    retry
-        .prepare_journals(None, None, admit_journals_for_test)
-        .unwrap();
+    let carrier = *carrier;
+    drop(state);
+    assert!(original_state.upgrade().is_none());
+    let carrier = std::thread::spawn(move || {
+        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
+        let (carrier, _) = carrier
+            .try_complete()
+            .err()
+            .expect("unchanged limit still refuses");
+        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
+        carrier
+    })
+    .join()
+    .unwrap();
+    assert!(!released.load(Ordering::SeqCst));
+    drop(carrier);
+    assert!(released.load(Ordering::SeqCst));
 }
 
-#[test]
-fn prepared_archive_projections_survive_state_journal_decomposition() {
-    use crate::query::reputation_finalized::ReputationFinalizedArchiveBounds;
+/// Signed genesis with the governed policies required by both archive captures.
+pub(in crate::state::carrier_preparation::journals) fn archive_fixture() -> (
+    Box<State>,
+    iroha_data_model::block::SignedBlock,
+    crate::sumeragi::network_topology::Topology,
+    iroha_data_model::block::consensus_v2::HeightContext,
+) {
     use iroha_data_model::{
         isi::{
             Grant, Register,
@@ -484,7 +851,7 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
     };
     // Activate every governed feed required by the real reputation projection
     // through signed genesis, preserving its permissions and policy histories.
-    let (state, proposal, topology, context) = super::super::tests::fixture_with_instructions(&[
+    super::super::tests::fixture_with_instructions(&[
         Grant::account_permission(
             Permission::new(
                 "CanManageSorafsReputationJournalPolicy".to_owned(),
@@ -520,7 +887,14 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
         )
         .into(),
         SetSorafsReservePolicy::new(reserve_policy).into(),
-    ]);
+    ])
+}
+
+#[test]
+fn prepared_archive_projections_survive_state_journal_decomposition() {
+    use crate::query::reputation_finalized::ReputationFinalizedArchiveBounds;
+
+    let (state, proposal, topology, context) = archive_fixture();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let directory_path = directory.path().canonicalize().unwrap();
@@ -540,10 +914,17 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
         .unwrap(),
     );
     for _ in 0..2 {
+        let provider_owner = reserve_provider_for_test(&provider, &state, &proposal, &context);
+        let reputation_owner =
+            reserve_reputation_for_test(&reputation, &state, &proposal, &context);
         let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
             .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
         let journals = prepared
-            .prepare_journals(Some(&provider), Some(&reputation), admit_journals_for_test)
+            .prepare_journals(
+                Some(provider_owner),
+                Some(reputation_owner),
+                admit_journals_for_test,
+            )
             .unwrap();
         assert!(journals.provider_capture.is_some());
         assert!(journals.reputation_capture.is_some());
@@ -574,6 +955,206 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
 }
 
 #[test]
+fn archive_index_refusal_retains_same_static_execution_and_completed_provider_plan() {
+    use crate::query::reputation_finalized::{
+        ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveError,
+    };
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    let (state, proposal, topology, context) = archive_fixture();
+    let state: Arc<State> = Arc::from(state);
+    let original_state = Arc::downgrade(&state);
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let provider = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(
+            root.join("provider"),
+            ProviderIngestFinalizedArchiveBoundsV1::try_new(1 << 20, 16, 16 << 20, 16, 16, 256, 16)
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    let reputation = Arc::new(
+        ReputationFinalizedArchive::try_open(
+            root.join("reputation"),
+            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
+        )
+        .unwrap(),
+    );
+    let provider_owner = reserve_provider_for_test(&provider, &state, &proposal, &context);
+    let reputation_owner = reserve_reputation_for_test(&reputation, &state, &proposal, &context);
+    let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("prepare archive candidate: {error}"));
+    let prefix = prepared.execution_prefix_commitment();
+    let original_inventory = Arc::clone(prepared.source_prefix.inventory());
+    // Original capture must complete without reading this held index. Only the
+    // later detached insertion preparation may observe its actual release wait.
+    let (carrier, error) = {
+        let failure = reputation
+            .with_index_reader_for_test(|| {
+                prepared.prepare_journals(
+                    Some(provider_owner),
+                    Some(reputation_owner),
+                    admit_journals_for_test,
+                )
+            })
+            .err()
+            .expect("held reputation reader refuses publication preparation");
+        match failure {
+            CarrierJournalPreparationError::ArchivePreparation { carrier, error } => {
+                (carrier, error)
+            }
+            _ => panic!("index refusal must retain detached execution"),
+        }
+    };
+    let CarrierArchivePreparationError::Reputation(error) = error else {
+        panic!("provider must have completed before reputation contention");
+    };
+    let ReputationFinalizedArchiveError::IndexBusy { wait } = error.as_ref() else {
+        panic!("actual index reader must supply its release observation: {error}");
+    };
+    let mut released = Box::pin(wait.clone().wait_for_release());
+    assert!(matches!(
+        released
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(())
+    ));
+    let carrier = *carrier;
+    let provider_bytes = carrier
+        .provider
+        .as_ref()
+        .unwrap()
+        .prepared_bytes_identity_for_test()
+        .expect("original provider insertion is prepared");
+    assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
+    assert!(Arc::ptr_eq(
+        carrier.journals.source_prefix.inventory(),
+        &original_inventory
+    ));
+    assert!(state.block_hashes.inner.try_write().is_some());
+    drop(state.world.block());
+    drop(state.transactions.block());
+    drop(state.canonical_runtime.block());
+    drop(state);
+    assert!(
+        original_state.upgrade().is_none(),
+        "staged owner retains no hidden State"
+    );
+    let (carrier, _) = reputation
+        .with_index_reader_for_test(|| carrier.try_complete())
+        .err()
+        .expect("another real reader still refuses the same owner");
+    assert_eq!(
+        carrier
+            .provider
+            .as_ref()
+            .unwrap()
+            .prepared_bytes_identity_for_test(),
+        Some(provider_bytes)
+    );
+    let journals = std::thread::spawn(move || {
+        carrier
+            .try_complete()
+            .unwrap_or_else(|(_, error)| panic!("resume exact detached execution: {error}"))
+    })
+    .join()
+    .unwrap();
+    assert_eq!(journals.execution_prefix_commitment(), prefix);
+    assert!(Arc::ptr_eq(
+        journals.source_prefix.inventory(),
+        &original_inventory
+    ));
+    assert!(journals.provider_capture.is_some());
+    assert!(journals.reputation_capture.is_some());
+    assert!(provider.is_empty().unwrap());
+    assert!(reputation.is_empty().unwrap());
+    for relative in [
+        "provider/records",
+        "reputation/anchors",
+        "reputation/policies",
+    ] {
+        assert_eq!(std::fs::read_dir(root.join(relative)).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn archive_original_capture_identity_refusal_retains_static_recovery_owner() {
+    use crate::query::reputation_finalized::{
+        ReputationFinalizedArchiveBounds, ReputationFinalizedArchiveError,
+        ReputationFinalizedArchiveKeyV1,
+    };
+    let (state, proposal, topology, context) = archive_fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let archive = Arc::new(
+        ReputationFinalizedArchive::try_open(
+            directory.path().canonicalize().unwrap().join("reputation"),
+            ReputationFinalizedArchiveBounds::try_new(1 << 20, 16, 16 << 20).unwrap(),
+        )
+        .unwrap(),
+    );
+    for wrong_hash in [false, true] {
+        let mut hash = *proposal.hash().as_ref();
+        let mut time = proposal.header().creation_time_ms;
+        if wrong_hash {
+            hash[0] ^= 1;
+        } else {
+            time += 1;
+        }
+        let owner = archive
+            .try_reserve_candidate(
+                ReputationFinalizedArchiveKeyV1::try_new(
+                    context.network_id,
+                    proposal.header().height().get(),
+                    hash,
+                )
+                .unwrap(),
+                time,
+                &state.kura,
+            )
+            .unwrap();
+        let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
+            .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"));
+        let prefix = prepared.execution_prefix_commitment();
+        let failure = prepared
+            .prepare_journals(None, Some(owner), admit_journals_for_test)
+            .err()
+            .expect("reserved identity must match original State exactly");
+        let CarrierJournalPreparationError::ArchivePreparation { carrier, error } = failure else {
+            panic!("capture failure keeps original detached execution");
+        };
+        let CarrierArchivePreparationError::Reputation(original_error) = error else {
+            panic!("exact reputation source mismatch");
+        };
+        assert!(matches!(
+            original_error.as_ref(),
+            ReputationFinalizedArchiveError::FinalityAuthentication {
+                reason: "candidate reputation State differs from its reserved exact identity"
+            }
+        ));
+        assert!(state.block_hashes.inner.try_write().is_some());
+        drop(state.world.block());
+        let (carrier, repeated) = (*carrier)
+            .try_complete()
+            .err()
+            .expect("failed capture is recovery-required");
+        let CarrierArchivePreparationError::Reputation(repeated) = repeated else {
+            panic!("same exact refusal");
+        };
+        assert!(
+            Arc::ptr_eq(&original_error, &repeated),
+            "retry cannot reread another State"
+        );
+        assert_eq!(carrier.journals.execution_prefix_commitment(), prefix);
+        assert!(archive.is_empty().unwrap());
+        drop(carrier);
+    }
+}
+
+#[test]
 fn journal_resource_refusal_precedes_geometry_projection() {
     #[derive(Debug, PartialEq, Eq)]
     enum Capacity {
@@ -598,8 +1179,12 @@ fn journal_resource_refusal_precedes_geometry_projection() {
     assert!(called);
     assert!(matches!(
         error,
-        CarrierJournalPreparationError::JournalAdmission(Capacity::Exhausted)
+        CarrierJournalPreparationError::JournalAdmission {
+            error: Capacity::Exhausted,
+            ..
+        }
     ));
+    drop(error);
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before

@@ -27,6 +27,56 @@ use iroha_data_model::{
 };
 use norito::codec::DecodeAll as _;
 
+#[test]
+fn local_storage_recovery_emits_no_block_rejection() {
+    use crate::state::{LaneLifecycleError, MergeLedgerCommitError};
+    use iroha_data_model::block::error::BlockRejectionReason;
+
+    let header = BlockHeader::new(
+        nonzero_ext::nonzero!(2_u64),
+        Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [7; Hash::LENGTH],
+        ))),
+        None,
+        10,
+        0,
+    );
+    let diagnostic = "retained drain evidence requires local recovery";
+    let local_errors = [
+        BlockValidationError::from_autoscale_lifecycle_error(LaneLifecycleError::Storage(
+            diagnostic.to_owned(),
+        )),
+        BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                MergeLedgerCommitError::ExecutionMarkerConflict(diagnostic.to_owned()),
+            )),
+        ),
+    ];
+    let mut events = Vec::new();
+    for error in local_errors {
+        assert_eq!(map_block_err_to_reason(&error), None);
+        emit_block_rejection(header, &error, |event| events.push(event));
+        assert!(
+            events.is_empty(),
+            "a local refusal must not publish rejection"
+        );
+    }
+
+    let deterministic = BlockValidationError::from_certified_merge_stage_error(
+        MergeLedgerCommitError::ExecutionBatchInvalid(diagnostic.to_owned()),
+    );
+    emit_block_rejection(header, &deterministic, |event| events.push(event));
+    assert_eq!(events.len(), 1);
+    let PipelineEventBox::Block(event) = &events[0] else {
+        panic!("deterministic invalidity must emit the exact block rejection");
+    };
+    assert_eq!(event.header, header);
+    assert_eq!(
+        event.status,
+        BlockStatus::Rejected(BlockRejectionReason::TransactionValidationFailed)
+    );
+}
+
 fn event_signed_transaction(network_seed: u8) -> (SignedTransaction, iroha_crypto::KeyPair) {
     let keypair = iroha_crypto::KeyPair::try_random().expect("generate event fixture signer");
     let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());

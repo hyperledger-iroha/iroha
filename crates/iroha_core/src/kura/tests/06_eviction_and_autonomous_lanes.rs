@@ -3288,3 +3288,130 @@ fn first_admission_carrier_read_rejects_occupied_body_corruption_even_with_warm_
         "occupied corruption cannot become CanonicalBodyRecoveryRequired"
     );
 }
+
+#[test]
+fn held_lease_first_admission_read_keeps_all_fences_and_does_not_populate_body_cache() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    let expected = kura
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .unwrap();
+    *kura.block_data.lock() = BlockData::deferred(blocks.len());
+    kura.block_height_index.lock().clear();
+    *kura.transaction_entrypoint_index.lock() = TransactionEntrypointIndex::complete_empty();
+    assert_eq!(*kura.block_data.lock(), BlockData::deferred(blocks.len()));
+    assert!(kura.block_height_index.lock().is_empty());
+
+    let lease = kura.try_publication_lease().expect("original Kura lease");
+    for lock in [
+        &kura.prune_lock,
+        &kura.canonical_chain_lock,
+        &kura.lane_geometry_lock,
+        &kura.sidecar_lock,
+    ] {
+        assert!(
+            lock.try_lock_or_wait().is_err(),
+            "lease retains every fence"
+        );
+    }
+    let actual = lease
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .expect("guarded reader must not reacquire a held fence");
+    assert_eq!(actual.finality, expected.finality);
+    assert_eq!(actual.body.as_deref(), Some(blocks[1].as_ref()));
+    assert!(kura.block_data.lock().cached_body(1).is_none());
+    assert_eq!(
+        *kura.block_data.lock(),
+        BlockData::deferred(blocks.len()),
+        "the exact read must leave both the body and deferred hash slots cold"
+    );
+    assert!(
+        kura.block_height_index.lock().is_empty(),
+        "retained-evidence validation must not promote reverse hash membership"
+    );
+    let query_index = kura.transaction_entrypoint_index.lock();
+    assert!(query_index.indexed_heights.is_empty());
+    assert!(query_index.incomplete_heights.is_empty());
+    drop(query_index);
+    assert!(matches!(
+        lease.read_first_admission_carrier(height, blocks[0].hash()),
+        Err(Error::CanonicalBlockWireMismatch { height: 2 })
+    ));
+    assert!(matches!(
+        lease.read_first_admission_carrier(nonzero!(3_usize), blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 3 })
+    ));
+    drop(lease);
+    drop(
+        kura.try_publication_lease()
+            .expect("original fences released"),
+    );
+}
+
+#[test]
+fn held_lease_first_admission_read_preserves_eviction_and_finality_error_semantics() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let blocks = store_dummy_block_arcs(&kura, 4);
+    let height = nonzero!(2_usize);
+    let (_, payload_len) = advertise_required_replicas(&kura, height);
+    let expected = kura
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .unwrap();
+    assert!(kura.evict_block_bodies(payload_len).unwrap() >= payload_len);
+    kura.remove_evicted_block_sidecar_for_testing(height)
+        .unwrap();
+
+    let path = kura.v2_finality_artifact_path_for_testing(2);
+    let exact = fs::read(&path).unwrap();
+    let lease = kura.try_publication_lease().expect("original Kura lease");
+    let remote = lease
+        .read_first_admission_carrier(height, blocks[1].hash())
+        .expect("authenticated evicted body remains absent");
+    assert!(remote.body.is_none());
+    assert_eq!(remote.finality, expected.finality);
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        lease.read_first_admission_carrier(height, blocks[1].hash()),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
+    let mut corrupt = exact;
+    corrupt[0] ^= 1;
+    fs::write(&path, &corrupt).unwrap();
+    assert!(
+        lease
+            .read_first_admission_carrier(height, blocks[1].hash())
+            .is_err(),
+        "absent body cannot bypass corrupt existing finality"
+    );
+    assert_eq!(fs::read(path).unwrap(), corrupt);
+}
+
+#[test]
+fn held_lease_first_admission_read_rejects_occupied_corruption_with_warm_cache() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    assert_eq!(kura.get_block(height).as_deref(), Some(blocks[1].as_ref()));
+    let (path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).unwrap(),
+        )
+    };
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.seek(SeekFrom::Start(slot.start)).unwrap();
+    file.write_all(&vec![0; usize::try_from(slot.length).unwrap()])
+        .unwrap();
+    let lease = kura.try_publication_lease().expect("original Kura lease");
+    assert!(
+        lease
+            .read_first_admission_carrier(height, blocks[1].hash())
+            .is_err(),
+        "occupied corruption must not fall back to resident body or body absence"
+    );
+    assert!(kura.block_data.lock().cached_body(1).is_some());
+}

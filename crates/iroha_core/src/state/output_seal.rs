@@ -48,6 +48,22 @@ impl Drop for SealOwner<'_, '_> {
     }
 }
 
+impl SealedExecutionOutputs {
+    /// Rejoin the original result-bearing attachment without resealing World.
+    /// The deterministic carrier tail may already have changed the World delta;
+    /// this check authenticates only the immutable wire captured by execution.
+    pub(in crate::state) fn verify_wire_binding(&self, block: &SignedBlock) -> Result<(), String> {
+        let wire = block.encode_wire().map_err(|error| error.to_string())?;
+        if self.proposal != block.hash()
+            || u64::try_from(wire.len()).ok() != Some(self.wire_bytes)
+            || Hash::new(&wire) != self.wire_hash
+        {
+            return Err("execution output attachment changed after its seal".into());
+        }
+        Ok(())
+    }
+}
+
 impl StateBlock<'_> {
     /// Run the complete execution output owner and consume its actual sources.
     /// The caller still owes source/finality and non-output resource admission.
@@ -222,12 +238,8 @@ impl StateBlock<'_> {
         block
             .validate_execution_outputs(&limits)
             .map_err(|error| error.to_string())?;
-        let wire = block.encode_wire().map_err(|error| error.to_string())?;
-        if sealed.proposal != block.hash()
-            || self._curr_block != block.header()
-            || u64::try_from(wire.len()).ok() != Some(sealed.wire_bytes)
-            || Hash::new(&wire) != sealed.wire_hash
-        {
+        sealed.verify_wire_binding(block)?;
+        if self._curr_block != block.header() {
             return Err("execution output attachment changed after its seal".into());
         }
         if self.world.net_state_delta()? != sealed.world_delta {

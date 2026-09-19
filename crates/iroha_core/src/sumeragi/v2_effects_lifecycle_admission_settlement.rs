@@ -3605,7 +3605,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectTransportError> {
         if self.output_guard.restart_required() {
             return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         if let Some(reason) = &self.fatal_reason {

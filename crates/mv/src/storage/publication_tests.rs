@@ -133,7 +133,7 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
     let mut candidate = target.block();
     candidate.insert(1, 12);
     let mut journal = detach(candidate);
-    let original = journal.entries.as_ptr();
+    let original = journal.blocks.get(&1).unwrap() as *const _;
     for which in 0..2 {
         let undo = (which == 0).then(|| target.revert.write());
         let current = (which == 1).then(|| target.blocks.write());
@@ -142,7 +142,7 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
             .err()
             .unwrap();
         assert!(matches!(error, PublicationPreparationError::Busy(_)));
-        assert_eq!(returned.entries.as_ptr(), original);
+        assert_eq!(returned.blocks.get(&1).unwrap() as *const _, original);
         drop(current);
         drop(undo);
         assert!(target.revert.try_write().is_some());
@@ -196,7 +196,7 @@ fn abort_keeps_original_owner_available_after_another_component_refuses() {
     let mut block = first.block();
     block.insert(1, 11);
     let journal = detach(block);
-    let ptr = journal.entries.as_ptr();
+    let ptr = journal.blocks.get(&1).unwrap() as *const _;
     let prepared = prepare(journal, &first);
     let mut block = second.block();
     block.insert(1, 21);
@@ -207,7 +207,7 @@ fn abort_keeps_original_owner_available_after_another_component_refuses() {
         .unwrap();
     assert_eq!(error, PublicationPreparationError::Admission("capacity"));
     let journal = prepared.abort();
-    assert_eq!(journal.entries.as_ptr(), ptr);
+    assert_eq!(journal.blocks.get(&1).unwrap() as *const _, ptr);
     assert_eq!(values(&first), [(1, 10)]);
     assert_eq!(values(&second), [(1, 20)]);
     assert!(journal.matches_current(&first));
@@ -216,7 +216,7 @@ fn abort_keeps_original_owner_available_after_another_component_refuses() {
 }
 
 #[test]
-fn admission_precedes_cow_and_both_reservations_survive_publication() {
+fn installation_retains_original_successors_and_both_reservations_survive_publication() {
     #[derive(Debug)]
     struct Counted(Arc<AtomicUsize>);
     impl Clone for Counted {
@@ -254,7 +254,7 @@ fn admission_precedes_cow_and_both_reservations_survive_publication() {
         Ok(p) => p,
         Err(_) => panic!("admission"),
     };
-    assert!(copies.load(Ordering::SeqCst) > 0);
+    assert_eq!(copies.load(Ordering::SeqCst), 0);
     let reservations = prepared.publish();
     assert!(!captured.load(Ordering::SeqCst));
     assert!(!installed.load(Ordering::SeqCst));
@@ -263,4 +263,103 @@ fn admission_precedes_cow_and_both_reservations_survive_publication() {
     drop(reservations);
     assert!(captured.load(Ordering::SeqCst));
     assert!(installed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn original_map_and_undo_survive_both_busy_writers_abort_and_publication_without_clones() {
+    #[derive(Debug)]
+    struct NeverCloneAfterPreparation {
+        value: u64,
+        frozen: Arc<AtomicBool>,
+    }
+    impl Clone for NeverCloneAfterPreparation {
+        fn clone(&self) -> Self {
+            assert!(
+                !self.frozen.load(Ordering::SeqCst),
+                "successor was reconstructed"
+            );
+            Self {
+                value: self.value,
+                frozen: Arc::clone(&self.frozen),
+            }
+        }
+    }
+    let frozen = Arc::new(AtomicBool::new(false));
+    let target = Storage::from_iter((0_u64..128).map(|key| {
+        (
+            key,
+            NeverCloneAfterPreparation {
+                value: key,
+                frozen: Arc::clone(&frozen),
+            },
+        )
+    }));
+    let old = target.snapshot();
+    let mut block = target.block();
+    block.get_mut(&1).unwrap().value = 1001;
+    block.remove(126);
+    let current = block.get(&1).unwrap() as *const _;
+    let undo = block.revert_map().get(&1).unwrap().as_ref().unwrap() as *const _;
+    frozen.store(true, Ordering::SeqCst);
+    let mut journal = detach(block);
+    for which in 0..2 {
+        let undo_writer = (which == 0).then(|| target.revert.write());
+        let map_writer = (which == 1).then(|| target.blocks.write());
+        let (returned, error) = journal
+            .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
+            .err()
+            .expect("original writer is held");
+        assert!(matches!(error, PublicationPreparationError::Busy(_)));
+        assert_eq!(returned.blocks.get(&1).unwrap() as *const _, current);
+        assert_eq!(
+            returned.revert.get(&1).unwrap().as_ref().unwrap() as *const _,
+            undo
+        );
+        drop(map_writer);
+        drop(undo_writer);
+        journal = returned;
+    }
+    let journal = prepare(journal, &target).abort();
+    assert_eq!(journal.blocks.get(&1).unwrap() as *const _, current);
+    assert_eq!(
+        journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _,
+        undo
+    );
+    prepare(journal, &target).publish();
+    let published = target.snapshot();
+    assert_eq!(published.current().get(&1).unwrap() as *const _, current);
+    assert_eq!(
+        published.revert_map().get(&1).unwrap().as_ref().unwrap() as *const _,
+        undo
+    );
+    assert!(published.current().get(&126).is_none());
+    assert_eq!(old.current().get(&1).unwrap().value, 1);
+    assert_eq!(old.current().get(&126).unwrap().value, 126);
+}
+
+#[test]
+fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
+    let target: Storage<_, _> = [(1, 10), (2, 20)].into_iter().collect();
+    let mut candidate = target.block();
+    candidate.insert(1, 11);
+    let journal = detach(candidate);
+    let original = journal.blocks.get(&1).unwrap() as *const _;
+    let (journal, error) = journal
+        .try_prepare_publication(&target, |_, target| {
+            // Deliberately bypass only the outer MV identity in this structural test.
+            // The tree itself must reject a cursor whose shared-node base changed.
+            let mut writer = target.blocks.write();
+            writer.insert(2, 22);
+            writer.commit();
+            Ok::<_, ()>(())
+        })
+        .err()
+        .expect("original tree generation changed");
+    assert_eq!(error, PublicationPreparationError::Changed);
+    assert_eq!(journal.blocks.get(&1).unwrap() as *const _, original);
+    assert_eq!(journal.blocks.get(&2), Some(&20));
+    assert_eq!(values(&target), [(1, 10), (2, 22)]);
+    assert!(target.snapshot().revert_map().is_empty());
+    assert!(target.revert.try_write().is_some());
+    assert!(target.blocks.try_write().is_some());
 }

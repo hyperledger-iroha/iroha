@@ -26,6 +26,14 @@ pub(crate) struct KuraWsvCheckpointReceipt {
     kura: Arc<Kura>,
 }
 
+impl KuraWsvCheckpointReceipt {
+    /// Borrow the original durable commit receipt authenticated by this writer.
+    /// This projection grants neither a new checkpoint nor State permission.
+    pub(crate) fn finality_receipt(&self) -> &KuraV2CommitReceipt {
+        &self.finality
+    }
+}
+
 /// Actual synchronized writer and held ancestor namespace, plus stable readback.
 /// The shared writer returns these together; no later reopen creates custody.
 pub(super) struct DurableWsvCheckpoint {

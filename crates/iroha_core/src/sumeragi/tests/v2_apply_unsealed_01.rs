@@ -62,13 +62,12 @@ v2_apply_test!(
             reservation.lane_incarnation,
         )
         .expect_err("the exact reserved route must veto prospective retirement");
-        let message = match error {
-            V2ApplyError::Validation(message) => message,
-            unexpected => panic!("unexpected retirement Queue-veto error: {unexpected}"),
-        };
-        assert!(message.contains("blocked by local Queue ownership"));
-        assert!(message.contains(&format!("lane {}", reservation.lane_id.as_u32())));
-        assert!(message.contains(&format!("dataspace {}", reservation.dataspace_id.as_u64())));
+        assert!(
+            matches!(error, V2ApplyError::LocalValidation(
+                super::super::v2_body_store::LocalValidationRefusal::QueueRelease(_)
+            )),
+            "local Queue ownership must never reject the candidate"
+        );
         let unrelated_incarnation = Hash::new(b"unrelated retirement incarnation");
         assert_ne!(unrelated_incarnation, reservation.lane_incarnation);
         V2ApplyService::validate_autoscale_retirement_queue_binding(

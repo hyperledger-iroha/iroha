@@ -434,10 +434,10 @@ fn maximum_height_allows_exact_repeat_and_replacement_but_refuses_advance() {
         impossible_advance.membership_transition(),
         Err(TransactionsBlockError::HeightOverflow)
     ));
-    assert_eq!(
+    assert!(matches!(
         impossible_advance.commit(),
         Err(TransactionsBlockError::HeightOverflow)
-    );
+    ));
     assert_eq!(committed(&storage.block()), expected);
     let mut replacement = storage.block_and_revert();
     assert_eq!(

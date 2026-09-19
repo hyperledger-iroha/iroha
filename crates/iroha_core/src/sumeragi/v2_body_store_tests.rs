@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod tests {
+    mod retained_validation_tests {
+        include!("v2_body_store/retained_validation_tests.rs");
+    }
     use super::{
         BlockSignaturePolicy, BodyValidationError, BodyValidationRejectionIdentity,
         DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT, QuarantinedValidationOutcome,
@@ -1150,6 +1153,183 @@ Vec::new(),
             store.store(result_bearing_manifest, result_bearing_wire),
             Err(V2BodyStoreError::ResultBearingProposal)
         ));
+    }
+    #[test]
+    fn local_validation_capacity_leaves_body_markers_untouched_and_restart_revalidates() {
+        use crate::sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal};
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let before = durable_files_snapshot(directory.path());
+        let error = store.execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+            Err::<wire::ExecutionCommitment, _>(V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+                crate::kura::NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalCapacity {
+                    required: 65, limit: 64,
+                },
+            ))
+        }).expect_err("local capacity cannot become a durable rejection");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert_eq!(durable_files_snapshot(directory.path()), before);
+        assert!(store.rejected.is_empty());
+        assert!(store.validated.is_empty());
+        drop(store);
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("cold reopen");
+        assert!(reopened.pending_revalidation.is_empty());
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        reopened
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+            .expect("Strict restart retries the exact body after repair");
+        drop(reopened);
+        let mut quarantined =
+            V2BodyStore::open(directory.path(), context).expect("reopen success marker");
+        let marker_before = durable_files_snapshot(directory.path());
+        assert!(matches!(
+            quarantined.revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::RecoveryRequired(
+                    "canonical storage unavailable".to_owned(),
+                ))
+            }),
+            Err(V2BodyStoreError::LocalValidation(_))
+        ));
+        assert_eq!(quarantined.pending_revalidation.len(), 1);
+        assert!(quarantined.validated.is_empty());
+        assert!(quarantined.rejected.is_empty());
+        assert_eq!(durable_files_snapshot(directory.path()), marker_before);
+        quarantined
+            .revalidate_recovered_markers(|_| Ok::<_, String>(commitment))
+            .expect("unchanged marker promotes after exact successful replay");
+        assert_eq!(quarantined.validated.len(), 1);
+    }
+
+    #[test]
+    fn local_candidate_drain_observation_never_persists_rejection() {
+        use crate::{
+            block::BlockValidationError,
+            state::{LaneLifecycleError, MergeLedgerCommitError},
+            sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal},
+        };
+
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let before = durable_files_snapshot(directory.path());
+        let reason = "local drain evidence could not authenticate its retained owner";
+        let merge_failures = [
+            MergeLedgerCommitError::Persistence(crate::kura::Error::IO(
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason),
+                directory.path().join("drain-evidence"),
+            )),
+            MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                MergeLedgerCommitError::ExecutionMarkerConflict(reason.to_owned()),
+            )),
+            MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                MergeLedgerCommitError::ExecutionBatchInvalid(reason.to_owned()),
+            )),
+        ];
+        let failures = merge_failures
+            .into_iter()
+            .map(BlockValidationError::from_certified_merge_stage_error)
+            .chain([
+                BlockValidationError::from_autoscale_lifecycle_error(
+                    LaneLifecycleError::DrainObservation(
+                        MergeLedgerCommitError::ExecutionMarkerConflict(reason.to_owned()),
+                    ),
+                ),
+                BlockValidationError::from_autoscale_lifecycle_error(LaneLifecycleError::Storage(
+                    reason.to_owned(),
+                )),
+            ]);
+        for candidate_error in failures {
+            let BlockValidationError::LocalStorageRecoveryRequired { reason: diagnostic } =
+                &candidate_error
+            else {
+                panic!("local evidence must retain its provenance at the block boundary");
+            };
+            assert!(diagnostic.contains(reason));
+            let expected_diagnostic = diagnostic.clone();
+            let error = store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        V2ApplyService::classify_candidate_validation_error(
+                            None,
+                            block,
+                            &candidate_error,
+                        ),
+                    )
+                })
+                .expect_err("local candidate failure cannot authorize a semantic marker");
+            assert!(matches!(
+                error,
+                V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(actual))
+                    if actual == expected_diagnostic
+            ));
+            assert_eq!(durable_files_snapshot(directory.path()), before);
+            assert!(store.rejected.is_empty());
+            assert!(store.validated.is_empty());
+        }
+
+        drop(store);
+        let mut reopened = V2BodyStore::open(directory.path(), context).expect("Strict reopen");
+        assert!(reopened.pending_revalidation.is_empty());
+        // The identical diagnostic without local observation provenance remains
+        // a deterministic rejection; classification never parses error text.
+        let candidate_error = BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason.to_owned()),
+        );
+        assert!(matches!(
+            candidate_error,
+            BlockValidationError::ExecutionContextInvalid(_)
+        ));
+        let outcome = reopened
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                Err::<wire::ExecutionCommitment, _>(
+                    V2ApplyService::classify_candidate_validation_error(
+                        None,
+                        block,
+                        &candidate_error,
+                    ),
+                )
+            })
+            .expect("deterministic candidate error persists its rejection");
+        assert!(outcome.rejection_identity().is_some());
+        assert_eq!(reopened.rejected.len(), 1);
+        assert!(
+            reopened
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+    }
+    #[test]
+    fn native_amx_hard_budget_failure_remains_a_deterministic_rejection() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let outcome = store.execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+            Err::<wire::ExecutionCommitment, _>(crate::sumeragi::v2_apply::V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+                crate::kura::NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                    "Native AMX evidence exceeds the hard protocol artifact bound".to_owned(),
+                ),
+            ))
+        }).expect("hard protocol bound is deterministic");
+        assert!(outcome.rejection_identity().is_some());
+        assert!(
+            store
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+        assert_eq!(store.rejected.len(), 1);
     }
     #[test]
     fn typed_validation_deferral_and_durable_rejection_never_mint_success_receipts() {

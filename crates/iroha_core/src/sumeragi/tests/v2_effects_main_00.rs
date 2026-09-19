@@ -1114,6 +1114,8 @@ struct FakeServices {
     invalid_bodies: Vec<wire::BlockSubject>,
     statuses: Vec<EffectExecutorStatus>,
     closed: Vec<String>,
+    observe_failure_guard: Option<Arc<ConsensusOutputGuard>>,
+    observed_restart_errors: Vec<String>,
     fail_on: Option<&'static str>,
     fail_on_call: Option<(&'static str, usize)>,
     operation_calls: BTreeMap<&'static str, usize>,
@@ -1392,6 +1394,15 @@ impl V2EffectServices for FakeServices {
         Ok(())
     }
     fn fail_closed(&mut self, reason: &str) {
+        if let Some(guard) = &self.observe_failure_guard {
+            // Observe the exact close-to-service boundary before this service
+            // receives or retains the supplied cause. A generic observer must
+            // not win the guard's first-cause slot during this handoff.
+            assert!(guard.restart_required());
+            assert!(guard.acquire().is_none());
+            self.observed_restart_errors.push(guard.restart_error());
+            guard.retain_effect_failure("generic service observed closed output".to_owned());
+        }
         self.closed.push(reason.to_owned());
     }
 }
@@ -1450,13 +1461,7 @@ impl Fixture {
             leader_seed: [0x33; 32],
         };
         let round = round(&context, 0);
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height"),
-            None,
-            None,
-            1_000,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 1_000, 0);
         let signature = SignatureOf::try_from_hash(validator_keys[0].private_key(), header.hash())
             .expect("block signature");
         let block = SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
@@ -2629,6 +2634,78 @@ impl V2EffectExecutor<FakeRuntime> {
         );
         self.consume_effects(effects, services)
     }
+}
+
+#[test]
+fn executor_retains_precise_failure_before_service_observes_closed_guard() {
+    for transport in [false, true] {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let guard = Arc::clone(&executor.output_guard);
+        services.observe_failure_guard = Some(Arc::clone(&guard));
+        let outer = guard.begin_fail_stop_operation().expect("outer admission");
+        let cause = "exact retained carrier publication failed";
+        let reported = if transport {
+            executor
+                .fail_closed_transport(cause, &mut services)
+                .to_string()
+        } else {
+            executor
+                .external_service_failed(cause, &mut services)
+                .to_string()
+        };
+        let retained = services.closed.first().expect("failure notification");
+        assert!(reported.contains(cause));
+        assert!(retained.contains(cause));
+        let expected = format!("Sumeragi v2 consensus requires process restart: {retained}");
+        assert_eq!(services.observed_restart_errors, [expected.clone()]);
+        assert_eq!(guard.restart_error(), expected);
+        // A later propagated closure cannot replace or wrap the original cause.
+        executor.external_service_failed("later generic closure", &mut services);
+        assert_eq!(
+            services.observed_restart_errors,
+            [expected.clone(), expected.clone()]
+        );
+        assert_eq!(guard.restart_error(), expected);
+        assert!(guard.acquire().is_none());
+        outer.complete();
+        assert!(guard.restart_required());
+        assert!(guard.acquire().is_none());
+    }
+}
+
+#[test]
+fn executor_reports_retained_worker_failure_without_completion_drain() {
+    let fixture = Fixture::new();
+    let executor = fixture.executor(EffectQueueConfig::default());
+    let cause = "exact durable worker publication failed before completion delivery";
+    executor
+        .output_guard
+        .begin_fail_stop_operation()
+        .expect("admit worker operation")
+        .fail(cause.to_owned());
+    assert!(executor.fatal_reason.is_none());
+    assert!(
+        executor
+            .ensure_open()
+            .unwrap_err()
+            .to_string()
+            .contains(cause)
+    );
+    assert!(
+        executor
+            .validate_lifecycle_ingress_selector_authority()
+            .unwrap_err()
+            .to_string()
+            .contains(cause)
+    );
+    let status = executor.status();
+    assert!(status.fail_closed);
+    assert_eq!(
+        status.fatal_reason.as_deref(),
+        Some(executor.output_guard.restart_error().as_str())
+    );
 }
 
 #[test]

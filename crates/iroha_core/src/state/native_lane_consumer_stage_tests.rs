@@ -213,7 +213,12 @@ state_test! { sync native_consumer_stage_cannot_publish_through_empty_old_merge_
     assert!(overlay.start_of_block_effects_applied);
     overlay.stage_canonical_carrier_membership([],NonZeroUsize::new(carrier.header().height().get() as usize).unwrap()).unwrap();
     let called=Arc::new(AtomicBool::new(false));
-    assert!(matches!(overlay.commit_with_state_commit_authorization(Box::new(EmptyOldMergeAuthorization(Arc::clone(&called)))),Err(TransactionsBlockError::MergeAdmission)));
+    assert!(matches!(
+        overlay.commit_with_state_commit_authorization(Box::new(EmptyOldMergeAuthorization(
+            Arc::clone(&called)
+        ))),
+        Err(TransactionsBlockError::MergeAdmission)
+    ));
     assert!(!called.load(Ordering::SeqCst),"native stage is rejected before an empty old binding can authorize publication");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before,"hooks and all native writes roll back together");
 }
@@ -328,7 +333,13 @@ state_test! { sync native_common_owner_executes_and_seals_pipeline_and_time_once
         prepared.overlay().verify_execution_output_seal(&carrier).unwrap();
         assert_eq!(prepared.overlay().verified_fastpq_source_inventory_for_capture().unwrap().entries().len(), 3);
         let overlay = prepared.into_overlay_for_test();
-        assert!(matches!(overlay.commit(), Err(TransactionsBlockError::MergeAdmission)), "completed output attachment is not State/native Apply authority");
+        assert!(
+            matches!(
+                overlay.commit(),
+                Err(TransactionsBlockError::MergeAdmission)
+            ),
+            "completed output attachment is not State/native Apply authority"
+        );
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before, "all actual phases and metadata remain atomic on discard");
     }
 }

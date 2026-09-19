@@ -137,6 +137,36 @@ pub(crate) struct NativeExecutionCustody {
     context: crate::sumeragi::v2::VerifiedHeightContext,
 }
 impl NativeExecutionCustody {
+    /// Borrow the same privately authenticated sources retained by execution.
+    /// These immutable observations do not grant source release or live signing.
+    pub(in crate::state) fn sources(&self) -> &[VerifiedLaneDecisionGroupV1] {
+        &self.sources
+    }
+
+    /// Match the actual stage and complete input batch after journal detachment.
+    /// Current State membership remains a separate predecessor acquisition.
+    pub(in crate::state) fn retains_carrier(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        self.seal.carrier == block.header()
+            && self.context.context().id() == context.id()
+            && block
+                .execution_context()
+                .and_then(|bundle| bundle.native_lane_decisions.as_deref())
+                == Some(self.seal.batch.as_ref())
+            && self.sources.len() == self.seal.batch.groups.len()
+            && self.executions.len() == self.sources.len()
+            && self
+                .sources
+                .iter()
+                .zip(&self.seal.batch.groups)
+                .all(|(source, wire)| {
+                    source.body().payload() == &wire.payload && source.decisions() == wire.decisions
+                })
+    }
+
     #[cfg(test)]
     pub(in crate::state) fn sources_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
         &self.sources

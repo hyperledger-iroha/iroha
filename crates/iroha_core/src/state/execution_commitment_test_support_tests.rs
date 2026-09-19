@@ -136,9 +136,11 @@ fn retained_execution_projection_matches_canonical_consensus_projection_without_
         staged.execution_output_plan.as_ref(),
         Some(crate::state::output_capacity::ExecutionOutputPlanState::Sealed(_))
     ));
-    assert_eq!(
-        (*staged).commit().unwrap_err(),
-        TransactionsBlockError::ExecutionOutputCapacity,
+    assert!(
+        matches!(
+            (*staged).commit().unwrap_err(),
+            TransactionsBlockError::ExecutionOutputCapacity
+        ),
         "a projected commitment is not the unfinished State publication authority"
     );
 }

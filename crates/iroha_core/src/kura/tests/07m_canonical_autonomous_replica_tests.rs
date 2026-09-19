@@ -651,6 +651,183 @@ fn canonical_autonomous_replica_is_idempotent_non_owning_and_restart_stable() {
 }
 
 #[test]
+fn canonical_terminal_geometry_observation_does_not_sync_receipts_but_attestation_does() {
+    let fixture = canonical_autonomous_replica_fixture();
+    let outsider = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    fixture
+        .kura
+        .bind_local_peer_id(PeerId::new(outsider.public_key().clone()))
+        .expect("bind noncommittee observation peer");
+    let execution = canonical_terminal_merge_execution_from_durable_source_for_test(
+        &fixture.payload,
+        fixture.source.clone(),
+    );
+    let merge_entry = install_canonical_replica_terminal_merge_entry_for_test(
+        &fixture.kura,
+        &fixture.carrier,
+        vec![execution],
+        1,
+    );
+    let mut publication = fixture
+        .kura
+        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&merge_entry)
+        .expect("publish canonical terminal outcome")
+        .expect("canonical source publication")
+        .consume_for_v2_apply(&merge_entry)
+        .expect("consume canonical source publication");
+    let (group, authorization) = publication.pop().expect("one canonical terminal group");
+    let (_, _, source_outcome_hash) = authorization
+        .consume_for_queue()
+        .expect("consume exact Queue authorization");
+    let descriptor = &fixture.payload.origin_proposal.descriptor;
+    let entry = fixture
+        .kura
+        .lane_storage_entry(descriptor.lane_id)
+        .expect("canonical route");
+    let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
+        &entry,
+        &fixture.kura.store_root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    let pending = Kura::decode_autonomous_lifecycle_terminal_outcome(
+        &outcome_path,
+        &fs::read(&outcome_path).expect("read Pending outcome"),
+    )
+    .expect("decode Pending outcome");
+    fixture
+        .kura
+        .complete_autonomous_lifecycle_terminal_outcome(
+            group,
+            canonical_terminal_projection_for_binding_test(
+                group,
+                pending.binding(),
+                &fixture.source,
+            ),
+            true,
+            source_outcome_hash,
+        )
+        .expect("complete canonical terminal outcome");
+    let outcome_before = fs::read(&outcome_path).expect("read Complete outcome");
+
+    fail_next_indexed_sidecar_data_sync_for_tests();
+    let observed = fixture
+        .kura
+        .observe_geometry_autonomous_namespace_for_tests(descriptor.lane_id, false);
+    // Reset before asserting so even a failing read cannot leak a thread-local fault.
+    let untouched = FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false));
+    assert_eq!(
+        observed.expect("observe exact Complete canonical terminal"),
+        0
+    );
+    assert!(
+        untouched,
+        "observation must not synchronize its application receipt"
+    );
+
+    fail_next_indexed_sidecar_data_sync_for_tests();
+    let attested = fixture
+        .kura
+        .observe_geometry_autonomous_namespace_for_tests(descriptor.lane_id, true);
+    let untouched = FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false));
+    assert!(
+        attested.is_err(),
+        "runtime attestation must reject a receipt sync failure"
+    );
+    assert!(
+        !untouched,
+        "runtime attestation must retain the original receipt durability boundary"
+    );
+    assert_eq!(
+        fixture
+            .kura
+            .observe_geometry_autonomous_namespace_for_tests(descriptor.lane_id, true)
+            .expect("attest unchanged canonical terminal after resetting the fault"),
+        0
+    );
+    assert_eq!(
+        fs::read(&outcome_path).expect("read unchanged Complete outcome"),
+        outcome_before
+    );
+
+    // Leave an actual failed append and its recovery marker behind. A pure
+    // canonical terminal lookup must reject this state without repairing it.
+    let merge_path = fixture.kura.active_merge_path.lock().clone();
+    let committed_bytes = fs::read(&merge_path).expect("read committed merge history");
+    let next_entry = sample_merge_entry(merge_entry.epoch_id + 1);
+    fixture
+        .kura
+        .fail_next_merge_append_after_for_test(MergeLedgerAppendFailurePoint::AfterLength);
+    FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES.with(|flag| flag.set(true));
+    let failed_append = fixture.kura.append_merge_entry_for_test(&next_entry);
+    let recovery_fault_consumed =
+        !FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES.with(|flag| flag.replace(false));
+    assert!(
+        failed_append.is_err(),
+        "leave the injected failed append unresolved"
+    );
+    assert!(
+        recovery_fault_consumed,
+        "the failed append must reach tail recovery"
+    );
+    let failed_bytes = fs::read(&merge_path).expect("read unresolved merge tail");
+    assert_eq!(failed_bytes.len(), committed_bytes.len() + 4);
+    let failed_offset = Some(u64::try_from(committed_bytes.len()).expect("merge length fits u64"));
+    assert_eq!(
+        fixture.kura.merge_log.lock().append_recovery_offset,
+        failed_offset
+    );
+
+    FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES.with(|flag| flag.set(true));
+    let observed = fixture
+        .kura
+        .observe_geometry_autonomous_namespace_for_tests(descriptor.lane_id, false);
+    let untouched = FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES.with(|flag| flag.replace(false));
+    assert!(
+        observed.is_err(),
+        "pure canonical terminal observation must reject an unresolved append"
+    );
+    assert!(untouched, "observation must not invoke merge-tail recovery");
+    assert_eq!(
+        fs::read(&merge_path).expect("read preserved failed tail"),
+        failed_bytes
+    );
+    assert_eq!(
+        fixture.kura.merge_log.lock().append_recovery_offset,
+        failed_offset
+    );
+    assert_eq!(
+        fs::read(&outcome_path).expect("read unchanged canonical terminal"),
+        outcome_before
+    );
+
+    // The existing durability wrapper retains its explicit repair behavior.
+    let (receipt_data, receipt_index) =
+        Kura::lane_block_application_receipt_paths_for_entry(&entry, &fixture.kura.store_root);
+    {
+        let _prune = fixture.kura.prune_lock.lock();
+        let _canonical = fixture.kura.canonical_chain_lock.lock();
+        let _geometry = fixture.kura.lane_geometry_lock.lock();
+        let _sidecar = fixture.kura.sidecar_lock.lock();
+        fixture.kura.autonomous_lifecycle_terminal_source_matches_canonical_carrier_from_receipt_paths_locked(
+            &fixture.payload, pending.source(), &receipt_data, &receipt_index,
+        ).expect("durable terminal validation preserves explicit append-tail repair");
+    }
+    assert_eq!(
+        fs::read(&merge_path).expect("read repaired merge history"),
+        committed_bytes
+    );
+    assert_eq!(fixture.kura.merge_log.lock().append_recovery_offset, None);
+    assert_eq!(
+        fixture
+            .kura
+            .observe_geometry_autonomous_namespace_for_tests(descriptor.lane_id, false)
+            .expect("pure observation accepts the explicitly repaired exact history"),
+        0
+    );
+}
+
+#[test]
 fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody() {
     let fixture = canonical_autonomous_replica_fixture();
     let outsider = checked_keypair_with_algorithm(Algorithm::BlsNormal);

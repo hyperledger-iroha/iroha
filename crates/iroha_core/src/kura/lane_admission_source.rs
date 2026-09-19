@@ -76,6 +76,17 @@ impl Kura {
         let _prune = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical = self.canonical_chain_lock.lock();
+        self.read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)
+    }
+
+    /// Read through the same exact oracle while the original Kura's prune and
+    /// canonical fences remain held. This helper must not acquire either fence.
+    pub(super) fn read_first_admission_carrier_under_prune_and_canonical_guards(
+        &self,
+        height: NonZeroUsize,
+        expected_hash: HashOf<BlockHeader>,
+    ) -> Result<FinalizedAdmissionCarrierReadV1> {
+        self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let height_u64 = u64::try_from(height.get())?;
         let (header, finality, _) = self

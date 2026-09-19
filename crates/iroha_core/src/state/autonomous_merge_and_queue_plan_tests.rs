@@ -2375,11 +2375,13 @@ fn queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain
     drop(world);
     for route in obligation.routes {
         assert!(
-            state.lane_has_drain_blocking_evidence(
-                route.lane_id,
-                route.dataspace_id,
-                route.lane_incarnation,
-            ),
+            state
+                .lane_has_drain_blocking_evidence(
+                    route.lane_id,
+                    route.dataspace_id,
+                    route.lane_incarnation,
+                )
+                .expect("observe exact lane drain evidence"),
             "each exact coordinator or participant incarnation must remain drain-blocked"
         );
     }
@@ -2638,11 +2640,15 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
     assert_eq!(member.member_identity, member_identity);
     assert_eq!(members[0], (member_key, member));
     drop(world);
-    assert!(state.lane_has_drain_blocking_evidence(
-        route.lane_id,
-        route.dataspace_id,
-        route.lane_incarnation,
-    ));
+    assert!(
+        state
+            .lane_has_drain_blocking_evidence(
+                route.lane_id,
+                route.dataspace_id,
+                route.lane_incarnation,
+            )
+            .expect("observe exact lane drain evidence")
+    );
 }
 
 #[test]

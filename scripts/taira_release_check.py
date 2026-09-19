@@ -20,6 +20,11 @@ filesystems stream only when all remaining copies fit beside the working reserve
 later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
+After configuration, MV ownership controls execute before exact Pending Kura
+recovery controls. Either prerequisite stops qualification on failure before
+other startup checks, shipping builds or network execution. These controls use
+the same complete native compile graph; focused development checks can compile
+only configuration and selected MV targets, without qualifying a release.
 Full additionally executes advanced Core recovery and proof-production matrices.
 Both scopes require strict runtime catalog readback codecs and the lifecycle HTTP
 endpoint, compiled in the same native graph; no runtime security policy is relaxed.
@@ -980,10 +985,14 @@ CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters
     'zk::debug_backend_tests::halo2_ivm_execution_rejects_relabelled_demo_verifying_key',
 )), )
 
-CORE_ADMISSION_STARTUP_STAGES += (("standalone Apply recovery across retained Kura shutdown", (
+CORE_PENDING_KURA_RECOVERY_STAGES = (("standalone and linked Apply recovery across retained Kura shutdown", (
     'sumeragi::v2::tests::pending_kura_standalone_apply_recovers_real_kura_shutdown_cut',
     'sumeragi::v2::tests::pending_kura_standalone_apply_rejects_foreign_owner_without_mutation',
+    'sumeragi::v2::tests::pending_kura_linked_apply_recovers_real_kura_shutdown_cut',
+    'sumeragi::v2::tests::pending_kura_linked_apply_rejects_changed_parent_and_decision_without_mutation',
+    'sumeragi::v2::tests::pending_kura_recovered_decision_chain_recovers_real_kura_shutdown_cut',
 )), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_PENDING_KURA_RECOVERY_STAGES
 
 
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
@@ -1344,6 +1353,9 @@ TORII_UNIT_STAGES = (("released State snapshots and exact canonical outcome auth
 )), ) + TORII_UNIT_STAGES
 
 HARNESS_TARGETS = {
+    "mv": ("native MV ownership", "mv", "lib", ["-p", "mv", "--lib"]),
+    "mv-ebr": ("native EBR allocation custody", "ebr_allocation_custody", "test", ["-p", "mv", "--test", "ebr_allocation_custody"]),
+    "mv-map": ("native owned map generations", "map_owned_generations", "test", ["-p", "mv", "--test", "map_owned_generations"]),
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
@@ -1760,11 +1772,91 @@ CORE_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 
 
+# Portable ownership prerequisites; every selected leaf runs in both scopes.
+MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map")
+
+MV_OWNERSHIP_STAGES = (
+    ('finite resident allocation pool', (
+        'allocation::tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
+        'allocation::tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
+        'allocation::tests::exact_pool_release_wakes_waiters_including_before_their_first_poll',
+        'allocation::tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
+        'allocation::tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
+        'allocation::tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
+    )),
+    ('actual writer release observations', (
+        'release::tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
+        'release::tests::acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard',
+        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
+        'release::tests::cell_abort_detach_and_publication_release_the_actual_busy_writer',
+        'release::tests::cell_prepared_and_storage_original_guards_notify_every_release_path',
+        'release::tests::inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases',
+        'release::tests::partial_writer_acquisition_does_not_wake_its_own_refused_lock',
+        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
+        'release::tests::release_racing_first_poll_cannot_be_lost',
+        'release::tests::storage_first_undo_clone_panic_wakes_an_already_registered_retry',
+        'release::tests::storage_prepared_drop_abort_and_publish_release_the_original_writers',
+    )),
+    ('charged current and undo Cell ownership', (
+        'cell::charged_allocation_tests::detached_abort_keeps_original_journal_and_publish_never_returns_generation_charges',
+        'cell::charged_allocation_tests::first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_successors',
+        'cell::charged_allocation_tests::refusal_and_writer_contention_return_original_charged_journal_without_extra_clones',
+        'cell::charged_allocation_tests::repeated_block_and_transaction_mutation_capture_each_preimage_only_once',
+        'cell::charged_allocation_tests::same_cut_abort_refunds_writers_and_publish_retains_current_with_original_undo',
+        'cell::charged_allocation_tests::startup_ordinary_and_revert_charges_follow_all_actual_generations',
+        'cell::charged_allocation_tests::untouched_detached_publication_releases_only_unused_current_charge',
+    )),
+    ('original Storage successor publication', (
+        'storage::publication_tests::abort_keeps_original_owner_available_after_another_component_refuses',
+        'storage::publication_tests::busy_writers_return_same_journal_and_release_partial_acquisition',
+        'storage::publication_tests::changed_raw_map_generation_refuses_original_owner_before_any_installation',
+        'storage::publication_tests::foreign_aba_and_admission_race_cannot_publish_a_stale_journal',
+        'storage::publication_tests::installation_retains_original_successors_and_both_reservations_survive_publication',
+        'storage::publication_tests::original_map_and_undo_survive_both_busy_writers_abort_and_publication_without_clones',
+        'storage::publication_tests::prepared_delta_matches_direct_commit_and_preserves_existing_readers',
+        'storage::publication_tests::replacement_restores_discarded_tip_only_keys_and_candidate_undo',
+        'storage::publication_tests::untouched_noop_and_absent_touches_publish_exact_undo_transitions',
+    )),
+    ('move-only Storage journal detachment', (
+        'storage::detached_tests::aborted_children_and_noop_touches_survive_detachment_without_invented_entries',
+        'storage::detached_tests::detached_values_outlive_the_storage_without_a_reader_pin',
+        'storage::detached_tests::detachment_retains_original_values_without_clones_and_releases_reservation_last',
+        'storage::detached_tests::direct_insert_and_reverted_predecessor_cannot_reuse_original_identity',
+        'storage::detached_tests::disjoint_candidates_are_owned_send_journals_and_release_all_writers',
+        'storage::detached_tests::ordinary_capture_retains_applied_noop_and_absence_touches_without_publication',
+        'storage::detached_tests::replacement_mode_retains_discarded_tip_only_changes_and_real_undo',
+        'storage::detached_tests::snapshot_json_and_history_projection_create_new_owners_with_exact_images',
+        'storage::detached_tests::unchanged_replacement_and_undo_only_commit_have_distinct_pair_identity',
+    )),
+)
+
+MV_EBR_STAGES = (("actual epoch allocation and retained capacity custody", (
+    'admission_refusal_and_contention_never_clone_and_abort_frees_before_charge',
+    'committed_allocation_and_charge_wait_for_unrelated_epoch_pin',
+    'clone_panic_conservatively_retains_admitted_charge',
+    'destructor_panic_conservatively_retains_charge_even_if_outer_allocation_frees',
+    'detached_generation_retries_with_original_allocation_and_no_installation_clone',
+)),)
+
+MV_MAP_STAGES = (("original owned map successors across refusal and publication", (
+    'original_payloads_survive_detach_busy_retry_abort_and_publication_without_clones',
+    'foreign_stale_and_equal_content_aba_refusals_return_the_exact_original_owner',
+    'detached_owner_keeps_shared_nodes_after_source_drop_and_cross_thread_transfer',
+    'old_reader_chain_retains_removed_payloads_across_splits_abort_and_later_commits',
+    'sibling_candidate_cannot_adopt_after_another_commit_but_retains_its_shared_base',
+    'poisoned_writer_refuses_adoption_without_consuming_the_original_generation',
+    'clear_successor_preserves_old_reader_until_its_exact_payloads_are_released',
+    'scalar_detach_contention_retry_abort_and_commit_allocate_no_new_successor',
+    'fresh_map_first_commit_without_a_reader_allocates_no_new_successor',
+)),)
+
+
 def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
     """Select honest test coverage without changing shipping features or artifacts."""
     if qualification_scope not in QUALIFICATION_SCOPES:
         raise CheckError("native qualification scope must be basic or full")
     selected = {
+        "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "config": CONFIG_STAGES, "config-unit": CONFIG_UNIT_STAGES, "data-model": DATA_MODEL_STAGES,
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
@@ -3183,9 +3275,25 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
             # execute before CLI and long consensus/proof groups. Retain each immutable copy
             # until its remaining stages finish; no test runs twice or gains a skip flag.
             startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
-            preflight = tuple((name, tuple(stage for stage in stages if stage in startup.get(name, ())))
+            pending_kura = tuple(stage for stage in scoped_stages["core"]
+                                 if stage in CORE_PENDING_KURA_RECOVERY_STAGES)
+            preflight = tuple((name, tuple(stage for stage in stages
+                                          if stage in startup.get(name, ())
+                                          and not (name == "core" and stage in pending_kura)))
                               for name, stages in early_stages)
             if not reuse_independent:
+                # These exact immutable copies belong to the same complete Cargo
+                # graph and checkpoint. Refuse before Core runtime work; this
+                # does not claim to run before Core harness compilation.
+                for name in MV_OWNERSHIP_HARNESSES:
+                    if scoped_stages[name]:
+                        run_stages(harnesses[name], fixture_root, env,
+                                   scoped_stages[name], lock_fds)
+                # Actual post-Kura recovery is a prerequisite for every later
+                # stage. Keep the shared Cargo graph and exact checkpoint census,
+                # but do not bury a publication failure among other startup cases.
+                if pending_kura:
+                    run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
                 startup_failures = []
                 for name, stages in preflight:
                     if stages:
@@ -3205,7 +3313,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                         failures.extend(error.failures)
                 harnesses.release("cli")
             for name, stages in early_stages:
-                remaining = tuple(stage for stage in stages if stage not in startup.get(name, ()))
+                # Ownership stages already passed above (or share the exact
+                # reused checkpoint). Release their copies here, without a second run.
+                remaining = () if name in MV_OWNERSHIP_HARNESSES else tuple(
+                    stage for stage in stages if stage not in startup.get(name, ()))
                 if not reuse_independent and remaining:
                     try:
                         run_stages(harnesses[name], fixture_root, env, remaining, lock_fds)

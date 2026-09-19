@@ -6,6 +6,22 @@
 //! acquiring State writers, and release every guard before any async wait.
 
 use super::{Error, Kura, PublicationGuard, PublicationMutex};
+use iroha_data_model::NetworkId;
+
+/// An archive identity refusal remains distinct from an actual storage failure.
+#[derive(Debug)]
+pub(crate) enum KuraArchiveCaptureAuthenticationError {
+    /// Retained capture, original Kura, receipt or durable carrier differ.
+    Identity(&'static str),
+    /// Exact durable evidence could not be read or authenticated.
+    Storage(Error),
+}
+
+impl From<Error> for KuraArchiveCaptureAuthenticationError {
+    fn from(error: Error) -> Self {
+        Self::Storage(error)
+    }
+}
 
 /// A local physical refusal, independent of the decided block's validity.
 #[derive(Debug)]
@@ -36,6 +52,104 @@ pub(crate) struct KuraPublicationLease<'kura> {
 }
 
 impl Kura {
+    /// Authenticate a retained archive capture without an enclosing Kura lease.
+    ///
+    /// Standalone and aggregate publication use the same guarded oracle. The
+    /// caller must admit exact body/finality decoding before entering either.
+    pub(crate) fn authenticate_archive_capture(
+        &self,
+        network_id: NetworkId,
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+        receipt: &super::KuraV2CommitReceipt,
+    ) -> Result<(), KuraArchiveCaptureAuthenticationError> {
+        let _prune = self.prune_lock.lock();
+        let _canonical = self.canonical_chain_lock.lock();
+        let _sidecar = self.sidecar_lock.lock();
+        self.authenticate_archive_capture_under_publication_guards(
+            network_id,
+            height,
+            block_hash,
+            finalized_at_unix_ms,
+            receipt,
+        )
+    }
+
+    /// Caller retains prune, canonical and sidecar guards from this exact Kura.
+    fn authenticate_archive_capture_under_publication_guards(
+        &self,
+        network_id: NetworkId,
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+        receipt: &super::KuraV2CommitReceipt,
+    ) -> Result<(), KuraArchiveCaptureAuthenticationError> {
+        use KuraArchiveCaptureAuthenticationError::Identity;
+
+        if receipt.height() != height || *receipt.block_hash().as_ref() != block_hash {
+            return Err(Identity(
+                "retained capture anchor differs from the durable Kura receipt",
+            ));
+        }
+        let height_index = usize::try_from(height)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or(Identity("durable Kura receipt height is not representable"))?;
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        if self.exact_durable_blocks_count()? < height_index.get()
+            || self
+                .get_durable_block_hash(height_index)
+                .map(|hash| *hash.as_ref())
+                != Some(block_hash)
+        {
+            return Err(Identity(
+                "Kura canonical block log differs from the durable receipt",
+            ));
+        }
+        let (header, artifact, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+            .ok_or(Identity(
+                "Kura has no v2 finality artifact for the capture height",
+            ))?;
+        let recovered = super::v2_commit_receipt(&artifact);
+        if receipt.height() != recovered.height()
+            || receipt.block_hash() != recovered.block_hash()
+            || receipt.context_id() != recovered.context_id()
+            || receipt.subject() != recovered.subject()
+            || receipt.certificate() != recovered.certificate()
+            || receipt.artifact_hash() != recovered.artifact_hash()
+            || artifact.height_context.network_id != network_id
+            || artifact.height != height
+            || *artifact.block_hash.as_ref() != block_hash
+        {
+            return Err(Identity(
+                "Kura artifact, receipt, and capture identify different blocks",
+            ));
+        }
+        // Archive publication requires the actual result-bearing body as well
+        // as the retained header/wire association. This exact signed-wire reader
+        // does not reacquire the lease's prune, canonical or sidecar fences.
+        let block = self
+            .read_block_body_under_prune_and_canonical_guards(height_index)?
+            .ok_or(Identity(
+                "exact result-bearing Kura block is unavailable to the retained capture",
+            ))?;
+        if block.header() != header
+            || block.header().height().get() != height
+            || *block.hash().as_ref() != block_hash
+            || finalized_at_unix_ms == 0
+            || finalized_at_unix_ms == u64::MAX
+            || block.header().creation_time_ms != finalized_at_unix_ms
+        {
+            return Err(Identity(
+                "result-bearing Kura block has a mismatched identity or timestamp",
+            ));
+        }
+        Ok(())
+    }
+
     /// Acquire prune, canonical, geometry and sidecar ownership without waiting.
     ///
     /// Every refusal releases all earlier guards before returning. The release
@@ -79,6 +193,46 @@ impl Kura {
 }
 
 impl KuraPublicationLease<'_> {
+    /// Private guarded implementations may borrow only this original physical owner.
+    pub(super) fn original_kura(&self) -> &Kura {
+        self.kura
+    }
+
+    /// Check original physical ownership before capturing another retained plan.
+    /// This grants no source, finality or mutation authorization.
+    pub(crate) fn belongs_to(&self, kura: &Kura) -> bool {
+        std::ptr::eq(self.kura, kura)
+    }
+
+    /// Authenticate the exact archive owner and durable carrier under this lease.
+    ///
+    /// Success authorizes only the retained archive insertion, never State or
+    /// source publication. No physical fence is reacquired and no token escapes.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn authenticate_archive_capture(
+        &self,
+        original_kura: &Kura,
+        network_id: NetworkId,
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+        receipt: &super::KuraV2CommitReceipt,
+    ) -> Result<(), KuraArchiveCaptureAuthenticationError> {
+        if !std::ptr::eq(self.kura, original_kura) {
+            return Err(KuraArchiveCaptureAuthenticationError::Identity(
+                "retained archive capture belongs to another Kura instance",
+            ));
+        }
+        self.kura
+            .authenticate_archive_capture_under_publication_guards(
+                network_id,
+                height,
+                block_hash,
+                finalized_at_unix_ms,
+                receipt,
+            )
+    }
+
     /// Rejoin exact durable finality/checkpoint under this original held boundary.
     ///
     /// This uses only already-guarded Kura readers and never reacquires the four
@@ -93,6 +247,22 @@ impl KuraPublicationLease<'_> {
     ) -> super::Result<()> {
         self.kura
             .reauthenticate_checkpoint_under_publication_guards(receipt, finality, state_hash)
+    }
+
+    /// Observe exact published finality and its local result-bearing body under
+    /// this original held boundary without reacquiring any publication fence.
+    ///
+    /// Uses the standalone first-admission reader's full validation. Missing or
+    /// corrupt proof and occupied body corruption remain errors; authenticated
+    /// evicted/imported-prefix body absence remains `None`. The read has no body
+    /// cache effects and grants no source or State publication authorization.
+    pub(crate) fn read_first_admission_carrier(
+        &self,
+        height: std::num::NonZeroUsize,
+        expected_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    ) -> super::Result<super::lane_admission_source::FinalizedAdmissionCarrierReadV1> {
+        self.kura
+            .read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)
     }
 }
 

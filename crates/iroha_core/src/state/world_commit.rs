@@ -27,6 +27,14 @@ pub(in crate::state) struct PreparedWorldEffects {
     da_pins: Vec<DaPinIntentWithLocation>,
 }
 
+impl PreparedWorldEffects {
+    /// Consume the exact deferred cache records after their World is published.
+    /// The enclosing State publisher retains all authorization and writer gates.
+    pub(in crate::state) fn publish(self, state: &State) {
+        state.publish_prepared_da_pins(self.da_pins);
+    }
+}
+
 impl<'state> PreparedWorldCommit<'state> {
     /// Finish late deterministic writes before any live World/cache publication.
     pub(in crate::state) fn prepare(
@@ -110,7 +118,7 @@ impl<'state> PreparedWorldCommit<'state> {
     /// Consume the same prepared World after State's publication gates succeed.
     pub(in crate::state) fn commit(self) {
         self.world.commit();
-        self.state.publish_prepared_da_pins(self.effects.da_pins);
+        self.effects.publish(self.state);
     }
 
     fn prepare_pins(

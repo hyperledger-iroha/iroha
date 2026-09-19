@@ -180,9 +180,20 @@ pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
     /// Exact Norito framing failed before any persistence boundary.
     #[error("Native AMX participant evidence artifact framing failed: {0}")]
     ArtifactFraming(#[source] norito::Error),
-    /// The exact framed pair violates a configured or hard byte bound.
+    /// Framing or arithmetic violates a deterministic standalone byte bound.
     #[error("{0}")]
     Budget(String),
+    /// Valid evidence exceeds this node's configured local storage allowance.
+    /// This is a local readiness condition, never a proposal-validity verdict.
+    #[error(
+        "Native AMX participant manifest/receipt pair is {required} bytes, exceeding the configured shared stable aggregate byte bound of {limit} bytes"
+    )]
+    LocalCapacity {
+        /// Exact framed pair bytes required by this route.
+        required: u64,
+        /// Operator-configured shared stable byte allowance.
+        limit: u64,
+    },
 }
 /// Bounded route/incarnation pointer to the latest Native AMX application receipt.
 ///

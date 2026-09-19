@@ -799,30 +799,45 @@ impl LifecyclePlannerIoFixture {
         assert!(task.matches_exact());
         let key = task.key;
         let mut callbacks = 0usize;
-        let result = task
-            .dispatch
-            .execute(&mut self.body_store, |_| {
-                callbacks = callbacks.saturating_add(1);
-                validation
-                    .take()
-                    .expect("the real validator is called exactly once")
-            })
-            .unwrap_or_else(|(error, _)| panic!("execute held lifecycle Validate: {error}"));
+        let result = task.dispatch.execute(&mut self.body_store, |_| {
+            callbacks = callbacks.saturating_add(1);
+            validation
+                .take()
+                .expect("the real validator is called exactly once")
+        });
+        let guarded = match result {
+            Ok(result) => GuardedLifecycleValidateWorkerResultV1::new(key, result, output_guard),
+            Err((
+                super::super::v2_body_store::V2BodyStoreError::LocalValidation(refusal),
+                dispatch,
+            )) => GuardedLifecycleValidateWorkerResultV1::deferred(
+                key,
+                dispatch,
+                refusal,
+                output_guard,
+            ),
+            Err((error, _)) => panic!("execute held lifecycle Validate: {error}"),
+        };
+        let command_guard = Arc::clone(&guarded.drop_guard.output_guard);
+        let completion = execute_fail_stop_io_command(&command_guard, || {
+            Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
+        })
+        .expect("typed completion retains its dispatch even when local recovery closes output");
+        let V2IoCompletion::LifecycleValidate(guarded) = completion else {
+            panic!("foreign fixture completion")
+        };
         self.command_rx
-            .complete_lifecycle_validate(key, &result)
+            .complete_lifecycle_validate_result(key, guarded.result())
             .expect("move exact lifecycle Validate tracker to CompletionPending");
         try_send_tracked_completion_with_lifecycle_ordinal(
             &self.completion_tx,
             &self.admission,
-            V2IoCompletion::LifecycleValidate(Box::new(
-                GuardedLifecycleValidateWorkerResultV1::new(key, result, output_guard),
-            )),
+            V2IoCompletion::LifecycleValidate(guarded),
             Some(key.lifecycle_ordinal()),
         )
         .expect("publish one guarded lifecycle Validate completion");
         callbacks
     }
-
     /// Count exact queued lifecycle Decision Apply commands.
     pub(in crate::sumeragi) fn queued_lifecycle_decision_apply_count(&self) -> usize {
         self.command_rx
@@ -1634,4 +1649,125 @@ impl LifecyclePlannerIoFixture {
         )
         .expect("publish exactly one guarded recovered Fetch persistence result");
     }
+}
+
+/// Drive original dispatch custody through real Queue release and the worker FIFO.
+#[cfg(feature = "bls")]
+pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
+    dispatch: DurableValidateDispatch,
+    key: LifecycleValidateDispatchKeyV1,
+    store: &mut V2BodyStore,
+    commitment: wire::ExecutionCommitment,
+    output_guard: Arc<ConsensusOutputGuard>,
+) -> PreparedLifecycleValidateCompletionV1 {
+    use super::super::v2_body_store::{LocalValidationRefusal, V2BodyStoreError};
+    let (lane_queue, release, reservation, _directory) =
+        crate::queue::tests::lane_retirement_release_fixture_for_test();
+    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+    lane_queue.set_sumeragi_wake(wake_tx);
+    let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded admission"));
+    let (_tx, rx) = build_v2_io_command_channel(4, Arc::clone(&admission));
+    assert!(admission.try_reserve(V2IoAdmissionClass::Consensus));
+    LifecycleValidateCapacityReservationV1 {
+        queue: &rx.queue,
+        state: Some(rx.queue.lock()),
+        operation: Some(
+            output_guard
+                .begin_fail_stop_operation()
+                .expect("open output"),
+        ),
+        key,
+    }
+    .commit(dispatch);
+    let V2IoCommand::LifecycleValidate(task) = rx.try_recv().expect("initial exact dispatch")
+    else {
+        panic!("foreign initial command")
+    };
+    assert_eq!(task.key, key);
+    let (error, original) = task
+        .dispatch
+        .execute(store, |_| {
+            Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::QueueRelease(
+                release.clone(),
+            ))
+        })
+        .expect_err("local Queue dependency returns the original dispatch");
+    let V2BodyStoreError::LocalValidation(refusal) = error else {
+        panic!("lost local dependency")
+    };
+    let guarded = Box::new(GuardedLifecycleValidateWorkerResultV1::deferred(
+        key,
+        original,
+        refusal,
+        Arc::clone(&output_guard),
+    ));
+    rx.complete_lifecycle_validate_result(key, guarded.result())
+        .expect("exact completion index");
+    admission.retain_completion(
+        false,
+        Some(key.lifecycle_ordinal()),
+        None,
+        None,
+        None,
+        Some(key),
+        None,
+    );
+    let completion = PreparedLifecycleValidateCompletionV1::new(guarded, Arc::clone(&rx.queue), 0)
+        .expect("transfer original physical completion ownership");
+    let mut retained = match completion.into_local_or_publication() {
+        Err(retained) => retained,
+        Ok(_) => panic!("local refusal cannot authorize semantic publication"),
+    };
+    for _ in 0..2 {
+        retained = match retained.retry() {
+            LocalLifecycleValidateRetryV1::Waiting(retained) => retained,
+            _ => panic!("no release means no second dispatch"),
+        };
+        assert!(rx.queue.lock().commands.is_empty());
+        assert_eq!(
+            rx.queue.lock().lifecycle_validates[&key].state,
+            V2IoWorkState::CompletionPending
+        );
+        assert!(!output_guard.restart_required());
+    }
+    lane_queue
+        .commit_lane_reservation_for_test(&reservation)
+        .expect("actual reservation release");
+    wake_rx
+        .try_recv()
+        .expect("actual release wakes the existing Sumeragi channel");
+    assert!(matches!(
+        retained.retry(),
+        LocalLifecycleValidateRetryV1::Requeued
+    ));
+    let V2IoCommand::LifecycleValidate(task) = rx.try_recv().expect("same dispatch retry") else {
+        panic!("foreign retry command")
+    };
+    assert_eq!(task.key, key);
+    let executed = task
+        .dispatch
+        .execute(store, |_| Ok::<_, String>(commitment))
+        .expect("the same retained dispatch executes after actual release");
+    rx.complete_lifecycle_validate(key, &executed)
+        .expect("same completion index after retry");
+    admission.retain_completion(
+        false,
+        Some(key.lifecycle_ordinal()),
+        None,
+        None,
+        None,
+        Some(key),
+        None,
+    );
+    assert!(!output_guard.restart_required());
+    PreparedLifecycleValidateCompletionV1::new(
+        Box::new(GuardedLifecycleValidateWorkerResultV1::new(
+            key,
+            executed,
+            output_guard,
+        )),
+        Arc::clone(&rx.queue),
+        0,
+    )
+    .expect("same-row semantic completion retains the exact final acknowledgement")
 }

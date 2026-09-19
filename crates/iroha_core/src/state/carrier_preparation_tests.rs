@@ -233,10 +233,10 @@ fn candidate_preparation_retains_actual_prefix_and_context_without_publication()
         .unwrap_or_else(|(_, error)| panic!("repeat preparation after drop: {error}"));
     // Test-only field access proves preparation did not grant publication. The
     // production owner deliberately has no mutable or consuming State accessor.
-    assert_eq!(
+    assert!(matches!(
         (*prepared.state).commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
