@@ -194,6 +194,10 @@ fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
 ) -> (SignedBlock, Hash, Hash) {
+    use iroha_config::{
+        kura::{FsyncMode, InitMode},
+        parameters::{actual, defaults},
+    };
     use iroha_core::{
         block::ValidBlock,
         kura::Kura,
@@ -210,14 +214,6 @@ fn execute_fixture_genesis(
         [Account::new(authority.clone()).build(&authority)],
         [],
     );
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        manifest.chain_id().clone(),
-        NetworkId::from_genesis_hash(provisional.0.hash()),
-    )
-    .unwrap();
     let reprofile = |literal: &str| {
         iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
             literal,
@@ -238,15 +234,36 @@ fn execute_fixture_genesis(
     if let Some(authority) = nexus.relay_worker.authority_account_id.as_mut() {
         *authority = reprofile(authority);
     }
-    state.set_nexus(nexus).unwrap();
-    let mut pipeline = iroha_config::parameters::actual::Pipeline::default();
-    pipeline.workers = 1;
-    pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
-    state.set_pipeline(pipeline);
-    state.set_crypto(iroha_config::parameters::actual::Crypto::default());
-    // Match Kagami's required pre-execution policy installation. A configured
-    // lane catalog alone does not install its active transaction authority.
-    let nexus = state.nexus_snapshot();
+    let kura_config = actual::Kura {
+        init_mode: InitMode::Strict,
+        // The temporary constructor supplies and retains its isolated directory.
+        store_dir: iroha_config_base::WithOrigin::inline(PathBuf::new()),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: FsyncMode::Batched,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+    };
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .unwrap();
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        world,
+        kura,
+        LiveQueryStore::start_test(),
+        manifest.chain_id().clone(),
+        NetworkId::from_genesis_hash(provisional.0.hash()),
+    )
+    .unwrap();
+    // Match Kagami's configured startup: install the policy owner before any
+    // runtime projection, then bind physical storage to this exact genesis network.
     let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
         &nexus.governance,
@@ -256,6 +273,18 @@ fn execute_fixture_genesis(
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .unwrap();
     state.install_lane_manifests(&std::sync::Arc::new(manifests));
+    state
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .unwrap();
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .unwrap();
+    state.set_nexus_from_config(nexus).unwrap();
+    let mut pipeline = actual::Pipeline::default();
+    pipeline.workers = 1;
+    pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
+    state.set_pipeline(pipeline);
+    state.set_crypto(actual::Crypto::default());
     let topology =
         Topology::new(iroha_core::sumeragi::signed_genesis_voting_peers(&provisional).unwrap());
     let mut voting = None;
@@ -272,8 +301,11 @@ fn execute_fixture_genesis(
     .unwrap_or_else(|(block, error)| {
         let transaction_errors = (0..block.external_transactions().count())
             .filter_map(|index| {
-                block
-                    .error(index)
+                let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
+                output
+                    .result
+                    .as_ref()
+                    .err()
                     .map(|reason| format!("transaction[{index}]: {reason:?}"))
             })
             .collect::<Vec<_>>();

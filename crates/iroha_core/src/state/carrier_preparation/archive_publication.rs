@@ -14,7 +14,6 @@ use crate::{
 };
 
 /// Local archive continuation refusal with every original owner still retained.
-#[derive(Debug)]
 pub(crate) enum CarrierArchivePublicationError {
     /// Original Kura contention or storage repair prevents the receipt join.
     Kura(KuraPublicationPreparationError),
@@ -24,6 +23,17 @@ pub(crate) enum CarrierArchivePublicationError {
     Provider(ProviderIngestFinalizedArchiveErrorV1),
     /// Reputation publication failed; completed provider work remains retained.
     Reputation(ReputationFinalizedArchiveError),
+}
+
+impl std::fmt::Debug for CarrierArchivePublicationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
+            Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
+            Self::Provider(error) => f.debug_tuple("Provider").field(error).finish(),
+            Self::Reputation(error) => f.debug_tuple("Reputation").field(error).finish(),
+        }
+    }
 }
 
 impl<Admission, BindingAdmission>

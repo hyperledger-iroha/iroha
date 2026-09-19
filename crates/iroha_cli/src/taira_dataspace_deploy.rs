@@ -41,17 +41,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[path = "taira_dataspace_deploy_finality.rs"]
-mod finality;
 #[path = "taira_epoch_maintenance.rs"]
 pub(crate) mod epoch_maintenance;
+#[path = "taira_dataspace_deploy_finality.rs"]
+mod finality;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
 
-pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 pub(crate) use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
 };
+pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 
 pub(crate) fn validate_deployment_trust(
     trust: &DeploymentTrustV1,
@@ -1379,31 +1379,6 @@ fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     bounded
 }
 
-/// Read-only native entry point for the anchored finality/four-peer verification layer.
-/// The returned request never asserts that those independent verifications succeeded.
-pub(crate) fn verification_request<C: RunContext>(
-    context: &C,
-    journal_dir: &Path,
-    operation_id: &str,
-) -> Result<VerificationRequestV1> {
-    require(
-        context.config().chain.to_string() == "fc56984b-2be7-431d-840e-21514d1883f0"
-            && context.config().account_chain_discriminant == 369,
-        "verification requires the canonical Taira profile",
-    )?;
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    Ok(run_saved(
-        context,
-        SavedArgs {
-            journal_dir: journal_dir.to_owned(),
-            operation_id: operation_id.into(),
-            timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
-        },
-        false,
-    )?
-    .verification)
-}
-
 fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
     let deadline = operation_deadline(args.timeout_ms)?;
     require_operation_budget(deadline, "open retained operation")?;
@@ -2105,6 +2080,7 @@ mod tests {
         }
         use iroha_data_model::{
             ValidationFail,
+            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
             isi::error::InstructionExecutionError,
             query::CommittedTransaction,
             transaction::{
@@ -2120,6 +2096,11 @@ mod tests {
             InstructionExecutionError::Conversion(marker.into()),
         ));
         let make_details = |transaction: SignedTransaction, result: TransactionResult| {
+            let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            });
             PipelineTransactionDetailsResponse {
                 hash: transaction.hash_as_entrypoint().to_string(),
                 transaction: CommittedTransaction {
@@ -2129,12 +2110,10 @@ mod tests {
                     entrypoint_hash: transaction.hash_as_entrypoint(),
                     entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                     entrypoint: TransactionEntrypoint::External(transaction),
-                    result_hash: result.hash(),
-                    result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                    result,
-                    merge_inclusion: None,
+                    output_hash: iroha_crypto::HashOf::new(&output),
+                    output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    output,
                 },
-                trigger_completions: Vec::new(),
             }
         };
         let details = make_details(transaction.clone(), TransactionResult::new(Err(reason)));

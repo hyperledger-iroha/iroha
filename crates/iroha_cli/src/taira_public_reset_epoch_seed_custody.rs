@@ -131,18 +131,6 @@ impl OriginalSeed {
         self.revalidate()?;
         Ok(bytes)
     }
-
-    pub(super) fn copy_to(&self, output: &mut impl Write) -> Result<()> {
-        let bytes = self.read()?;
-        output
-            .write_all(bytes.as_ref())
-            .map_err(|_| eyre!("native original seed framing failed"))?;
-        self.revalidate()
-    }
-}
-
-pub(super) fn read_original(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
-    OriginalSeed::open(path)?.read()
 }
 
 pub(super) fn destination(network: NetworkId, index: usize) -> Result<PathBuf> {

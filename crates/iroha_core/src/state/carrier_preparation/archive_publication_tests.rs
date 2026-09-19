@@ -29,6 +29,32 @@ use std::{
     time::SystemTime,
 };
 
+#[test]
+fn archive_publication_diagnostics_identify_failed_archive_and_cause() {
+    for (error, archive) in [
+        (
+            CarrierArchivePublicationError::Provider(
+                ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
+                    reason: "invalid carrier height",
+                },
+            ),
+            "Provider",
+        ),
+        (
+            CarrierArchivePublicationError::Reputation(
+                ReputationFinalizedArchiveError::InvalidKey {
+                    reason: "invalid carrier height",
+                },
+            ),
+            "Reputation",
+        ),
+    ] {
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains(archive));
+        assert!(diagnostic.contains("invalid carrier height"));
+    }
+}
+
 struct Reservation {
     released: Arc<AtomicUsize>,
     provider: Weak<ProviderIngestFinalizedArchiveV1>,

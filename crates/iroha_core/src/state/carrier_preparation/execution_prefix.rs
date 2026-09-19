@@ -16,9 +16,11 @@ use crate::{
 pub(crate) struct ValidatedExecutionPrefix {
     sealed: output_capacity::SealedExecutionOutputs,
     authority: PrefixSourceAuthority,
-    inventory: Arc<FastpqSourceInventoryV1>,
+    // Retain the original proving inputs through publication, even when no
+    // proof work is scheduled by the current consumer.
+    _inventory: Arc<FastpqSourceInventoryV1>,
     witness: ExecWitness,
-    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
+    _fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     parliament_timed_ovn_casting_bindings: Option<
         Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
     >,
@@ -63,8 +65,9 @@ impl ValidatedExecutionPrefix {
     }
 
     /// Actual finalized inventory, including rejected and zero-transcript calls.
+    #[cfg(test)]
     pub(in crate::state) fn inventory(&self) -> &Arc<FastpqSourceInventoryV1> {
-        &self.inventory
+        &self._inventory
     }
 
     /// The original witness which produced the retained execution commitment.
@@ -73,15 +76,17 @@ impl ValidatedExecutionPrefix {
     }
 
     /// Actual invocation owners retained through sealing, never regenerated rows.
+    #[cfg(test)]
     pub(in crate::state) fn sources(&self) -> &output_capacity::OwnedExecutionSources {
         self.sealed.sources()
     }
 
     /// Original optional proving context, retained even when no work is scheduled.
+    #[cfg(test)]
     pub(in crate::state) fn fastpq_witness_context(
         &self,
     ) -> Option<&crate::fastpq::FastpqWitnessContext> {
-        self.fastpq_witness_context.as_ref()
+        self._fastpq_witness_context.as_ref()
     }
 
     /// Actual timed-casting bindings captured by execution.
@@ -205,9 +210,9 @@ impl<'state> PrefixPreparation<'state> {
         let prefix = ValidatedExecutionPrefix {
             sealed,
             authority,
-            inventory,
+            _inventory: inventory,
             witness,
-            fastpq_witness_context: state.fastpq_witness_context.take(),
+            _fastpq_witness_context: state.fastpq_witness_context.take(),
             parliament_timed_ovn_casting_bindings: state
                 .parliament_timed_ovn_casting_bindings
                 .take(),

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::state::{
-    StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly,
+    StateReadOnlyWithTransactions, WorldReadOnly,
     lane_decision_batch::NativeExecutionCustody,
     storage_transactions::TransactionsReadOnly,
     tests::{NativePublicationFixture, native_publication_fixture},

@@ -3,6 +3,32 @@
 These records describe focused repairs against the current first-release
 contracts. They do not establish full workspace or release qualification.
 
+## September 19 CLI output API and carrier warning repair
+
+CLI settlement verification uses canonical network inputs and authenticated typed
+execution outputs. Fixtures construct current block headers, output receipts and
+Merkle proofs; a regression rejects substitution of another input's successful
+output. The public-input genesis fixture installs its manifest baseline and
+authenticated configured Kura geometry before startup catalog projection.
+
+Carrier warning cleanup retains original resources and their drop order, limits
+inspection helpers to unit tests, and preserves nested failure diagnostics.
+The source bindings and mutation checks track the retained field names. Unused
+CLI wrappers and fulfilled lint expectations are removed without compatibility
+shims or blanket warning suppression.
+
+The combined test build is warning-free:
+
+```sh
+cargo test -p iroha_cli --bin iroha -p iroha_core --lib --no-run
+```
+
+Focused execution passes 90 Core tests, 51 CLI tests and the four-peer P2P
+crossed-dial/restart regression. The existing expensive end-to-end settlement
+proof test remains ignored. Three focused carrier source-contract checks,
+edited-file formatting and the retired-codec guard also pass. Full workspace
+tests and the broader source-contract mutation matrix were not completed.
+
 ## September 16 committed-carrier and recovery regressions
 
 The reported Core run passed 15,335 tests and failed 82. The original executable

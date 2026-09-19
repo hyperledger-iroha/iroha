@@ -1735,10 +1735,13 @@ fn execution_lifetime_for_inputs(timeouts: &TimeoutsV1, validators: &[ValidatorV
     )
 }
 
-fn execution_lifetime_for_host_identities<'a>(
+fn execution_lifetime_for_host_identities<'a, I>(
     timeouts: &TimeoutsV1,
-    identities: impl IntoIterator<Item = &'a str>,
-) -> Result<u64> {
+    identities: I,
+) -> Result<u64>
+where
+    I: IntoIterator<Item = &'a str>,
+{
     let physical_validator_hosts = identities.into_iter().collect::<BTreeSet<_>>().len();
     let physical_validator_hosts = u64::try_from(physical_validator_hosts)
         .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
@@ -9599,7 +9602,12 @@ mod executor_model {
                 fail: Some("epoch_supervisor_pause".to_owned()),
                 ..MockTransport::default()
             };
-            execute_plan(&inventory, &mut transport, &mut journal).expect_err("pause is mandatory");
+            let error = execute_plan(&inventory, &mut transport, &mut journal)
+                .expect_err("pause is mandatory");
+            assert!(
+                format!("{error:#}").contains("injected failure at epoch_supervisor_pause"),
+                "{error:#}"
+            );
             assert!(
                 !transport
                     .events

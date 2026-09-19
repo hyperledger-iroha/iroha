@@ -11216,9 +11216,9 @@
           "symbol": "ValidatedExecutionPrefix",
           "required_tokens": [
             "sealed: output_capacity::SealedExecutionOutputs",
-            "inventory: Arc<FastpqSourceInventoryV1>",
+            "_inventory: Arc<FastpqSourceInventoryV1>",
             "witness: ExecWitness",
-            "fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
+            "_fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
             "parliament_timed_ovn_casting_bindings:"
           ]
         },
@@ -12246,7 +12246,7 @@
             "drop(commit)",
             "Ok(PublishedCarrier {",
             "source: source_prefix",
-            "admission, binding, installation"
+            "_admission: admission, _binding: binding, _installation: installation"
           ]
         },
         {

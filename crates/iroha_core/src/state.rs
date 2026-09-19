@@ -1932,13 +1932,6 @@ pub(crate) struct DetachedBlockHashes {
     visible: Vec<HashOf<BlockHeader>>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect retained journals to the consuming State publisher"
-    )
-)]
 #[path = "state/block_hashes_publication.rs"]
 mod block_hashes_publication;
 

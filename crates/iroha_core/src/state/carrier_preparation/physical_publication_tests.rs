@@ -18,6 +18,40 @@ use std::{
 type CheckpointDecision<A, B> =
     DecisionBoundCarrierJournals<A, B, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
 
+#[test]
+fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
+    for error in [
+        CarrierPhysicalPreparationError::<Infallible>::Checkpoint(
+            crate::kura::Error::CanonicalStoragePoisoned,
+        ),
+        CarrierPhysicalPreparationError::ExecutionWitness(
+            crate::kura::Error::CanonicalStoragePoisoned,
+        ),
+        CarrierPhysicalPreparationError::Archive(
+            super::super::archive_publication::CarrierArchivePublicationError::Checkpoint(
+                crate::kura::Error::CanonicalStoragePoisoned,
+            ),
+        ),
+    ] {
+        assert!(format!("{error:?}").contains("CanonicalStoragePoisoned"));
+    }
+
+    let lock = crate::publication_lock::PublicationMutex::default();
+    let held = lock.lock();
+    let wait = lock
+        .try_lock_or_wait()
+        .err()
+        .expect("original owner is held");
+    let error = CarrierPhysicalPreparationError::<Infallible>::Fence {
+        field: "state_write_lock",
+        wait,
+    };
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("state_write_lock"));
+    assert!(diagnostic.contains("wait"));
+    drop(held);
+}
+
 fn decided<A, B>(
     state: &State,
     proposal: SignedBlock,

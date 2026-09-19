@@ -359,10 +359,13 @@ fn validate_genesis_maintenance_grant(
     validate_maintenance_grant_instructions(manifest.instructions(), account)
 }
 
-pub(super) fn validate_maintenance_grant_instructions<'a>(
-    instructions: impl IntoIterator<Item = &'a iroha_data_model::isi::InstructionBox>,
+pub(super) fn validate_maintenance_grant_instructions<'a, I>(
+    instructions: I,
     account: &AccountId,
-) -> Result<()> {
+) -> Result<()>
+where
+    I: IntoIterator<Item = &'a iroha_data_model::isi::InstructionBox>,
+{
     use iroha_data_model::{
         Identifiable as _,
         isi::{GrantBox, RegisterBox, RevokeBox, UnregisterBox},

@@ -47,6 +47,25 @@ fn busy(kura: &Kura, expected: &str) -> mv::ReleaseWait {
 }
 
 #[test]
+fn preparation_diagnostics_identify_busy_owner_and_storage_failure() {
+    let kura = Kura::blank_kura_for_testing();
+    let held = kura.sidecar_lock.lock();
+    let error = kura.try_publication_lease().err().expect("sidecar is held");
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("sidecar_lock"));
+    assert!(diagnostic.contains("wait"));
+    drop(held);
+
+    kura.canonical_storage_poisoned
+        .store(true, Ordering::Release);
+    let error = kura
+        .try_publication_lease()
+        .err()
+        .expect("storage is poisoned");
+    assert!(format!("{error:?}").contains("CanonicalStoragePoisoned"));
+}
+
+#[test]
 fn every_busy_kura_fence_releases_earlier_guards_and_wakes_only_on_its_owner() {
     let kura = Kura::blank_kura_for_testing();
     let other = Kura::blank_kura_for_testing();

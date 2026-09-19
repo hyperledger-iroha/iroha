@@ -1350,10 +1350,6 @@ pub(crate) struct PreparedProviderIngestCapture {
     insertion: PreparedProviderInsertion,
     kura: Arc<Kura>,
 }
-#[expect(
-    dead_code,
-    reason = "TODO: connect retained archive reservations to the production carrier publisher"
-)]
 impl PreparedProviderIngestCapture {
     /// Authenticate exact durable finality and persist only the admitted bytes.
     ///

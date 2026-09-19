@@ -31,9 +31,9 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
     checkpoint: KuraWsvCheckpointReceipt,
     source: super::super::super::super::execution_prefix::ValidatedExecutionPrefix,
     // These outlive all values retained for completion delivery.
-    admission: A,
-    binding: B,
-    installation: I,
+    _admission: A,
+    _binding: B,
+    _installation: I,
 }
 
 impl<A, B, I> PublishedCarrier<A, B, I> {
@@ -174,9 +174,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             events: publication_events,
             checkpoint,
             source: source_prefix,
-            admission,
-            binding,
-            installation,
+            _admission: admission,
+            _binding: binding,
+            _installation: installation,
         })
     }
 }

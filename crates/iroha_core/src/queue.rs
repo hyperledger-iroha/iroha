@@ -10162,6 +10162,7 @@ impl Queue {
     /// reacquire this observer before any State lifecycle fence and recheck
     /// the pending-work predicate. A Queue must come from the caller's original
     /// State/Queue service owner; empty contents do not establish that binding.
+    #[cfg(test)]
     pub(crate) fn try_lock_lane_retirement_observer(
         &self,
     ) -> Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait> {

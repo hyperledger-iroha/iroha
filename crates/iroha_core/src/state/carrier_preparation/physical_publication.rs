@@ -19,7 +19,6 @@ use crate::state::{
 use std::convert::Infallible;
 
 /// Exact local acquisition refusal; this never invalidates a consensus decision.
-#[derive(Debug)]
 pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparationError<E> {
     /// Complete installation capacity was refused before any physical acquisition.
     Admission(E),
@@ -51,6 +50,33 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Runtime(RuntimePublicationError<Infallible>),
     /// One of the complete World inventory's original writers refused acquisition.
     World(WorldPublicationError<Infallible>),
+}
+
+impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
+            Self::ForeignKura => f.write_str("ForeignKura"),
+            Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
+            Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
+            Self::ExecutionWitness(error) => {
+                f.debug_tuple("ExecutionWitness").field(error).finish()
+            }
+            Self::Archive(error) => f.debug_tuple("Archive").field(error).finish(),
+            Self::Fence { field, wait } => f
+                .debug_struct("Fence")
+                .field("field", field)
+                .field("wait", wait)
+                .finish(),
+            Self::Component { field, cause } => f
+                .debug_struct("Component")
+                .field("field", field)
+                .field("cause", cause)
+                .finish(),
+            Self::Runtime(error) => f.debug_tuple("Runtime").field(error).finish(),
+            Self::World(error) => f.debug_tuple("World").field(error).finish(),
+        }
+    }
 }
 
 /// Original State fences, acquired without waiting and released after writers.

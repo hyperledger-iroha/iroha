@@ -377,7 +377,7 @@ pub(super) fn derive_release(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::fs::symlink;
 
     fn directory() -> tempfile::TempDir {
         let dir = tempfile::Builder::new()

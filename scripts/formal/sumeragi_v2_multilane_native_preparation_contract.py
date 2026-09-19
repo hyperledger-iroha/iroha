@@ -354,8 +354,8 @@ PREPARATION_OWNER_BINDINGS = (
     )),
     (PREPARED, "method", "PreparedCarrier::prepare", ("execution_prefix::prepare(input)",)),
     (PREFIX, "struct", "ValidatedExecutionPrefix", (
-        "sealed: output_capacity::SealedExecutionOutputs", "inventory: Arc<FastpqSourceInventoryV1>",
-        "witness: ExecWitness", "fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
+        "sealed: output_capacity::SealedExecutionOutputs", "_inventory: Arc<FastpqSourceInventoryV1>",
+        "witness: ExecWitness", "_fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
         "parliament_timed_ovn_casting_bindings:",
     )),
     (PREFIX, "struct", "PrefixPreparation", (
@@ -569,7 +569,7 @@ TERMINAL_OWNER_BINDINGS = (
         "tiered_snapshot.publish(target, false)", "target.enforce_nexus_storage_budget(height)",
         "target.persist_query_index_status(height, Some(effects.header.hash()))",
         "publication_events.append(&mut extra_events)", "drop(commit)", "Ok(PublishedCarrier {",
-        "source: source_prefix", "admission, binding, installation",
+        "source: source_prefix", "_admission: admission, _binding: binding, _installation: installation",
     )),
 )
 PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
@@ -1000,7 +1000,7 @@ def validate_native_preparation_contract(
             "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(str::to_owned)?;",
             "let inventory = state.fastpq_source_inventory.take().ok_or(",
             "let witness = state.exec_witness.take().ok_or(",
-            "let prefix = ValidatedExecutionPrefix { sealed, authority, inventory, witness, fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
+            "let prefix = ValidatedExecutionPrefix { sealed, authority, _inventory: inventory, witness, _fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
     ordered("PrefixPreparation::capture", "let authority = match native",
             "state.verify_execution_output_seal(block)?;",
             "state.verify_cached_ordinary_witness_content(&verified_inventory)?;",

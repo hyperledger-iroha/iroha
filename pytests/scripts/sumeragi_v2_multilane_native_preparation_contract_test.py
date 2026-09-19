@@ -167,7 +167,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("PREFIX", "capture", "witness, &manifest, &lanes, block", "witness, &manifest, &other_lanes, block"),
     ("PREFIX", "capture", ".replace(output_capacity::ExecutionOutputPlanState::Captured)", ".take()"),
     ("PREFIX", "capture", "Arc::ptr_eq(&inventory, &verified_inventory)", "Arc::ptr_eq(&inventory, &inventory)"),
-    ("PREFIX", "capture", "fastpq_witness_context: state.fastpq_witness_context.take()", "fastpq_witness_context: None"),
+    ("PREFIX", "capture", "_fastpq_witness_context: state.fastpq_witness_context.take()", "_fastpq_witness_context: None"),
     ("PREFIX", "prepare", "PrefixPreparation::capture(state, &valid, native)?", "PrefixPreparation::capture(other_state, &valid, native)?"),
     ("PREFIX", "prepare", "Err(error) => Err((Box::new(valid.into()), error))", "Err(error) => retain_partial(error)"),
     ("PREFIX", "prepare_world_effects", "!self.prefix.retains_closed_state(state)", "false"),

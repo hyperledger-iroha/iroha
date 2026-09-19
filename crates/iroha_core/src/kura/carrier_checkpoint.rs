@@ -50,6 +50,7 @@ impl Kura {
     /// wire association and every receipt field before touching checkpoint bytes.
     /// An error grants no receipt; the idempotent writer retains any actual
     /// durable work for an exact retry.
+    #[cfg(test)]
     pub(crate) fn persist_wsv_checkpoint_for_v2_commit(
         self: &Arc<Self>,
         finality: &KuraV2CommitReceipt,
@@ -96,6 +97,7 @@ impl Kura {
     /// derived body/finality caches can be populated. The State aggregate
     /// still owes its final exact canonical-boundary fence before publishing.
     /// Do not call while holding `canonical_publication_lease`.
+    #[cfg(test)]
     pub(crate) fn reauthenticate_wsv_checkpoint_receipt(
         &self,
         receipt: &KuraWsvCheckpointReceipt,

@@ -523,14 +523,15 @@ impl VerifySettlementArgs {
         let proofs: BlockProofs = archive(&bundle.proofs)?;
         ensure!(
             proofs.verify(&anchor),
-            "authenticated entry/result proof mismatch"
+            "authenticated input/output proof mismatch"
         );
-        let (_, entry, result) = block
-            .entrypoint_results()
-            .find(|(_, entry, _)| entry.hash() == entry_hash)
+        let entry = block
+            .network_entrypoints()
+            .find(|entry| entry.hash() == entry_hash)
             .ok_or_else(|| eyre!("target entry absent from authenticated block"))?;
+        // The verified output proof authenticates the exact Network output joined to this input.
         ensure!(
-            result.0.is_ok(),
+            proofs.output_proof.output().result().0.is_ok(),
             "authenticated transaction was rejected, not settled"
         );
         let TransactionEntrypoint::External(transaction) = entry else {
@@ -589,15 +590,18 @@ impl VerifySettlementArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
         block::{
-            BlockHeader, BlockSignature,
+            BlockHeader,
+            builder::BlockBuilder,
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
                 GlobalPhase, QuorumCertificate, ValidatorPower, Vote, finality::V2FinalityArtifact,
             },
+            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            output_budget::ExecutionOutputLimits,
         },
         bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
         execution_proofs::{ExecutionProofEnvelopeV1, ExecutionPublicInputsV1},
@@ -661,32 +665,62 @@ mod tests {
             NonZeroU64::new(height).expect("non-zero height"),
             previous.map(|parent| parent.block.hash()),
             None,
-            None,
             0,
             0,
         );
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(transaction_key.private_key(), header.hash())
-                .expect("fixture block signature"),
-        );
-        let mut block =
-            SignedBlock::presigned(signature, header, vec![transaction, alternate_transaction]);
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.push_transaction(alternate_transaction);
+        let mut block = builder
+            .try_build_with_signature(0, transaction_key.private_key())
+            .expect("fixture block signature");
+        let results = [
+            if rejected {
+                Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "fixture rejection".to_owned(),
+                        ),
+                    ),
+                )
+            } else {
+                TransactionResultInner::Ok(DataTriggerSequence::default())
+            },
+            TransactionResultInner::Ok(DataTriggerSequence::default()),
+        ];
+        let outputs = results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).expect("fixture input index fits u32"),
+                    result: result.into(),
+                    completions: Vec::new(),
+                })
+            })
+            .collect();
         block
-            .set_transaction_results(
+            .set_execution_outputs(
+                outputs,
+                0,
+                Default::default(),
                 Vec::new(),
-                &[entry_hash, alternate_entry_hash],
-                vec![
-                    if rejected { Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted("fixture rejection".to_owned()))) } else { TransactionResultInner::Ok(DataTriggerSequence::default()) },
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &ExecutionOutputLimits {
+                    max_outputs: 2,
+                    max_output_bytes: 1024 * 1024,
+                    max_total_output_bytes: 2 * 1024 * 1024,
+                    max_executed_wire_bytes: MAX_BLOCK_BYTES as u64,
+                },
             )
-            .expect("fixture block results align");
+            .expect("fixture block outputs align with network inputs");
         let block_proofs = block
-            .proofs_for_entry_hash(&entry_hash)
+            .network_execution_proof(&entry_hash)
             .expect("fixture block proof exists");
         let alternate_block_proofs = block
-            .proofs_for_entry_hash(&alternate_entry_hash)
+            .network_execution_proof(&alternate_entry_hash)
             .expect("alternate fixture block proof exists");
         let executed_block_wire = block
             .encode_wire()
@@ -1200,7 +1234,7 @@ mod tests {
             args.verify_carriers(swapped)
                 .expect_err("swapped entry proof")
                 .to_string()
-                .contains("entry/result proof mismatch")
+                .contains("input/output proof mismatch")
         );
         let mut modified = bundle(&fixture);
         modified.block.push(0);
@@ -1212,6 +1246,34 @@ mod tests {
                 .expect_err("repeated height")
                 .to_string()
                 .contains("pinned-context")
+        );
+    }
+    #[test]
+    fn authenticated_output_must_belong_to_selected_input() {
+        let fixture = make_fixture(vec![invalid_settlement().into()], true);
+        let mut mismatched_proofs = fixture.block_proofs.clone();
+        mismatched_proofs.output_proof = fixture.alternate_block_proofs.output_proof.clone();
+        let mut mismatched = bundle(&fixture);
+        mismatched.proofs =
+            norito::encode_canonical(&mismatched_proofs).expect("mismatched proofs");
+        assert!(
+            expectations(&fixture)
+                .verify_carriers(mismatched)
+                .expect_err("another input's successful output cannot replace the rejection")
+                .to_string()
+                .contains("input/output proof mismatch")
+        );
+
+        let mut args = expectations(&fixture);
+        args.expected_entry_hash = fixture.alternate_block_proofs.entry_hash.into();
+        let mut alternate = bundle(&fixture);
+        alternate.proofs =
+            norito::encode_canonical(&fixture.alternate_block_proofs).expect("alternate proofs");
+        assert!(
+            args.verify_carriers(alternate)
+                .expect_err("the selected successful input has no settlement")
+                .to_string()
+                .contains("exactly one explicit settlement")
         );
     }
     #[test]
@@ -1330,9 +1392,9 @@ mod tests {
                 .encode_wire()
                 .expect("large executed block wire");
             let decoded = block_from_wire(&wire).expect("bounded large execution envelope");
-            let (_, entry, _) = decoded
-                .entrypoint_results()
-                .find(|(_, entry, _)| entry.hash() == fixture.block_proofs.entry_hash)
+            let entry = decoded
+                .network_entrypoints()
+                .find(|entry| entry.hash() == fixture.block_proofs.entry_hash)
                 .expect("same target entry");
             let TransactionEntrypoint::External(transaction) = entry else {
                 panic!("expected wallet transaction");
