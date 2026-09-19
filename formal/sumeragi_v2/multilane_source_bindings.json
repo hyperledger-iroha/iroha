@@ -9885,31 +9885,10 @@
           "kind": "fn",
           "symbol": "ensure_first_release_lane_retirement_admissible_with_certified_locked",
           "required_tokens": [
-            "maintain_lane_retirement_route_locked",
-            "read_and_attest_geometry_native_amx_per_height_evidence",
-            "require_active_lane_incarnation",
-            "require_active_lane_artifact",
-            "native_amx_participant_receipt_matches_manifest_leaf",
-            "native_amx_retained_windows_are_complete",
-            "validate_native_amx_retained_history_continuity",
-            "decode_native_amx_participant_receipt_latest_index",
-            "latest.matches_receipt",
-            "confirmed_snapshot != artifact_snapshot"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
-          "kind": "fn",
-          "symbol": "ensure_archived_lane_work_released",
-          "required_tokens": [
-            "read_and_attest_geometry_native_amx_per_height_evidence",
-            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
-            "native_amx_retained_windows_are_complete",
-            "validate_native_amx_retained_history_continuity",
-            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
-            "decode_native_amx_participant_receipt_latest_index_for_route",
-            "latest.matches_receipt",
-            "confirmed_snapshot != artifact_snapshot"
+            "scan_lane_retirement_locked",
+            "RetirementScanEffects::MaintainAndAttest",
+            "pending_canonical_bytes",
+            ".map(drop)"
           ]
         },
         {
@@ -11011,40 +10990,22 @@
           "symbol": "run_autonomous_merge_frontier_fixture",
           "required_tokens": [
             "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n            0",
             "for _ in 0..4 {",
             ".validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)",
             "\"the locally built execution candidate must not be fully reexecuted by the adapter\"",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n            1",
-            "fail_next_native_amx_prepublication_for_tests",
-            "\"pre-WSV Native AMX participant evidence publication\"",
-            "\"failed live Native prepublication must not stage WSV\"",
-            "prepublish_native_amx_participant_application_evidence(",
-            "durable_carrier.as_ref(), None)",
-            "\"live merge prepublication requires its exact staged witness\"",
-            "durable_carrier.as_ref(),\n                Some(&entry),",
-            "live_prepublication.authenticates_state_frontiers",
-            "remove_latest_native_amx_participant_manifest_for_testing",
-            "\"remove only the exact latest Native manifest\"",
-            "remove_merge_carrier_record_for_testing",
-            "read_structural_native_amx_participant_application_receipt(",
-            "\"manifest loss must retain the exact structural Native receipt\"",
-            "read_native_amx_participant_application_receipt(",
-            ".is_none()",
-            "\"the authoritative reader must reject a receipt without its manifest\"",
-            "preflight_native_amx_participant_application_evidence_repair(",
-            "std::slice::from_ref(&native_marker),\n                None,",
-            "\"startup Native repair requires a committed or planned association\"",
-            "std::slice::from_ref(&native_marker),\n                Some(&entry),",
-            "\"planned merge association authorizes exact Native startup repair\"",
-            "plan_lane_application_evidence_repair(",
-            "apply_lane_application_evidence_repair(",
-            "native_carriers: 1",
-            "native_routes: 1",
-            "merge_carriers: 1",
-            "\"startup repair must reproduce the exact retained receipt bytes\"",
-            "\"startup evidence repair must not mutate canonical WSV\"",
-            "assert!(empty_plan.is_empty())"
+            "authenticate_merge_entry_for_height_context(",
+            "if frontier_case != MergeFrontierFixtureCase::SuccessfulApply {",
+            "assert_retired_merge_candidate_rejected(",
+            "assert_eq!(queue.live_lane_reservations(), reservations);",
+            "assert!(queue.lane_reservation_commit_barriers().is_empty());",
+            "assert!(queue.lane_reservation_release_barriers().is_empty());",
+            "assert_eq!(autonomous_balance(), None);",
+            "assert!(!participant_metadata_is_committed());",
+            "assert!(\n                expected_fifo\n                    .iter()\n                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))\n            );",
+            "fixture\n            .kura\n            .durable_autonomous_lane_merge_source(",
+            "assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));",
+            "assert_cold_merge_registry_replay_boundary(",
+            "return;"
           ]
         },
         {
@@ -11256,7 +11217,7 @@
           "required_tokens": [
             "native: Option<lane_decision_batch::NativeExecutionCustody>",
             "let authority = match native",
-            "Some(native) if native.retains_state(&state) && block.execution_context().is_some_and(|context| context.native_lane_decisions.is_some()) =>",
+            "Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>",
             "PrefixSourceAuthority::Native(Box::new(native))",
             "None if state.native_lane_stage.is_none()",
             "state.merge_carrier_entrypoints.is_empty()",
@@ -11322,7 +11283,6 @@
             "prepare_deterministic_carrier_metadata",
             "preparation.prepare_world_effects()?",
             "prepare_carrier_publication_events(block.header())",
-            "PreparedTieredSnapshot::prepare(",
             "prefix: source_prefix",
             "Ok(PreparedCarrier {",
             "Err(error) => Err((Box::new(valid.into()), error))"
@@ -11334,15 +11294,24 @@
           "symbol": "PreparedCarrier::prepare_journals",
           "required_tokens": [
             "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
-            "let admission;",
-            "source_prefix,",
-            "admit_journals(CarrierJournalInputs {",
-            "state: &state",
-            "prefix: &source_prefix",
+            "let admission = match admit_journals(CarrierJournalInputs {",
+            "state: &self.state",
+            "prefix: &self.source_prefix",
+            "provider: provider_capture.as_ref()",
+            "reputation: reputation_capture.as_ref()",
+            "CarrierJournalPreparationError::JournalAdmission { carrier: self, provider: provider_capture, reputation: reputation_capture, error, }",
+            "let mut provider_capture = provider_capture;",
+            "let mut reputation_capture = reputation_capture;",
+            "PreparedTieredSnapshot::prepare(&state.world, &state.state_ref.tiered_snapshot_worker,)",
             "state.prepare_carrier_geometry()?",
+            "owner.capture_original(state.as_ref())",
             "world.try_detach_journals",
             "transactions.prepare_commit()?.detach()",
-            "admission, })"
+            "let journals = PreparedCarrierJournals {",
+            "admission,",
+            "StagedCarrierCapture {",
+            ".try_complete()",
+            "carrier: Box::new(carrier)"
           ]
         },
         {
@@ -11411,8 +11380,8 @@
           "symbol": "ValidBlock::seal_native_execution_outputs",
           "required_tokens": [
             "verify_native_execution_metadata(block, executions)",
-            "block.validate_output_merkle_cache()",
-            "advertised_policy.as_ref().ok_or_else(",
+            "block\n                .validate_output_merkle_cache()",
+            "advertised_policy\n                .as_ref()\n                .ok_or_else(",
             ".validate()",
             "seal_execution_outputs(block, |state, source, routes|",
             "verify_native_execution_metadata(source, executions)",
@@ -11432,20 +11401,16 @@
           "required_tokens": [
             "executions.len() != routes.len() || executions.len() != block.network_entrypoint_count()",
             "executions.iter().zip(routes)",
-            "source.payload.input.routing_plan()",
+            "source\n                .payload\n                .input\n                .routing_plan()",
             "plan.coordinator_route() != *route",
             ".find(|(_, slot)| slot.route == *route)",
             "source.decisions.get(slot_index)",
             "let commitment = &execution.settlement_commitment",
             "iroha_data_model::nexus::compute_settlement_hash(commitment)",
             "!= execution.settlement_hash",
-            "commitment.receipts.is_empty() && commitment.nexus_fee_receipts.is_empty() && commitment.native_amx_receipts.is_empty()",
-            "commitment.total_local_amount.is_zero()",
-            "commitment.total_xor_due.is_zero()",
-            "commitment.total_xor_after_haircut.is_zero()",
-            "commitment.total_xor_variance.is_zero()",
-            "commitment.swap_metadata.is_some()",
-            "source.payload.descriptor.canonical_hash()",
+            "if !Self::native_settlement_requires_relay(commitment)?",
+            "continue;",
+            "source\n                .payload\n                .descriptor\n                .canonical_hash()",
             "LaneRelayEnvelope::new(",
             "commitment.clone()",
             "decision.manifest.byte_len",
@@ -11505,7 +11470,7 @@
             "height.checked_add(1)",
             "!= Some(frozen.height)",
             "block.header().prev_block_hash() != view.latest_block_hash()",
-            ".map(|qc| qc.subject.block_hash) != view.latest_block_hash()",
+            ".map(|qc| qc.subject.block_hash)\n                    != view.latest_block_hash()",
             "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
             "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
             "committed_nexus_amx_context_hash(state)",
@@ -11513,10 +11478,10 @@
             "frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy",
             "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?",
             "Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?",
-            "Ok(PreparedNativeExecutionControls { state, generation, header: block.header(),",
-            "admissions: block.execution_context()",
-            ".queue_plan_admissions.clone()",
-            "npos, context"
+            "Ok(PreparedNativeExecutionControls {\n                state,\n                generation,\n                header: block.header(),",
+            "admissions: block\n                    .execution_context()",
+            ".queue_plan_admissions\n                    .clone()",
+            "npos,\n                context"
           ]
         },
         {
@@ -11542,10 +11507,10 @@
             "block.header().height().get()",
             "block.npos_consensus_effects()",
             "authenticated_height_context.ok_or_else(",
-            "v2_committed_evidence_prune_keys_from_state(state, height, effects.v2_evidence_admissions.len(),)",
+            "v2_committed_evidence_prune_keys_from_state(\n                    state,\n                    height,\n                    effects.v2_evidence_admissions.len(),\n                )",
             "expected_anchor: header.prev_block_hash().map(|block_hash|",
             "height: height.saturating_sub(1)",
-            "roster: context.roster.iter()",
+            "roster: context\n                    .roster\n                    .iter()",
             "effects: effects.clone()",
             "header"
           ]
@@ -11603,23 +11568,23 @@
             "with_stable_observation(self, ||",
             "if !carrier.is_resultless_proposal()",
             "native_lane_batch_for_execution(&carrier)",
-            "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+            "ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )",
             "self.prepare_lane_decision_batch(&groups)?",
             "if &batch != expected",
             "self.with_native_lane_execution_scope(",
             "begin_exec_witness_capture()",
-            "controls.apply(overlay)",
+            "controls\n                        .apply(overlay)",
             "Ok((recorder, context))",
             "overlay.seal_native_lane_decision_batch(results, batch)",
             "|overlay, executions, (recorder, context)|",
-            "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
-            "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+            "ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )",
+            "ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )",
             "overlay.capture_exec_witness()",
             "verify_execution_output_seal(&carrier)",
             "drop(recorder)",
             "Ok((executions, context))",
             "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
-            "Ok(RecordedNativeLaneBatchV1 { prepared, carrier, context, })"
+            "Ok(RecordedNativeLaneBatchV1 {\n                prepared,\n                carrier,\n                context,\n            })"
           ]
         },
         {
@@ -11667,8 +11632,8 @@
             "self.import_lane_decision_group(&observed, execution)",
             "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
             "!observed.is_current(self)",
-            "state: self, observed, generation,",
-            "input: Arc::new(carrier.clone()), groups"
+            "state: self,\n                observed,\n                generation,",
+            "input: Arc::new(carrier.clone()),\n                groups"
           ]
         },
         {
@@ -11680,10 +11645,10 @@
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ensure_exec_witness_capture_available()",
             "if !self.is_current()",
-            "if carrier != *self.input { return Err(",
+            "if carrier != *self.input {\n            return Err(",
             "drop(self.input)",
             "record_native_lane_decision_batch(carrier, self.groups, context)",
-            "self.generation, self.state.state_view_generation()",
+            "self.generation,\n            self.state.state_view_generation()",
             "recorded.map(Some)"
           ]
         },
@@ -11707,7 +11672,7 @@
           "symbol": "native_lane_batch_for_scratch",
           "required_tokens": [
             "let batch = native_lane_batch_for_execution(carrier)?",
-            ".queue_plan_admissions.is_empty()",
+            ".queue_plan_admissions\n        .is_empty()",
             "carrier.npos_consensus_effects().is_some()",
             "carrier.header().npos_effects_hash().is_some()",
             "return Err(",
@@ -11731,7 +11696,7 @@
             "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
             "self.applied_npos_consensus_effects_hash != seal.npos_effects_hash",
             "self.canonical_wsv_merge_commit_authorization.is_some()",
-            "self.canonical_carrier_commit_metadata_authorization.is_some()",
+            "self\n                .canonical_carrier_commit_metadata_authorization\n                .is_some()",
             "self._curr_block != seal.carrier",
             "return Err("
           ]
@@ -11742,12 +11707,7 @@
           "symbol": "StateBlock::validate_native_output_carrier",
           "required_tokens": [
             "self.validate_native_lane_execution()",
-            "seal.completed_write_set_root.is_none()",
-            "block.header() != seal.carrier",
-            "block.header().npos_effects_hash() != seal.npos_effects_hash",
-            ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash)",
-            "!= Some(seal.batch.as_ref())",
-            "return Err("
+            "self.validate_native_output_source(block)"
           ]
         },
         {
@@ -11764,7 +11724,7 @@
           "kind": "method",
           "symbol": "NativeLaneBatchRecoveryV1::project",
           "required_tokens": [
-            "self.finality.validate_for_header(&block.header())",
+            "self.finality\n            .validate_for_header(&block.header())",
             "block.hash() != self.finality.block_hash",
             "canonical_proposal_wire_hash()",
             "!= self.finality.subject.payload_hash",
@@ -11786,7 +11746,7 @@
             "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ensure_state_access_without_exec_witness()",
-            "let Some((state, body, generation)) = source.preparation_input() else { return Ok(None); };",
+            "let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };",
             "if !body.is_resultless_proposal()",
             "native_lane_batch_for_execution(body)",
             "body.validate_proposal_commitments()",
@@ -11815,7 +11775,7 @@
             "self,",
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ValidBlock::prepare_native_candidate(",
-            "self, context, genesis_account, time_source, block_cadence"
+            "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence"
           ]
         },
         {
@@ -11844,15 +11804,16 @@
           "kind": "method",
           "symbol": "RecordedNativeLaneBatchV1::into_preparation_parts",
           "required_tokens": [
-            "fn into_preparation_parts(self)",
-            "self.prepared.verify_source_binding()",
-            "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+            "fn into_preparation_parts(\n        self,\n    )",
+            "self.prepared\n            .verify_source_binding()",
+            "verify_execution_output_seal(&self.carrier)",
+            "validate_native_output_source(&self.carrier)",
             "let seal = Arc::clone(",
-            "self.prepared.overlay.native_lane_stage.as_ref()",
+            "self.prepared\n                .overlay\n                .native_lane_stage\n                .as_ref()",
             "let PreparedLaneDecisionBatchV1",
-            "overlay, executions, sources",
+            "overlay,\n            executions,\n            sources",
             "= self.prepared",
-            "NativeExecutionCustody { seal, sources, executions, context: self.context"
+            "NativeExecutionCustody {\n                seal,\n                sources,\n                executions,\n                context: self.context"
           ]
         },
         {
@@ -11879,7 +11840,7 @@
             "block: &SignedBlock",
             "policy: &BlockSignaturePolicy",
             "context.leader(block.header().view_change_index())",
-            "context.roster.get(leader_index)",
+            "context\n                .roster\n                .get(leader_index)",
             "let mut signatures = block.signatures()",
             "if signatures.next().is_some() || signature.index() != expected_index",
             "verify_hash(expected_key, block.hash())"
@@ -11912,7 +11873,7 @@
           "kind": "method",
           "symbol": "ValidBlock::validate_execution_context_with_state",
           "required_tokens": [
-            "matches!(&validation_profile, ConsensusValidationProfile::NativePreparation { .. })",
+            "matches!(\n                &validation_profile,\n                ConsensusValidationProfile::NativePreparation { .. }\n            )",
             "native_lane_batch_for_execution(block)",
             "Self::checked_execution_context_header(block)?",
             "Self::validate_execution_context_header(block)?",
@@ -11925,7 +11886,922 @@
           "symbol": "PreparedNativeLaneBatchSourceV1::preparation_input",
           "required_tokens": [
             "Option<(&'state State, &SignedBlock, u64)>",
-            "self.is_current().then_some((self.state, &self.input, self.generation))"
+            "self.is_current()\n            .then_some((self.state, &self.input, self.generation))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_apply_certified_source_rejection.rs",
+          "kind": "fn",
+          "symbol": "assert_retired_merge_candidate_rejected",
+          "required_tokens": [
+            "let before_state = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())",
+            "let before_ledger = fixture.state.merge_ledger.snapshot();",
+            "let before_height = fixture.state.committed_height();",
+            "let before_tree = completed_secondary_tree(&fixture.kura.store_root());",
+            "for _ in 0..2 {",
+            ".validate_candidate(context, body)",
+            ".expect_err(\"MergeQC cannot substitute for the canonical native Decision source\")",
+            "reason.contains(\"ordinary output source contains a competing native owner\")",
+            "assert_eq!(fixture.state.committed_height(), before_height);",
+            "crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),\n            before_state",
+            "assert_eq!(fixture.state.merge_ledger.snapshot(), before_ledger);",
+            "assert_eq!(fixture.state.has_committed_entrypoint(*hash), *committed);",
+            "completed_secondary_tree(&fixture.kura.store_root()),\n            before_tree"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_publication_test_support.rs",
+          "kind": "fn",
+          "symbol": "prepared_native_publication_for_test",
+          "required_tokens": [
+            "let mut executed = carrier.clone();",
+            "ValidBlock::execute_native_block_and_capture_for_test(",
+            "&mut executed, state, &context",
+            "let (committed, witness) =\n        finalize_native_execution_for_test(",
+            "state, executed, &mut overlay, context",
+            "overlay\n        .authorize_execution_output_publication(&committed, &witness)",
+            "overlay\n        .apply_without_execution_with_verified_v2_finality(&committed)",
+            "assert!(\n        overlay\n            .native_output_publication_identity()\n            .unwrap()\n            .is_some()\n    );",
+            "assert!(matches!(\n        overlay.execution_output_plan,\n        Some(super::output_capacity::ExecutionOutputPlanState::Finalized(\n            _\n        ))\n    ));",
+            "(overlay, committed)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_execution_finality_test_support.rs",
+          "kind": "fn",
+          "symbol": "finalize_native_execution_for_test",
+          "required_tokens": [
+            "context.validate()",
+            "assert_eq!(context.network_id, state.network_id);",
+            "assert_eq!(context.height, block.header().height().get());",
+            "context.roster.len(),\n        4",
+            "assert_eq!(validator.power, 1",
+            "let witness = overlay\n        .take_exec_witness()",
+            "let casting = overlay\n        .take_parliament_timed_ovn_casting_bindings()",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(",
+            "LaneFinalityManifestV1::from_result_bearing_block(&block)",
+            "execution_commitment_from_validated_block(&witness, &native, &lanes, &block)",
+            "let preimage = iroha_data_model::block::consensus_v2::Vote {",
+            "let signatures = keys\n        .iter()\n        .take(3)",
+            "signers: vec![0, 1, 2]",
+            "crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())",
+            ".commit_with_verified_v2_artifact(verified, execution_commitment)",
+            ".stage_kagemusha_finality_sidecar(",
+            "&witness,\n            execution_commitment,\n            &casting",
+            ".store_block(committed.clone())",
+            ".store_v2_finality_artifact(&artifact)",
+            "assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));",
+            "assert_eq!(receipt.block_hash(), committed.as_ref().hash());",
+            "(committed, witness)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_execution_finality_test_support.rs",
+          "kind": "fn",
+          "symbol": "promote_native_execution_finality_for_test",
+          "required_tokens": [
+            ".verified_v2_finality_artifact()",
+            ".store_v2_finality_artifact(artifact)",
+            ".promote_kagemusha_finality_sidecar(artifact, &receipt)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "publish_next_native_group_for_test",
+          "required_tokens": [
+            "state\n        .kura\n        .get_block(",
+            "state\n        .kura\n        .v2_finality_artifact(",
+            "build_successor_height_context(",
+            "state\n        .prepare_lane_decision_batch(std::slice::from_ref(group))",
+            "BlockExecutionContextBundle::default().with_native_lane_decisions(batch)",
+            "prepared_native_publication_for_test(state, &carrier, context)",
+            "overlay\n        .commit()",
+            "promote_native_execution_finality_for_test(state, &committed)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "cold_restore_completed_native_history_for_test",
+          "required_tokens": [
+            "for entry in std::fs::read_dir(source)",
+            "if kind.is_dir() {",
+            "copy_durable_tree(&source, &destination);",
+            "assert!(\n                    kind.is_file()",
+            "std::fs::write(&destination, &bytes)",
+            "assert_eq!(std::fs::read(&destination).unwrap(), bytes);",
+            "assert_eq!(\n                    std::fs::read(&source).unwrap(),\n                    bytes",
+            "let cold_root = tempfile::tempdir()",
+            "copy_durable_tree(&state.kura.store_root(), cold_root.path());",
+            "strict_kura_config_for_testing(cold_root.path().to_path_buf())",
+            "Kura::new_with_configured_lane_catalog(",
+            "kura: cold_kura",
+            "lane_manifests: state.lane_manifests.read().clone()",
+            ".into_state_from_json(norito::json::to_value(state).unwrap())",
+            "restored\n        .kura\n        .bind_lane_storage_network(restored.network_id)",
+            "restored\n        .prepare_restored_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)",
+            "restored\n        .restore_kura_lane_segments_from_nexus()",
+            "restored\n        .set_nexus_from_config(nexus)",
+            "restored.install_lane_compliance_engine(state.lane_compliance_engine())",
+            "restored.execution_policy_digest_v1().unwrap()",
+            "state.execution_policy_digest_v1().unwrap()",
+            "crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap()",
+            "crate::snapshot::canonical_state_snapshot_hash(state).unwrap()",
+            "(cold_root, restored)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "assert_completed_native_history_for_test",
+          "required_tokens": [
+            "crate::snapshot::canonical_state_snapshot_hash(state).unwrap()",
+            "state.kura.exact_durable_blocks_count().unwrap()",
+            "blocks.iter().zip(original_groups)",
+            "let expected_wire = signed.encode_wire().unwrap()",
+            "state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n            expected_wire",
+            "block.verified_v2_finality_artifact().unwrap()",
+            "let finality_bytes = std::fs::read(&path).unwrap()",
+            "state\n                .kura\n                .v2_finality_artifact(height.get() as u64)\n                .unwrap()\n                .as_ref(),\n            Some(original_finality)",
+            "NativeLaneBatchCarrierReadV1::Ready(included)",
+            "state\n            .read_finalized_native_lane_batch(height, signed.hash())\n            .unwrap()",
+            "assert_eq!(included.batch().groups, vec![group.to_wire()])",
+            "assert_eq!(\n            state.view().transactions.get(&entrypoint),\n            Some(height)",
+            "assert!(\n            state\n                .replay_finalized_native_lane_batch(&included, &[])\n                .is_err()",
+            "state\n            .preexecute_lane_decision_groups(successor.header(), std::slice::from_ref(group))\n            .err()",
+            "if reason == expected_reason",
+            "assert_eq!(\n            std::fs::read(&path).unwrap(),\n            finality_bytes",
+            "assert_eq!(\n            state.kura.get_block(height).unwrap().encode_wire().unwrap(),\n            expected_wire\n        )",
+            "assert_eq!(\n        state.kura.exact_durable_blocks_count().unwrap(),\n        durable_height\n    )",
+            "assert_eq!(\n        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),\n        before"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_completed_history_tests.rs",
+          "kind": "fn",
+          "symbol": "native_completed_history_rejects_reapplication_after_second_economic_commit_impl",
+          "required_tokens": [
+            "native_publication_fixture_for_test(&[\n        NativeEconomicCase::Transfer(25),\n        NativeEconomicCase::Transfer(15),\n    ])",
+            "assert_eq!(original_groups.len(), 2)",
+            "for original in &original_groups {",
+            "publish_next_native_group_for_test(&fixture, current)",
+            "assert_eq!(block.as_ref().network_entrypoint_count(), 1)",
+            "assert!(\n            block\n                .as_ref()\n                .network_output_at(0)\n                .unwrap()\n                .1\n                .result\n                .is_ok()\n        )",
+            "assert!(block.as_ref().output_results().all(|result| result.is_ok()))",
+            "assert_eq!(state.committed_height(), admission_height + committed.len())",
+            "assert!(\n            current_total > total",
+            "assert_completed_native_history_for_test(\n            state,\n            &committed,\n            &original_groups[..committed.len()],\n        )",
+            "assert_eq!(total, Quantity::from(40_u32))",
+            "assert_eq!(\n        state.world.assets.view().get(&fixture.source).unwrap().0,\n        Quantity::from(60_u32)\n    )",
+            "assert_eq!(\n        committed[1].as_ref().header().prev_block_hash(),\n        Some(committed[0].as_ref().hash())\n    )",
+            "state\n            .verified_lane_consensus_contexts()\n            .unwrap()\n            .unwrap()\n            .contexts()\n            .is_empty()",
+            "let (_cold_root, restored) = cold_restore_completed_native_history_for_test(state)",
+            "restored\n            .kura\n            .get_block(admission_height)\n            .unwrap()\n            .encode_wire()\n            .unwrap(),\n        admission_wire",
+            "restored\n            .kura\n            .v2_finality_artifact(admission_height.get() as u64)\n            .unwrap(),\n        admission_finality",
+            "assert_completed_native_history_for_test(&restored, &committed, &original_groups)",
+            "assert!(\n        restored\n            .read_finalized_native_lane_batch(",
+            "committed[0].as_ref().hash(),\n            )\n            .is_err()",
+            "assert_eq!(\n        restored.world.assets.view().get(&fixture.source).unwrap().0,\n        Quantity::from(60_u32)\n    )",
+            "assert_eq!(\n        restored\n            .world\n            .assets\n            .view()\n            .get(&fixture.destination)\n            .unwrap()\n            .0,\n        Quantity::from(40_u32)\n    )",
+            "for change_instance in [false, true] {",
+            "copied.base_state_height = restored.committed_height() as u64;",
+            "copied.base_state_hash = restored.lane_execution_state_hash().unwrap();",
+            "copied.groups[0].payload.descriptor.slots[0].instance_id =",
+            "copied.groups[0].payload.descriptor.slots[0].lane_incarnation =",
+            "assert!(\n            restored\n                .prepare_proposed_native_lane_batch_source(&candidate, &[])\n                .is_err()",
+            "assert_eq!(\n            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),\n            before\n        )",
+            "assert_completed_native_history_for_test(&restored, &committed, &original_groups)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::validate_native_output_source",
+          "required_tokens": [
+            "self.validate_native_lane_stage_membership()",
+            "seal.completed_write_set_root.is_none()",
+            "block.header() != seal.carrier",
+            "block.header().npos_effects_hash() != seal.npos_effects_hash",
+            ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions))\n                != Some(seal.queue_plan_admissions_hash)",
+            "!block.external_entrypoints_slice().is_empty()",
+            "!= Some(seal.batch.as_ref())",
+            "return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_execution_metadata.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::native_settlement_requires_relay",
+          "required_tokens": [
+            "let has_receipts = !commitment.receipts.is_empty()",
+            "|| !commitment.nexus_fee_receipts.is_empty()",
+            "|| !commitment.native_amx_receipts.is_empty()",
+            "if !has_receipts",
+            "!commitment.total_local_amount.is_zero()",
+            "!commitment.total_xor_due.is_zero()",
+            "!commitment.total_xor_after_haircut.is_zero()",
+            "!commitment.total_xor_variance.is_zero()",
+            "commitment.swap_metadata.is_some()",
+            "return Ok(false)",
+            "if commitment.tx_count == 0",
+            "return Err(",
+            "Ok(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "method",
+          "symbol": "ValidatedExecutionPrefix::retains_carrier",
+          "required_tokens": [
+            "self.sealed.proposal() == block.hash()",
+            "self.sealed.sources().proposal() == block.hash()",
+            "PrefixSourceAuthority::Ordinary => { !self.sealed.sources().is_native() && !block.execution_context().is_some_and(|bundle| bundle.native_lane_decisions.is_some()) }",
+            "PrefixSourceAuthority::Native(native) => { self.sealed.sources().is_native() && native.retains_carrier(block, context) }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "NativeExecutionCustody::retains_carrier",
+          "required_tokens": [
+            "self.context.context() == context",
+            "self.seal.completed_write_set_root.is_some()",
+            "self.seal.carrier == block.header()",
+            "block.header().npos_effects_hash() == self.seal.npos_effects_hash",
+            "Some(self.seal.queue_plan_admissions_hash)",
+            "block.external_entrypoints_slice().is_empty()",
+            "Some(self.seal.batch.as_ref())",
+            "self.sources.len() == self.seal.batch.groups.len()",
+            "self.executions.len() == self.sources.len()",
+            "source.body().payload() == &wire.payload && source.decisions() == wire.decisions"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/archive_publication.rs",
+          "kind": "fn",
+          "symbol": "publish_archives",
+          "required_tokens": [
+            "&mut self",
+            "try_publication_lease()",
+            "&self.checkpoint",
+            "self.finality.artifact()",
+            "self.journals.checkpoint",
+            "drop(lease)",
+            "self.checkpoint.finality_receipt()",
+            "self.journals.provider_capture.as_mut()",
+            "self.journals.reputation_capture.as_mut()",
+            "provider.publish(receipt)",
+            "reputation.publish(receipt)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "fn",
+          "symbol": "try_prepare_physical",
+          "required_tokens": [
+            "admit: impl FnOnce(&Self, &State)",
+            "admit(&original, target)",
+            "target.matches_kura_instance(&original.journals.kura)",
+            "original.publish_execution_witness()",
+            "original.publish_archives()",
+            "target.kura.try_publication_lease()",
+            "SourceAuthenticatedCarrier::try_new(original, kura)",
+            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
+            "StateFences::try_acquire(target)",
+            "journals.try_map_components(",
+            "Ok(PhysicallyPreparedCarrier { target, decision: retain!(journals), installation, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::is_identity_transition",
+          "required_tokens": [
+            "self._header == header",
+            "self._pending.is_none()",
+            "self._certified_frontiers.is_empty()",
+            "self._previous_runtime_catalog == self._accepted_runtime_catalog",
+            "self._predecessor.lanes == self._successor.lanes",
+            "self._predecessor.lane_count == self._successor.lane_count",
+            "self._predecessor.lane_incarnation_lineage == self._successor.lane_incarnation_lineage",
+            "self._predecessor.owner_policy == self._successor.owner_policy",
+            "self._predecessor.autoscale_last_transition_height == self._successor.autoscale_last_transition_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "CarrierFences::release_for_completion",
+          "required_tokens": [
+            "drop(write)",
+            "drop(lifecycle)",
+            "drop(kura)",
+            "commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/publication.rs",
+          "kind": "method",
+          "symbol": "PhysicallyPreparedCarrier::publish",
+          "required_tokens": [
+            "journals.effects.replay_prevalidation",
+            "journals.source_prefix.retains_carrier(journals.valid.as_ref(), &journals.context)",
+            "journals.effects.header != journals.valid.as_ref().header()",
+            "journals.staged_legacy_source()",
+            "journals.geometry.is_identity_transition(journals.effects.header)",
+            "journals.effects.pending_autoscale_lifecycle.is_some()",
+            "journals.native_amx_manifest.entries().is_empty()",
+            "return Err((self.abort(), error))",
+            "target.begin_state_view_write()",
+            "transactions.publish()",
+            "runtime.publish()",
+            "world.publish()",
+            "world_effects.publish(target)",
+            "effects.publish(target, &generation, true)",
+            "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
+            "block_hashes.publish()",
+            "target.update_latest_block_header_cache(effects.header)",
+            "drop(generation)",
+            "fences.release_for_completion()",
+            "effects.publish_observability(target)",
+            "target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)",
+            "tiered_snapshot.publish(target, false)",
+            "target.enforce_nexus_storage_budget(height)",
+            "target.persist_query_index_status(height, Some(effects.header.hash()))",
+            "publication_events.append(&mut extra_events)",
+            "drop(commit)",
+            "Ok(PublishedCarrier {",
+            "source: source_prefix",
+            "admission, binding, installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_witness_publication.rs",
+          "kind": "fn",
+          "symbol": "publish_execution_witness",
+          "required_tokens": [
+            "&mut self",
+            "try_publication_lease()",
+            "&self.checkpoint",
+            "self.finality.artifact()",
+            "self.journals.checkpoint",
+            "drop(lease)",
+            "stage_kagemusha_finality_sidecar(",
+            "self.finality.artifact().height",
+            "self.finality.artifact().block_hash",
+            "self.journals.source_prefix.witness()",
+            "self.journals.execution_prefix",
+            "self.journals.source_prefix.parliament_timed_ovn_casting_bindings().unwrap_or(&[])",
+            "promote_kagemusha_finality_sidecar(self.finality.artifact(), self.checkpoint.finality_receipt(),)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::reauthenticate_execution_witness",
+          "required_tokens": [
+            "self.kura.kagemusha_finality_sidecar_path(finality.height)",
+            "let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else { return Err(",
+            "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?",
+            "self.kura.regular_sidecar_metadata(&path, &directory)?",
+            "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)",
+            "Ok(())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "Queue",
+          "required_tokens": [
+            "lane_reservation_transition_lock: PublicationMutex,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::from_config_with_router_limits_and_catalogs",
+          "required_tokens": [
+            "lane_reservation_transition_lock: PublicationMutex::default(),"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "QueueLaneRetirementObserver",
+          "required_tokens": [
+            "queue: &'queue Queue",
+            "_reservation_transition_guard: PublicationGuard<'queue>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lock_lane_retirement_observer",
+          "required_tokens": [
+            "queue: self",
+            "_reservation_transition_guard: self.lane_reservation_transition_lock.lock()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::try_lock_lane_retirement_observer",
+          "required_tokens": [
+            "Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait>",
+            "let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;",
+            "Ok(QueueLaneRetirementObserver { queue: self, _reservation_transition_guard: guard, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::lane_has_pending_work",
+          "required_tokens": [
+            "self.queue.lane_has_pending_work_under_retirement_observer(lane_id, dataspace_id, lane_incarnation,)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_has_pending_work_under_retirement_observer",
+          "required_tokens": [
+            "hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted()",
+            "let _queue_guard = self.push_remove_lock.lock();",
+            "if self.transaction_selection_durability_faulted() { return true; }",
+            "let reservations = self.lane_reservations.lock();",
+            "self.lane_has_pending_work_locked(&reservations, lane_id, dataspace_id, lane_incarnation)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationMutex",
+          "required_tokens": [
+            "inner: parking_lot::Mutex<T>",
+            "released: mv::ReleaseNotification"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationGuard",
+          "required_tokens": [
+            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::wrap",
+          "required_tokens": [
+            "guard: parking_lot::MutexGuard<'state, T>",
+            "self.released.guard(PhysicalPublicationGuard { guard: Some(guard), fair: false, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::lock",
+          "required_tokens": [
+            "self.wrap(self.inner.lock())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::try_lock",
+          "required_tokens": [
+            "self.inner.try_lock().map(|guard| self.wrap(guard))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::try_lock_or_wait",
+          "required_tokens": [
+            "let wait = self.released.observe();",
+            "self.try_lock().ok_or(wait)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "struct",
+          "symbol": "KuraPublicationLease",
+          "required_tokens": [
+            "kura: &'kura Kura",
+            "pending_canonical_bytes: u64",
+            "_sidecar: PublicationGuard<'kura>",
+            "_geometry: PublicationGuard<'kura>",
+            "_canonical: PublicationGuard<'kura>",
+            "_prune: PublicationGuard<'kura>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "method",
+          "symbol": "StagedCarrierCapture::try_complete",
+          "required_tokens": [
+            "if let Some(error) = &self.capture_refusal",
+            "return Err(error.clone());",
+            "provider.try_prepare()",
+            "reputation.try_prepare()",
+            "return Err((self, error));",
+            "self.journals.provider_capture = self.provider.take()",
+            "self.journals.reputation_capture = self.reputation.take()",
+            "owner.into_prepared()",
+            "Ok(self.journals)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PhysicalPublicationGuard<'_, T>::drop",
+          "required_tokens": [
+            "if let Some(guard) = self.guard.take()",
+            "if self.fair",
+            "parking_lot::MutexGuard::unlock_fair(guard);",
+            "else { drop(guard); }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::try_publication_lease",
+          "required_tokens": [
+            "lock.try_lock_or_wait()",
+            "KuraPublicationPreparationError::Busy { field, wait }",
+            "let prune = acquire(\"prune_lock\", &self.prune_lock)?;",
+            "let canonical = acquire(\"canonical_chain_lock\", &self.canonical_chain_lock)?;",
+            "let pending_canonical_bytes = self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;",
+            "let geometry = acquire(\"lane_geometry_lock\", &self.lane_geometry_lock)?;",
+            "let sidecar = acquire(\"sidecar_lock\", &self.sidecar_lock)?;",
+            "self.ensure_prune_recovery_not_required()",
+            "self.ensure_canonical_storage_not_poisoned()",
+            "Ok(KuraPublicationLease { kura: self, pending_canonical_bytes, _sidecar: sidecar, _geometry: geometry, _canonical: canonical, _prune: prune, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::original_kura",
+          "required_tokens": [
+            "pub(super) fn original_kura(&self) -> &Kura",
+            "self.kura"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "struct",
+          "symbol": "RawGeometryAttempt",
+          "required_tokens": [
+            "kura: KuraInstanceIdentity",
+            "request: OwnedRequest",
+            "previous_entries: Option<BTreeMap<LaneId, LaneStorageEntry>>",
+            "updated_entries: Option<BTreeMap<LaneId, LaneStorageEntry>>",
+            "maintenance: RawGeometryMaintenance",
+            "target: Option<PreparedGeometryJournalTransition>",
+            "pending_phase: Option<LaneGeometryPhase>",
+            "intent_complete: bool",
+            "operation_cursor: usize",
+            "provisioning_failure: Option<RawGeometryProvisioningFailure>",
+            "claim: RawGeometryClaim"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryClaim::authorizes",
+          "required_tokens": [
+            "Arc::ptr_eq(&self.state, &gate.state)",
+            "!state.abandoned",
+            "state.active.ptr_eq(&Arc::downgrade(&self.signal))",
+            "!self.complete"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryClaim::drop",
+          "required_tokens": [
+            "state.active.ptr_eq(&Arc::downgrade(&self.signal))",
+            "state.abandoned |= self.effects_started && !self.complete;",
+            "drop(state);",
+            "self.signal.released.send_replace(true);"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::begin_raw_geometry_attempt",
+          "required_tokens": [
+            "let kura = self.original_kura();",
+            "kura.durable_mutation_authorized()?;",
+            "kura.require_raw_geometry_canonical_recovery_complete()?;",
+            "let claim = kura.raw_geometry_claim.claim()?;",
+            "kura.validate_certified_lane_drain_frontier_under_publication_lease(",
+            "kura.read_lane_geometry_journal_structure()?",
+            "retained_journal::RetainedGeometryJournal::capture(kura, journal.encode().len())?",
+            "if observed != journal",
+            "kura: kura.instance_identity()",
+            "request: OwnedRequest::capture(request, replaced, certified_frontiers)",
+            "previous_entries: Some(previous_entries)",
+            "updated_entries: Some(updated_entries)",
+            "phase: RawGeometryPhase::Captured",
+            "namespace_receipts: Vec::new(), claim"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::authenticate",
+          "required_tokens": [
+            "let kura = lease.original_kura();",
+            "!self.kura.matches(kura) || !self.claim.authorizes(&kura.raw_geometry_claim)",
+            "if let Some(failure) = &self.provisioning_failure",
+            "return Err(failure.error());",
+            "kura.ensure_prune_recovery_not_required()?;",
+            "kura.durable_mutation_authorized()?;",
+            "kura.require_raw_geometry_canonical_recovery_complete()?;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::persist_target",
+          "required_tokens": [
+            "self.pending_phase.is_some_and(|pending| pending != phase)",
+            "self.pending_phase = Some(phase);",
+            "self.target.as_mut()",
+            ".persist(kura, phase)?;",
+            "self.pending_phase = None;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::prepare_target",
+          "required_tokens": [
+            "PreparedGeometryJournalTransition::prepare_with_retained_writer(",
+            "kura, self.journal.clone(), index, &mut self.maintenance.writer"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::select_plan",
+          "required_tokens": [
+            "record.transition_height == self.request.transition_height",
+            "record.previous_catalog == previous_catalog",
+            "record.previous_lineage_root == self.request.previous_lineage_root",
+            "record.updated_catalog == updated_catalog",
+            "record.updated_lineage_root == self.request.updated_lineage_root",
+            "record.previous_bindings != self.previous_bindings",
+            "record.updated_bindings != self.updated_bindings",
+            "TargetKind::Published",
+            "TargetKind::Retained",
+            "TargetKind::Fresh"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::resume_under",
+          "required_tokens": [
+            "let kura = self.authenticate(lease)?;",
+            "RawGeometryPhase::FilesApplied => return Ok(())",
+            "self.maintenance.flush(kura)?;",
+            "self.claim.effects_started = true;",
+            "kura.finish_pending_lane_geometry_gc_with_custody(&mut self.journal, Some(&mut mutation),)?;",
+            "self.plan = Some(self.select_plan(kura)?);",
+            "kura.reconcile_lane_geometry_history_to_count_with_custody(",
+            "if self.target.is_none()",
+            "if !matches!(kind, TargetKind::Published) { let retiring = kura.geometry_retirement_identities(",
+            "let pending = lease.pending_canonical_bytes();",
+            "kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;",
+            "self.target = Some(self.prepare_target(kura, index)?);",
+            "self.persist_target(kura, LaneGeometryPhase::Intent)?;",
+            "self.intent_complete = true;",
+            "GeometryEvidencePolicy::FreshJournalIntent",
+            "GeometryEvidencePolicy::RequireDurableEvidence",
+            "while self.operation_cursor < target.operations().len()",
+            "kura.apply_geometry_operations_forward_with_progress(",
+            "if matches!(kind, TargetKind::Fresh) && provisioning_started",
+            "self.provisioning_failure = Some(failure);",
+            "self.phase = RawGeometryPhase::RecoveryRequired;",
+            "self.operation_cursor += 1;",
+            "self.persist_target(kura, LaneGeometryPhase::FilesApplied)?;",
+            "&self.request.updated, &self.request.updated_incarnations, &self.request.updated_activation_heights,",
+            "self.updated_entries.take()",
+            "*kura.lane_storage_entries.lock() = entries;",
+            "self.phase = RawGeometryPhase::FilesApplied;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::publish_catalog_under",
+          "required_tokens": [
+            "let kura = self.authenticate(lease)?;",
+            "RawGeometryPhase::FilesApplied | RawGeometryPhase::PublishingCatalog",
+            "self.catalog_baseline.is_some_and(|original| original != configured_baseline)",
+            "self.journal.configured_catalog_hash != Some(expected)",
+            "self.journal.configured_primary_binding.as_ref() != self.updated_bindings.first()",
+            "kura.require_lane_marker(primary)?;",
+            "self.catalog_baseline = Some(configured_baseline);",
+            "self.phase = RawGeometryPhase::PublishingCatalog;",
+            "self.persist_target(kura, LaneGeometryPhase::CatalogPublished)?;",
+            "self.phase = RawGeometryPhase::CatalogPublished;",
+            "self.claim.finish();"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::reauthenticate_catalog_under",
+          "required_tokens": [
+            "let kura = lease.original_kura();",
+            "!self.kura.matches(kura)",
+            "self.phase != RawGeometryPhase::CatalogPublished",
+            "!self.claim.complete",
+            "self.has_pending_journal_write()",
+            "kura.raw_geometry_claim.ensure_unclaimed()?;",
+            "target.reauthenticate_completed(kura, LaneGeometryPhase::CatalogPublished)?;",
+            "writer.reauthenticate_current(kura)?;",
+            "installed.len() != self.updated_bindings.len()",
+            "installed.get(&binding.lane_id).map(|entry| entry.identity) != Some(binding.identity())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs",
+          "kind": "method",
+          "symbol": "RawGeometryAttempt::rollback_under",
+          "required_tokens": [
+            "let kura = self.authenticate(lease)?;",
+            "self.maintenance.pending.is_some()",
+            "self.phase != RawGeometryPhase::RollingBack || phase != LaneGeometryPhase::RolledBack",
+            "RawGeometryPhase::PublishingCatalog | RawGeometryPhase::CatalogPublished | RawGeometryPhase::RolledBack",
+            "GeometryEvidencePolicy::AllowJournalIntentProvisioning",
+            "GeometryEvidencePolicy::RequireDurableEvidence",
+            "let index = target.operations().len() - self.operation_cursor - 1;",
+            "kura.apply_geometry_operations_rollback(&target.operations()[index..index + 1], policy,)?;",
+            "self.persist_target(kura, LaneGeometryPhase::RolledBack)?;",
+            "&self.request.previous, &self.request.previous_incarnations, &self.request.previous_activation_heights,",
+            "self.previous_entries.take()",
+            "*kura.lane_storage_entries.lock() = entries;",
+            "self.claim.finish();"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_has_pending_work_locked",
+          "required_tokens": [
+            "reservations: &LaneQueueReservationStore",
+            "key.lane_id == lane_id && key.dataspace_id == dataspace_id && key.lane_incarnation == lane_incarnation",
+            "reservations.live_by_entrypoint.values().any(|record| exact_reservation(&record.key))",
+            "reservations.commit_barriers.iter().any(exact_reservation)",
+            "reservations.release_barriers.iter().any(|barrier| { barrier.lane_id == lane_id && barrier.dataspace_id == dataspace_id && barrier.lane_incarnation == lane_incarnation })",
+            "reservations.completed_releases.iter().any(|completion| { completion.barrier.lane_id == lane_id && completion.barrier.dataspace_id == dataspace_id && completion.barrier.lane_incarnation == lane_incarnation })",
+            "!reservation_owned_hashes.contains(entry.key())",
+            "self.txs.contains_key(entry.key())",
+            "entry.value().legs().into_iter().any(|leg|",
+            "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "scan_lane_retirement_locked",
+          "required_tokens": [
+            "effects.prepare_route",
+            "observe_geometry_native_amx_per_height_evidence",
+            "effects.native",
+            "require_active_lane_incarnation",
+            "require_active_lane_artifact",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "native_amx_retained_windows_are_complete",
+            "validate_native_amx_retained_history_continuity",
+            "decode_native_amx_participant_receipt_latest_index",
+            "latest.matches_receipt",
+            "confirmed_snapshot != artifact_snapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "ensure_archived_lane_work_released_with_custody",
+          "required_tokens": [
+            "custody.authenticate(self)?",
+            "custody.is_none().then(|| self.sidecar_lock.lock())",
+            "read_and_attest_geometry_native_amx_per_height_evidence",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "native_amx_retained_windows_are_complete",
+            "validate_native_amx_retained_history_continuity",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "decode_native_amx_participant_receipt_latest_index_for_route",
+            "latest.matches_receipt",
+            "confirmed_snapshot != artifact_snapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "observe_lane_retirement_locked",
+          "required_tokens": [
+            "validate_certified_retirements_against_geometry",
+            "scan_lane_retirement_locked",
+            "RetirementScanEffects::Observe"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs",
+          "kind": "fn",
+          "symbol": "prepare_route",
+          "required_tokens": [
+            "Self::MaintainAndAttest",
+            "maintain_lane_retirement_route_locked",
+            "Self::Observe",
+            "observe_lane_retirement_route_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs",
+          "kind": "fn",
+          "symbol": "native",
+          "required_tokens": [
+            "ObservedNativeAmxEvidence",
+            "Self::Observe => observation.into_observed()",
+            "Self::MaintainAndAttest { .. } => observation.attest()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs",
+          "kind": "fn",
+          "symbol": "historical",
+          "required_tokens": [
+            "ObservedHistoricalRecoveryEvidence",
+            "Self::Observe => observation.into_observed()",
+            "Self::MaintainAndAttest { .. } => observation.attest()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/native_evidence.rs",
+          "kind": "fn",
+          "symbol": "into_observed",
+          "required_tokens": [
+            "fn into_observed(self)",
+            "read_regular_sidecar_snapshot",
+            "after.bytes_hash != observed.bytes_hash",
+            "stable_sidecar_metadata_unchanged",
+            "geometry_bound_progress_directory_snapshot",
+            "Ok((self.manifests, self.receipts))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/historical_evidence.rs",
+          "kind": "fn",
+          "symbol": "into_observed",
+          "required_tokens": [
+            "self.ensure_unchanged()?",
+            "Ok((self.records, self.encoded_bytes))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "SourceAuthenticatedCarrier::try_new",
+          "required_tokens": [
+            "let owner = Self { decision, kura };",
+            "let original = &owner.decision;",
+            "owner.kura.reauthenticate_checkpoint(&original.checkpoint, original.finality.artifact(), original.journals.checkpoint,)",
+            "original.journals.source_prefix.authenticate_durable_carrier(original.block(), &original.journals.context, &original.journals.execution_prefix, &owner.kura,)",
+            "original.journals.provider_capture.as_ref()",
+            "original.journals.reputation_capture.as_ref()",
+            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
+            "Err(error) => Err((owner.release(), error))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::pending_canonical_bytes",
+          "required_tokens": [
+            "pub(super) fn pending_canonical_bytes(&self) -> u64",
+            "self.pending_canonical_bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards",
+          "required_tokens": [
+            "Result<u64, KuraPublicationPreparationError>",
+            "self.persisted_count_and_unindexed_bytes()?",
+            "self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash|",
+            "self.sidecar_lock.try_lock_or_wait()",
+            "KuraPublicationPreparationError::Busy { field: \"sidecar_lock\", wait, }",
+            "self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)"
           ]
         }
       ]

@@ -2,6 +2,7 @@
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
+    governance::manifest::LaneManifestRegistryHandle,
     kura::{BlockCount, CommitManifestBindingState, Error as KuraError, Kura},
     query::store::LiveQueryStoreHandle,
     secure_file_metadata::{self, SecureMetadata},
@@ -2630,6 +2631,7 @@ fn validate_snapshot_wsv_checkpoint(
 fn try_read_snapshot_bundle<F>(
     generation: &BoundSnapshotGeneration,
     kura: &Arc<Kura>,
+    lane_manifests: &LaneManifestRegistryHandle,
     live_query_store: &LiveQueryStoreHandle,
     block_count: usize,
     merkle_chunk_size: NonZeroUsize,
@@ -2715,6 +2717,7 @@ where
         )?;
         let seed = KuraSeed {
             kura: Arc::clone(kura),
+            lane_manifests: Arc::clone(lane_manifests),
             query_handle: live_query_store.clone(),
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -2801,6 +2804,7 @@ where
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
         kura: Arc::clone(kura),
+        lane_manifests: Arc::clone(lane_manifests),
         query_handle: live_query_store.clone(),
         #[cfg(feature = "telemetry")]
         telemetry,
@@ -2931,7 +2935,8 @@ where
     Ok(SnapshotReadOutcome { state })
 }
 /// Deserialize a heap-owned [`State`] and install the actual runtime ZK configuration
-/// before snapshot reconciliation is allowed to mutate Kura.
+/// before snapshot reconciliation is allowed to mutate Kura. The caller supplies
+/// the immutable configured manifest baseline before any restored State view.
 ///
 /// # Errors
 ///
@@ -2944,6 +2949,7 @@ where
 pub fn try_read_snapshot(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
+    lane_manifests: &LaneManifestRegistryHandle,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     block_count: BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -2956,6 +2962,7 @@ pub fn try_read_snapshot(
     try_read_snapshot_with_bootstrap_policy(
         store_dir,
         kura,
+        lane_manifests,
         live_query_store_lazy,
         block_count,
         merkle_chunk_size,
@@ -2979,6 +2986,7 @@ pub fn try_read_snapshot(
 pub fn try_read_snapshot_with_bootstrap_policy(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
+    lane_manifests: &LaneManifestRegistryHandle,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     block_count: BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -2993,6 +3001,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     try_read_snapshot_with_initializer(
         store_dir,
         kura,
+        lane_manifests,
         live_query_store_lazy,
         block_count,
         merkle_chunk_size,
@@ -3016,6 +3025,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
 fn try_read_snapshot_with_initializer<F>(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
+    lane_manifests: &LaneManifestRegistryHandle,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     BlockCount(block_count): BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -3057,6 +3067,7 @@ where
     let outcome = try_read_snapshot_bundle(
         &generation,
         kura,
+        lane_manifests,
         &live_query_store,
         block_count,
         merkle_chunk_size,
@@ -4206,6 +4217,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
         kura: state.kura_handle(),
+        lane_manifests: state.lane_manifests.read().clone(),
         query_handle: state.query_handle.clone(),
         #[cfg(feature = "telemetry")]
         telemetry: StateTelemetry::default(),
@@ -4710,19 +4722,32 @@ fn snapshot_lane_geometry_images(
     runtime: &Cell<SnapshotNexusRuntime>,
     height: u64,
     network_id: &NetworkId,
-) -> Result<(SnapshotLaneGeometryProjection, Option<SnapshotLaneGeometryProjection>), TryWriteError> {
+) -> Result<
+    (
+        SnapshotLaneGeometryProjection,
+        Option<SnapshotLaneGeometryProjection>,
+    ),
+    TryWriteError,
+> {
     let current = runtime.view();
     let predecessor = runtime.predecessor_view();
     let recovery = if height == 0 {
         None
     } else {
         Some(snapshot_lane_geometry_projection(
-            predecessor.get().as_ref().unwrap_or_else(|| current.get()).clone(),
+            predecessor
+                .get()
+                .as_ref()
+                .unwrap_or_else(|| current.get())
+                .clone(),
             height - 1,
             network_id,
         )?)
     };
-    Ok((snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?, recovery))
+    Ok((
+        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
+        recovery,
+    ))
 }
 
 #[cfg(test)]

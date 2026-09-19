@@ -117,7 +117,7 @@ fn unknown_syscall_is_rejected_at_admission() {
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
     .sign(kp.private_key());
     // Validate the transaction in a block; ABI policy admission rejects it before execution.
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));

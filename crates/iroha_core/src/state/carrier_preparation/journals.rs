@@ -5,8 +5,9 @@
 //! Block hashes likewise move into an owned journal and release their read guard.
 //! World/runtime journals and tiered snapshots follow one resource admission.
 //! Archive plans retain original logical reservations and filesystem owners.
-//! TODO: join complete geometry/resource admission and exact QC/Kura/Native
-//! authorization before exposing the sole consuming publication operation.
+//! The private terminal consumer joins exact QC/Kura/Native custody and refuses
+//! outstanding namespace/participant obligations. TODO: complete those geometry
+//! and durability owners plus aggregate resource admission before live cutover.
 
 use super::super::*;
 use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};
@@ -199,6 +200,13 @@ pub(crate) struct DetachedCarrierComponents {
 }
 
 /// Deferred effects and original proof owners needed by the consuming publisher.
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "TODO: consume retained journals and effects in the aggregate State publisher"
+    )
+)]
 struct RetainedCarrierEffects {
     header: BlockHeader,
     nexus: iroha_config::parameters::actual::Nexus,

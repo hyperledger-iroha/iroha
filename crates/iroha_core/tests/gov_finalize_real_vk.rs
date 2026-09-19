@@ -19,7 +19,7 @@ use nonzero_ext::nonzero;
 #[test]
 fn zk_finalize_rejects_unqualified_tally_keys_without_mutating_state() {
     let state = closed_registry::state();
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in ["halo2/pasta/ipa/vote-tally", "halo2/pasta/tiny-add-public"] {
         let mut transaction = block.transaction();
         closed_registry::grant_permissions(&mut transaction, "ref-final");

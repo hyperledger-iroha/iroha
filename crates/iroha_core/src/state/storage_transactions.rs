@@ -536,6 +536,13 @@ mod block {
             drop(block);
         }
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
     impl DetachedTransactionsBlock {
         /// Admit installation and reacquire the original predecessor without waiting.
         ///
@@ -643,6 +650,13 @@ mod block {
             }
         }
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
     impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
         /// Release the physical writer and recover the same admitted journal.
         pub(crate) fn abort(self) -> DetachedTransactionsBlock {
@@ -695,14 +709,84 @@ mod block {
         }
     }
 }
+#[cfg(test)]
+pub(crate) use block::MembershipPredecessorStatus;
 pub(crate) use block::{
-    DetachedTransactionsBlock, MembershipPredecessorStatus, PreparedDetachedTransactionsBlock,
-    PreparedTransactionsBlock,
+    DetachedTransactionsBlock, PreparedDetachedTransactionsBlock, PreparedTransactionsBlock,
 };
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError};
 
+/// Local identity of an immutable pending row under its retained predecessor.
+///
+/// The exclusive writer freezes both historical membership and its opaque
+/// predecessor identity. The pending `BlockInfo` allocation is immutable and is
+/// replaced only by staging a different row. Pointer equality therefore binds
+/// the exact publication without copying or sorting its membership set.
+pub(in crate::state) struct TransactionsPublicationSurface {
+    predecessor: Arc<()>,
+    current: Option<Arc<BlockInfo>>,
+    revert: bool,
+}
+
+impl std::fmt::Debug for TransactionsPublicationSurface {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TransactionsPublicationSurface")
+            .field("has_current", &self.current.is_some())
+            .field("revert", &self.revert)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for TransactionsPublicationSurface {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.predecessor, &other.predecessor)
+            && self.revert == other.revert
+            && match (&self.current, &other.current) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for TransactionsPublicationSurface {}
+
+impl TransactionsBlock<'_> {
+    /// Return how this block acquired its original membership predecessor.
+    pub(in crate::state) fn mode(&self) -> mv::BlockMode {
+        if self.revert {
+            mv::BlockMode::Replace
+        } else {
+            mv::BlockMode::Ordinary
+        }
+    }
+
+    /// Check the exact original membership owner without reading its history.
+    pub(in crate::state) fn belongs_to(&self, storage: &TransactionsStorage) -> bool {
+        std::ptr::eq(self.latest_block_ref, &storage.latest_block)
+            && std::ptr::eq(self.blocks_ref, &storage.blocks)
+    }
+
+    /// Bind this owner's exact predecessor and immutable pending membership row.
+    pub(in crate::state) fn publication_surface(&self) -> TransactionsPublicationSurface {
+        TransactionsPublicationSurface {
+            predecessor: Arc::clone(&self._guard),
+            current: self.current_block.clone(),
+            revert: self.revert,
+        }
+    }
+}
+
 /// Borrowed logical membership, independent of the latest/history representation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod membership_projection {
     use super::*;
 
@@ -924,6 +1008,7 @@ mod membership_projection {
         }
     }
 }
+#[cfg(test)]
 pub(in crate::state) use membership_projection::TransactionsMembershipTransition;
 
 #[cfg(test)]
@@ -1095,6 +1180,29 @@ mod tests {
     fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
         let keys = keys.iter().copied().collect();
         block.insert_block(keys, value);
+    }
+    #[test]
+    fn publication_surface_binds_original_predecessor_and_immutable_row() {
+        let storage = TransactionsStorage::new();
+        let foreign_storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        assert!(block.belongs_to(&storage));
+        assert!(!block.belongs_to(&foreign_storage));
+        assert_eq!(block.mode(), mv::BlockMode::Ordinary);
+        let empty = block.publication_surface();
+        assert_eq!(empty, block.publication_surface());
+        assert_ne!(empty, foreign_storage.block().publication_surface());
+        let [key] = get_keys();
+        insert_keys(&mut block, &[key], NonZeroUsize::MIN);
+        let staged = block.publication_surface();
+        assert_ne!(empty, staged);
+        insert_keys(&mut block, &[key], NonZeroUsize::MIN);
+        assert_eq!(staged, block.publication_surface());
+        block.commit().unwrap();
+        assert_ne!(empty, storage.block().publication_surface());
+        let replacement = storage.block_and_revert();
+        assert_eq!(replacement.mode(), mv::BlockMode::Replace);
+        assert_ne!(staged, replacement.publication_surface());
     }
     #[test]
     fn fixture_membership_overwrite_reaches_public_reader_without_moving_frontier() {

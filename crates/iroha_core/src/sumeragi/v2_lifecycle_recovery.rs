@@ -43,28 +43,9 @@ use iroha_model_base::peer::PeerId;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 std::thread_local! {
-    static DEFERRED_TERMINAL_STAGE_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
     static POST_LIFECYCLE_CURSOR_CAS_HOOK: std::cell::RefCell<
         Option<Box<dyn FnMut(&AutonomousLifecycleCursorV1)>>,
     > = std::cell::RefCell::new(None);
-}
-#[cfg(test)]
-pub(crate) fn install_deferred_terminal_stage_proof_hook_for_test(hook: impl FnOnce() + 'static) {
-    DEFERRED_TERMINAL_STAGE_PROOF_HOOK.with(|slot| {
-        assert!(
-            slot.borrow().is_none(),
-            "deferred terminal test hook already installed"
-        );
-        *slot.borrow_mut() = Some(Box::new(hook));
-    });
-}
-#[cfg(test)]
-fn run_deferred_terminal_stage_proof_hook_for_test() {
-    let hook = DEFERRED_TERMINAL_STAGE_PROOF_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
 }
 #[cfg(test)]
 pub(crate) fn install_post_lifecycle_cursor_cas_hook_for_test(
@@ -1017,8 +998,6 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
         .iter()
         .flat_map(|unit| unit.pending_groups.iter().cloned())
         .collect::<Vec<_>>();
-    #[cfg(test)]
-    run_deferred_terminal_stage_proof_hook_for_test();
     let durable_stages = kura
         .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
             expected_network_id,

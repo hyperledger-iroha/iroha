@@ -85,11 +85,14 @@ pub(super) enum SlotSelection {
     Blocked(Vec<LaneInputDependencyV1>),
 }
 
-pub(super) fn select_input_slots<'a>(
+pub(super) fn select_input_slots<'a, I>(
     binding: &QueuePlanAdmissionBindingV1,
     priority: QueuePlanAdmissionPriorityV1,
-    contexts: impl IntoIterator<Item = (&'a FrozenLaneConsensusContextV1, Hash)>,
-) -> Result<SlotSelection, String> {
+    contexts: I,
+) -> Result<SlotSelection, String>
+where
+    I: IntoIterator<Item = (&'a FrozenLaneConsensusContextV1, Hash)>,
+{
     let binding_hash = binding.canonical_hash();
     let mut routes = BTreeMap::new();
     for bound in &binding.admission_context.route_incarnations {

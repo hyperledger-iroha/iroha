@@ -8601,7 +8601,6 @@ mod halo2_ipa_proving_key_archive_tests {
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 mod halo2_ipa_parameter_source_tests {
     use super::*;
-    use halo2_proofs::poly::commitment::Params as _;
     fn append_raw_tlv(bytes: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
         bytes.extend_from_slice(&tag);
         bytes.extend_from_slice(
@@ -8799,7 +8798,6 @@ mod zkparse {
     #[cfg(test)]
     mod production_parameter_cache_tests {
         use super::*;
-        use halo2_proofs::poly::commitment::Params as _;
         use std::sync::{Barrier, atomic::Ordering};
 
         #[test]

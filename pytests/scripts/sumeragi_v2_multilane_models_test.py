@@ -36,6 +36,55 @@ def load_checker():
     return module
 
 
+@pytest.mark.parametrize("parameters", [
+    "Config { capacity, nested: Nested { limit } }: Config",
+    "(Config { capacity }, [first, second]): (Config, [usize; 2])",
+    "Config { capacity }: Config, callback: fn([u8; { LIMIT }]) -> ()",
+    "Config { capacity }: Config, borrowed: &'a &'b Config",
+    'Config /* { ignored } */ { capacity }: Config, label: Label<"{(">',
+    'Config { capacity }: Config, label: Label<r###"{)]}"###>',
+    "Config { capacity }: Config, label: Label<'{'>",
+])
+def test_rust_item_parser_binds_body_after_destructured_parameters(parameters):
+    checker = load_checker()
+    source = f"""impl Owner {{
+    pub fn construct({parameters}) -> Self {{
+        let original_owner = PublicationMutex::default();
+        Self {{ original_owner }}
+    }}
+    fn sibling() {{ unrelated_owner(); }}
+}}
+"""
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Owner::construct",
+    )
+    assert item.rstrip().endswith("Self { original_owner }\n    }")
+    assert "PublicationMutex::default()" in item
+    assert "unrelated_owner" not in item
+
+
+@pytest.mark.parametrize("declaration", [
+    "fn absent(Config { capacity }: Config);",
+    "fn absent(Config { capacity }: Config, broken: [T));",
+    "fn absent(Config { capacity: Nested { limit } }: Config",
+])
+def test_rust_item_parser_does_not_borrow_sibling_after_missing_body(declaration):
+    checker = load_checker()
+    source = declaration + "\nfn sibling() { unrelated_owner(); }\n"
+    assert checker._extract_rust_binding_items(source, "fn", "absent") == ()
+
+
+def test_rust_item_parser_binds_actual_queue_constructor_body():
+    checker = load_checker()
+    source = (ROOT_DIR / "crates/iroha_core/src/queue.rs").read_text()
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Queue::from_config_with_router_limits_and_catalogs",
+    )
+    assert "Config {" in item
+    assert "lane_reservation_transition_lock: PublicationMutex::default()," in item
+    assert "Self {" in item
+
+
 def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:
@@ -658,6 +707,10 @@ def copy_reviewed_source_fixture_with_includes(
     reviewed_source = importlib.util.module_from_spec(helper_spec)
     sys.modules[helper_spec.name] = reviewed_source
     helper_spec.loader.exec_module(reviewed_source)
+    # Authenticate the production allowlist before copying any source. Parsing
+    # its mapping alone does not establish the pinned canonical-manifest digest.
+    manifest_errors = reviewed_source._CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS
+    assert not manifest_errors, "\n".join(manifest_errors)
     pending = list(relatives)
     copied: set[Path] = set()
     while pending:
@@ -687,6 +740,28 @@ def copy_reviewed_source_fixture_with_includes(
             assert child is not None
             pending.append(relative.parent.joinpath(*child.parts))
     initialize_git_fixture(tmp_path)
+
+
+def test_reviewed_fixture_rejects_raw_file_hash_as_manifest_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive fixture must not hide a wrong production manifest pin."""
+    module = load_checker()
+    isolated_root = tmp_path / "source"
+    helper = isolated_root / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE
+    inventory = isolated_root / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE
+    helper.parent.mkdir(parents=True)
+    inventory.write_bytes((ROOT_DIR / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE).read_bytes())
+    source = (ROOT_DIR / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE).read_text()
+    raw_digest = hashlib.sha256(inventory.read_bytes()).hexdigest()
+    assert raw_digest != module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
+    assert source.count(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256) == 1
+    helper.write_text(source.replace(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256, raw_digest))
+    monkeypatch.setitem(globals(), "ROOT_DIR", isolated_root)
+    destination = tmp_path / "fixture"
+    with pytest.raises(AssertionError, match="manifest digest must equal"):
+        copy_reviewed_source_fixture_with_includes(destination, module, set())
+    assert not destination.exists(), "unauthenticated inventory must fail before fixture creation"
 
 
 def copy_native_prepublication_fixture(

@@ -130,7 +130,7 @@ pub(in crate::state) mod capture_observer {
 mod tests {
     use super::*;
     use crate::query::store::LiveQueryStore;
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
 
     fn manifest_value_hash(value: &[u8]) -> String {
         hex::encode(Sha256::digest(

@@ -37,6 +37,12 @@ pub(crate) enum KuraPublicationPreparationError {
     Storage(Error),
 }
 
+impl From<Error> for KuraPublicationPreparationError {
+    fn from(error: Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
 /// All original Kura publication fences, acquired in the established order.
 ///
 /// Fields drop from the innermost fence to the outermost. This is not a receipt
@@ -45,6 +51,7 @@ pub(crate) enum KuraPublicationPreparationError {
 #[must_use = "retain the physical boundary through the authorized operation"]
 pub(crate) struct KuraPublicationLease<'kura> {
     kura: &'kura Kura,
+    pending_canonical_bytes: u64,
     _sidecar: PublicationGuard<'kura>,
     _geometry: PublicationGuard<'kura>,
     _canonical: PublicationGuard<'kura>,
@@ -52,6 +59,28 @@ pub(crate) struct KuraPublicationLease<'kura> {
 }
 
 impl Kura {
+    /// Capture immutable pending-byte accounting before acquiring geometry/sidecar.
+    /// The caller owns prune and canonical fences. Cold merge lookups must return
+    /// the actual sidecar release observation instead of blocking behind its owner.
+    fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(
+        &self,
+    ) -> Result<u64, KuraPublicationPreparationError> {
+        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
+        self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash| {
+            let sidecar = self.sidecar_lock.try_lock_or_wait().map_err(|wait| {
+                KuraPublicationPreparationError::Busy {
+                    field: "sidecar_lock",
+                    wait,
+                }
+            })?;
+            self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)
+                .map_err(KuraPublicationPreparationError::Storage)
+        })
+    }
+
     /// Authenticate a retained archive capture without an enclosing Kura lease.
     ///
     /// Standalone and aggregate publication use the same guarded oracle. The
@@ -176,6 +205,8 @@ impl Kura {
         self.ensure_prune_recovery_not_required()
             .map_err(KuraPublicationPreparationError::Storage)?;
         let canonical = acquire("canonical_chain_lock", &self.canonical_chain_lock)?;
+        let pending_canonical_bytes =
+            self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let geometry = acquire("lane_geometry_lock", &self.lane_geometry_lock)?;
         let sidecar = acquire("sidecar_lock", &self.sidecar_lock)?;
         self.ensure_prune_recovery_not_required()
@@ -184,6 +215,7 @@ impl Kura {
             .map_err(KuraPublicationPreparationError::Storage)?;
         Ok(KuraPublicationLease {
             kura: self,
+            pending_canonical_bytes,
             _sidecar: sidecar,
             _geometry: geometry,
             _canonical: canonical,
@@ -192,7 +224,39 @@ impl Kura {
     }
 }
 
+#[cfg(test)]
+impl<'kura> KuraPublicationLease<'kura> {
+    /// Transfer structural catalog fixture guards into the common boundary.
+    ///
+    /// The fixture has resolved canonical recovery and completed authorized GC
+    /// before acquiring sidecar. No fence is released or reacquired. Production
+    /// geometry publication retains its original raw attempt under a lease.
+    pub(super) fn from_geometry_guards(
+        kura: &'kura Kura,
+        sidecar: PublicationGuard<'kura>,
+        geometry: PublicationGuard<'kura>,
+        canonical: PublicationGuard<'kura>,
+        prune: PublicationGuard<'kura>,
+        pending_canonical_bytes: u64,
+    ) -> Self {
+        Self {
+            kura,
+            pending_canonical_bytes,
+            _sidecar: sidecar,
+            _geometry: geometry,
+            _canonical: canonical,
+            _prune: prune,
+        }
+    }
+}
+
 impl KuraPublicationLease<'_> {
+    /// Pending canonical bytes captured before the inner publication fences.
+    /// Prune/canonical custody keeps this snapshot valid for the lease lifetime.
+    pub(super) fn pending_canonical_bytes(&self) -> u64 {
+        self.pending_canonical_bytes
+    }
+
     /// Private guarded implementations may borrow only this original physical owner.
     pub(super) fn original_kura(&self) -> &Kura {
         self.kura
@@ -263,6 +327,37 @@ impl KuraPublicationLease<'_> {
     ) -> super::Result<super::lane_admission_source::FinalizedAdmissionCarrierReadV1> {
         self.kura
             .read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)
+    }
+
+    /// Require the final witness projection under the original publication fences.
+    ///
+    /// The caller has already joined exact durable body/finality/checkpoint on
+    /// this lease. Missing or staged-only material grants no permission. This
+    /// bounded reader acquires no publication lock, verifies every retained
+    /// witness root and the exact finality artifact, then rejoins read identity.
+    pub(crate) fn reauthenticate_execution_witness(
+        &self,
+        finality: &super::V2FinalityArtifact,
+    ) -> super::Result<()> {
+        let path = self.kura.kagemusha_finality_sidecar_path(finality.height);
+        let Some((sidecar, read)) = self.kura.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "State publication requires its final execution witness sidecar".to_owned(),
+            ));
+        };
+        Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;
+        let directory = self.kura.kagemusha_finality_sidecar_dir();
+        let current = self.kura.regular_sidecar_metadata(&path, &directory)?;
+        if !current
+            .as_ref()
+            .is_some_and(|current| Kura::stable_sidecar_metadata_unchanged(&read.metadata, current))
+        {
+            return Err(Error::KagemushaFinalitySidecar(
+                "final execution witness sidecar changed during publication authentication"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use iroha_crypto::Hash;
 
-use super::{State, StateBlock, VerifiedLaneDecisionGroupV1};
+use super::{State, StateBlock, StateReadOnlyWithTransactions, VerifiedLaneDecisionGroupV1};
 
 impl StateBlock<'_> {
     /// Check all immutable sources against this exact pre-execution overlay.
@@ -65,6 +65,15 @@ impl StateBlock<'_> {
                 return Err("native execution source is outside its exact carrier history".into());
             }
             let entrypoint = &payload.input.entrypoint;
+            if crate::tx::canonical_replay_alias_hashes(std::slice::from_ref(entrypoint))
+                .into_iter()
+                .any(|hash| self.has_entrypoint(hash))
+            {
+                return Err(
+                    "native execution reuses a committed carrier or sealed signed-execution identity"
+                        .into(),
+                );
+            }
             if !entrypoints.insert(entrypoint.hash()) {
                 return Err("native execution batch repeats an entrypoint".into());
             }

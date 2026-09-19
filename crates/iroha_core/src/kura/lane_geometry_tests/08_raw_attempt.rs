@@ -1,17 +1,21 @@
 // Actual retained geometry operation ownership, including real journal I/O failures.
 
 fn with_raw_geometry_fixture(test: impl FnOnce(&Kura, &ReplayGeometryBindingRequest<'_>)) {
-    with_raw_geometry_fixture_mode(false, test);
+    with_raw_geometry_fixture_mode(false, MAX_DISK_USAGE_BYTES, test);
 }
 
 fn with_raw_geometry_fixture_mode(
     in_memory: bool,
+    max_disk_usage_bytes: iroha_config_base::util::Bytes,
     test: impl FnOnce(&Kura, &ReplayGeometryBindingRequest<'_>),
 ) {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("kura");
     let (initial, extended) = initial_and_extended_configs();
     let mut kura = open_kura(&root, &initial);
+    Arc::get_mut(&mut kura)
+        .expect("fixture owns its sole Kura")
+        .max_disk_usage_bytes = max_disk_usage_bytes.get();
     let (previous_incarnations, previous_activation_heights) = initial_geometry();
     let (updated_incarnations, updated_activation_heights) = extended_geometry();
     authenticate_transition_fixture_primary(&kura, &initial, &previous_incarnations);
@@ -51,6 +55,36 @@ fn with_raw_geometry_fixture_mode(
             .clear();
     }
     test(&kura, &request);
+}
+
+#[test]
+fn raw_geometry_uses_lease_pending_capacity_without_a_held_lock_rescan() {
+    let capacity = iroha_config_base::util::Bytes(u64::MAX / 4);
+    with_raw_geometry_fixture_mode(false, capacity, |kura, request| {
+        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, None)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        block.set_execution_context(Some(BlockExecutionContextBundle::new(Vec::new())));
+        kura.append_pending_block_for_bench(Arc::new(block));
+        kura.pending_budget_raw_scans.store(0, Ordering::Relaxed);
+        let lease = kura.try_publication_lease().unwrap();
+        assert!(lease.pending_canonical_bytes() > 0);
+        assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+        let mut original = lease
+            .begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new())
+            .unwrap();
+        // An invalidated global cache must not cause a metadata/sidecar scan
+        // after this original lease has acquired the inner publication locks.
+        kura.invalidate_pending_budget_cache();
+        original.resume_under(&lease).unwrap();
+        assert_eq!(original.phase(), RawGeometryPhase::FilesApplied);
+        assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+        original.publish_catalog_under(&lease, None).unwrap();
+        assert_eq!(original.phase(), RawGeometryPhase::CatalogPublished);
+        assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+    });
 }
 
 #[test]
@@ -239,7 +273,7 @@ fn raw_geometry_namespace_retry_retains_original_descriptor_and_refuses_uncaptur
 
 #[test]
 fn raw_geometry_in_memory_map_change_keeps_abandonment_fence() {
-    with_raw_geometry_fixture_mode(true, |kura, request| {
+    with_raw_geometry_fixture_mode(true, MAX_DISK_USAGE_BYTES, |kura, request| {
         let lease = kura.try_publication_lease().unwrap();
         let mut original = lease
             .begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new())
@@ -260,7 +294,7 @@ fn raw_geometry_in_memory_map_change_keeps_abandonment_fence() {
 
 #[test]
 fn raw_geometry_in_memory_catalog_and_owned_rollback_keep_exact_maps() {
-    with_raw_geometry_fixture_mode(true, |kura, request| {
+    with_raw_geometry_fixture_mode(true, MAX_DISK_USAGE_BYTES, |kura, request| {
         let lease = kura.try_publication_lease().unwrap();
         let mut rollback = lease
             .begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new())

@@ -20,6 +20,13 @@ use iroha_data_model::block::{
 use std::sync::Arc;
 
 mod execution_prefix;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained journals to the consuming State publisher"
+    )
+)]
 mod journals;
 pub(crate) use journals::PreparedCarrierJournals;
 

@@ -1,6 +1,6 @@
 //! Opaque local identity for one storage owner's published current/undo pair.
 
-use crate::{ReleaseGuard, ReleaseNotification, ReleaseWait};
+use crate::{BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait};
 use std::sync::{Arc, Mutex, TryLockError};
 
 struct Owner;
@@ -60,6 +60,46 @@ pub(crate) struct CapturedPublication {
     version: Arc<Version>,
 }
 
+/// Opaque local equality of a block's original owner, predecessor and mode.
+///
+/// Capturing this identity borrows no values and acquires no locks. Equality
+/// remains stable while a block stages changes; publication rotates the captured
+/// current/undo predecessor even if values remain equal. This observation grants
+/// no mutation or publication authority and is not a portable state commitment.
+pub struct BlockPublicationIdentity {
+    predecessor: CapturedPublication,
+    mode: BlockMode,
+}
+
+impl BlockPublicationIdentity {
+    pub(crate) fn capture(predecessor: &CapturedPublication, mode: BlockMode) -> Self {
+        Self {
+            predecessor: CapturedPublication {
+                owner: Arc::clone(&predecessor.owner),
+                version: Arc::clone(&predecessor.version),
+            },
+            mode,
+        }
+    }
+}
+
+impl std::fmt::Debug for BlockPublicationIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BlockPublicationIdentity")
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for BlockPublicationIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.mode == other.mode && self.predecessor.same_as(&other.predecessor)
+    }
+}
+
+impl Eq for BlockPublicationIdentity {}
+
 impl Publication {
     pub(crate) fn new() -> Self {
         Self {
@@ -100,6 +140,11 @@ impl Publication {
 }
 
 impl CapturedPublication {
+    /// Compare only the original owner without acquiring its publication lock.
+    pub(crate) fn belongs_to(&self, publication: &Publication) -> bool {
+        Arc::ptr_eq(&self.owner, &publication.owner)
+    }
+
     /// Check the original owner and version without waiting on a publication cut.
     pub(crate) fn try_check_current<E>(
         &self,

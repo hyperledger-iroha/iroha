@@ -852,8 +852,7 @@ impl RawGeometryAttempt {
                             },
                         )
                         .collect();
-                    let pending =
-                        kura.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+                    let pending = lease.pending_canonical_bytes();
                     kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;
                 }
                 // All semantic preparation must precede moving the sole retained

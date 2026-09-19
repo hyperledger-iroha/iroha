@@ -553,6 +553,7 @@ impl Kura {
     /// This is an execution-cache boundary, not a source of canonical block authority. It permits
     /// a speculative executor to reuse metadata that it previously persisted for the same exact
     /// block while rejecting metadata from a competing candidate at the same height.
+    #[cfg(test)]
     pub(crate) fn read_pipeline_metadata_for_block(
         &self,
         height: u64,

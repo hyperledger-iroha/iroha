@@ -9,10 +9,7 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
             _tx: &dyn TransactionRoutingView,
         ) -> Result<RoutingDecision, RoutingResolveError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok(RoutingDecision::new(
-                LaneId::SINGLE,
-                DataSpaceId::UNIVERSAL,
-            ))
+            Ok(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         }
     }
     let kura = Kura::blank_kura_for_testing();
@@ -144,7 +141,38 @@ fn native_amx_participant_drift_fixture(
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = dataspace_catalog.clone();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
+    // Deliberate inactive/future geometry is not valid startup configuration.
+    // Install it through the explicit test fixture owner, including canonical
+    // runtime and exact physical identities, rather than changing only a cache.
+    state.reseed_static_lane_incarnations_for_tests();
+    state.install_active_lane_markers_for_tests();
+    let current_nexus = state.nexus_snapshot();
+    assert_eq!(current_nexus.lane_catalog, current_lane_catalog);
+    assert_eq!(current_nexus.dataspace_catalog, dataspace_catalog);
+    for (lane_id, dataspace_id) in [
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (LaneId::new(1), first_dataspace),
+        (LaneId::new(3), second_dataspace),
+    ] {
+        assert!(state.lane_incarnation(lane_id).is_some());
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(lane_id, &current_nexus, 0),
+            Some(dataspace_id),
+        );
+    }
+    assert!(state.lane_incarnation(LaneId::new(2)).is_some());
+    assert_eq!(
+        crate::state::nexus_active_lane_dataspace_at_height(LaneId::new(2), &current_nexus, 0),
+        None,
+        "the stale participant must remain closed in the canonical fixture",
+    );
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     register_test_authority(&mut state, &authority_id);
     let tx = accepted_tx_with(
@@ -168,9 +196,13 @@ fn native_amx_participant_drift_fixture(
     )
     .try_route_plan(&tx)
     .expect("stale Native AMX plan should resolve");
-    let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
-        .try_route_plan(&tx)
-        .expect("current Native AMX plan should resolve");
+    let current_plan = ConfigLaneRouter::new(
+        current_nexus.routing_policy,
+        current_nexus.dataspace_catalog,
+        current_nexus.lane_catalog,
+    )
+    .try_route_plan_with_view(&tx, &state.view())
+    .expect("current Native AMX plan should resolve from canonical State");
     NativeAmxParticipantDriftFixture {
         state,
         tx,
@@ -425,7 +457,11 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
                 .expect("future-created lane catalog");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
     }
+    state.reseed_static_lane_incarnations_for_tests();
+    state.install_active_lane_markers_for_tests();
     seed_committed_height_for_queue_test(&state, 6);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);

@@ -51,7 +51,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
         ("early", 4, Some(Open), "referendum not active"),
         ("late", 7, Some(Open), "referendum not active"),
     ] {
-        let header = BlockHeader::new(height.try_into().unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(height.try_into().unwrap(), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         // Authorization is exact even when the referenced referendum is absent.

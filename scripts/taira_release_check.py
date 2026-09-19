@@ -1201,6 +1201,10 @@ STAGES += (('native core scope and durable dataspace deployment', (
     'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied',
     'taira_dataspace_deploy::tests::init_builds_native_restricted_intent_from_policy_and_profile',
     'taira_dataspace_deploy::tests::init_rejects_policy_drift_and_parses_explicit_caps',
+    'taira_dataspace_deploy::lane_manifest::tests::generates_typed_manifest_from_executed_signed_genesis',
+    'taira_dataspace_deploy::lane_manifest::tests::rejects_genesis_without_explicit_bindings_or_with_malformed_wire',
+    'taira_dataspace_deploy::lane_manifest::tests::requires_unique_complete_activated_genesis_bindings',
+    'taira_dataspace_deploy::lane_manifest::tests::rejects_changed_binding_and_non_four_trusted_roster',
     'taira_dataspace_deploy::finality::tests::deployment_trust_derives_exact_genesis_roster_and_network',
     'taira_dataspace_deploy::finality::tests::deployment_trust_rejects_wrong_network_key_and_changed_genesis_wire',
     'taira_dataspace_deploy::finality::tests::deployment_trust_requires_four_distinct_genesis_peers_and_public_endpoints',
@@ -1382,6 +1386,7 @@ HARNESS_TARGETS = {
 KAGAMI_STAGES = (("canonical Kagami export projection", (
     "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
 )), ("native Taira genesis and independent localnet profiles", (
+    "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",

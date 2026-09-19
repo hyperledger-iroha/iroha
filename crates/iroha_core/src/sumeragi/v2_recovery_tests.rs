@@ -868,6 +868,7 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     kura.install_authenticated_snapshot_prefix_for_testing(&payload)
         .expect("retain authenticated imported hash vector");
     let mut restored = crate::state::deserialize::KuraSeed {
+        lane_manifests: Arc::clone(&frozen_manifests),
         kura: Arc::clone(&kura),
         query_handle: LiveQueryStore::start_test(),
         #[cfg(feature = "telemetry")]

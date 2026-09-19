@@ -21151,6 +21151,25 @@ pub(super) mod tests {
         Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("initialize isolated authenticated lane-work Kura")
     }
+    /// Authenticate the fresh primary before fixture markers or durable lane work exist.
+    pub(in crate::sumeragi) fn authenticated_lane_work_state_for_testing(
+        world: World,
+        kura: Arc<Kura>,
+        chain_id: ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> State {
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            world,
+            kura,
+            LiveQueryStore::start_test(),
+            chain_id,
+            network_id,
+        )
+        .expect("construct lane-work State before provisioning its primary instance");
+        state.install_pre_genesis_nexus_for_testing(state.nexus_snapshot());
+        state.configure_test_runtime_defaults();
+        state
+    }
     #[test]
     fn completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged() {
         let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Npos);
@@ -21340,6 +21359,7 @@ pub(super) mod tests {
                 alias: "independent-lane".to_owned(),
                 ..LaneConfig::default()
             }),
+            None,
         )
     }
     fn fixture_at_height_inner_with_limits(
@@ -21421,6 +21441,7 @@ pub(super) mod tests {
             voting_enabled,
             da_layout,
             None,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -21434,6 +21455,7 @@ pub(super) mod tests {
         voting_enabled: bool,
         da_layout: wire::DataAvailabilityLayout,
         initial_lane: Option<LaneConfig>,
+        initial_lane_keys: Option<Vec<KeyPair>>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-display-name".into();
         let network_id = crate::sumeragi::synthetic_network_id("v2-lane-work-test");
@@ -21444,6 +21466,8 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert!(initial_lane.is_some() || initial_lane_keys.is_none());
+        let lane_keys = initial_lane_keys.as_deref().unwrap_or(&keys);
         let mut world = World::new();
         let mut peers = crate::Peers::default();
         for (index, key) in keys.iter().enumerate() {
@@ -21456,6 +21480,37 @@ pub(super) mod tests {
                 pop: Some(
                     iroha_crypto::bls_normal_pop_prove(key.private_key())
                         .expect("BLS proof of possession"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world.consensus_keys.insert(id.clone(), record.clone());
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id]);
+        }
+        for (index, key) in lane_keys.iter().enumerate() {
+            if keys
+                .iter()
+                .any(|global| global.public_key() == key.public_key())
+            {
+                continue;
+            }
+            // Lane authority resolves manifest bindings against registered peers.
+            // Register the lane-only peer without adding it to the global roster.
+            let _ = peers.push(PeerId::new(key.public_key().clone()));
+            let id = ConsensusKeyId::new(
+                ConsensusKeyRole::Validator,
+                format!("lane-validator{index}"),
+            );
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("initial lane validator proof of possession"),
                 ),
                 activation_height: 0,
                 expiry_height: None,
@@ -21513,9 +21568,10 @@ pub(super) mod tests {
                 },
             ])
             .expect("Native signing fixture dataspace catalog");
+            nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
             state
                 .set_nexus_from_config(nexus)
-                .expect("install dataspace before genesis");
+                .expect("install configured dataspace baseline before genesis");
             state
                 .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
                     additions: vec![lane.clone()],
@@ -21558,7 +21614,7 @@ pub(super) mod tests {
                 dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
-                governance: Some("default-lane-governance".to_owned()),
+                governance: LaneConfig::default().governance,
                 manifest_path: Some(std::path::PathBuf::from(
                     "/tmp/v2-default-lane-manifest.json",
                 )),
@@ -21578,7 +21634,22 @@ pub(super) mod tests {
             status.lane = lane.id;
             status.alias = lane.alias;
             status.dataspace = lane.dataspace_id;
-            status.governance = Some("independent-lane-governance".to_owned());
+            status.governance = lane.governance;
+            status.governance_rules = Some(GovernanceRules {
+                validators: lane_keys
+                    .iter()
+                    .map(|key| AccountId::new(key.public_key().clone()))
+                    .collect(),
+                validator_bindings: lane_keys
+                    .iter()
+                    .map(|key| ManifestValidatorBinding {
+                        validator: AccountId::new(key.public_key().clone()),
+                        peer_id: PeerId::new(key.public_key().clone()),
+                        torii_url: None,
+                    })
+                    .collect(),
+                ..GovernanceRules::default()
+            });
             status.manifest_path = Some(std::path::PathBuf::from(
                 "/tmp/v2-independent-lane-manifest.json",
             ));
@@ -21672,6 +21743,7 @@ pub(super) mod tests {
                         NonZeroU64::new(block_height).expect("non-zero fixture height"),
                     );
                     header.set_prev_block_hash(parent);
+                    header.creation_time_ms = block_height;
                     header.merkle_root = None;
                 },
             );
@@ -21782,6 +21854,7 @@ pub(super) mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
+            nexus.configured_dataspace_catalog = dataspace_catalog.clone();
             nexus.dataspace_catalog = dataspace_catalog;
         }
         adapter.state.reseed_static_lane_incarnations_for_tests();
@@ -21834,14 +21907,14 @@ pub(super) mod tests {
         world_block.commit();
         let_row! { validators = keys .iter() .map(|key| AccountId::new(key.public_key().clone())) .collect::<Vec<_>>() };
         let_row! { validator_bindings = validators .iter() .zip(keys) .map(|(validator, key)| ManifestValidatorBinding { validator: validator.clone(), peer_id: PeerId::new(key.public_key().clone()), torii_url: None, }) .collect::<Vec<_>>() };
-        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: Some("default-lane-governance".to_owned()), manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
+        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: LaneConfig::default().governance, manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
         let status = LaneManifestStatus {
             lane: lane_id,
             alias: "independent-lane".to_owned(),
             dataspace: dataspace_id,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
-            governance: Some("independent-lane-governance".to_owned()),
+            governance: LaneConfig::default().governance,
             manifest_path: Some(std::path::PathBuf::from(
                 "/tmp/v2-independent-lane-manifest.json",
             )),
@@ -21890,7 +21963,7 @@ pub(super) mod tests {
         let_row! { lane_count = lane_id .as_u32() .checked_add(1) .and_then(NonZeroU32::new) .expect("custom lane id must fit its non-zero catalog bound") };
         let_row! { lane_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { id: lane_id, dataspace_id, alias: "independent-lane".to_owned(), ..LaneConfig::default() }], ) .expect("single custom-lane test catalog") };
         let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }]) .expect("single custom-dataspace test catalog") };
-        stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.dataspace_catalog = dataspace_catalog; } }
+        stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.configured_dataspace_catalog = dataspace_catalog.clone(); nexus.dataspace_catalog = dataspace_catalog; } }
         adapter.state.reseed_static_lane_incarnations_for_tests();
         stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()).expect("valid committed catalog"); }
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
@@ -21954,6 +22027,7 @@ pub(super) mod tests {
         for mode in [wire::ConsensusMode::Permissioned, wire::ConsensusMode::Npos] {
             let (adapter, _) = fixture_with_durable_parent(mode);
             let mut previous = None;
+            let mut previous_time = Duration::ZERO;
             for height in 1..adapter.context.height {
                 let finality = adapter
                     .kura
@@ -21974,6 +22048,12 @@ pub(super) mod tests {
                     .expect("authenticate complete parent wire")
                     .expect("complete parent body exists");
                 assert_eq!(finality.block_hash, block.hash());
+                let creation_time = block.header().creation_time();
+                assert!(
+                    creation_time > previous_time,
+                    "signed parent timestamps must be positive and strictly increasing for snapshot recovery"
+                );
+                previous_time = creation_time;
                 assert_eq!(
                     finality
                         .commit_qc
@@ -26465,10 +26545,9 @@ pub(super) mod tests {
         }
         let kura =
             locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY);
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        let state = Arc::new(authenticated_lane_work_state_for_testing(
             world,
             Arc::clone(&kura),
-            LiveQueryStore::start_test(),
             ChainId::from("v2-lane-work-initially-absent-validator"),
             context.network_id,
         ));
@@ -28997,7 +29076,25 @@ pub(super) mod tests {
                     .with_lane_payload_ownerships(vec![ownership]),
             ));
         }
-        builder.build_with_signature(0, signer.private_key())
+        let mut block = builder.build_with_signature(0, signer.private_key());
+        install_empty_lane_work_outputs_for_test(&mut block);
+        block
+    }
+    /// Complete structural control fixtures before their executed-wire finality is signed.
+    fn install_empty_lane_work_outputs_for_test(block: &mut SignedBlock) {
+        assert!(block.external_entrypoints_slice().is_empty());
+        block
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .expect("empty control carrier has exact checked output metadata");
     }
     fn planned_lane_candidate_block_at_view(
         adapter: &V2LaneWorkAdapter,

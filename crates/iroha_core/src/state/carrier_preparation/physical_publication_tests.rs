@@ -129,7 +129,7 @@ fn fixture_archive_decision() -> (
 }
 
 #[test]
-fn joint_publication_authenticates_both_original_archives_without_effects_or_relocking() {
+fn joint_publication_persists_both_original_archives_without_state_effects_or_relocking() {
     let (_directory, state, mut decision, provider, reputation) = fixture_archive_decision();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let generation = state.state_view_generation();
@@ -142,8 +142,8 @@ fn joint_publication_authenticates_both_original_archives_without_effects_or_rel
         .as_ptr();
     for _ in 0..2 {
         let physical = acquire(decision, &state);
-        assert!(provider.is_empty().unwrap());
-        assert!(reputation.is_empty().unwrap());
+        assert!(!provider.is_empty().unwrap());
+        assert!(!reputation.is_empty().unwrap());
         decision = physical.abort();
         assert_eq!(decision.block().encode_wire().unwrap(), wire);
         assert_eq!(
@@ -182,6 +182,8 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
         .as_slice()
         .as_ptr();
     for provider_case in [true, false] {
+        let provider_was_empty = provider.is_empty().unwrap();
+        let reputation_was_empty = reputation.is_empty().unwrap();
         // Only adversarial tests can exchange private capture fields. The
         // actual original Kura seal must still reject equal projection bytes.
         if provider_case {
@@ -228,8 +230,8 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
             retry.journals.components.block_hashes.as_slice().as_ptr(),
             hashes
         );
-        assert!(provider.is_empty().unwrap());
-        assert!(reputation.is_empty().unwrap());
+        assert_eq!(provider.is_empty().unwrap(), provider_was_empty);
+        assert_eq!(reputation.is_empty().unwrap(), reputation_was_empty);
         assert!(foreign_provider.is_empty().unwrap());
         assert!(foreign_reputation.is_empty().unwrap());
         drop(held);
@@ -242,13 +244,13 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
     );
 }
 
-fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
+pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
     let (state, proposal, topology, context) = fixture();
     let decision = decided(&state, proposal, &topology, &context, (), ());
     (state, decision)
 }
 
-fn acquire<'target, A, B>(
+pub(super) fn acquire<'target, A, B>(
     decision: CheckpointDecision<A, B>,
     state: &'target State,
 ) -> PhysicallyPreparedCarrier<'target, A, B, ()> {
@@ -297,6 +299,15 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
     assert!(
         matches!(error, CarrierPhysicalPreparationError::Source(_)),
         "wrong refusal: {error:?}"
+    );
+    assert!(
+        !state
+            .kura
+            .store_root()
+            .join("blocks/canonical/kagemusha_v1_finality")
+            .join(format!("{:020}.norito", retry.finality().height))
+            .exists(),
+        "foreign execution custody must refuse before witness publication"
     );
     assert_fences_free_except(&state, "state_commit_lock");
     drop(

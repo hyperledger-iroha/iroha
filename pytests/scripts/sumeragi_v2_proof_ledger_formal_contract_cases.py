@@ -268,6 +268,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/expiry_tracking_tests.rs'),
         Path('queue/inflight_tracking_tests.rs'),
         Path('queue/lane_reservation_tests.rs'),
+        Path('queue/lane_retirement_observer_tests.rs'),
         Path('queue/lane_reservation_terminal_fault_tests.rs'),
         Path('queue/reservation_recovery_tests.rs'),
     ),

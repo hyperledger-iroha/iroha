@@ -77,12 +77,24 @@ fn carrier_geometry_captures_original_predecessor_and_drop_does_not_publish() {
         assert_eq!(&prepared._successor, block.canonical_runtime.get());
         assert_eq!(prepared._header, header());
         assert!(prepared._pending.is_some());
+        assert!(!prepared.is_identity_transition(header()));
         prepared
     };
     drop(prepared);
     assert_eq!(state.canonical_runtime.view().get(), &before);
     assert_eq!(norito::json::to_json(&state.world).unwrap(), world_before);
     assert_eq!(state.kura.blocks_count(), 0);
+}
+
+#[test]
+fn carrier_geometry_identity_requires_its_exact_captured_header() {
+    let state = state();
+    let block = state.merge_preexecution_block(header());
+    let prepared = block.prepare_carrier_geometry().unwrap();
+    assert!(prepared.is_identity_transition(header()));
+    let mut foreign_header = header();
+    foreign_header.set_view_change_index(1);
+    assert!(!prepared.is_identity_transition(foreign_header));
 }
 
 #[test]

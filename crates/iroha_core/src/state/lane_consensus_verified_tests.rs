@@ -11,7 +11,7 @@ struct LaneContextVerifiedFixture<StateOwner = State> {
     witness: ExecWitness,
 }
 
-fn lane_context_verified_fixture() -> LaneContextVerifiedFixture {
+fn lane_context_verified_fixture() -> Box<LaneContextVerifiedFixture> {
     let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
     let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
         &state,
@@ -23,10 +23,36 @@ fn lane_context_verified_fixture() -> LaneContextVerifiedFixture {
         parent.header().height().get(),
         0x4B,
     );
-    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let block = empty_global_block_after(Some(&parent));
-    let opening = lane_opening_context_for_state_test(&state);
-    let mut overlay = state.block(block.header());
+    let (block, opening, witness) =
+        publish_lane_context_verified_fixture(&state, &parent, &certificate);
+    Box::new(LaneContextVerifiedFixture {
+        state,
+        validators,
+        binding,
+        block,
+        opening,
+        witness,
+    })
+}
+
+// State construction and its publication overlay need separate stack frames;
+// callers retain the completed fixture on the heap, including foreign owners.
+#[inline(never)]
+fn publish_lane_context_verified_fixture(
+    state: &State,
+    parent: &SignedBlock,
+    certificate: &[u8],
+) -> (
+    SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    ExecWitness,
+) {
+    let block = lane_context_admission_carrier_for_test(parent, certificate);
+    let opening = lane_opening_context_for_state_test(state);
+    let predecessor_runtime = state.canonical_runtime.view().get().clone();
+    let mut overlay = state
+        .block_with_queue_plan_admissions(block.header(), &[certificate.to_vec()])
+        .unwrap();
     overlay
         .finalize_lane_consensus_contexts(&block, Some(&opening))
         .unwrap();
@@ -34,18 +60,19 @@ fn lane_context_verified_fixture() -> LaneContextVerifiedFixture {
     overlay
         .capture_lane_consensus_contexts(&mut witness)
         .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .unwrap();
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
+    assert_eq!(
+        state.canonical_runtime.predecessor_view().get().as_ref(),
+        Some(&predecessor_runtime),
+        "snapshot fixture must retain the actual pre-carrier runtime"
+    );
     state.kura.store_block(Arc::new(block.clone())).unwrap();
-    LaneContextVerifiedFixture {
-        state,
-        validators,
-        binding,
-        block,
-        opening,
-        witness,
-    }
+    (block, opening, witness)
 }
 
 // Real test-key finality authenticates these exact fixture witness bytes. This

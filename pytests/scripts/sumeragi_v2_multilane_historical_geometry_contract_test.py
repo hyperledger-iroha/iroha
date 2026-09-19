@@ -70,13 +70,14 @@ def test_historical_geometry_contract_is_connected_to_release_gate():
 @pytest.mark.parametrize("symbol", [
     "ObservedHistoricalRecoveryEvidence", "observe_geometry_historical_autonomous_recovery_records",
     "ensure_unchanged", "attest", "read_historical_autonomous_recovery_record_with_identity",
+    "historical", "into_observed",
 ])
 def test_historical_geometry_contract_rejects_missing_owner(fixture, symbol):
     _, _, checker, models = fixture
     c = checker.historical_geometry_contract
     native = next(m for m in models if m["module"] == c.NATIVE_MODULE)
     native["production_symbols"] = [b for b in native["production_symbols"]
-        if not (b["symbol"] == symbol and b["path"] in (c.HISTORICAL, c.RECOVERY))]
+        if not (b["symbol"] == symbol and b["path"] in (c.HISTORICAL, c.RECOVERY, c.EFFECTS))]
     assert any(f"ledger owner {symbol}" in e for e in validate(fixture))
 
 
@@ -118,6 +119,43 @@ def test_historical_geometry_contract_rejects_semantic_mutation(fixture, owner, 
     errors = validate(fixture)
     assert any(diagnostic in e for e in errors), errors
     assert not any("must have one" in e or "digest" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("Self::Observe => observation.into_observed()", "Self::Observe => observation.attest()"),
+    ("Self::MaintainAndAttest { .. } => observation.attest()", "Self::MaintainAndAttest { .. } => observation.into_observed()"),
+])
+def test_historical_geometry_contract_rejects_changed_dispatch(fixture, old, new):
+    root, support, checker, _ = fixture
+    support.replace_once_after(
+        root / checker.historical_geometry_contract.EFFECTS,
+        "fn historical(", old, new,
+    )
+    assert any("executable relation" in e for e in validate(fixture))
+
+
+@pytest.mark.parametrize("observation", ["historical_observation", "confirmed_historical_observation"])
+def test_historical_geometry_contract_rejects_bypassed_dispatch(fixture, observation):
+    root, support, checker, _ = fixture
+    support.replace_once(
+        root / checker.historical_geometry_contract.GEOMETRY,
+        f"effects.historical({observation})?", f"{observation}.into_observed()?",
+    )
+    assert any("missing or reorders" in e for e in validate(fixture))
+
+
+@pytest.mark.parametrize("old,new,diagnostic", [
+    ("self.ensure_unchanged()?;", "// self.ensure_unchanged()?;", "executable relation"),
+    ("        self,", "        &self,", "executable relation"),
+    ("        self.ensure_unchanged()?;", "        sync_dir(&self.outer.expected_path)?;\n        self.ensure_unchanged()?;", "forbidden observation effect"),
+])
+def test_historical_geometry_contract_rejects_changed_observed_consumer(fixture, old, new, diagnostic):
+    root, support, checker, _ = fixture
+    support.replace_once_after(
+        root / checker.historical_geometry_contract.HISTORICAL,
+        "fn into_observed(", old, new,
+    )
+    assert any(diagnostic in e for e in validate(fixture))
 
 
 @pytest.mark.parametrize("earlier,later", [

@@ -47,6 +47,9 @@ pub(crate) fn native_lane_batch_for_execution(
                 .into(),
         );
     }
+    if header.npos_effects_hash() != carrier.npos_consensus_effects().map(HashOf::new) {
+        return Err("native carrier has unbound NPoS controls".into());
+    }
     if batch.base_state_height.checked_add(1) != Some(header.height().get())
         || header.prev_block_hash().is_none()
         || header.creation_time().is_zero()

@@ -20,7 +20,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let rid = hex::encode([0x11_u8; 32]);
-    let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock1 = state.block(header1);
     let mut stx1 = sblock1.transaction();
     stx1.world.governance_referenda_mut().insert(
@@ -52,7 +52,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
     );
     stx1.apply();
     sblock1.commit_empty_block_for_testing().unwrap();
-    let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut sblock2 = state.block(header2);
     let events_at_end = sblock2.world.take_external_events();
     assert!(
@@ -65,7 +65,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         "inclusive h_end must remain open for ballots"
     );
     sblock2.commit_empty_block_for_testing().unwrap();
-    let header3 = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
+    let header3 = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let events = sblock3.world.take_external_events();
     let has_closed = events.iter().any(|event| {

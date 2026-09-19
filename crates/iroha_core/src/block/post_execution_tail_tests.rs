@@ -3,6 +3,63 @@ type TailBatchOutcomes = BTreeMap<
     Vec<iroha_data_model::events::data::prelude::AssetBatchTransferOutcome>,
 >;
 
+#[test]
+fn native_settlement_relay_requires_receipts_and_contributing_transactions() {
+    let empty = LaneBlockCommitment {
+        block_height: 1,
+        lane_id: LaneId::SINGLE,
+        lane_incarnation: Hash::new(b"native settlement test incarnation"),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        tx_count: 0,
+        total_local_amount: Quantity::zero(),
+        total_xor_due: Quantity::zero(),
+        total_xor_after_haircut: Quantity::zero(),
+        total_xor_variance: Quantity::zero(),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
+    };
+    for tx_count in [0, 1] {
+        let mut commitment = empty.clone();
+        commitment.tx_count = tx_count;
+        assert!(!ValidBlock::native_settlement_requires_relay(&commitment).unwrap());
+        for field in 0..4 {
+            let mut changed = commitment.clone();
+            *match field {
+                0 => &mut changed.total_local_amount,
+                1 => &mut changed.total_xor_due,
+                2 => &mut changed.total_xor_after_haircut,
+                _ => &mut changed.total_xor_variance,
+            } = Quantity::from(1u32);
+            assert!(
+                ValidBlock::native_settlement_requires_relay(&changed).is_err(),
+                "receipt-free settlement cannot discard monetary evidence: {tx_count}/{field}"
+            );
+        }
+        commitment.receipts.push(LaneSettlementReceipt {
+            source_id: [1; 32],
+            local_amount: Quantity::zero(),
+            xor_due: Quantity::zero(),
+            xor_after_haircut: Quantity::zero(),
+            xor_variance: Quantity::zero(),
+            timestamp_ms: 1,
+        });
+        let relay = ValidBlock::native_settlement_requires_relay(&commitment);
+        if tx_count == 0 {
+            assert!(
+                relay.is_err(),
+                "a receipt requires a contributing transaction"
+            );
+        } else {
+            assert!(
+                relay.unwrap(),
+                "an actual receipt requires relay validation"
+            );
+        }
+    }
+}
+
 /// Attach executor-owned receipt rows without clearing already-complete outputs.
 /// Validate every row before changing any result. No display-hash inference occurs here.
 fn attach_fixture_receipts(

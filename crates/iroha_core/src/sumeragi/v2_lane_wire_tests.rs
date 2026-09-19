@@ -460,7 +460,7 @@ fn native_storage_wal_decoder_requires_recovered_exact_frame_and_reauthenticates
     );
     let mut substituted = envelope;
     substituted.persistence_id = 3; // Physical second frame must own id 2.
-    reopened
+    let _receipt = reopened
         .append(&norito::encode_canonical(&substituted).unwrap())
         .unwrap();
     assert!(

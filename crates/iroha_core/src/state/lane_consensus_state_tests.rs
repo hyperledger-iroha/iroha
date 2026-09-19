@@ -33,6 +33,43 @@ fn lane_opening_context_for_state_test(
     .unwrap()
 }
 
+// Keep admission and lane opening in one carrier so both reverted owners still
+// describe the genuine predecessor, where this pending input did not exist.
+fn lane_context_admission_carrier_for_test(
+    parent: &SignedBlock,
+    certificate: &[u8],
+) -> SignedBlock {
+    let mut block = empty_global_block_after(Some(parent));
+    let mut execution = block.execution_context().cloned().unwrap_or_default();
+    execution.queue_plan_admissions = vec![certificate.to_vec()];
+    block.set_execution_context(Some(execution));
+    assert_eq!(block.network_entrypoint_count(), 0);
+    block
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            BTreeMap::new(),
+            Vec::new(),
+            AxtPolicySnapshot::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("admission-only carrier retains its exact empty execution result");
+    let key = merge_carrier_finality_fixture_keypair();
+    block
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(key.private_key(), block.hash()),
+            ),
+        ]))
+        .unwrap();
+    block.validate_proposal_commitments().unwrap();
+    block.validate_execution_result_structure().unwrap();
+    block
+}
+
 state_test! { sync lane_consensus_full_set_witness_rejects_mutation_removal_and_duplicates
     let state = blank_test_state();
     let block = empty_global_block_after(None);
@@ -131,10 +168,10 @@ state_test! { sync lane_consensus_opens_from_admitted_work_and_survives_global_a
         )),
         &validators, parent.header().height().get(), 0x35,
     );
-    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let block = empty_global_block_after(Some(&parent));
+    let block = lane_context_admission_carrier_for_test(&parent, &certificate);
     let opening = lane_opening_context_for_state_test(&state);
-    let mut overlay = state.block(block.header());
+    let predecessor_runtime = state.canonical_runtime.view().get().clone();
+    let mut overlay = state.block_with_queue_plan_admissions(block.header(), &[certificate]).unwrap();
     assert!(overlay.finalize_lane_consensus_contexts(&block, None).is_err(),
         "pending work alone cannot invent the global opening authority");
     assert!(overlay.lane_consensus_contexts.get().contexts.is_empty());
@@ -145,9 +182,15 @@ state_test! { sync lane_consensus_opens_from_admitted_work_and_survives_global_a
     assert_eq!(original.contexts[0].opening_global_height, block.header().height().get());
     assert_eq!(original.contexts[0].next_lane_height, 1);
     overlay.capture_lane_consensus_contexts(&mut ExecWitness::default()).unwrap();
+    overlay.stage_autoscale_sample_record_for_count(&block, 0).unwrap();
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
+    assert_eq!(
+        state.canonical_runtime.predecessor_view().get().as_ref(),
+        Some(&predecessor_runtime),
+        "snapshot fixture must retain the actual pre-carrier runtime"
+    );
     state.kura.store_block(Arc::new(block.clone())).unwrap();
     seed_autoscale_sample_history_for_snapshot_test(&state);
     let snapshot = norito::json::to_value(&state).unwrap();

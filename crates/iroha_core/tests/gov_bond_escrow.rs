@@ -72,7 +72,7 @@ fn plain_ballot_locks_bond_into_escrow() {
     gov_cfg.bond_escrow_account = BOB_ID.clone();
     gov_cfg.slash_receiver_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Grant ballot permission to ALICE for this referendum.

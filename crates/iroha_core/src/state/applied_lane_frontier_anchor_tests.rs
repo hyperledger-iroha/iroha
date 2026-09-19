@@ -116,37 +116,44 @@ state_test! { sync native_participant_frontier_retains_the_actual_application_ca
     }
 }
 
-state_test!(consensus_stack autonomous_merge_frontier_retains_the_actual_application_carrier_height
-    autonomous_merge_frontier_retains_the_actual_application_carrier_height_on_consensus_stack();
+state_test!(consensus_stack native_decision_frontier_retains_the_actual_application_carrier_height
+    native_decision_frontier_retains_the_actual_application_carrier_height_on_consensus_stack();
 );
-fn autonomous_merge_frontier_retains_the_actual_application_carrier_height_on_consensus_stack() {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
-    let batch = entry
-        .execution_batch
-        .as_ref()
-        .expect("autonomous execution batch");
-    assert!(!batch.lanes.is_empty());
-    commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("apply the actual authenticated autonomous carrier");
+fn native_decision_frontier_retains_the_actual_application_carrier_height_on_consensus_stack() {
+    let (fixture, carrier, context) =
+        native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap();
+    assert!(!batch.groups.is_empty());
+    let (overlay, committed) = prepared_native_publication_for_test(state, &carrier, context);
+    overlay
+        .commit()
+        .expect("apply the actual Decision-authenticated native carrier");
+    promote_native_execution_finality_for_test(state, &committed);
     let world = state.world.view();
-    for execution in &batch.lanes {
-        let descriptor = &execution.proposal.descriptor;
-        assert_eq!(
-            State::canonical_merged_lane_frontier_with_anchor_from_world(
-                &world,
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_incarnation,
-            )
-            .unwrap(),
-            (
-                descriptor.lane_block_height,
-                Some(descriptor.descriptor_hash),
-                carrier.header().height().get(),
-            )
-        );
+    for group in &batch.groups {
+        let descriptor = &group.payload.descriptor;
+        for slot in &descriptor.slots {
+            assert_eq!(
+                State::canonical_merged_lane_frontier_with_anchor_from_world(
+                    &world,
+                    slot.route.lane_id,
+                    slot.route.dataspace_id,
+                    slot.lane_incarnation,
+                )
+                .unwrap(),
+                (
+                    slot.lane_height,
+                    Some(descriptor.canonical_hash().unwrap()),
+                    carrier.header().height().get(),
+                )
+            );
+        }
     }
 }
 

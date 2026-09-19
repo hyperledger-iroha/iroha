@@ -37,7 +37,7 @@ fn preverify_state_wrapper_requires_bound_commitments_and_dedups() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let c1 = [0x11u8; 32];

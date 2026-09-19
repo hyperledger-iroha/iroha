@@ -484,6 +484,18 @@ mod block {
         pub(super) mode: BlockMode,
     }
     impl<'store, K: Key, V: Value> Block<'store, K, V> {
+        /// Observe this block's original owner, current/undo predecessor and mode.
+        /// The opaque identity permits only local equality, never publication.
+        pub fn publication_identity(&self) -> crate::BlockPublicationIdentity {
+            crate::BlockPublicationIdentity::capture(&self.predecessor, self.mode)
+        }
+
+        /// Check the original storage owner without reading values or taking locks.
+        /// This observation grants no mutation or publication authority.
+        pub fn belongs_to(&self, storage: &Storage<K, V>) -> bool {
+            self.predecessor.belongs_to(&storage.publication)
+        }
+
         pub(super) fn new(
             revert: ReleaseGuard<'store, EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>>,
             blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,

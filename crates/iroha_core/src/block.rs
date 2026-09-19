@@ -57,8 +57,6 @@ pub(crate) use native_lane_carrier::{
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
-#[cfg(test)]
-use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -78,18 +76,19 @@ use iroha_data_model::{
         pin_intent::DaPinIntentBundle,
     },
     events::prelude::*,
-    isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
         AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
         AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig, LaneRelayEnvelope,
         LaneSettlementBufferPolicy, ProofBlob,
     },
-    transaction::{
-        Executable, SignedTransaction, TransactionEntrypoint,
-        error::{TransactionLimitError, TransactionRejectionReason},
-        signed::TransactionResultInner,
-    },
+    transaction::{SignedTransaction, TransactionEntrypoint, error::TransactionLimitError},
+};
+#[cfg(test)]
+use iroha_data_model::{
+    block::consensus::{CertPhase, NativeAmxAttestationBodyV2},
+    isi::InstructionBox,
+    transaction::{Executable, error::TransactionRejectionReason, signed::TransactionResultInner},
 };
 #[cfg(feature = "bls")]
 use iroha_model_base::metadata::Metadata;
@@ -97,25 +96,22 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
-use iroha_primitives::{numeric::Quantity, small::SmallVec};
-#[cfg(feature = "telemetry")]
-use iroha_torii_shared::status::{NexusLaneTeuBuckets, SchedulerLayerWidthBuckets};
-#[cfg(feature = "telemetry")]
-use ivm::ProgramMetadata;
+use iroha_primitives::numeric::Quantity;
+#[cfg(test)]
+use iroha_primitives::small::SmallVec;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
-use sha2::Digest as _;
+#[cfg(test)]
+use std::hint::black_box;
 #[cfg(feature = "bls")]
 use std::sync::LazyLock;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashSet},
-    hint::black_box,
     num::NonZeroU64,
     str::FromStr,
-    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
 
@@ -221,7 +217,8 @@ mod checked_keypair_tests {
         }
     }
 }
-/// Convert overlay build errors into transaction rejection reasons with stable labels.
+#[cfg(test)]
+/// Preserve stable overlay rejection labels for scheduler regression tests.
 fn map_overlay_error(
     err: &crate::pipeline::overlay::OverlayBuildError,
 ) -> TransactionRejectionReason {
@@ -276,7 +273,8 @@ fn map_overlay_error(
         ),
     }
 }
-/// Return whether an executable needs the VM overlay scheduler and live rebuild.
+#[cfg(test)]
+/// Reference VM-overlay classification retained for scheduler regression tests.
 #[must_use]
 const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     matches!(
@@ -284,7 +282,8 @@ const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
         Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_)
     )
 }
-/// Return whether the executable must run once against the scheduler's live state.
+#[cfg(test)]
+/// Reference live-batch classification retained for scheduler regression tests.
 #[must_use]
 fn uses_live_batch_scheduler(executable: &Executable) -> bool {
     matches!(executable, Executable::Batch(_))
@@ -292,64 +291,6 @@ fn uses_live_batch_scheduler(executable: &Executable) -> bool {
             crate::state::standalone_governance_ballot_instruction_v1(executable),
             Ok(Some(_)) | Err(_)
         )
-}
-fn missing_authority_requires_rejection(
-    state_tx: &crate::state::StateTransaction<'_, '_>,
-    tx: &SignedTransaction,
-    authority: &AccountId,
-    overlay_instruction_count: usize,
-    is_genesis: bool,
-) -> bool {
-    overlay_instruction_count > 0
-        && !is_genesis
-        && state_tx.world.accounts.get(authority).is_none()
-        && !crate::tx::allows_unregistered_authority(tx.instructions(), authority)
-}
-fn validate_block_transaction_admission(
-    state_tx: &mut crate::state::StateTransaction<'_, '_>,
-    tx: &SignedTransaction,
-    routing: crate::queue::RoutingDecision,
-    entrypoint_index: usize,
-) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
-    let governance_ballot_binding = crate::state::standalone_governance_ballot_instruction_v1(
-        tx.instructions(),
-    )
-    .map_err(|message| {
-        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
-            message.to_owned(),
-        ))
-    })?;
-    let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
-        .map_err(TransactionRejectionReason::Validation)?;
-    let private_settlement_carrier_binding =
-        crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
-    state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
-    state_tx.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
-    state_tx.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
-    state_tx.current_entrypoint_index = Some(u64::try_from(entrypoint_index).map_err(|_| {
-        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InternalError(
-            "ordinary phase index exceeds u64".to_owned(),
-        ))
-    })?);
-    StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
-}
-fn commit_stateful_admission_sequence(
-    state_tx: &mut crate::state::StateTransaction<'_, '_>,
-    admission: &crate::tx::StatefulAdmission,
-) -> Result<(), TransactionRejectionReason> {
-    crate::validation_fee::commit_validation_fee_credit(
-        state_tx,
-        admission.validation_fee_credit.as_ref(),
-    )?;
-    if let Some(seq) = admission.sequence_to_commit {
-        state_tx
-            .world
-            .tx_sequences
-            .insert(admission.authority.clone(), seq);
-    }
-    crate::tx::commit_faucet_claim_consumption(state_tx, admission);
-    Ok(())
 }
 #[cfg(test)]
 mod overlay_error_tests {
@@ -463,8 +404,6 @@ mod overlay_error_tests {
         assert!(crate::state::standalone_governance_ballot_instruction_v1(&mixed).is_err());
     }
 }
-#[cfg(feature = "telemetry")]
-const PIPELINE_LAYER_WIDTH_THRESHOLDS: [u64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST;
 #[cfg(test)]
@@ -513,10 +452,6 @@ impl core::ops::Deref for VerifiedV2FinalityArtifact {
         self.artifact()
     }
 }
-#[cfg(feature = "telemetry")]
-use crate::telemetry::{
-    DataspacePipelineSummary, DataspaceTeuGaugeUpdate, LanePipelineSummary, LaneTeuGaugeUpdate,
-};
 use crate::{
     da::{
         DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
@@ -528,154 +463,10 @@ use crate::{
 use settlement_router::haircut::LiquidityProfile;
 use settlement_router::{XorQuantity, policy::BufferStatus};
 use thiserror::Error;
-#[derive(Default, Clone, Copy)]
-struct DetachedFallbackReasons {
-    fee_postprocessing: u64,
-    user_executor: u64,
-    durable_state: u64,
-    unsupported_instruction: u64,
-    rejected_eval: u64,
-    overlay_error: u64,
-}
-impl DetachedFallbackReasons {
-    fn add(&mut self, reason: DetachedFallbackReason) {
-        match reason {
-            DetachedFallbackReason::FeePostprocessing => {
-                self.fee_postprocessing = self.fee_postprocessing.saturating_add(1);
-            }
-            DetachedFallbackReason::UserExecutor => {
-                self.user_executor = self.user_executor.saturating_add(1);
-            }
-            DetachedFallbackReason::DurableState => {
-                self.durable_state = self.durable_state.saturating_add(1);
-            }
-            DetachedFallbackReason::UnsupportedInstruction => {
-                self.unsupported_instruction = self.unsupported_instruction.saturating_add(1);
-            }
-            DetachedFallbackReason::RejectedEval => {
-                self.rejected_eval = self.rejected_eval.saturating_add(1);
-            }
-            DetachedFallbackReason::OverlayError => {
-                self.overlay_error = self.overlay_error.saturating_add(1);
-            }
-        }
-    }
-    fn merge(self, other: Self) -> Self {
-        Self {
-            fee_postprocessing: self
-                .fee_postprocessing
-                .saturating_add(other.fee_postprocessing),
-            user_executor: self.user_executor.saturating_add(other.user_executor),
-            durable_state: self.durable_state.saturating_add(other.durable_state),
-            unsupported_instruction: self
-                .unsupported_instruction
-                .saturating_add(other.unsupported_instruction),
-            rejected_eval: self.rejected_eval.saturating_add(other.rejected_eval),
-            overlay_error: self.overlay_error.saturating_add(other.overlay_error),
-        }
-    }
-}
-#[derive(Clone, Copy)]
-enum DetachedFallbackReason {
-    FeePostprocessing,
-    UserExecutor,
-    DurableState,
-    UnsupportedInstruction,
-    RejectedEval,
-    OverlayError,
-}
-fn transaction_requires_fee_postprocessing(
-    pipeline_cfg: &iroha_config::parameters::actual::Pipeline,
-    nexus_cfg: &iroha_config::parameters::actual::Nexus,
-) -> bool {
-    if !pipeline_cfg.gas.accepted_assets.is_empty() {
-        return true;
-    }
-    let fees = &nexus_cfg.fees;
-    if !fees.base_fee.is_zero()
-        || !fees.per_byte_fee.is_zero()
-        || !fees.per_instruction_fee.is_zero()
-        || !fees.per_gas_unit_fee.is_zero()
-    {
-        return true;
-    }
-    false
-}
 #[derive(Default)]
 struct LaneSummary {
     tx_vertices: u64,
-    tx_edges: u64,
-    overlay_count: u64,
-    overlay_instr_total: u64,
-    overlay_bytes_total: u64,
-    rbc_chunks: u64,
     rbc_bytes_total: u64,
-    layer_widths: Vec<u64>,
-    peak_layer_width: u64,
-    detached_prepared: u64,
-    detached_merged: u64,
-    detached_fallback: u64,
-    detached_fallback_reasons: DetachedFallbackReasons,
-    quarantine_executed: u64,
-}
-fn set_pipeline_status_snapshots(lane_summaries: &BTreeMap<LaneId, LaneSummary>) {
-    let lane_activity_snapshot: Vec<crate::sumeragi::status::LaneActivitySnapshot> = lane_summaries
-        .iter()
-        .map(
-            |(lane_id, summary)| crate::sumeragi::status::LaneActivitySnapshot {
-                lane_id: lane_id.as_u32(),
-                tx_vertices: summary.tx_vertices,
-                tx_edges: summary.tx_edges,
-                overlay_count: summary.overlay_count,
-                overlay_instr_total: summary.overlay_instr_total,
-                overlay_bytes_total: summary.overlay_bytes_total,
-                rbc_chunks: summary.rbc_chunks,
-                rbc_bytes_total: summary.rbc_bytes_total,
-                detached_prepared: summary.detached_prepared,
-                detached_merged: summary.detached_merged,
-                detached_fallback: summary.detached_fallback,
-                detached_fallback_fee_postprocessing: summary
-                    .detached_fallback_reasons
-                    .fee_postprocessing,
-                detached_fallback_user_executor: summary.detached_fallback_reasons.user_executor,
-                detached_fallback_durable_state: summary.detached_fallback_reasons.durable_state,
-                detached_fallback_unsupported_instruction: summary
-                    .detached_fallback_reasons
-                    .unsupported_instruction,
-                detached_fallback_rejected_eval: summary.detached_fallback_reasons.rejected_eval,
-                detached_fallback_overlay_error: summary.detached_fallback_reasons.overlay_error,
-                quarantine_executed: summary.quarantine_executed,
-            },
-        )
-        .collect();
-    let detached_fallback_reasons_total = lane_summaries
-        .values()
-        .fold(DetachedFallbackReasons::default(), |acc, summary| {
-            acc.merge(summary.detached_fallback_reasons)
-        });
-    let pipeline_execution_snapshot = crate::sumeragi::status::PipelineExecutionSnapshot {
-        tx_vertices_total: lane_summaries.values().map(|s| s.tx_vertices).sum(),
-        tx_edges_total: lane_summaries.values().map(|s| s.tx_edges).sum(),
-        overlay_count_total: lane_summaries.values().map(|s| s.overlay_count).sum(),
-        overlay_instr_total: lane_summaries.values().map(|s| s.overlay_instr_total).sum(),
-        overlay_bytes_total: lane_summaries.values().map(|s| s.overlay_bytes_total).sum(),
-        rbc_chunks_total: lane_summaries.values().map(|s| s.rbc_chunks).sum(),
-        rbc_bytes_total: lane_summaries.values().map(|s| s.rbc_bytes_total).sum(),
-        detached_prepared_total: lane_summaries.values().map(|s| s.detached_prepared).sum(),
-        detached_merged_total: lane_summaries.values().map(|s| s.detached_merged).sum(),
-        detached_fallback_total: lane_summaries.values().map(|s| s.detached_fallback).sum(),
-        detached_fallback_fee_postprocessing_total: detached_fallback_reasons_total
-            .fee_postprocessing,
-        detached_fallback_user_executor_total: detached_fallback_reasons_total.user_executor,
-        detached_fallback_durable_state_total: detached_fallback_reasons_total.durable_state,
-        detached_fallback_unsupported_instruction_total: detached_fallback_reasons_total
-            .unsupported_instruction,
-        detached_fallback_rejected_eval_total: detached_fallback_reasons_total.rejected_eval,
-        detached_fallback_overlay_error_total: detached_fallback_reasons_total.overlay_error,
-        quarantine_executed_total: lane_summaries.values().map(|s| s.quarantine_executed).sum(),
-    };
-    crate::sumeragi::status::set_lane_activity_snapshot(lane_activity_snapshot);
-    crate::sumeragi::status::set_pipeline_execution_snapshot(pipeline_execution_snapshot);
 }
 #[derive(Default)]
 struct LaneSettlementBuilder {
@@ -1789,41 +1580,26 @@ fn record_lane_settlement_metrics(
         );
     }
 }
-#[cfg(feature = "telemetry")]
-use crate::queue::{LaneSchedulingLimits, QueueLimits};
+#[cfg(test)]
 use crate::{
-    executor::{
-        charge_fees_for_applied_overlay, charge_fees_for_precharged_overlay,
-        charge_fees_for_rejected_live_batch, precharge_gas_for_applied_overlay,
-    },
-    kura::{
-        PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
-        PipelineTxSnapshot,
-    },
-    pipeline::{
-        gpu::{self, AccessTriplet},
-        overlay::TxOverlay,
-        smallset::sort_dedup_u32_in_place,
-    },
+    kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
+    pipeline::{overlay::TxOverlay, smallset::sort_dedup_u32_in_place},
+    tx::is_quarantine_transaction,
+};
+use crate::{
     prelude::*,
     queue::{
-        evaluate_policy_plan_with_nexus_and_world_at_block_height,
         reconcile_execution_routing_plan, resolve_routing_decision,
         routing_plan_from_execution_context,
     },
-    smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
     },
     sumeragi::{
-        VotingBlock, network_topology::Topology, status,
-        v2_candidate::candidate_block_has_proposal_work,
+        VotingBlock, network_topology::Topology, v2_candidate::candidate_block_has_proposal_work,
     },
-    tx::{
-        AcceptTransactionFail, LaneAssignment, SignatureRejectionCode, SignatureVerificationFail,
-        enforce_fraud_policy, is_quarantine_transaction,
-    },
+    tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
 };
 use std::sync::Arc;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
@@ -1833,14 +1609,19 @@ struct PreparedBlockTransaction {
 }
 #[cfg(test)]
 use crate::tx::QUARANTINE_METADATA_KEY;
+#[cfg(test)]
 #[derive(Clone)]
 struct AccessIds {
     reads: SmallVec<[u32; 8]>,
     writes: SmallVec<[u32; 8]>,
 }
+#[cfg(test)]
 const GLOBAL_WILDCARD_KEY: &str = "*";
+#[cfg(test)]
 const STATE_KEY_PREFIX: &str = "state:";
+#[cfg(test)]
 const STATE_WILDCARD_SUFFIX: &str = "[*]";
+#[cfg(test)]
 fn state_wildcard_base(key: &str) -> Option<&str> {
     let rest = key.strip_prefix(STATE_KEY_PREFIX)?;
     if rest == "*" {
@@ -1848,6 +1629,7 @@ fn state_wildcard_base(key: &str) -> Option<&str> {
     }
     rest.strip_suffix(STATE_WILDCARD_SUFFIX)
 }
+#[cfg(test)]
 fn state_map_entry_base(key: &str) -> Option<&str> {
     let rest = key.strip_prefix(STATE_KEY_PREFIX)?;
     let (base, _) = rest.split_once('/')?;
@@ -1856,6 +1638,7 @@ fn state_map_entry_base(key: &str) -> Option<&str> {
     }
     Some(base)
 }
+#[cfg(test)]
 fn state_wildcard_key(base: &str) -> String {
     if base == "*" {
         format!("{STATE_KEY_PREFIX}*")
@@ -1863,37 +1646,7 @@ fn state_wildcard_key(base: &str) -> String {
         format!("{STATE_KEY_PREFIX}{base}{STATE_WILDCARD_SUFFIX}")
     }
 }
-fn union_from_sorted_triplets(
-    dsu: &mut DisjointSet,
-    triplets: &[crate::pipeline::gpu::AccessTriplet],
-) {
-    use iroha_primitives::small::SmallVec;
-    let mut cur_key: Option<u32> = None;
-    let mut last_writer: Option<usize> = None;
-    let mut open_readers: SmallVec<[usize; 8]> = SmallVec::new();
-    for entry in triplets {
-        if cur_key != Some(entry.key) {
-            cur_key = Some(entry.key);
-            last_writer = None;
-            open_readers.0.clear();
-        }
-        if entry.flag == 0 {
-            if let Some(writer) = last_writer {
-                dsu.union(entry.tx_index, writer);
-            }
-            open_readers.push(entry.tx_index);
-        } else {
-            if let Some(writer) = last_writer {
-                dsu.union(entry.tx_index, writer);
-            }
-            for &reader in open_readers.iter() {
-                dsu.union(entry.tx_index, reader);
-            }
-            open_readers.0.clear();
-            last_writer = Some(entry.tx_index);
-        }
-    }
-}
+#[cfg(test)]
 #[allow(clippy::explicit_iter_loop)]
 fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<AccessIds>) {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1981,30 +1734,7 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
     }
     (key_count, out)
 }
-#[allow(clippy::explicit_iter_loop)]
-fn dag_fingerprint(
-    key_count: usize,
-    access_ids: &[AccessIds],
-    call_hashes: &[HashOf<TransactionEntrypoint>],
-) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update((key_count as u64).to_le_bytes());
-    for aset in access_ids.iter() {
-        h.update((aset.reads.len() as u64).to_le_bytes());
-        for &r in aset.reads.iter() {
-            h.update(r.to_le_bytes());
-        }
-        h.update((aset.writes.len() as u64).to_le_bytes());
-        for &w in aset.writes.iter() {
-            h.update(w.to_le_bytes());
-        }
-    }
-    for hash in call_hashes.iter() {
-        h.update(hash.as_ref());
-    }
-    h.finalize().into()
-}
+#[cfg(test)]
 fn expected_pipeline_dag_fingerprint(
     height: u64,
     block_hash: HashOf<BlockHeader>,
@@ -2044,17 +1774,6 @@ fn expected_pipeline_dag_fingerprint(
         return None;
     }
     Some(sidecar.dag.fingerprint)
-}
-fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
-    if vertices < 2 {
-        return 0;
-    }
-    let max_edges = u128::from(vertices) * u128::from(vertices - 1) / 2;
-    if max_edges == 0 {
-        return 0;
-    }
-    let bps = u128::from(edges).saturating_mul(10_000) / max_edges;
-    u64::try_from(bps).unwrap_or(u64::MAX)
 }
 pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
@@ -2099,6 +1818,7 @@ pub(crate) fn parse_asset_definition_literal_with_world(
                 .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
         })
 }
+#[cfg(test)]
 fn parse_account_from_access_key(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2116,6 +1836,7 @@ fn parse_account_from_access_key(
         Ok(None)
     }
 }
+#[cfg(test)]
 fn warm_overlay_chunk(overlay: &TxOverlay, chunk_size: usize) -> usize {
     let chunk = chunk_size.max(1);
     let mut warmed = 0usize;
@@ -2125,6 +1846,7 @@ fn warm_overlay_chunk(overlay: &TxOverlay, chunk_size: usize) -> usize {
     }
     warmed
 }
+#[cfg(test)]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct PrefetchStats {
     account_loaded: bool,
@@ -2132,6 +1854,7 @@ struct PrefetchStats {
     permissions_touched: usize,
     roles_touched: usize,
 }
+#[cfg(test)]
 fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId) -> PrefetchStats {
     let mut stats = PrefetchStats::default();
     if let Some(account) = state_block.world.accounts.get(account_id) {
@@ -2459,11 +2182,13 @@ mod pipeline_recovery_tests {
         );
     }
 }
+#[cfg(test)]
 #[derive(Debug)]
 struct DisjointSet {
     parent: Vec<usize>,
     rank: Vec<u8>,
 }
+#[cfg(test)]
 impl DisjointSet {
     fn new(size: usize) -> Self {
         Self {
@@ -2493,103 +2218,7 @@ impl DisjointSet {
         }
     }
 }
-#[allow(clippy::too_many_lines)]
-fn build_csr(access_ids: &[AccessIds], key_count: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
-    let n = access_ids.len();
-    let mut outdeg = vec![0usize; n];
-    // Pass 1: count edges
-    {
-        let mut last_writer: Vec<Option<usize>> = vec![None; key_count];
-        let mut open_readers: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); key_count];
-        for (idx, aset) in access_ids.iter().enumerate() {
-            let mut parents: SmallVec<[usize; 8]> = SmallVec::new();
-            for &k in aset.reads.iter() {
-                if let Some(w) = last_writer[k as usize] {
-                    parents.push(w);
-                }
-                open_readers[k as usize].push(idx);
-            }
-            for &k in aset.writes.iter() {
-                if let Some(w) = last_writer[k as usize] {
-                    parents.push(w);
-                }
-                if let Some(readers) = {
-                    if open_readers[k as usize].is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(&mut open_readers[k as usize]))
-                    }
-                } {
-                    for r in readers {
-                        parents.push(r);
-                    }
-                }
-                last_writer[k as usize] = Some(idx);
-            }
-            if !parents.is_empty() {
-                parents.sort_unstable();
-                dedup_sorted_usize_smallvec(&mut parents);
-                for &p in parents.iter() {
-                    if p != idx {
-                        outdeg[p] = outdeg[p].saturating_add(1);
-                    }
-                }
-            }
-        }
-    }
-    let mut row_offsets = vec![0usize; n + 1];
-    for i in 0..n {
-        row_offsets[i + 1] = row_offsets[i] + outdeg[i];
-    }
-    let edge_count = row_offsets[n];
-    let mut cols = vec![0usize; edge_count];
-    let mut indeg = vec![0usize; n];
-    // Pass 2: fill columns
-    {
-        let mut last_writer: Vec<Option<usize>> = vec![None; key_count];
-        let mut open_readers: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); key_count];
-        let mut cursor = row_offsets.clone();
-        for (idx, aset) in access_ids.iter().enumerate() {
-            let mut parents: SmallVec<[usize; 8]> = SmallVec::new();
-            for &k in aset.reads.iter() {
-                if let Some(w) = last_writer[k as usize] {
-                    parents.push(w);
-                }
-                open_readers[k as usize].push(idx);
-            }
-            for &k in aset.writes.iter() {
-                if let Some(w) = last_writer[k as usize] {
-                    parents.push(w);
-                }
-                if let Some(readers) = {
-                    if open_readers[k as usize].is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(&mut open_readers[k as usize]))
-                    }
-                } {
-                    for r in readers {
-                        parents.push(r);
-                    }
-                }
-                last_writer[k as usize] = Some(idx);
-            }
-            if !parents.is_empty() {
-                parents.sort_unstable();
-                dedup_sorted_usize_smallvec(&mut parents);
-                for &p in parents.iter() {
-                    if p != idx {
-                        let pos = cursor[p];
-                        cols[pos] = idx;
-                        cursor[p] = pos + 1;
-                        indeg[idx] += 1;
-                    }
-                }
-            }
-        }
-    }
-    (row_offsets, cols, indeg)
-}
+#[cfg(test)]
 fn component_iteration_order(
     components: &[Vec<usize>],
     call_hashes: &[iroha_crypto::HashOf<
@@ -2620,6 +2249,7 @@ fn component_iteration_order(
     });
     indices
 }
+#[cfg(test)]
 fn schedule_components_ready_heap(
     components: &[Vec<usize>],
     row_offsets: &[usize],
@@ -2701,6 +2331,7 @@ fn schedule_components_ready_heap(
     }
     Some(order)
 }
+#[cfg(test)]
 fn schedule_components_wave(
     components: &[Vec<usize>],
     row_offsets: &[usize],
@@ -2785,6 +2416,7 @@ fn schedule_components_wave(
     }
     Some(order)
 }
+#[cfg(test)]
 fn conflict_free_component_layers(
     components: &[Vec<usize>],
     row_offsets: &[usize],
@@ -2892,6 +2524,7 @@ fn conflict_free_component_layers(
     }
     Some(layers)
 }
+#[cfg(test)]
 fn schedule_ready_heap_global(
     row_offsets: &[usize],
     cols: &[usize],
@@ -2933,6 +2566,7 @@ fn schedule_ready_heap_global(
     }
     order
 }
+#[cfg(test)]
 fn schedule_wave_global(
     row_offsets: &[usize],
     cols: &[usize],
@@ -2976,6 +2610,7 @@ fn schedule_wave_global(
     }
     order
 }
+#[cfg(test)]
 impl Clone for DisjointSet {
     fn clone(&self) -> Self {
         Self {
@@ -3202,9 +2837,7 @@ pub enum BlockValidationError {
 }
 impl BlockValidationError {
     /// Keep local autoscale observations out of deterministic block rejection.
-    pub(crate) fn from_autoscale_lifecycle_error(
-        error: crate::state::LaneLifecycleError,
-    ) -> Self {
+    pub(crate) fn from_autoscale_lifecycle_error(error: crate::state::LaneLifecycleError) -> Self {
         use crate::state::LaneLifecycleError;
         let reason = format!("failed to evaluate Nexus autoscale: {error}");
         match error {
@@ -4199,257 +3832,17 @@ pub(crate) mod valid {
     #[cfg(test)]
     use super::event::{map_block_err_to_reason, map_sig_err_to_reason};
     use super::{event::emit_block_rejection, *};
-    use crate::smartcontracts::ivm::cache::IvmCache;
-    use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
+    use crate::state::{StateBlock, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
     use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
-    use iroha_logger::warn;
     #[cfg(test)]
     use iroha_model_base::chain::ChainId;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
-    #[derive(Clone, Copy)]
-    struct ConfidentialWorkV1 {
-        operations: u32,
-        verify_calls: u32,
-        proof_bytes: u64,
-        gas: u64,
-    }
-    impl ConfidentialWorkV1 {
-        fn capture(state_tx: &StateTransaction<'_, '_>) -> Self {
-            Self {
-                operations: state_tx.zk_confidential_ops_in_tx,
-                verify_calls: state_tx.zk_verify_calls_in_tx,
-                proof_bytes: state_tx.zk_proof_bytes_in_tx,
-                gas: state_tx.confidential_gas_used_in_tx,
-            }
-        }
-        fn account(self, state_block: &mut StateBlock<'_>) {
-            state_block.account_confidential_work_v1(
-                self.operations,
-                self.verify_calls,
-                self.proof_bytes,
-                self.gas,
-            );
-        }
-    }
-    fn account_transaction_gas(state_block: &mut StateBlock<'_>, gas_used: u64) {
-        if gas_used > 0 {
-            state_block.gas_used_in_block = state_block.gas_used_in_block.saturating_add(gas_used);
-        }
-    }
-    fn instruction_mutates_trigger_lifecycle(instruction: &InstructionBox) -> bool {
-        let any = instruction.as_any();
-        any.downcast_ref::<iroha_data_model::isi::RegisterBox>()
-            .is_some_and(|register| {
-                matches!(register, iroha_data_model::isi::RegisterBox::Trigger(_))
-            })
-            || any
-                .downcast_ref::<iroha_data_model::isi::UnregisterBox>()
-                .is_some_and(|unregister| {
-                    matches!(unregister, iroha_data_model::isi::UnregisterBox::Trigger(_))
-                })
-            || any
-                .downcast_ref::<iroha_data_model::isi::MintBox>()
-                .is_some_and(|mint| {
-                    matches!(mint, iroha_data_model::isi::MintBox::TriggerRepetitions(_))
-                })
-            || any
-                .downcast_ref::<iroha_data_model::isi::BurnBox>()
-                .is_some_and(|burn| {
-                    matches!(burn, iroha_data_model::isi::BurnBox::TriggerRepetitions(_))
-                })
-            || any
-                .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
-                .is_some_and(|set| matches!(set, iroha_data_model::isi::SetKeyValueBox::Trigger(_)))
-            || any
-                .downcast_ref::<iroha_data_model::isi::RemoveKeyValueBox>()
-                .is_some_and(|remove| {
-                    matches!(remove, iroha_data_model::isi::RemoveKeyValueBox::Trigger(_))
-                })
-            || any.is::<iroha_data_model::isi::ExecuteTrigger>()
-    }
-    fn charge_rejected_overlay_fees(
-        state_block_mut: &mut StateBlock<'_>,
-        tx: &iroha_data_model::transaction::SignedTransaction,
-        authority: &AccountId,
-        overlay: &crate::pipeline::overlay::TxOverlay,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        rejection_reason: &TransactionRejectionReason,
-        attempted_gas_used: u64,
-    ) -> Result<(), TransactionRejectionReason> {
-        if matches!(
-            rejection_reason,
-            TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::InternalError(_)
-            )
-        ) {
-            return Ok(());
-        }
-        let mut fee_tx = state_block_mut.transaction();
-        fee_tx.current_lane_id = Some(lane_id);
-        fee_tx.current_dataspace_id = Some(dataspace_id);
-        fee_tx.world.current_dataspace_id = Some(dataspace_id);
-        fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        fee_tx.current_tx_hash = Some(tx.hash());
-        let fee_result = charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
-            .map_err(TransactionRejectionReason::Validation);
-        let replay_gas_used = fee_tx.last_tx_gas_used;
-        match &fee_result {
-            Ok(()) => fee_tx.apply(),
-            Err(_) => drop(fee_tx),
-        }
-        let gas_used = if attempted_gas_used > 0 {
-            attempted_gas_used
-        } else {
-            replay_gas_used
-        };
-        account_rejected_live_batch_gas(state_block_mut, gas_used, rejection_reason);
-        fee_result
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn execute_prepared_overlay_attempt(
-        state_block: &mut StateBlock<'_>,
-        tx: &SignedTransaction,
-        authority: &AccountId,
-        overlay: &TxOverlay,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-        signed_hash: HashOf<SignedTransaction>,
-        routing: crate::queue::RoutingDecision,
-        chunk_size: usize,
-        is_genesis: bool,
-        entrypoint_index: usize,
-    ) -> TransactionResultInner {
-        let mut state_tx = state_block.transaction();
-        state_tx.current_lane_id = Some(routing.lane_id);
-        state_tx.current_dataspace_id = Some(routing.dataspace_id);
-        state_tx.world.current_dataspace_id = Some(routing.dataspace_id);
-        state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint_hash));
-        state_tx.current_tx_hash = Some(signed_hash);
-        if missing_authority_requires_rejection(
-            &state_tx,
-            tx,
-            authority,
-            overlay.instruction_count(),
-            is_genesis,
-        ) {
-            return Err(TransactionRejectionReason::AccountDoesNotExist(
-                iroha_data_model::query::error::FindError::Account(authority.clone()),
-            ));
-        }
-        let admission =
-            validate_block_transaction_admission(&mut state_tx, tx, routing, entrypoint_index)?;
-        precharge_gas_for_applied_overlay(&mut state_tx, tx, overlay)
-            .map_err(TransactionRejectionReason::Validation)?;
-        let confidential_gas =
-            crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
-        state_tx.record_confidential_gas_delta(confidential_gas);
-        if let Err(error) = overlay.apply_with_chunk(&mut state_tx, authority, chunk_size) {
-            let rejection_reason = TransactionRejectionReason::Validation(error);
-            let gas_used = state_tx.last_tx_gas_used;
-            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
-            drop(state_tx);
-            confidential_work.account(state_block);
-            return match charge_rejected_overlay_fees(
-                state_block,
-                tx,
-                authority,
-                overlay,
-                routing.lane_id,
-                routing.dataspace_id,
-                &rejection_reason,
-                gas_used,
-            ) {
-                Ok(()) => Err(rejection_reason),
-                Err(error) => Err(error),
-            };
-        }
-        if let Err(error) =
-            charge_fees_for_precharged_overlay(&mut state_tx, authority, tx, overlay)
-        {
-            let rejection_reason = TransactionRejectionReason::Validation(error);
-            let gas_used = state_tx.last_tx_gas_used;
-            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
-            drop(state_tx);
-            confidential_work.account(state_block);
-            account_rejected_live_batch_gas(state_block, gas_used, &rejection_reason);
-            return Err(rejection_reason);
-        }
-        let trigger_sequence = match state_tx.execute_data_triggers_dfs(authority) {
-            Ok(trigger_sequence) => trigger_sequence,
-            Err(error) => {
-                let gas_used = state_tx.last_tx_gas_used;
-                let confidential_work = ConfidentialWorkV1::capture(&state_tx);
-                drop(state_tx);
-                confidential_work.account(state_block);
-                return match charge_rejected_overlay_fees(
-                    state_block,
-                    tx,
-                    authority,
-                    overlay,
-                    routing.lane_id,
-                    routing.dataspace_id,
-                    &error,
-                    gas_used,
-                ) {
-                    Ok(()) => Err(error),
-                    Err(fee_error) => Err(fee_error),
-                };
-            }
-        };
-        if let Err(error) = commit_stateful_admission_sequence(&mut state_tx, &admission) {
-            let gas_used = state_tx.last_tx_gas_used;
-            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
-            drop(state_tx);
-            confidential_work.account(state_block);
-            return match charge_rejected_overlay_fees(
-                state_block,
-                tx,
-                authority,
-                overlay,
-                routing.lane_id,
-                routing.dataspace_id,
-                &error,
-                gas_used,
-            ) {
-                Ok(()) => Err(error),
-                Err(fee_error) => Err(fee_error),
-            };
-        }
-        let gas_used = state_tx.last_tx_gas_used;
-        let confidential_work = ConfidentialWorkV1::capture(&state_tx);
-        state_tx.apply();
-        account_transaction_gas(state_block, gas_used);
-        confidential_work.account(state_block);
-        Ok(trigger_sequence)
-    }
-    fn charge_rejected_live_batch_fees(
-        state_block_mut: &mut StateBlock<'_>,
-        tx: &iroha_data_model::transaction::SignedTransaction,
-        authority: &AccountId,
-        gas_used: u64,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        rejection_reason: &TransactionRejectionReason,
-    ) -> Result<(), TransactionRejectionReason> {
-        if !rejected_live_batch_fees_are_chargeable(gas_used, rejection_reason) {
-            return Ok(());
-        }
-        let mut fee_tx = state_block_mut.transaction();
-        fee_tx.current_lane_id = Some(lane_id);
-        fee_tx.current_dataspace_id = Some(dataspace_id);
-        fee_tx.world.current_dataspace_id = Some(dataspace_id);
-        fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        fee_tx.current_tx_hash = Some(tx.hash());
-        charge_fees_for_rejected_live_batch(&mut fee_tx, authority, tx, gas_used)
-            .map_err(TransactionRejectionReason::Validation)?;
-        fee_tx.apply();
-        Ok(())
-    }
+    #[cfg(test)]
     pub(super) fn rejected_live_batch_fees_are_chargeable(
         gas_used: u64,
         rejection_reason: &TransactionRejectionReason,
@@ -4461,6 +3854,7 @@ pub(crate) mod valid {
                     if crate::executor::is_live_batch_overlay_limit_rejection(error)
             )
     }
+    #[cfg(test)]
     pub(super) fn rejected_live_batch_gas_is_accountable(
         gas_used: u64,
         rejection_reason: &TransactionRejectionReason,
@@ -4472,16 +3866,6 @@ pub(crate) mod valid {
                     iroha_data_model::ValidationFail::InternalError(_)
                 )
             )
-    }
-    fn account_rejected_live_batch_gas(
-        state_block_mut: &mut StateBlock<'_>,
-        gas_used: u64,
-        rejection_reason: &TransactionRejectionReason,
-    ) {
-        if rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
-            state_block_mut.gas_used_in_block =
-                state_block_mut.gas_used_in_block.saturating_add(gas_used);
-        }
     }
     /// Block that was validated and accepted.
     #[derive(Debug, Clone)]
@@ -4507,58 +3891,10 @@ pub(crate) mod valid {
         pub(crate) execution_state_block_ms: u64,
         /// Elapsed milliseconds spent executing transactions.
         pub(crate) execution_tx_ms: u64,
-        /// Elapsed milliseconds spent in signature micro-batching for stateless pre-pass.
-        pub(crate) execution_tx_signature_batch_ms: u64,
-        /// Elapsed milliseconds spent in stateless transaction validation.
-        pub(crate) execution_tx_stateless_ms: u64,
-        /// Elapsed milliseconds spent deriving access sets.
-        pub(crate) execution_tx_access_ms: u64,
-        /// Elapsed milliseconds spent building overlays.
-        pub(crate) execution_tx_overlay_ms: u64,
-        /// Elapsed milliseconds spent building the conflict graph/DAG.
-        pub(crate) execution_tx_dag_ms: u64,
-        /// Elapsed milliseconds spent scheduling the transaction order.
-        pub(crate) execution_tx_schedule_ms: u64,
         /// Elapsed milliseconds spent applying overlays and finalizing results.
         pub(crate) execution_tx_apply_ms: u64,
-        /// Elapsed milliseconds spent preparing apply accounting before layer execution.
-        pub(crate) execution_tx_apply_setup_ms: u64,
-        /// Elapsed milliseconds spent building conflict-free apply layers.
-        pub(crate) execution_tx_apply_layer_build_ms: u64,
-        /// Elapsed milliseconds spent executing time triggers.
-        pub(crate) execution_tx_time_triggers_ms: u64,
-        /// Elapsed milliseconds spent finalizing block results after time triggers.
-        pub(crate) execution_tx_finalize_ms: u64,
-        /// Elapsed milliseconds spent submitting FASTPQ transcript digest work.
-        pub(crate) execution_tx_finalize_digest_submit_ms: u64,
-        /// Elapsed milliseconds spent preparing FASTPQ entry dataspace records.
-        pub(crate) execution_tx_finalize_dataspaces_ms: u64,
-        /// Elapsed milliseconds spent computing and storing the transaction set hash.
-        pub(crate) execution_tx_finalize_tx_set_ms: u64,
-        /// Elapsed milliseconds spent finalizing and draining FASTPQ transfer transcripts.
-        pub(crate) execution_tx_finalize_transcripts_ms: u64,
-        /// Elapsed milliseconds spent draining AXT state for block results.
-        pub(crate) execution_tx_finalize_axt_ms: u64,
-        /// Elapsed milliseconds spent publishing transaction results into the block.
-        pub(crate) execution_tx_finalize_set_results_ms: u64,
-        /// Elapsed finalization milliseconds not attributed to a narrower sub-stage.
-        pub(crate) execution_tx_finalize_other_ms: u64,
-        /// Elapsed milliseconds spent preparing apply layers (validation + setup).
-        pub(crate) execution_tx_apply_prep_ms: u64,
-        /// Elapsed milliseconds spent executing detached overlays.
-        pub(crate) execution_tx_apply_detached_ms: u64,
-        /// Elapsed milliseconds spent merging detached deltas (excluding fallback).
-        pub(crate) execution_tx_apply_merge_ms: u64,
-        /// Elapsed milliseconds spent in sequential fallback during apply.
-        pub(crate) execution_tx_apply_fallback_ms: u64,
-        /// Elapsed milliseconds spent applying quarantine transactions.
-        pub(crate) execution_tx_apply_quarantine_ms: u64,
         /// Elapsed milliseconds spent in the sequential apply path (when parallel apply is off).
         pub(crate) execution_tx_apply_sequential_ms: u64,
-        /// Elapsed milliseconds spent materializing transaction results after apply.
-        pub(crate) execution_tx_apply_results_ms: u64,
-        /// Elapsed apply milliseconds not attributed to a narrower apply sub-stage.
-        pub(crate) execution_tx_apply_other_ms: u64,
         /// Elapsed milliseconds spent validating AXT envelopes.
         pub(crate) execution_axt_ms: u64,
         /// Elapsed milliseconds spent validating DA shard cursors.
@@ -4896,6 +4232,7 @@ pub(crate) mod valid {
         },
     }
     impl ConsensusValidationProfile {
+        #[cfg(test)]
         /// Return whether validation may publish best-effort pipeline recovery metadata.
         ///
         /// Signed genesis and authenticated replay execute against disposable overlays.
@@ -7596,28 +6933,6 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
-        /// Test-only entry into the production native staging and capability path.
-        #[cfg(test)]
-        pub(crate) fn state_block_for_execution_for_test<'state>(
-            block: &SignedBlock,
-            state: &'state State,
-            context: &iroha_data_model::block::consensus_v2::HeightContext,
-        ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
-            Self::validate_npos_effects_with_state(
-                block,
-                state,
-                Some(context.mode),
-                Some(context),
-            )?;
-            Self::state_block_for_execution(
-                block,
-                state,
-                false,
-                Some(context.mode),
-                Some(context),
-                None,
-            )
-        }
         fn prepare_pristine_consensus_effects(
             block: &SignedBlock,
             state: &State,
@@ -7767,6 +7082,11 @@ pub(crate) mod valid {
                 authenticated_height_context,
             )?;
             let execution_context = block.execution_context();
+            if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
+                return Err(Self::execution_context_error(
+                    "native execution requires its original recorded source owner",
+                ));
+            }
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
             if let Some(reference) = merge_reference {
                 Self::validate_npos_merge_composition(block, reference)?;
@@ -8206,6 +7526,8 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            crate::sumeragi::witness::start_block();
             let mut state_block = match Self::state_block_for_execution(
                 &block,
                 state,
@@ -8240,7 +7562,6 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
             let genesis = if block.header().is_genesis() {
                 match authenticate_genesis_block_intents(&block, genesis_account) {
@@ -10839,58 +10160,6 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        fn embedded_routing_decisions_for_signed_transactions(
-            block: &SignedBlock,
-            tx_count: usize,
-        ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block) {
-                Ok(Some(bundle)) => bundle,
-                Ok(None) => return None,
-                Err(error) => {
-                    warn!(%error, "ignoring invalid embedded execution context during unchecked execution");
-                    return None;
-                }
-            };
-            if let Err(error) = Self::validate_execution_context_alignment(block, bundle) {
-                warn!(%error, "ignoring misaligned embedded execution context during unchecked execution");
-                return None;
-            }
-            let decisions = block
-                .external_entrypoints_cloned()
-                .zip(bundle.external.iter())
-                .filter_map(|(entrypoint, context)| {
-                    matches!(entrypoint, TransactionEntrypoint::External(_)).then(|| {
-                        crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
-                    })
-                })
-                .collect::<Vec<_>>();
-            (decisions.len() == tx_count).then_some(decisions)
-        }
-        fn embedded_routing_decisions_for_entrypoints(
-            block: &SignedBlock,
-            entrypoint_count: usize,
-        ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block) {
-                Ok(Some(bundle)) => bundle,
-                Ok(None) => return None,
-                Err(error) => {
-                    warn!(%error, "ignoring invalid embedded execution context during unchecked execution");
-                    return None;
-                }
-            };
-            if let Err(error) = Self::validate_execution_context_alignment(block, bundle) {
-                warn!(%error, "ignoring misaligned embedded execution context during unchecked execution");
-                return None;
-            }
-            let decisions = bundle
-                .external
-                .iter()
-                .map(|context| {
-                    crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
-                })
-                .collect::<Vec<_>>();
-            (decisions.len() == entrypoint_count).then_some(decisions)
-        }
         fn committed_heights_for_prepared_transactions(
             prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
@@ -10995,21 +10264,6 @@ pub(crate) mod valid {
                 |entrypoint, routing_plan, execution_height| {
                     State::pending_queue_plan_binding_for_execution(
                         state,
-                        entrypoint,
-                        routing_plan,
-                        execution_height,
-                    )
-                },
-            )
-        }
-        fn queue_plan_stateless_validation_times_at_block_start(
-            block: &SignedBlock,
-            state_block: &StateBlock<'_>,
-        ) -> Result<Vec<Option<Duration>>, BlockValidationError> {
-            Self::queue_plan_stateless_validation_times_with_lookup(
-                block,
-                |entrypoint, routing_plan, execution_height| {
-                    state_block.pending_queue_plan_binding_for_execution_at_block_start(
                         entrypoint,
                         routing_plan,
                         execution_height,
@@ -11999,6 +11253,23 @@ pub(crate) mod valid {
                     })
                 })
                 .collect::<Result<Vec<_>, BlockValidationError>>()?;
+            Self::finalize_lane_settlement_commitments(
+                block,
+                state_block,
+                &lane_settlement_commitments,
+                lane_summaries,
+                &lane_payload_coordinates,
+            )
+        }
+
+        fn finalize_lane_settlement_commitments(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+            lane_settlement_commitments: &[LaneBlockCommitment],
+            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
+            lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
+        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
+        {
             if lane_settlement_commitments.is_empty() {
                 return Ok(Vec::new());
             }
@@ -12109,6 +11380,14 @@ pub(crate) mod valid {
                     )
                 })?;
             }
+            if block
+                .execution_context()
+                .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+            {
+                return Err(Self::execution_context_error(
+                    "native outputs require their original recorded source owner",
+                ));
+            }
             let expired =
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
@@ -12124,24 +11403,27 @@ pub(crate) mod valid {
                     "retired SoraFS pins at the block consensus timestamp"
                 );
             }
+            let finalize = |state: &mut StateBlock<'_>,
+                            source: &SignedBlock,
+                            routes: &[crate::queue::RoutingDecision]| {
+                Self::finalize_owned_execution_metadata(
+                    source,
+                    state,
+                    routes,
+                    advertised_fragments,
+                    advertised_policy.as_ref(),
+                    advertised_transitions.as_ref(),
+                )
+            };
+            // Standalone ordinary callers may enter with a plain overlay.
             crate::sumeragi::witness::start_block();
-            state_block
-                .execute_and_seal_ordinary_outputs(block, genesis, |state, source, routes| {
-                    Self::finalize_owned_execution_metadata(
-                        source,
-                        state,
-                        routes,
-                        advertised_fragments,
-                        advertised_policy.as_ref(),
-                        advertised_transitions.as_ref(),
-                    )
-                })
-                .map_err(|error| match error {
-                    crate::state::ExecutionOutputSealError::Owner(reason) => {
-                        Self::execution_context_error(reason)
-                    }
-                    crate::state::ExecutionOutputSealError::Finalizer(error) => error,
-                })?;
+            let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
+            result.map_err(|error| match error {
+                crate::state::ExecutionOutputSealError::Owner(reason) => {
+                    Self::execution_context_error(reason)
+                }
+                crate::state::ExecutionOutputSealError::Finalizer(error) => error,
+            })?;
             if sccp_root_validation == SccpRootValidation::Enforce {
                 Self::validate_sccp_commitment_root(block)?;
             }
@@ -12575,8 +11857,8 @@ pub(crate) mod valid {
             },
             sorafs::pin_registry::ManifestDigest,
             transaction::{
-                Executable, ExecutionStep, IvmBytecode, IvmProved, SignedTransaction,
-                TransactionBuilder, error::TransactionLimitError,
+                Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder,
+                error::TransactionLimitError,
             },
             trigger::DataTriggerSequence,
         };
@@ -14382,7 +13664,7 @@ pub(crate) mod valid {
                         dataspace: lane.dataspace_id,
                         visibility: lane.visibility,
                         storage: lane.storage,
-                        governance: Some("test-governance".to_owned()),
+                        governance: lane.governance.clone(),
                         manifest_path: Some(PathBuf::from("/tmp/block-test-lane-manifest.json")),
                         governance_rules: Some(crate::governance::manifest::GovernanceRules {
                             validators: validators.clone(),
@@ -14786,14 +14068,20 @@ pub(crate) mod valid {
                 .expect("persist actual predecessor finality before application receipts");
             {
                 let mut state_block = state.block(committed.as_ref().header());
-                // This fixture supplies the results directly, so it must also stage
-                // the execution-owned frontier before finality applies those results.
+                // This structural predecessor fixture supplies results directly;
+                // use the explicit metadata fixture path with its verified roster.
                 state_block
                     .stage_ordinary_lane_frontiers(committed.as_ref())
                     .expect("stage the exact predecessor execution frontier");
-                let _ = state_block
-                    .apply_without_execution_with_verified_v2_finality(&committed)
-                    .expect("apply predecessor under exact finality topology");
+                let _ = state_block.apply_without_execution(
+                    &committed,
+                    artifact
+                        .height_context
+                        .roster
+                        .iter()
+                        .map(|entry| entry.validator.clone())
+                        .collect(),
+                );
                 state_block.commit().unwrap();
             }
             for proposal in proposals {
@@ -16978,9 +16266,17 @@ pub(crate) mod valid {
                 state_block
                     .stage_ordinary_lane_frontiers(committed_first.as_ref())
                     .expect("stage the result-bearing predecessor execution frontier");
-                let _ = state_block
-                    .apply_without_execution_with_verified_v2_finality(&committed_first)
-                    .expect("apply the exact predecessor under its frozen finality authority");
+                // The test supplies structural results rather than executing a
+                // proposal. Prepare its predecessor with the explicit fixture API.
+                let _ = state_block.apply_without_execution(
+                    &committed_first,
+                    artifact
+                        .height_context
+                        .roster
+                        .iter()
+                        .map(|entry| entry.validator.clone())
+                        .collect(),
+                );
                 state_block
                     .commit()
                     .expect("commit first lane predecessor block");
@@ -20372,8 +19668,6 @@ pub(crate) mod valid {
         }
         #[test]
         fn advertised_zero_committed_fragment_count_is_rejected() {
-            use iroha_data_model::IntoKeyValue;
-
             setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
             let prev_committed = state.view().latest_block().expect("fixture parent");
             let (authority, signer) = gen_account_in("wonderland");
@@ -24894,28 +24188,7 @@ mod event {
         include!("block/output_event_tests.rs");
     }
 }
-fn dedup_sorted_usize_smallvec(parents: &mut iroha_primitives::small::SmallVec<[usize; 8]>) {
-    if parents.0.len() <= 1 {
-        return;
-    }
-    #[cfg(feature = "simd")]
-    if let Some(len) = simd_parent_dedup::dedup_sorted_slice(parents.0.as_mut_slice()) {
-        parents.0.truncate(len);
-        return;
-    }
-    let mut write = 1usize;
-    let mut last = parents.0[0];
-    for i in 1..parents.0.len() {
-        let value = parents.0[i];
-        if value != last {
-            parents.0[write] = value;
-            write += 1;
-            last = value;
-        }
-    }
-    parents.0.truncate(write);
-}
-#[cfg(feature = "simd")]
+#[cfg(all(test, feature = "simd"))]
 mod simd_parent_dedup {
     const LANES: usize = 8;
 
@@ -24965,9 +24238,10 @@ mod simd_parent_dedup {
         }
     }
 }
+#[cfg(test)]
 /// Build a conflict graph from access sets using an incremental O(n + E) algorithm.
 /// Returns adjacency list and indegree vector.
-#[allow(dead_code, clippy::disallowed_types)]
+#[allow(clippy::disallowed_types)]
 fn build_conflict_graph(
     access: &[crate::pipeline::access::AccessSet],
 ) -> (
@@ -25228,7 +24502,7 @@ pub(crate) mod tests {
         governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::Execute,
+        smartcontracts::{Execute, isi::triggers::set::SetReadOnly},
         state::{State, World},
         tx::AcceptedTransaction,
     };
@@ -25270,10 +24544,22 @@ pub(crate) mod tests {
             post_effect_authorization_calls, 4,
             "both Sumeragi-v2 fixtures, authenticated keep-voting validation, and unchecked execution must gate merge execution after effects"
         );
+        let native_finalizer = source
+            .split_once("pub(crate) fn finalize_native_execution_contexts(")
+            .expect("source-owned native finalizer")
+            .1
+            .split_once("fn state_block_for_execution<")
+            .expect("ordinary execution boundary follows the native finalizer")
+            .0;
+        assert_eq!(
+            native_finalizer.matches(&staged_reference_needle).count(),
+            1,
+            "source-owned native finalization must independently check its exact staged controls"
+        );
         assert_eq!(
             staged_reference_calls,
-            post_effect_authorization_calls + 1,
-            "the only staged-reference path without the voting gate must remain the test-only SCCP root probe"
+            post_effect_authorization_calls + 2,
+            "only the test-only SCCP probe and source-owned native finalizer omit the old merge voting gate"
         );
     }
     include!("block/validation_native_amx_test_support.rs");
@@ -29310,7 +28596,7 @@ seiyaku DynamicTarget {
 #[cfg(test)]
 #[path = "block/commit_signature_tally_tests.rs"]
 mod commit_signature_tally_tests;
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(test)]
 fn committed_teu_by_lane_from_routes(
     routes: impl IntoIterator<Item = impl core::borrow::Borrow<crate::queue::RoutingDecision>>,
     teus: impl IntoIterator<Item = u64>,
@@ -29358,54 +28644,5 @@ mod committed_teu_tests {
         ];
         let committed = committed_teu_by_lane_from_routes(routes.iter(), [u64::MAX, 1]);
         assert_eq!(committed.get(&lane), Some(&u64::MAX));
-    }
-}
-#[cfg(feature = "telemetry")]
-fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
-    use iroha_data_model::transaction::Executable;
-    const IVM_TEU_FALLBACK: u64 = 5_000;
-    match tx.instructions() {
-        Executable::Instructions(batch) => {
-            let instructions: Vec<_> = batch.iter().cloned().collect();
-            crate::gas::meter_instructions(&instructions)
-        }
-        Executable::ContractCall(_) => {
-            crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
-        }
-        Executable::Batch(items) => {
-            if items.iter().any(|item| {
-                matches!(
-                    item,
-                    iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
-                )
-            }) {
-                crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
-            } else {
-                let instructions = tx
-                    .instructions()
-                    .explicit_instructions()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                crate::gas::meter_instructions(&instructions)
-            }
-        }
-        Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
-            Ok(parsed) => {
-                let max_cycles = parsed.metadata.max_cycles;
-                if max_cycles == 0 {
-                    IVM_TEU_FALLBACK
-                } else {
-                    max_cycles
-                }
-            }
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    "Failed to parse IVM metadata while deriving TEU weight; using fallback"
-                );
-                IVM_TEU_FALLBACK
-            }
-        },
-        Executable::IvmProved(proved) => crate::gas::meter_instructions(proved.overlay.as_ref()),
     }
 }

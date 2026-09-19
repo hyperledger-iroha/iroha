@@ -2383,6 +2383,7 @@ enum RelayReceiverKind {
     Chunk,
     Low,
 }
+#[cfg(test)]
 impl RelayReceiverKind {
     const fn label(self) -> &'static str {
         match self {
@@ -2395,7 +2396,9 @@ impl RelayReceiverKind {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayIngressLoopExit {
+    #[cfg(test)]
     ReceiverClosed(RelayReceiverKind),
+    #[cfg(test)]
     WorkerClosed(RelayReceiverKind),
 }
 enum RelayReceiverEvent<T> {
@@ -6714,6 +6717,7 @@ struct StartupLanePolicies {
 fn install_lane_policies_for_startup_replay(
     state: &mut State,
     configured: iroha_config::parameters::actual::Nexus,
+    baseline: &LaneManifestRegistryHandle,
 ) -> ReportResult<StartupLanePolicies, StartError> {
     let restored = state
         .nexus_runtime_restored_from_snapshot()
@@ -6727,11 +6731,8 @@ fn install_lane_policies_for_startup_replay(
         .map_err(|report| {
             report.attach("restored physical dataspaces differ from protected catalog authority")
         })?;
-    let baseline = freeze_lane_manifests_for_startup_replay(&nexus)
-        .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-        .map_err(|report| report.attach("lane manifest registry is not ready before snapshot authentication and Kura replay"))?;
     let manifests = state
-        .lane_manifests_with_committed_catalog(&baseline, &nexus)
+        .lane_manifests_with_committed_catalog(baseline, &nexus)
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))
         .map_err(|report| report.attach("committed lane manifests are invalid before snapshot authentication and Kura replay"))?;
     let compliance = freeze_lane_compliance_for_startup_replay(&nexus)?;
@@ -7892,11 +7893,21 @@ impl Iroha {
             StartupTrustRoot::AuthenticatedSnapshotPending => None,
         };
         let effective_genesis_public_key = config.genesis.public_key.clone();
+        // Freeze configured sources before deserialization creates its first State
+        // view, then retain the same baseline through replay and runtime handoff.
+        let configured_lane_manifests = if emergency_fast {
+            Arc::new(LaneManifestRegistry::empty())
+        } else {
+            freeze_lane_manifests_for_startup_replay(&config.nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot restoration"))?
+        };
         let mut loaded_state_from_snapshot = false;
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_bootstrap_policy(
                 config.snapshot.store_dir.resolve_relative_path(),
                 &kura,
+                &configured_lane_manifests,
                 || live_query_store.clone(),
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
@@ -8035,6 +8046,7 @@ impl Iroha {
             Some(install_lane_policies_for_startup_replay(
                 &mut state,
                 config.nexus.clone(),
+                &configured_lane_manifests,
             )?)
         };
         if let Some(policies) = startup_lane_policies
@@ -14528,8 +14540,10 @@ fn validate_genesis_execution_offline(
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
     apply_state_runtime_config_before_snapshot_auth(&mut state, config)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
+        .map_err(|error| Report::new(error).change_context(MainError::Config))?;
     let startup_policies =
-        install_lane_policies_for_startup_replay(&mut state, config.nexus.clone())
+        install_lane_policies_for_startup_replay(&mut state, config.nexus.clone(), &baseline)
             .change_context(MainError::Config)?;
     apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
         .change_context(MainError::Config)?;
@@ -18717,8 +18731,10 @@ mod tests {
                 .expect("fixture ZK policy must be valid");
             apply_state_runtime_config_before_snapshot_auth(&mut state, config)
                 .expect("fixture execution policy must be valid");
+            let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
+                .expect("fixture configured manifest baseline");
             let startup_policies =
-                install_lane_policies_for_startup_replay(&mut state, config.nexus.clone())
+                install_lane_policies_for_startup_replay(&mut state, config.nexus.clone(), &baseline)
                     .expect("fixture lane policies must be ready before publishing geometry");
             apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
                 .expect("fixture Nexus geometry must be valid");

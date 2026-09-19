@@ -394,7 +394,7 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         assert_eq!(state.committed_height(), durable_count);
         return;
     }
-    let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    let_row! { parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
     assert!(parent.as_ref().execution_outputs().is_empty());
     assert_eq!(parent.as_ref().committed_fragment_count(), Some(0));
     let parent_hash = parent.as_ref().hash();
@@ -430,6 +430,9 @@ fn store_merge_carrier_without_state_publication_for_test(
     carrier
         .as_mut()
         .set_execution_context(Some(execution_context));
+    // Attaching the exact relay reference invalidates result metadata. Finish
+    // this empty structural carrier before binding its durable finality.
+    finish_autoscale_fixture(carrier.as_mut(), 0);
     state
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.as_ref().clone()), entry)
@@ -689,6 +692,9 @@ fn commit_exact_merge_carrier_to_state(
 ) {
     persist_merge_carrier_finality_for_state_test(&state.kura, carrier);
     let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), entry, ConsensusMode::Permissioned) .expect("certified merge entry must stage on its exact carrier") };
+    state_block
+        .stage_autoscale_sample_record_for_count(carrier, 0)
+        .expect("certified relay carrier retains its exact runtime sample and predecessor");
     state_block.block_hashes.push(carrier.hash());
     insert_empty_transaction_block_for_state_commit(&mut state_block, carrier);
     state_block

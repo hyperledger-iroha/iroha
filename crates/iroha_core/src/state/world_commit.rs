@@ -108,6 +108,13 @@ impl<'state> PreparedWorldCommit<'state> {
 
     /// Derive the new private World baseline from this exact predecessor version.
     /// The complete State lifecycle must still establish predecessor identity.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect retained journals to the consuming State publisher"
+        )
+    )]
     pub(in crate::state) fn baseline_after(
         &self,
         parent: &WorldStateBaseline,

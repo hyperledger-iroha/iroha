@@ -631,6 +631,18 @@ mod block {
             self.mode
         }
 
+        /// Observe this block's original owner, current/undo predecessor and mode.
+        /// The opaque identity permits only local equality, never publication.
+        pub fn publication_identity(&self) -> crate::BlockPublicationIdentity {
+            crate::BlockPublicationIdentity::capture(&self.predecessor, self.mode)
+        }
+
+        /// Check the original cell owner without reading values or taking locks.
+        /// This observation grants no mutation or publication authority.
+        pub fn belongs_to(&self, cell: &Cell<V>) -> bool {
+            self.predecessor.belongs_to(&cell.publication)
+        }
+
         /// Return whether this block has staged a value mutation.
         pub fn is_dirty(&self) -> bool {
             self.dirty

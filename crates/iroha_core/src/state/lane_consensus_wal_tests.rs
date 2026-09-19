@@ -1,6 +1,6 @@
 // Real native finality, shared reducer, BLS, and descriptor-relative WAL boundary.
 
-fn finalized_lane_wal_fixture() -> LaneContextVerifiedFixture {
+fn finalized_lane_wal_fixture() -> Box<LaneContextVerifiedFixture> {
     let fixture = lane_context_verified_fixture();
     let (artifact, receipt) = stage_lane_context_fixture_finality(
         &fixture.state,

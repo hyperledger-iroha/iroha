@@ -302,6 +302,12 @@ impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, Bindin
 #[path = "physical_publication.rs"]
 mod physical_publication;
 
+#[path = "archive_publication.rs"]
+pub(crate) mod archive_publication;
+
+#[path = "execution_witness_publication.rs"]
+pub(crate) mod execution_witness_publication;
+
 #[cfg(test)]
 #[path = "decision_binding_tests.rs"]
 mod tests;

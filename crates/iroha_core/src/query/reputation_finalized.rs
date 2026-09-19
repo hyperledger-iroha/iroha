@@ -1860,6 +1860,10 @@ pub(crate) struct PreparedReputationCapture {
     insertion: OwnedReputationInsertion,
     kura: Arc<Kura>,
 }
+#[expect(
+    dead_code,
+    reason = "TODO: connect retained archive reservations to the production carrier publisher"
+)]
 impl PreparedReputationCapture {
     /// Rejoin the original capture to durable evidence without reacquiring Kura fences.
     /// The immutable insertion and its reservation remain owned on every refusal.

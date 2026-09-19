@@ -130,7 +130,6 @@ fn host_bridges_nft_mint_and_transfer() {
         core::num::NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -185,7 +184,6 @@ fn host_bridges_nft_mint_and_transfer() {
         core::num::NonZeroU64::new(2).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -228,7 +226,6 @@ fn host_rejects_insufficient_asset_transfer() {
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,
@@ -290,7 +287,6 @@ fn host_rejects_insufficient_asset_transfer() {
     // Apply queued transfer: should be rejected due to insufficient funds
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(2).unwrap(),
-        None,
         None,
         None,
         0,
@@ -365,7 +361,6 @@ fn host_batches_transfer_v1_calls() {
     let state = State::new_for_testing(world, kura, query);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,
@@ -485,7 +480,6 @@ fn host_rejects_nft_transfer_from_non_owner() {
         core::num::NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -522,7 +516,6 @@ fn host_bridges_set_account_detail() {
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,
@@ -590,7 +583,6 @@ fn host_bridges_mint_asset() {
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,
@@ -672,7 +664,6 @@ fn host_bridges_nft_set_metadata_and_burn() {
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,

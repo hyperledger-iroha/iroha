@@ -405,6 +405,13 @@ pub(super) fn deployment_genesis_fixture()
     tests::deployment_genesis_fixture()
 }
 
+/// Native signed genesis with explicitly registered and activated validator accounts.
+#[cfg(test)]
+pub(super) fn deployment_lane_genesis_fixture()
+-> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
+    tests::deployment_lane_genesis_fixture()
+}
+
 /// Native signed genesis with an explicit administrator grant for admission controls.
 #[cfg(test)]
 pub(super) fn deployment_genesis_administrator_fixture()

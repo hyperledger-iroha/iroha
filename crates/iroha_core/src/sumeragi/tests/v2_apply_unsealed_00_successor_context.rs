@@ -288,31 +288,6 @@ fn verified_successor_context_at_fixture_tip(
     verified_context_for_fixture(fixture, &context)
 }
 
-/// Reserve exact FIFO inputs for a verified successor without resetting validator authority.
-fn reserve_canonical_autonomous_batch_at_context_with_instructions(
-    fixture: &ApplyFixture,
-    queue: &Arc<Queue>,
-    context: &wire::HeightContext,
-    count: usize,
-    instructions: impl Fn(usize) -> Vec<InstructionBox>,
-    sort_by_signed_transaction_hash: bool,
-    native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
-) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
-    assert_eq!(
-        verified_successor_context_at_fixture_tip(fixture).context(),
-        context,
-        "FIFO reservation uses the exact verified successor context"
-    );
-    reserve_canonical_autonomous_batch_with_installed_authority(
-        fixture,
-        queue,
-        context,
-        count,
-        instructions,
-        sort_by_signed_transaction_hash,
-        native_receipt_builder,
-    )
-}
 /// Share the exact admission/reservation path after validator authority is installed.
 fn reserve_canonical_autonomous_batch_with_installed_authority(
     fixture: &ApplyFixture,

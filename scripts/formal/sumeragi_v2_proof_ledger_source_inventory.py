@@ -263,6 +263,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'native_amx_participant_application_artifacts.rs',
     ),
     'crates/iroha_core/src/kura/lane_geometry.rs': (
+        'lane_geometry/guarded_publication.rs',
         'lane_geometry/instance_recovery.rs',
         'lane_geometry/reference_gc.rs',
         'lane_geometry/bootstrap_path_safety.rs',
@@ -277,6 +278,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'lane_geometry_tests/04_physical_resource_accounting.rs',
         'lane_geometry_tests/05_prepared_journal.rs',
         'lane_geometry_tests/06_native_observation.rs',
+        'lane_geometry_tests/07_retirement_observation.rs',
+        'lane_geometry_tests/08_raw_attempt.rs',
+        'lane_geometry_tests/07_guarded_publication.rs',
         'startup_replay_geometry_binding.rs',
     ),
     'crates/iroha_core/src/merge_sidecar.rs': (
@@ -301,6 +305,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/expiry_tracking_tests.rs',
         'queue/inflight_tracking_tests.rs',
         'queue/lane_reservation_tests.rs',
+        'queue/lane_retirement_observer_tests.rs',
         'queue/lane_reservation_terminal_fault_tests.rs',
         'queue/reservation_recovery_tests.rs',
     ),

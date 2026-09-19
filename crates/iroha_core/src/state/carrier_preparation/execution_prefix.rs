@@ -184,6 +184,26 @@ impl ValidatedExecutionPrefix {
         Ok(())
     }
 
+    /// Match the exact immutable source owner at the sole publication boundary.
+    pub(in crate::state::carrier_preparation) fn retains_carrier(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        self.sealed.proposal() == block.hash()
+            && self.sealed.sources().proposal() == block.hash()
+            && match &self.authority {
+                PrefixSourceAuthority::Ordinary => {
+                    !self.sealed.sources().is_native()
+                        && !block
+                            .execution_context()
+                            .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+                }
+                PrefixSourceAuthority::Native(native) => {
+                    self.sealed.sources().is_native() && native.retains_carrier(block, context)
+                }
+            }
+    }
     #[cfg(test)]
     pub(in crate::state) fn native_for_test(
         &self,

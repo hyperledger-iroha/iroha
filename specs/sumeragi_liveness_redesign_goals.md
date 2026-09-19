@@ -1760,3 +1760,128 @@ families and atomic production cutover remain required. The production Native
 gate stays closed. Real unchanged four/seven-validator loss, reordering,
 backpressure, leader-failure, restart and final-transaction qualification, full
 workspace/release checks and all L1–L6 outcomes remain open.
+
+### Source-owned Native carrier preparation, September 19, 2026
+
+The original prepared Native source now enters the existing private carrier
+preparation owner through common global validation. Exact origin-signature
+verification is shared with V2 body storage, retaining the frozen original-view
+leader, exactly one signature and its authenticated index. Canonical time,
+parent, height, network, confidentiality/DA policies, payload limits, proposal
+commitments and snapshot checks precede actual recorded execution. Only this
+private preparation profile admits the supported Native shape; the live header
+gate and raw State publication refusal remain closed.
+
+The original verified applying context now survives recording. Capture retains
+the immutable original stage allocation, all source groups and executions through
+an exhaustive ordinary/Native prefix owner. The actual sealed outputs, source
+inventory, witness and proving context move once into the existing metadata tail
+and lifetime-free journals. No empty legacy AMX manifest grants Native authority,
+and no source, witness or overlay is reconstructed for thread transfer.
+
+Preflight returns refresh before consulting an obsolete source. Both its initial
+current check and its post-preflight fence use the retained source generation;
+sampling a fresh generation after the current check would reopen a publication
+race and could persist a transient height/policy mismatch as invalid. The new
+regression publishes an actual later QueuePlan admission with verified 3-of-4
+finality before consuming the stale source, then checks no further State, Kura,
+generation or economic mutation. Equal-byte generation advancement remains a
+separate control.
+
+Build30 passed combined compilation but only 124/127 Native/signature controls.
+LLDB located all three new success-path stack overflows in genesis fixture setup,
+before Native preparation. Build31 separates fixture construction from assertion
+frames without changing production stack limits or weakening assertions. Build30
+also passed 144/145 source/inventory checks: its short repeated Native predicate
+failed to detect a branch mutation. The binding now covers the complete Native
+match arm; two added mutations cover source-current and retained-generation loss.
+These failed runs remain in `dist/sumeragi-main-work` alongside terminal receipts.
+
+The checkout advanced through a concurrent commit and merge before build31's
+source freeze. That merge also changed Pasta arithmetic profile optimization and
+ancillary diagnostic/test-network code. Build31 therefore uses freshly compiled
+artifacts for the complete merged input; build30 binaries are not qualification
+of those changes. The source-difference receipt retains that distinction.
+
+Combined build31 passes Core, Torii, test-network, Kagami and daemon compilation
+on 7,038 unchanged Rust/configuration inputs. Its exact emitted executables pass
+419 distinct controls: 244 composition/output/publication, 128 Native/signature,
+17 original-review and 30 storage controls. All eight new Native preparation
+controls pass on the default stack, including real single/atomic economic effects,
+pending suffix controls, original-allocation custody, thread transfer, malformed
+global proposals, actual publication staleness and raw commit refusal. All 149
+scoped formal/source checks pass on 8,114 unchanged inputs with no index alteration
+or source-inventory deselection. Formatting of the 24 Rust files in this work span
+and the codec guard pass. Evidence: `dist/sumeragi-main-work/validation31.json`.
+
+This establishes private Native preparation, not production activation or release
+readiness. Remaining DA/pin/SCCP, broader NPoS and sponsor/lease owners, aggregate
+capture/resources and the complete consuming publisher must join original
+Validate-to-Apply custody across fresh, cached and recovered bodies. The production
+cutover and unchanged real four/seven-validator fault/restart/final-transaction
+campaign remain required. No L1–L6 goal is complete.
+
+The next connected implementation is the terminal consumer of the existing
+`PhysicallyPreparedCarrier`, using the retained source prefix and all actual
+deferred effects. Archive capture currently authenticates through public Kura
+readers which reacquire its fences: consume that retry-aware durable work before
+joint acquisition, or supply a real lease-scoped authentication path. Geometry
+and Queue retirement must retain their real authority and outer lock order;
+capture alone is not permission to change storage. Publish all retained component
+journals within one State visibility interval, and classify any later durable
+failure as post-publication recovery. Only then connect the production worker's
+fresh, cached and recovered validation owners to this complete consumer.
+
+
+## 2026-09-19: terminal carrier publication, still before production cutover
+
+The private consuming publisher now moves the exact ordinary or recorded Native
+source owner, verified decision, original Kura checkpoint and detached journals
+through joint acquisition and one State visibility interval. It publishes original
+membership, all four runtime cells, World and its retained DA pin effects, DA
+commitment caches, SCCP cache, block hashes and the latest header. Physical fences
+release before cursor persistence, relay hydration, tiered persistence, storage
+budget and query completion; Apply serialization survives those completion steps.
+There is no retryable error after the first component write and no second execution.
+The result retains the original source, events and all three admission lifetimes.
+
+Provider and reputation captures publish before the final joint lease; a successful
+provider survives reputation refusal with its exact file identity and original
+reservations. Final checkpoint authentication is repeated under the final lease.
+Review found that body/QC/checkpoint alone did not establish the actual execution
+witness required by the next height's context reader. The aggregate now stages
+and promotes the original retained witness and casting bindings with the actual
+finality receipt, then requires its final artifact/root-bound proof under the
+lease before acquiring State writers. Missing and staged-only proofs do not grant
+permission. Corrupt/foreign proofs and Kura Busy preserve original custody and
+leave State unchanged. Existing idempotent stage/promote preserves the final
+object but may recreate identical staging on later physical retries; complete
+production resource admission/continuation must account for or eliminate it.
+
+All 15 new archive/witness/terminal tests pass, including actual single and atomic
+Native Transfer(25) publication, mandatory beacon and complete admission effects,
+exact checkpoint, authenticated suffix contexts, source allocation retention,
+abort/retry, single visibility interval and release of original reservations.
+The geometry identity test and four prior capture checks also pass. Build33
+passes the combined five-crate/test-harness boundary with 7,045 unchanged
+Rust/configuration inputs and 439 distinct scoped runtime tests (264 + 128 + 17 +
+30), using default stacks. All 179 scoped source/mutation/inventory/binding tests
+pass on 8,121 unchanged recorded inputs. The main index and HEAD are
+unchanged during qualification. The codec guard and 21 changed Rust files pass;
+full workspace formatting retains five unrelated differences. Build32's single
+missing HeightContext fixture path and its unchanged input receipt remain recorded.
+
+This is not an L1–L6 completion or release claim. Pending geometry/Queue retirement
+and nonempty old participant durability explicitly return the original carrier
+before visibility. Real aggregate memory/disk admission, original worker-owned
+Validate-to-Apply custody, cached/recovered round aliases, async owner-bound local
+deferral, complete geometry/participant publication, atomic live cutover and the
+unchanged four/seven-validator loss/reordering/backpressure/leader/restart/final-
+transaction campaigns remain required. Native live admission and raw State gates
+remain closed. The next geometry owner must preserve Queue's outer retirement
+fence, perform cold pending-capacity reads before geometry/sidecar locks, and
+extract actual guarded geometry/GC/frontier-history operations; wrapping public
+relocking APIs inside the current lease would introduce circular waits.
+
+Local evidence: `dist/sumeragi-main-work/validation33.json`, exact build/source
+receipts, four runtime summaries, formal shards and the read-only geometry plan.

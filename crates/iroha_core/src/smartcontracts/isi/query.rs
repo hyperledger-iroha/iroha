@@ -3429,7 +3429,6 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::{Execute, ValidQuery},
         state::{State, StateReadOnly, World, WorldReadOnly},
-        sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
     use core::time::Duration;
@@ -5249,14 +5248,6 @@ mod tests {
             World::with([domain], [account], [asset_definition]),
             &ALICE_ID,
         )
-    }
-    #[cfg(feature = "bls")]
-    fn bls_test_keypair() -> KeyPair {
-        checked_keypair_with_algorithm(Algorithm::BlsNormal)
-    }
-    #[cfg(not(feature = "bls"))]
-    fn bls_test_keypair() -> KeyPair {
-        checked_keypair()
     }
     // Query/storage fixture: signed source identities and explicit typed results
     // are authenticated by real CommitQCs. This is not an economic execution test.

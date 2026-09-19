@@ -1,6 +1,7 @@
 use super::{default_oracle, *};
 use iroha_model_base::chain::ChainId;
-use norito::codec::{DecodeAll, Encode};
+#[cfg(test)]
+use norito::codec::DecodeAll;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeMap, marker::PhantomData};
 #[cfg(test)]
@@ -225,6 +226,8 @@ impl IvmSeed<'_, TriggerSet> {
 }
 pub struct KuraSeed {
     pub kura: Arc<Kura>,
+    /// Immutable configured manifest sources used before the first restored State view.
+    pub lane_manifests: LaneManifestRegistryHandle,
     pub query_handle: LiveQueryStoreHandle,
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
@@ -284,6 +287,7 @@ impl KuraSeed {
             .collect();
         let state = build_state(
             BuildStateInputs {
+                lane_manifests: self.lane_manifests,
                 world: World::default(),
                 block_hashes,
                 transactions: TransactionsStorage::new(),
@@ -301,10 +305,6 @@ impl KuraSeed {
                     ),
                 ),
                 nexus,
-                lane_incarnations,
-                lane_incarnation_activation_heights,
-                lane_incarnation_lineage,
-                autoscale_sample_history: VecDeque::new(),
                 chain_id,
                 network_id,
                 snapshot_v2_bootstrap_candidate: None,
@@ -519,19 +519,23 @@ impl KuraSeed {
             field: "state.world.privacy_activations".to_owned(),
             message,
         })?;
-        let (
-            mut restored_nexus,
-            lane_incarnations,
-            lane_incarnation_activation_heights,
-            lane_incarnation_lineage,
-            autoscale_sample_history,
-        ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
+        let (mut restored_nexus, lane_incarnations, _, _, _) =
+            nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
         let world_catalog = runtime_catalog_from_world(&world.view()).map_err(|error| {
             json::Error::InvalidField {
                 field: "nexus_runtime.blocks".to_owned(),
                 message: error.to_string(),
             }
         })?;
+        if world_catalog.as_ref().is_some_and(|catalog| {
+            catalog.baseline_manifests_hash
+                != Hash::prehashed(self.lane_manifests.baseline_consensus_policy_digest())
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "state.lane_manifests".to_owned(),
+                message: "manifest baseline differs from canonical World catalog".to_owned(),
+            });
+        }
         let added_dataspaces: BTreeSet<_> = world_catalog
             .as_ref()
             .into_iter()
@@ -700,6 +704,7 @@ impl KuraSeed {
         }
         let state = build_state(
             BuildStateInputs {
+                lane_manifests: self.lane_manifests,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
                 transactions,
@@ -709,10 +714,6 @@ impl KuraSeed {
                 ivm: ivm_runtime,
                 canonical_runtime,
                 nexus: restored_nexus,
-                lane_incarnations,
-                lane_incarnation_activation_heights,
-                lane_incarnation_lineage,
-                autoscale_sample_history,
                 chain_id,
                 network_id,
                 snapshot_v2_bootstrap_candidate,

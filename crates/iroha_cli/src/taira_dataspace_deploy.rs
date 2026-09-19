@@ -41,17 +41,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[path = "taira_dataspace_deploy_finality.rs"]
-mod finality;
 #[path = "taira_epoch_maintenance.rs"]
 pub(crate) mod epoch_maintenance;
+#[path = "taira_dataspace_deploy_finality.rs"]
+mod finality;
+#[path = "taira_dataspace_deploy_manifest.rs"]
+mod lane_manifest;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
 
-pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 pub(crate) use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
 };
+pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 
 pub(crate) fn validate_deployment_trust(
     trust: &DeploymentTrustV1,
@@ -69,7 +71,7 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 pub(crate) enum Command {
     /// Export retained-network expectations from independently selected public inputs.
     ExportProfile(profile::ExportProfile),
-    /// Generate native deployment intent from public files and current namespace policies.
+    /// Generate native deployment intent from signed genesis and current namespace policies.
     Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
@@ -95,8 +97,6 @@ pub(crate) struct InitArgs {
     lane_profile: LaneProfile,
     #[arg(long)]
     account_alias: String,
-    #[arg(long)]
-    lane_manifest: PathBuf,
     #[arg(long)]
     trust: PathBuf,
     #[arg(long)]
@@ -346,6 +346,18 @@ impl ManifestV1 {
         }
         self.dataspace.validate_structure()?;
         self.lane_manifest.validate_structure()?;
+        iroha_core::governance::manifest::LaneManifestRegistry::validate_runtime_manifest(
+            &self.lane_manifest,
+            &self.lane,
+            &self.dataspace.descriptor,
+            &iroha_config::parameters::actual::GovernanceCatalog::default(),
+        )
+        .map_err(|error| eyre!("invalid native lane manifest: {error}"))?;
+        require(
+            self.lane_manifest.manifest
+                == lane_manifest::generate(&self.lane.alias, &self.finality)?,
+            "native lane manifest differs from the selected genesis committee and peer endpoints",
+        )?;
         let grant = AliasDataspaceBootstrapGrantV1::try_new(
             &self.dataspace.descriptor.alias,
             self.owner.clone(),
@@ -354,7 +366,8 @@ impl ManifestV1 {
             self.dataspace.descriptor.id == grant.dataspace.dataspace_id
                 && self.dataspace.manifest_hash == grant.name_hash
                 && self.lane.dataspace_id == grant.dataspace.dataspace_id
-                && self.lane.id == self.lane_manifest.lane_id,
+                && self.lane.id == self.lane_manifest.lane_id
+                && self.lane.alias == grant.dataspace.canonical_name.to_string(),
             "dataspace, selector hash, lane and manifest must bind the same native identity",
         )?;
         require(
@@ -1100,14 +1113,11 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
                 .ok_or_else(|| eyre!("quote lifetime overflow"))?,
         )
         .ok_or_else(|| eyre!("quote deadline overflow"))?;
-    let raw_manifest = String::from_utf8(read_public_input(&args.lane_manifest)?)?;
-    let inline_manifest = raw_manifest.parse::<iroha_primitives::json::Json>()?;
     let manifest = init_manifest(
         &args,
         context.config().network_id,
         context.config().account.clone(),
         trust,
-        inline_manifest,
         &policies,
         deadline,
     )?;
@@ -1126,7 +1136,6 @@ fn init_manifest(
     network_id: NetworkId,
     owner: AccountId,
     trust: finality::TrustV1,
-    inline_manifest: iroha_primitives::json::Json,
     policies: &[iroha_data_model::sns::SuffixPolicyV1; 2],
     deadline: u64,
 ) -> Result<ManifestV1> {
@@ -1166,6 +1175,7 @@ fn init_manifest(
         })
     };
     let name = grant.dataspace.canonical_name.to_string();
+    let inline_manifest = lane_manifest::generate(&name, &trust)?;
     let alias = AccountAliasName::try_new(&args.account_alias, None::<&str>, &name)?;
     let intents = vec![
         EnsureAlias::new(
@@ -2120,6 +2130,13 @@ mod tests {
             InstructionExecutionError::Conversion(marker.into()),
         ));
         let make_details = |transaction: SignedTransaction, result: TransactionResult| {
+            let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result,
+                    completions: Vec::new(),
+                },
+            );
             PipelineTransactionDetailsResponse {
                 hash: transaction.hash_as_entrypoint().to_string(),
                 transaction: CommittedTransaction {
@@ -2129,12 +2146,10 @@ mod tests {
                     entrypoint_hash: transaction.hash_as_entrypoint(),
                     entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                     entrypoint: TransactionEntrypoint::External(transaction),
-                    result_hash: result.hash(),
-                    result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                    result,
-                    merge_inclusion: None,
+                    output_hash: iroha_crypto::HashOf::new(&output),
+                    output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    output,
                 },
-                trigger_completions: Vec::new(),
             }
         };
         let details = make_details(transaction.clone(), TransactionResult::new(Err(reason)));
@@ -2462,6 +2477,15 @@ mod tests {
         KeyPair::try_from_seed(vec![37; 32], Algorithm::Ed25519).unwrap()
     }
     fn manifest() -> ManifestV1 {
+        let trust = lane_manifest::test_trust();
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_genesis::decode_signed_genesis(
+                &hex::decode(&trust.genesis_signed_wire_hex).unwrap(),
+            )
+            .unwrap()
+            .hash(),
+        );
+        let native_manifest = lane_manifest::generate("devex", &trust).unwrap();
         let owner = AccountId::new(key().public_key().clone());
         let grant = AliasDataspaceBootstrapGrantV1::try_new("devex", owner.clone()).unwrap();
         let asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap();
@@ -2493,10 +2517,10 @@ mod tests {
             guard,
         );
         ManifestV1 {
-            finality: finality::test_trust(),
+            finality: trust,
             schema_version: 1,
             operation_id: None,
-            network_id: finality::test_network_id(),
+            network_id,
             owner,
             dataspace: RuntimeDataSpaceAdditionV1 {
                 descriptor: DataSpaceMetadata {
@@ -2515,7 +2539,7 @@ mod tests {
             },
             lane_manifest: RuntimeLaneManifestV1 {
                 lane_id: LaneId::new(6),
-                manifest: Json::new(norito::json!({"version":1})),
+                manifest: native_manifest,
             },
             alias_request: AliasSetupPlanRequestV1::new(vec![ds, account]),
             spending: SpendingV1 {
@@ -2671,6 +2695,45 @@ mod tests {
         assert!(wrong.validate().is_err());
         let mut wrong = value.clone();
         wrong.lane_manifest.lane_id = LaneId::new(5);
+        assert!(wrong.validate().is_err());
+        for (field, changed) in [
+            ("lane", norito::json!("another-lane")),
+            ("quorum", norito::json!(2)),
+            ("validators", norito::json!([])),
+            ("unknown", norito::json!(true)),
+        ] {
+            let mut wrong = value.clone();
+            let mut native: json::Value =
+                json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+            native
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), changed);
+            wrong.lane_manifest.manifest = Json::new(native);
+            assert!(wrong.validate().is_err(), "accepted invalid native {field}");
+        }
+        let mut wrong = value.clone();
+        let mut native: json::Value = json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+        native
+            .as_object_mut()
+            .unwrap()
+            .get_mut("validators")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "torii_url".into(),
+                norito::json!("https://unselected.example/"),
+            );
+        wrong.lane_manifest.manifest = Json::new(native);
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.lane.alias = "another-lane".into();
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.dataspace.descriptor.fault_tolerance = 2;
         assert!(wrong.validate().is_err());
         let mut wrong = value.clone();
         wrong.alias_request.intents[0].quote_guard.max_amount = amount(6, 1);
@@ -2966,7 +3029,6 @@ mod tests {
             lane_id: 6,
             lane_profile: LaneProfile::RestrictedFullReplica,
             account_alias: "admin".into(),
-            lane_manifest: PathBuf::from("public.json"),
             trust: PathBuf::from("trust.json"),
             payment_asset: manifest().spending.asset_definition_id,
             alias_create_maximum: amount(5, 1),
@@ -3000,8 +3062,7 @@ mod tests {
             &args,
             reference.network_id,
             reference.owner.clone(),
-            finality::test_trust(),
-            reference.lane_manifest.manifest.clone(),
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -3033,8 +3094,7 @@ mod tests {
             &public,
             reference.network_id,
             reference.owner,
-            finality::test_trust(),
-            reference.lane_manifest.manifest,
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -3058,8 +3118,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3072,8 +3131,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3086,8 +3144,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner,
-                finality::test_trust(),
-                reference.lane_manifest.manifest,
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3104,8 +3161,6 @@ mod tests {
             "restricted-full-replica",
             "--account-alias",
             "admin",
-            "--lane-manifest",
-            "public.json",
             "--trust",
             "trust.json",
             "--payment-asset",
@@ -3124,5 +3179,8 @@ mod tests {
         assert_eq!(init.alias_create_maximum, amount(5, 1));
         assert_eq!(init.transaction_fee_maximum, amount(1, 0));
         assert!(Wrapper::try_parse_from(&argv[..argv.len() - 2]).is_err());
+        let mut retired = argv.to_vec();
+        retired.extend(["--lane-manifest", "handwritten.json"]);
+        assert!(Wrapper::try_parse_from(retired).is_err());
     }
 }

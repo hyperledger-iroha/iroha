@@ -17,7 +17,7 @@ use crate::{
     state::{State, TransactionsBlockError, World},
 };
 use iroha_data_model::{
-    NetworkId, Registrable,
+    NetworkId,
     account::Account,
     block::{
         BlockHeader, SignedBlock,

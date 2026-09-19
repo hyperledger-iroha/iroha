@@ -11,9 +11,8 @@ async fn push_tx() {
 }
 #[test]
 fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
+
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     // Prepare a representative transaction so we can size the lane capacity to its TEU weight.
     let first_tx = accepted_tx_by_someone(&time_source);
@@ -24,7 +23,11 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
     );
     let test_lane = LaneId::new(7);
     let test_dataspace = DataSpaceId::new(1);
-    install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(test_lane, test_dataspace)]),
+        query_handle,
+    );
     let state = Arc::new(state);
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
@@ -90,12 +93,11 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
 }
 #[test]
 fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
+
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let (account_id, key_pair) = gen_account_in("wonderland");
-    register_test_authority(&state, &account_id);
+
     let first_tx = accepted_tx_with(
         account_id.clone(),
         &key_pair,
@@ -125,7 +127,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         None,
     ));
     let lane_catalog = LaneCatalog::new(lane_catalog.lane_count(), lanes).expect("lane catalog");
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = Nexus::default();
     nexus.lane_catalog = lane_catalog;
     nexus.dataspace_catalog = (*dataspace_catalog).clone();
     nexus.fees.base_fee = Quantity::zero();
@@ -134,7 +136,8 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state.set_nexus(nexus).expect("set Nexus config");
+    let state = State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
+    register_test_authority(&state, &account_id);
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let first_hash = first_tx.as_ref().hash_as_entrypoint();
@@ -205,7 +208,7 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     let first_teu = Queue::compute_teu_weight(&first_tx);
     assert!(first_teu > 0, "expected positive TEU weight");
     {
-        let nexus = state.nexus.get_mut();
+        let mut nexus = state.nexus_snapshot();
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -223,6 +226,13 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
             LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        // This fixture intentionally contains a future, inactive participant.
+        // Publish its test projection explicitly; production startup correctly
+        // refuses configuration that introduces future autoscale geometry.
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        *state.nexus.write() = nexus;
+        state.reseed_static_lane_incarnations_for_tests();
     }
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -298,10 +308,14 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
     let lane_b = LaneId::new(2);
     let dataspace_a = DataSpaceId::new(11);
     let dataspace_b = DataSpaceId::new(12);
-    let kura = Kura::blank_kura_for_testing();
+
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(lane_a, dataspace_a), (lane_b, dataspace_b)]);
+
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(lane_a, dataspace_a), (lane_b, dataspace_b)]),
+        query_handle,
+    );
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let first_tx = accepted_tx_by_someone(&time_source);
@@ -352,10 +366,14 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
 fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
     let test_lane = LaneId::new(11);
     let test_dataspace = DataSpaceId::new(5);
-    let kura = Kura::blank_kura_for_testing();
+
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(test_lane, test_dataspace)]),
+        query_handle,
+    );
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let first_tx = accepted_tx_by_someone(&time_source);
@@ -409,12 +427,16 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
     {
         let test_lane = LaneId::new(17);
         let test_dataspace = DataSpaceId::new(4);
-        let kura = Kura::blank_kura_for_testing();
+
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+
+        let state = State::new_with_nexus_for_testing(
+            world_with_test_domains(),
+            test_nexus_for_routes(&[(test_lane, test_dataspace)]),
+            query_handle,
+        );
         register_test_authority(&state, first_tx.as_ref().authority());
         register_test_authority(&state, second_tx.as_ref().authority());
-        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
         let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let lane_capacity = Queue::compute_teu_weight(first_tx);
@@ -477,7 +499,7 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
 #[test]
 fn enforce_lane_teu_limits_updates_telemetry_counters() {
     use std::num::NonZeroU32;
-    let kura = Kura::blank_kura_for_testing();
+
     let query_handle = LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -512,13 +534,8 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     let dataspace_catalog =
         DataSpaceCatalog::new(vec![dataspace_metadata.clone()]).expect("valid dataspace catalog");
     telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
-    let mut state = State::with_telemetry(
-        world_with_test_domains(),
-        kura.clone(),
-        query_handle.clone(),
-        telemetry.clone(),
-    );
-    let mut nexus = state.nexus_snapshot();
+
+    let mut nexus = Nexus::default();
     let state_lane_catalog = LaneCatalog::new(
         NonZeroU32::new(16).expect("nonzero lane count"),
         vec![LaneConfig::default(), lane_metadata.clone()],
@@ -534,9 +551,12 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     nexus.dataspace_catalog = state_dataspace_catalog;
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state
-        .set_nexus(nexus)
-        .expect("apply telemetry test Nexus state");
+    let state = new_queue_test_state_with_telemetry(
+        world_with_test_domains(),
+        nexus,
+        query_handle,
+        telemetry.clone(),
+    );
     let state = Arc::new(state);
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
@@ -595,7 +615,7 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
 #[test]
 fn queue_backlog_reports_available_lane_headroom() {
     use std::num::NonZeroU32;
-    let kura = Kura::blank_kura_for_testing();
+
     let query_handle = LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -636,13 +656,8 @@ fn queue_backlog_reports_available_lane_headroom() {
     let dataspace_catalog =
         DataSpaceCatalog::new(vec![dataspace_metadata.clone()]).expect("valid dataspace catalog");
     telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
-    let mut state = State::with_telemetry(
-        world_with_test_domains(),
-        kura.clone(),
-        query_handle.clone(),
-        telemetry.clone(),
-    );
-    let mut nexus = state.nexus_snapshot();
+
+    let mut nexus = Nexus::default();
     let state_lane_catalog = LaneCatalog::new(
         NonZeroU32::new(16).expect("nonzero lane count"),
         vec![LaneConfig::default(), lane_metadata.clone()],
@@ -658,9 +673,12 @@ fn queue_backlog_reports_available_lane_headroom() {
     nexus.dataspace_catalog = state_dataspace_catalog;
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
-    state
-        .set_nexus(nexus)
-        .expect("apply backlog test Nexus state");
+    let state = new_queue_test_state_with_telemetry(
+        world_with_test_domains(),
+        nexus,
+        query_handle,
+        telemetry.clone(),
+    );
     let state = Arc::new(state);
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,

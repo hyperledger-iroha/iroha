@@ -2,12 +2,12 @@
 
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::nexus::{DataSpaceMetadata, LaneLifecyclePlan};
+use iroha_data_model::nexus::{DataSpaceMetadata, LaneLifecyclePlan, NativeLaneValidatorBindingV1};
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 
-fn manifest(alias: &str, count: u8, quorum: u32) -> ManifestFile {
-    ManifestFile {
+fn manifest(alias: &str, count: u8, quorum: u32) -> NativeLaneManifestV1 {
+    NativeLaneManifestV1 {
         lane: Some(alias.to_owned()),
         version: Some(1),
         validators: Some(
@@ -15,7 +15,7 @@ fn manifest(alias: &str, count: u8, quorum: u32) -> ManifestFile {
                 .map(|seed| {
                     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
                         .expect("deterministic public manifest fixture");
-                    ManifestValidatorBindingFile {
+                    NativeLaneValidatorBindingV1 {
                         validator: Some(AccountId::new(key.public_key().clone()).to_string()),
                         peer_id: Some(PeerId::new(key.public_key().clone()).to_string()),
                         torii_url: None,
@@ -24,7 +24,7 @@ fn manifest(alias: &str, count: u8, quorum: u32) -> ManifestFile {
                 .collect(),
         ),
         quorum: Some(quorum),
-        ..ManifestFile::default()
+        ..NativeLaneManifestV1::default()
     }
 }
 
@@ -486,4 +486,167 @@ fn runtime_manifest_overlay_governed_lane_is_ready_without_a_filesystem_path() {
         assert!(status.manifest_required && status.manifest_ready);
         assert!(status.manifest_path.is_none());
     }
+}
+
+#[test]
+fn runtime_manifest_preflight_uses_install_semantics() {
+    let (baseline, catalog, dataspaces, governance) = fixture();
+    let lane = catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::new(5))
+        .expect("new lane");
+    let dataspace = dataspaces
+        .by_id(lane.dataspace_id)
+        .expect("physical dataspace");
+    let mut unknown_hook = manifest("bpng", 4, 3);
+    unknown_hook.hooks = Some(BTreeMap::from([(
+        "runtime_upgrdae".to_owned(),
+        JsonValue::Bool(true),
+    )]));
+    let mut oversized_string = manifest("bpng", 4, 3);
+    oversized_string.protected_namespaces =
+        Some(vec!["x".repeat(MANIFEST_SOURCE_MAX_STRING_BYTES_V1 + 1)]);
+    let cases = [
+        (true, Json::new(manifest("bpng", 4, 3))),
+        (false, Json::new(manifest("bpng", 3, 3))),
+        (false, Json::new(manifest("bpng", 4, 2))),
+        (false, Json::new(manifest("wrong-alias", 4, 3))),
+        (false, Json::new(unknown_hook)),
+        (false, Json::new(oversized_string)),
+        (
+            false,
+            Json::from(norito::json!({"lane":"bpng","unexpected":true})),
+        ),
+    ];
+    for (accepted, manifest) in cases {
+        let addition = RuntimeLaneManifestV1 {
+            lane_id: lane.id,
+            manifest,
+        };
+        let preflight = LaneManifestRegistry::validate_runtime_manifest(
+            &addition,
+            lane,
+            dataspace,
+            &governance,
+        );
+        let installed =
+            baseline.with_runtime_additions(&[addition], &catalog, &dataspaces, &governance);
+        assert_eq!(
+            preflight.is_ok(),
+            accepted,
+            "preflight result: {preflight:?}"
+        );
+        assert_eq!(
+            installed.is_ok(),
+            accepted,
+            "installation result: {installed:?}"
+        );
+        if !accepted {
+            assert_eq!(preflight.unwrap_err(), installed.unwrap_err());
+        }
+    }
+}
+
+#[test]
+fn runtime_manifest_preflight_requires_exact_lane_and_dataspace_identity() {
+    let (_, catalog, dataspaces, governance) = fixture();
+    let lane = catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::new(5))
+        .expect("new lane");
+    let dataspace = dataspaces
+        .by_id(lane.dataspace_id)
+        .expect("physical dataspace");
+    let wrong_lane = addition(6, "bpng");
+    let error =
+        LaneManifestRegistry::validate_runtime_manifest(&wrong_lane, lane, dataspace, &governance)
+            .expect_err("wrong envelope lane id");
+    assert!(error.contains("exact effective lane id"));
+    let correct = addition(5, "bpng");
+    let error = LaneManifestRegistry::validate_runtime_manifest(
+        &correct,
+        lane,
+        &DataSpaceMetadata::default(),
+        &governance,
+    )
+    .expect_err("wrong physical dataspace");
+    assert!(error.contains("exact physical dataspace"));
+}
+
+#[test]
+fn runtime_manifest_preflight_validates_governance_and_required_commitments() {
+    let (_, catalog, dataspaces, mut governance) = fixture();
+    let mut lane = catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::new(5))
+        .expect("new lane")
+        .clone();
+    let dataspace = dataspaces
+        .by_id(lane.dataspace_id)
+        .expect("physical dataspace");
+    lane.governance = Some("parliament".to_owned());
+    let mut source = manifest("bpng", 4, 3);
+    let mut addition = RuntimeLaneManifestV1 {
+        lane_id: lane.id,
+        manifest: Json::new(source.clone()),
+    };
+    let error =
+        LaneManifestRegistry::validate_runtime_manifest(&addition, &lane, dataspace, &governance)
+            .expect_err("missing governance declaration");
+    assert!(error.contains("missing governance module"));
+    source.governance = Some("parliament".to_owned());
+    addition.manifest = Json::new(source);
+    let error =
+        LaneManifestRegistry::validate_runtime_manifest(&addition, &lane, dataspace, &governance)
+            .expect_err("unregistered governance module");
+    assert!(error.contains("not present in catalog"));
+    governance
+        .modules
+        .insert("parliament".to_owned(), ConfigGovernanceModule::default());
+    LaneManifestRegistry::validate_runtime_manifest(&addition, &lane, dataspace, &governance)
+        .expect("registered governance");
+    lane.storage = LaneStorageProfile::CommitmentOnly;
+    let error =
+        LaneManifestRegistry::validate_runtime_manifest(&addition, &lane, dataspace, &governance)
+            .expect_err("missing required commitment");
+    assert!(error.contains("requires privacy commitments"));
+}
+
+#[test]
+fn runtime_manifest_preparation_preserves_callers_aggregate_budget() {
+    let (_, catalog, dataspaces, governance) = fixture();
+    let lane = catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::new(5))
+        .expect("new lane");
+    let dataspace = dataspaces
+        .by_id(lane.dataspace_id)
+        .expect("physical dataspace");
+    let addition = addition(5, "bpng");
+    let mut budget = ManifestSourceLoadBudget {
+        bytes: MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1 - addition.manifest.get().len(),
+        ..ManifestSourceLoadBudget::default()
+    };
+    LaneManifestRegistry::prepare_runtime_manifest(
+        &addition,
+        lane,
+        dataspace,
+        &governance,
+        &mut budget,
+    )
+    .expect("last available source bytes");
+    assert_eq!(budget.bytes, MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1);
+    let error = LaneManifestRegistry::prepare_runtime_manifest(
+        &addition,
+        lane,
+        dataspace,
+        &governance,
+        &mut budget,
+    )
+    .expect_err("one shared budget across additions");
+    assert!(error.contains("aggregate source bytes"));
 }

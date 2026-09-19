@@ -101,14 +101,8 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -136,7 +130,6 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     // Idempotent re-register
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
-        None,
         None,
         None,
         0,
@@ -168,14 +161,8 @@ fn register_contract_code_bytes_respects_size_cap() {
     let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -225,14 +212,8 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         std::iter::empty::<AssetDefinition>(),
     );
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -361,14 +342,8 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         std::iter::empty::<AssetDefinition>(),
     );
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -541,14 +516,8 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
         std::iter::empty::<AssetDefinition>(),
     );
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -628,14 +597,8 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
         std::iter::empty::<AssetDefinition>(),
     );
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
@@ -803,14 +766,8 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
         std::iter::empty::<AssetDefinition>(),
     );
     let state = State::new_for_testing(world, kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =

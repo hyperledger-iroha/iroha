@@ -203,6 +203,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let error = match try_read_snapshot(
         &snapshot_store_dir,
         &tail_loss_kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -278,6 +279,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
     );
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("snapshot write");
+    let lane_manifests = state.lane_manifests.read().clone();
     drop(state);
     drop(kura);
     let (kura, block_count) =
@@ -291,7 +293,8 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         .evict_block_bodies_for_bench(payload_len)
         .expect("evict historical block body");
     assert!(freed >= payload_len);
-    let historical_sidecar_path = Kura::canonical_storage_paths(&kura_store_dir).0
+    let historical_sidecar_path = Kura::canonical_storage_paths(&kura_store_dir)
+        .0
         .join("da_blocks")
         .join(format!("{:020}.norito", historical_height.get()));
     assert!(
@@ -311,6 +314,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
     let snapshot_state = try_read_snapshot(
         &snapshot_store_dir,
         &kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -350,6 +354,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     try_write_snapshot(&state, &snapshot_store_dir, &signing_key, TEST_CHUNK_SIZE)
         .expect("write current snapshot");
     let expected_network_id = state.network_id.clone();
+    let lane_manifests = state.lane_manifests.read().clone();
     drop(state);
     drop(kura);
 
@@ -372,6 +377,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let restored = try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -469,6 +475,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let restored_without_reading_payload = try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -494,6 +501,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let restored_without_reading_merkle = try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -510,6 +518,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let network_error = match try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -543,6 +552,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let manifest_signature_error = match try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -573,6 +583,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
     let signature_error = match try_read_snapshot(
         &snapshot_store_dir,
         &fast_kura,
+        &lane_manifests,
         LiveQueryStore::start_test,
         block_count,
         TEST_CHUNK_SIZE,
@@ -772,6 +783,7 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1320,6 +1332,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
     let Err(error) = try_read_snapshot(
         store_dir,
         &Kura::blank_kura_for_testing(),
+        &Arc::new(crate::governance::manifest::LaneManifestRegistry::default()),
         LiveQueryStore::start_test,
         BlockCount(15),
         TEST_CHUNK_SIZE,
@@ -1345,6 +1358,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &Arc::new(crate::governance::manifest::LaneManifestRegistry::default()),
         LiveQueryStore::start_test,
         BlockCount(15),
         TEST_CHUNK_SIZE,
@@ -1374,6 +1388,7 @@ async fn checksum_mismatch_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1401,6 +1416,7 @@ async fn network_id_mismatch_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1452,6 +1468,7 @@ async fn missing_checksum_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1483,6 +1500,7 @@ async fn missing_merkle_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1514,6 +1532,7 @@ async fn merkle_root_mismatch_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1545,6 +1564,7 @@ async fn merkle_leaf_count_mismatch_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1573,6 +1593,7 @@ async fn merkle_chunk_size_mismatch_rejected() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1770,6 +1791,7 @@ async fn can_read_multiple_blocks() {
     let state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1830,6 +1852,7 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,

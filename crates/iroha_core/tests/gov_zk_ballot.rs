@@ -153,7 +153,7 @@ fn zk_ballot_records_and_dedupes() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     // Leader keypair not needed in this simplified setup
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Register a real Halo2 verifying key and wire config defaults
@@ -245,7 +245,7 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
         !state.gov.min_bond_amount.is_zero(),
         "bond must be required by default"
     );
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-bond-required".to_string();
@@ -270,7 +270,7 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
 fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-direction-only".to_string();
@@ -296,7 +296,7 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
 fn zk_ballot_accepts_commit_nullifier_hint() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-commit-nullifier".to_string();
@@ -337,7 +337,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
 fn zk_ballot_rejects_invalid_proof() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-invalid-proof".to_string();
@@ -368,7 +368,7 @@ fn zk_ballot_rejects_invalid_proof() {
 fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-owner-mismatch".to_string();
@@ -409,7 +409,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
 fn zk_ballot_rejects_malformed_public_inputs() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs".to_string();
@@ -435,7 +435,7 @@ fn zk_ballot_rejects_malformed_public_inputs() {
 fn zk_ballot_rejects_non_object_public_inputs() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-object".to_string();
@@ -462,7 +462,7 @@ fn zk_ballot_rejects_public_input_aliases() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     state.zk.max_verify_calls_per_tx = 0;
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-alias".to_string();
@@ -509,7 +509,7 @@ fn zk_ballot_rejects_public_input_aliases() {
 fn zk_ballot_accepts_null_public_input_hints() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-null".to_string();
@@ -532,7 +532,7 @@ fn zk_ballot_accepts_null_public_input_hints() {
 fn zk_ballot_rejects_owner_non_string() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-owner-hint-type".to_string();
@@ -558,7 +558,7 @@ fn zk_ballot_rejects_owner_non_string() {
 fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-vk-commitment".to_string();

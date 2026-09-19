@@ -973,11 +973,12 @@ pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
 }
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
-/// Execute a single instruction in a detached overlay, recording only the state deltas.
+#[cfg(test)]
+/// Execute a single instruction in a detached overlay for delta regression tests.
 ///
-/// This helper is used by the parallel validator to pre-apply side-effect-free instructions without
+/// This regression-test helper pre-applies side-effect-free instructions without
 /// borrowing a live `StateBlock`. Unsupported instructions return `ValidationFail::InternalError`
-/// so the caller can conservatively fall back to sequential execution.
+/// to preserve the reference fallback boundary exercised by the tests.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
     authority: &AccountId,
@@ -1466,6 +1467,7 @@ fn extract_permission_or_role_mutation(
             is_revoke: true,
         })
 }
+#[cfg(test)]
 fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool {
     matches!(
         extract_permission_or_role_mutation(instruction),
@@ -4329,6 +4331,7 @@ pub(crate) fn validate_transaction_fee_admission(
     .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
+#[cfg(test)]
 fn applied_overlay_base_gas(
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
@@ -4380,33 +4383,11 @@ fn applied_overlay_base_gas(
     Ok((gas_used, instruction_count))
 }
 
-/// Reserve an overlay transaction's deterministic base gas before applying its effects.
+#[cfg(test)]
+/// Reference gas and Nexus fee settlement for overlay regression tests.
 ///
-/// Trigger work executed by an overlay is metered relative to this reservation, so neither a
-/// nested callback nor a later transaction can execute past the shared block limit.
-pub(crate) fn precharge_gas_for_applied_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    if is_initial_genesis_context(state_transaction) {
-        return Ok(());
-    }
-    if state_transaction.last_tx_gas_used != 0 {
-        return Err(ValidationFail::InternalError(
-            "overlay base gas must be reserved before transaction effects".to_owned(),
-        ));
-    }
-    let (gas_used, _) = applied_overlay_base_gas(transaction, overlay)?;
-    Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-    state_transaction.last_tx_gas_used = gas_used;
-    Ok(())
-}
-
-/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
-///
-/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
-/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
+/// The tests apply overlays directly and use this helper to exercise fee accounting
+/// independently of `Executor::execute_transaction`.
 pub(crate) fn charge_fees_for_applied_overlay(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -4416,16 +4397,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
     charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, false)
 }
 
-/// Settle an overlay whose base gas was reserved before its effects were applied.
-pub(crate) fn charge_fees_for_precharged_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, true)
-}
-
+#[cfg(test)]
 fn charge_fees_for_applied_overlay_inner(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,

@@ -35,6 +35,10 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Provider(crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1),
     /// The original reputation capture does not join this exact durable carrier.
     Reputation(crate::query::reputation_finalized::ReputationFinalizedArchiveError),
+    /// The original execution witness could not be persisted or reauthenticated.
+    ExecutionWitness(crate::kura::Error),
+    /// Retained archive persistence failed before the final joint lease.
+    Archive(super::archive_publication::CarrierArchivePublicationError),
     /// The named original State fence must release before another attempt.
     Fence {
         /// State lock which prevented acquisition.
@@ -111,7 +115,26 @@ impl<'target, Admission, BindingAdmission>
                     &original.journals.execution_prefix,
                     &owner.kura,
                 )
-                .map_err(CarrierPhysicalPreparationError::Source)
+                .map_err(CarrierPhysicalPreparationError::Source)?;
+            // Standalone archive readers would reacquire Kura and deadlock.
+            // Join both retained anchors under this exact source boundary.
+            if let Some(capture) = original.journals.provider_capture.as_ref() {
+                capture
+                    .reauthenticate_under_publication_lease(
+                        &owner.kura,
+                        original.checkpoint.finality_receipt(),
+                    )
+                    .map_err(CarrierPhysicalPreparationError::Provider)?;
+            }
+            if let Some(capture) = original.journals.reputation_capture.as_ref() {
+                capture
+                    .reauthenticate_under_publication_lease(
+                        &owner.kura,
+                        original.checkpoint.finality_receipt(),
+                    )
+                    .map_err(CarrierPhysicalPreparationError::Reputation)?;
+            }
+            Ok(())
         })();
         match result {
             Ok(()) => Ok(owner),
@@ -163,7 +186,28 @@ struct CarrierFences<'target> {
     _kura: KuraPublicationLease<'target>,
 }
 
-/// All original component writers and State/Kura fences, with no publication API.
+impl<'target> CarrierFences<'target> {
+    /// Keep serialization of Apply while releasing every physical writer/fence
+    /// needed by derived persistence and cache readers after visibility changes.
+    fn release_for_completion(self) -> PublicationGuard<'target> {
+        let Self {
+            _state: state,
+            _kura: kura,
+        } = self;
+        let StateFences {
+            _write: write,
+            _lifecycle: lifecycle,
+            _commit: commit,
+        } = state;
+        drop(write);
+        drop(lifecycle);
+        drop(kura);
+        commit
+    }
+}
+
+/// All original component writers and State/Kura fences, with no independent
+/// authority to publish outside the complete carrier consumer.
 /// The full carrier owns this group before its capture and binding reservations.
 pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierComponents<'target> {
     world: PreparedWorld<'target, (), ()>,
@@ -202,7 +246,8 @@ impl AcquiredCarrierComponents<'_> {
 
 /// A complete decided carrier holding every original storage writer together.
 ///
-/// TODO: consume only through the complete source/durability/geometry publisher.
+/// The private terminal consumer refuses outstanding geometry and participant
+/// durability work. TODO: complete those owners and production resource admission.
 /// Acquiring these writers neither advances State visibility nor grants finality,
 /// retirement or Kura permission. No physical guard may cross an async wait.
 #[must_use = "keep the complete carrier until authorized publication or abort"]
@@ -238,7 +283,8 @@ impl<Admission, BindingAdmission>
     /// The required callback covers all component staging/COW copies, retained
     /// readers, publication identities, durable body/finality/checkpoint decoding
     /// and verification, both retained archive anchors and their result-bearing
-    /// body authentication, and acquisition/abort bookkeeping. There
+    /// body authentication, original witness and archive persistence, final
+    /// witness reauthentication, and acquisition/abort bookkeeping. There
     /// is no implicit production capacity policy. A failed attempt returns the
     /// exact block, verified artifact, journals, effects and prior reservations.
     pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<
@@ -256,7 +302,7 @@ impl<Admission, BindingAdmission>
         // Shadow the original after declaring installation: even an unwind in
         // an early probe drops every retained original before its reservation.
         let installation;
-        let original = self;
+        let mut original = self;
         installation = match admit(&original, target) {
             Ok(guard) => guard,
             Err(error) => {
@@ -266,6 +312,54 @@ impl<Admission, BindingAdmission>
         if !target.matches_kura_instance(&original.journals.kura) {
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
+        }
+        // Reject substituted execution or archive custody before any derived
+        // persistence can modify its durable namespace. Release the temporary
+        // lease before the continuations enter their own storage APIs; the final
+        // lease below must authenticate all these same owners again.
+        let kura = match target.kura.try_publication_lease() {
+            Ok(lease) => lease,
+            Err(error) => {
+                drop(installation);
+                return Err((original, CarrierPhysicalPreparationError::Kura(error)));
+            }
+        };
+        original = match SourceAuthenticatedCarrier::try_new(original, kura) {
+            Ok(owner) => owner.release(),
+            Err((original, error)) => {
+                drop(installation);
+                return Err((original, error));
+            }
+        };
+        if let Err(error) = original.publish_execution_witness() {
+            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;
+            let error = match error {
+                CarrierExecutionWitnessPublicationError::Kura(error) => {
+                    CarrierPhysicalPreparationError::Kura(error)
+                }
+                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {
+                    CarrierPhysicalPreparationError::Checkpoint(error)
+                }
+                CarrierExecutionWitnessPublicationError::Witness(error) => {
+                    CarrierPhysicalPreparationError::ExecutionWitness(error)
+                }
+            };
+            drop(installation);
+            return Err((original, error));
+        }
+        if let Err(error) = original.publish_archives() {
+            use super::archive_publication::CarrierArchivePublicationError;
+            let error = match error {
+                CarrierArchivePublicationError::Kura(error) => {
+                    CarrierPhysicalPreparationError::Kura(error)
+                }
+                CarrierArchivePublicationError::Checkpoint(error) => {
+                    CarrierPhysicalPreparationError::Checkpoint(error)
+                }
+                error => CarrierPhysicalPreparationError::Archive(error),
+            };
+            drop(installation);
+            return Err((original, error));
         }
         // Borrow the exact target's Arc, never a self-referential field inside
         // the retained carrier. Identity equality above joins that same owner.
@@ -286,32 +380,16 @@ impl<Admission, BindingAdmission>
                 return Err((original, error));
             }
         };
-        // Both archive anchors share the source's original Kura boundary. Their
-        // standalone readers would reacquire Kura and deadlock here.
-        let archive_result = (|| {
-            let original = &authenticated.decision;
-            if let Some(capture) = original.journals.provider_capture.as_ref() {
-                capture
-                    .reauthenticate_under_publication_lease(
-                        &authenticated.kura,
-                        original.checkpoint.finality_receipt(),
-                    )
-                    .map_err(CarrierPhysicalPreparationError::Provider)?;
-            }
-            if let Some(capture) = original.journals.reputation_capture.as_ref() {
-                capture
-                    .reauthenticate_under_publication_lease(
-                        &authenticated.kura,
-                        original.checkpoint.finality_receipt(),
-                    )
-                    .map_err(CarrierPhysicalPreparationError::Reputation)?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = archive_result {
+        if let Err(error) = authenticated
+            .kura
+            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())
+        {
             let original = authenticated.release();
             drop(installation);
-            return Err((original, error));
+            return Err((
+                original,
+                CarrierPhysicalPreparationError::ExecutionWitness(error),
+            ));
         }
         let state = match StateFences::try_acquire(target) {
             Ok(fences) => fences,
@@ -544,6 +622,9 @@ impl<Admission, BindingAdmission, Installation>
         }
     }
 }
+
+#[path = "publication.rs"]
+mod publication;
 
 #[cfg(test)]
 #[path = "physical_publication_tests.rs"]

@@ -90,7 +90,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
     state.zk.halo2.enabled = true;
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Authority and host

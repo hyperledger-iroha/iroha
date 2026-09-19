@@ -13,18 +13,17 @@ async fn push_records_teu_using_router_assignment() {
             Ok(RoutingDecision::new(self.lane, self.dataspace))
         }
     }
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let test_lane = LaneId::new(7);
     let test_dataspace = DataSpaceId::new(42);
-    install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
-    {
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy.default_lane = test_lane;
-        nexus.routing_policy.default_dataspace = test_dataspace;
-    }
+    let mut nexus = test_nexus_for_routes(&[(test_lane, test_dataspace)]);
+    nexus.routing_policy.default_lane = test_lane;
+    nexus.routing_policy.default_dataspace = test_dataspace;
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        nexus,
+        LiveQueryStore::start_test(),
+    );
     let state = Arc::new(state);
     let router = Arc::new(StaticRouter {
         lane: test_lane,
@@ -117,10 +116,18 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
     }
     let expected_lane = LaneId::new(5);
     let expected_dataspace = DataSpaceId::new(13);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(expected_lane, expected_dataspace)]);
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(expected_lane, expected_dataspace)]),
+        LiveQueryStore::start_test(),
+    );
+    // This regression executes ordinary queued work after an explicit committed-index fixture.
+    // It does not authenticate genesis or publish the candidate's State effects.
+    seed_committed_height_for_queue_test(&state, 1);
+    let parent_height = u64::try_from(state.committed_height()).expect("fixture height fits u64");
+    let parent_hash = state
+        .latest_block_hash_fast()
+        .expect("seeded exact predecessor");
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test_with_router_for_routes(
@@ -181,12 +188,15 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
             .collect(),
     );
     let new_block = BlockBuilder::new(transactions)
-        .chain(0, None)
+        .chain_with_parent_hash(0, parent_height, parent_hash)
         .with_execution_context(Some(execution_context))
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let header = new_block.header();
+    assert_eq!(header.height().get(), parent_height + 1);
+    assert_eq!(header.prev_block_hash(), Some(parent_hash));
     let signed_block: SignedBlock = new_block.into();
+    let generation = state.state_view_generation();
     let mut state_block = state.block(header);
     let valid_block = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
     drop(guards);
@@ -199,20 +209,32 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
         .expect("missing transaction event for routed transaction");
     assert_eq!(tx_event.lane_id(), expected_lane);
     assert_eq!(tx_event.dataspace_id(), expected_dataspace);
+    drop(state_block);
+    assert_eq!(
+        u64::try_from(state.committed_height()).unwrap(),
+        parent_height
+    );
+    assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
+    assert_eq!(state.state_view_generation(), generation);
 }
 #[test]
 fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
     let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(
-        &mut state,
-        &[
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (refreshed.lane_id, refreshed.dataspace_id),
-        ],
+        ]),
+        LiveQueryStore::start_test(),
     );
+    // This regression executes ordinary queued work after an explicit committed-index fixture.
+    // It does not authenticate genesis or publish the candidate's State effects.
+    seed_committed_height_for_queue_test(&state, 1);
+    let parent_height = u64::try_from(state.committed_height()).expect("fixture height fits u64");
+    let parent_hash = state
+        .latest_block_hash_fast()
+        .expect("seeded exact predecessor");
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
@@ -263,12 +285,15 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         ExternalExecutionContext::new(hash, guard.routing().lane_id, guard.routing().dataspace_id),
     ]);
     let new_block = BlockBuilder::new(transactions)
-        .chain(0, None)
+        .chain_with_parent_hash(0, parent_height, parent_hash)
         .with_execution_context(Some(execution_context))
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let header = new_block.header();
+    assert_eq!(header.height().get(), parent_height + 1);
+    assert_eq!(header.prev_block_hash(), Some(parent_hash));
     let signed_block: SignedBlock = new_block.into();
+    let generation = state.state_view_generation();
     let mut state_block = state.block(header);
     let valid_block = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
     drop(guard);
@@ -287,13 +312,21 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         .expect("missing transaction event for admitted routed transaction");
     assert_eq!(tx_event.lane_id(), LaneId::SINGLE);
     assert_eq!(tx_event.dataspace_id(), DataSpaceId::UNIVERSAL);
+    drop(state_block);
+    assert_eq!(
+        u64::try_from(state.committed_height()).unwrap(),
+        parent_height
+    );
+    assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
+    assert_eq!(state.state_view_generation(), generation);
 }
 #[test]
 fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]),
+        LiveQueryStore::start_test(),
+    );
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
     let mut queue = Queue::test_with_router_for_routes(
@@ -358,10 +391,13 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     let domain_id = DomainId::try_new("queue_fee_drift", "universal").expect("fee drift domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
-    let fee_asset = AssetDefinitionId::derive_from_components(
-        domain_id,
-        "xor".parse().expect("fee drift asset name"),
-    );
+    let universal_domain =
+        Domain::new(DomainId::try_new("universal", "universal").expect("canonical XOR domain"))
+            .build(&authority);
+    let fee_asset: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("canonical configured XOR asset");
     let definition = AssetDefinition::numeric(
         fee_asset.clone(),
         "queue fee drift XOR".to_owned(),
@@ -371,22 +407,23 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     .build(&authority);
     let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
     let payer_asset = Asset::new(payer_asset_id.clone(), Quantity::from(10_u32));
-    let world = World::with_assets([domain], [account], [definition], [payer_asset], []);
-    let mut state = State::new(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
+    let world = World::with_assets(
+        [domain, universal_domain],
+        [account],
+        [definition],
+        [payer_asset],
+        [],
     );
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.settlement_mode =
-            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
-        nexus.fees.fee_asset_id = fee_asset.canonical_address();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-    }
+    let mut nexus = test_nexus_for_routes(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+    nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+    nexus.fees.fee_asset_id = fee_asset.canonical_address();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    // Preserve this fixture's actual fee policy from initial State/Kura construction.
+    let state =
+        State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -447,10 +484,11 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
 #[test]
 fn expired_event_uses_the_authoritative_full_plan() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+    let state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]),
+        LiveQueryStore::start_test(),
+    );
     let state = Arc::new(state);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let mut queue = Queue::test_with_router_for_routes(
@@ -501,10 +539,11 @@ fn expired_event_uses_the_authoritative_full_plan() {
 fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
     let stale = RoutingDecision::default();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+    let mut state = State::new_with_nexus_for_testing(
+        world_with_test_domains(),
+        test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]),
+        LiveQueryStore::start_test(),
+    );
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router = Arc::new(MutableRouter::new(expected));
     let mut queue = Queue::test_with_router_for_routes(
@@ -515,11 +554,13 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     );
     install_manifest_lane_authority_for_queue_test(&mut state, &queue, 0x71);
     let journal_dir = tempfile::tempdir().expect("journal directory");
-    queue.install_plan_journal(
-        journal_dir.path().join("routing-corruption.norito"),
-        1024 * 1024,
-        true,
-    ).expect("install exact routing-ownership journal");
+    queue
+        .install_plan_journal(
+            journal_dir.path().join("routing-corruption.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install exact routing-ownership journal");
     let state = Arc::new(state);
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;

@@ -1,6 +1,5 @@
-// A completed secondary coordinator archives only after real economic Apply and
-// Queue terminal publication. Equal-input/equal-incarnation ABA is tested as a
-// separate rejected transition in Kura; this positive uses fresh lineage.
+// Pending secondary source custody survives rejection of an execution-bearing
+// MergeQC and prevents unauthenticated archival or destructive cold recovery.
 
 /// Snapshot exact directory structure and bytes, refusing symlinks in the fixture.
 fn completed_secondary_tree(
@@ -89,7 +88,7 @@ fn assert_completed_secondary_accounting(kura: &Kura) {
 }
 
 v2_apply_test!(
-    completed_secondary_autonomous_application_retains_original_instance_and_reopens_without_replay,
+    secondary_certified_source_rejects_merge_execution_and_preserves_original_custody,
     {
         use crate::state::WorldReadOnly as _;
         use iroha_data_model::isi::SetKeyValue;
@@ -142,9 +141,6 @@ v2_apply_test!(
                 .collect::<Vec<_>>()
         };
         assert_eq!(read_values(), vec![None, None]);
-        let expected_values = (0..2_u32)
-            .map(|value| Some(iroha_primitives::json::Json::new(value + 11)))
-            .collect::<Vec<_>>();
         let (events, _receiver) = tokio::sync::broadcast::channel(32);
         let queue = fixture_queue(fixture.state.as_ref(), events.clone());
         let journals = tempfile::tempdir().expect("secondary producer journals");
@@ -393,7 +389,7 @@ v2_apply_test!(
             &local_key,
         );
         let (certificate, _, _) =
-            terminal_cycle_certificate(&fixture, &install.payload, &lane_keys);
+            certified_source_certificate_for_rejection(&fixture, &install.payload, &lane_keys);
         assert_eq!(
             lane_work.accept_lane_message(
                 crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
@@ -430,7 +426,11 @@ v2_apply_test!(
         assert_eq!(batch.lanes[0].proposal, certificate.proposal);
         assert!(batch.lanes[0].results.iter().all(|result| result.is_ok()));
         let global_keys = fixture_validator_keys();
-        let entry = terminal_cycle_merge_entry(&candidate, apply_context.context(), &global_keys);
+        let entry = certified_merge_entry_for_source_rejection(
+            &candidate,
+            apply_context.context(),
+            &global_keys,
+        );
         fixture
             .state
             .validate_certified_merge_entry_for_global_order(&entry, apply_context.context().mode)
@@ -450,7 +450,8 @@ v2_apply_test!(
             events.clone(),
             fixture.service.validator_set_pops.clone(),
         );
-        let mut merge = terminal_cycle_merge_apply_fixture(
+        let reservations = queue.live_lane_reservations();
+        assert_retired_merge_carrier_rejected(
             &fixture,
             &service,
             apply_context.context(),
@@ -458,134 +459,93 @@ v2_apply_test!(
             &application_header,
             &global_keys,
         );
-        service
-            .execute(&merge.context, &mut merge.store, &merge.task)
-            .expect("apply actual secondary economic carrier");
-        assert_eq!(fixture.state.committed_height(), 4);
-        assert_eq!(read_values(), expected_values);
+        assert_eq!(fixture.state.committed_height(), 3);
+        assert_eq!(read_values(), vec![None, None]);
         assert!(
             entrypoints
                 .iter()
-                .all(|hash| fixture.state.has_committed_entrypoint(*hash))
+                .all(|hash| !fixture.state.has_committed_entrypoint(*hash))
         );
-        assert!(queue.live_lane_reservations().is_empty());
+        assert_eq!(queue.live_lane_reservations(), reservations);
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
-        assert!(queue.lane_reservation_group_is_finalized_for_diagnostics(&reservation_keys));
-        for key in &reservation_keys {
-            assert!(!queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
-        }
-        let receipt = fixture
-            .kura
-            .read_lane_block_application_receipt(lane_id, 1)
-            .expect("genuine secondary economic application receipt");
-        assert_eq!(receipt.proposal, certificate.proposal);
-        assert_eq!(
-            receipt.format,
-            crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
-        );
-        assert_eq!(receipt.application_block_height, 4);
-        assert_eq!(receipt.application_block_hash, merge.body.hash());
-        assert!(
-            fixture
-                .state
-                .certified_autonomous_lane_block_is_globally_applied(&certificate.proposal)
-                .expect("authenticate economic completion")
-        );
+        assert!(fixture.state.merge_ledger.snapshot().is_empty());
         assert!(
             fixture
                 .kura
-                .pending_autonomous_lifecycle_terminal_outcome_inventory()
-                .expect("read pending terminal inventory")
-                .is_empty()
+                .read_lane_block_application_receipt(lane_id, 1)
+                .is_none()
         );
-        let terminal_path = fixture
-            .kura
-            .autonomous_lifecycle_terminal_outcome_path_for_test(lane_id, 1, 3)
-            .expect("real Complete owner path");
-        let terminal_bytes =
-            std::fs::read(&terminal_path).expect("actual Apply published durable Complete");
-        assert!(!terminal_bytes.is_empty());
-        service
-            .execute(&merge.context, &mut merge.store, &merge.task)
-            .expect("repeat same Apply idempotently");
-        assert_eq!(read_values(), expected_values);
-        assert_eq!(fixture.state.merge_ledger.snapshot(), vec![Arc::new(entry)]);
-        assert_eq!(
-            std::fs::read(&terminal_path).expect("same terminal proof"),
-            terminal_bytes
+        assert!(
+            !fixture
+                .state
+                .certified_autonomous_lane_block_is_globally_applied(&certificate.proposal)
+                .unwrap()
         );
-
-        // A cold Queue replay observes terminal ownership; it cannot resurrect inputs.
-        drop(service);
-        drop(queue);
-        let cold_queue = fixture_queue(fixture.state.as_ref(), events);
-        cold_queue
-            .install_lane_reservation_journal(&reservations_path, 1024 * 1024)
-            .expect("cold terminal reservations");
-        cold_queue
-            .install_plan_journal(&plans_path, 1024 * 1024, true)
-            .expect("cold terminal plan owner");
-        cold_queue
-            .replay_plan_journal(fixture.state.as_ref())
-            .expect("cold replay authenticates completed State");
-        assert!(cold_queue.live_lane_reservations().is_empty());
-        assert!(cold_queue.lane_reservation_commit_barriers().is_empty());
-        assert!(cold_queue.lane_reservation_release_barriers().is_empty());
-        assert!(cold_queue.lane_reservation_group_is_finalized_for_diagnostics(&reservation_keys));
         for key in &reservation_keys {
-            assert!(!cold_queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
+            assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
         }
-        drop(cold_queue);
-        drop(lane_work);
-        drop(generation);
-
-        let next_lane = fixture
+        let original_tree = completed_secondary_tree(root.path());
+        let original_state =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap();
+        let lane = fixture
             .state
             .nexus_snapshot()
             .lane_catalog
             .lanes()
             .iter()
             .find(|lane| lane.id == lane_id)
-            .expect("actual secondary catalog entry")
+            .unwrap()
             .clone();
         let replacement = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![next_lane],
+            additions: vec![lane],
             retire: vec![lane_id],
         };
-        // This test-only lifecycle entry point supplies geometry authorization, but
-        // its Kura prearchive gate must independently authenticate economic custody.
-        // Removing the real Complete file cannot be replaced by the receipt alone.
-        std::fs::remove_file(&terminal_path).expect("temporarily remove exact Complete owner");
-        let without_terminal = completed_secondary_tree(root.path());
-        let old_state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
-            .expect("stable valid fixture snapshot");
-        assert!(fixture.state.apply_lane_lifecycle(&replacement).is_err());
-        assert_eq!(completed_secondary_tree(root.path()), without_terminal);
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
-                .expect("stable valid fixture snapshot"),
-            old_state_hash
+        assert!(
+            fixture.state.apply_lane_lifecycle(&replacement).is_err(),
+            "unconsumed certified source custody cannot authorize archival"
         );
-        std::fs::write(&terminal_path, &terminal_bytes).expect("restore exact real Complete bytes");
-        let old_segment = completed_secondary_tree(&blocks);
-        let old_merge_bytes = std::fs::read(old_lane.merge_log_path(root.path()))
-            .expect("retain every old merge-journal byte");
+        assert_eq!(completed_secondary_tree(root.path()), original_tree);
         assert_eq!(
-            old_segment.get(&record_relative),
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+            original_state
+        );
+        assert_eq!(
+            fixture.state.lane_incarnations_snapshot()[&lane_id],
+            old_incarnation
+        );
+        assert_eq!(
+            fixture.state.view().lane_incarnation_activation_heights[&lane_id],
+            old_activation
+        );
+        assert_eq!(
+            fixture.state.lane_storage_identity(lane_id).unwrap(),
+            old_lane
+        );
+        assert_eq!(
+            completed_secondary_tree(&blocks).get(&record_relative),
             Some(&Some(record_bytes.clone()))
         );
-        fixture
-            .state
-            .apply_lane_lifecycle(&replacement)
-            .expect("archive economically completed secondary incarnation");
-        let new_incarnation = fixture.state.lane_incarnations_snapshot()[&lane_id];
-        assert_ne!(
-            new_incarnation, old_incarnation,
-            "valid recreation advances lineage rather than reusing an ABA hash"
-        );
-        // Capture the same exact geometry tuple used by State snapshot restore;
-        // a runtime catalog alone must not authorize a changed incarnation.
+        assert_completed_secondary_accounting(fixture.kura.as_ref());
+
+        drop(service);
+        drop(queue);
+        let cold_queue = fixture_queue(fixture.state.as_ref(), events);
+        let replay = cold_queue
+            .install_lane_reservation_journal(&reservations_path, 1024 * 1024)
+            .unwrap();
+        assert_eq!(replay.restored, reservation_keys.len());
+        cold_queue
+            .install_plan_journal(&plans_path, 1024 * 1024, true)
+            .unwrap();
+        cold_queue
+            .replay_plan_journal(fixture.state.as_ref())
+            .unwrap();
+        assert_eq!(cold_queue.live_lane_reservations(), reservations);
+        for key in &reservation_keys {
+            assert!(cold_queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
+        }
+        drop(cold_queue);
         let (
             runtime_lanes,
             runtime_incarnations,
@@ -602,169 +562,28 @@ v2_apply_test!(
                     &payload.network_id,
                     &view.lane_incarnation_lineage,
                 ),
-                u64::try_from(view.block_hashes.len()).expect("captured height fits u64"),
+                u64::try_from(view.block_hashes.len()).unwrap(),
             )
         };
-        let new_lane = fixture
-            .state
-            .lane_storage_identity(lane_id)
-            .expect("exact replacement identity");
-        let blocks = new_lane.blocks_dir(root.path());
-        assert_ne!(
-            blocks, old_blocks,
-            "new incarnation has a distinct immutable address"
-        );
-        for name in ["blocks.index", "blocks.data", "blocks.hashes"] {
-            assert!(blocks.join(name).is_file());
-        }
-        let artifacts = blocks.join("lane_artifacts");
-        let metadata = std::fs::symlink_metadata(&artifacts).expect("new artifact namespace");
-        assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
-        assert_eq!(
-            std::fs::read_dir(&artifacts)
-                .expect("new artifact directory")
-                .count(),
-            0
-        );
-        assert_eq!(
-            std::fs::metadata(new_lane.merge_log_path(root.path()))
-                .expect("new empty merge log")
-                .len(),
-            0
-        );
-        assert!(
-            fixture
-                .kura
-                .historical_autonomous_lane_recovery_records_bounded(1)
-                .expect("fresh namespace inventory")
-                .is_empty()
-        );
-        let archive = std::fs::canonicalize(&old_blocks).expect("retained original instance");
-        let archived_merge = std::fs::canonicalize(old_lane.merge_log_path(root.path()))
-            .expect("retained original merge object");
-        assert_eq!(std::fs::read(&archived_merge).unwrap(), old_merge_bytes);
-        fixture
-            .kura
-            .validate_retained_lane_pair_for_test(old_lane, &archive, &archived_merge)
-            .expect("completed journal reference and exact original pair");
-        assert!(
-            fixture
-                .kura
-                .validate_retained_lane_pair_for_test(
-                    crate::kura::LaneStorageIdentity {
-                        incarnation: new_incarnation,
-                        ..old_lane
-                    },
-                    &archive,
-                    &archived_merge
-                )
-                .is_err(),
-            "new incarnation cannot authenticate the old object"
-        );
-        assert!(
-            fixture
-                .kura
-                .validate_retained_lane_pair_for_test(
-                    crate::kura::LaneStorageIdentity {
-                        activation_height: old_activation.checked_add(1).unwrap(),
-                        ..old_lane
-                    },
-                    &archive,
-                    &archived_merge
-                )
-                .is_err(),
-            "activation height is part of the exact retained identity"
-        );
-        assert!(
-            fixture
-                .kura
-                .validate_retained_lane_pair_for_test(
-                    old_lane,
-                    &archive,
-                    &std::fs::canonicalize(new_lane.merge_log_path(root.path())).unwrap()
-                )
-                .is_err(),
-            "new instance merge log cannot substitute for the original pair"
-        );
-        let archived_segment = completed_secondary_tree(&archive);
-        assert_eq!(
-            archived_segment, old_segment,
-            "reference publication changes no byte of the retained original instance"
-        );
-        assert!(
-            !root.path().join("retired/lane_geometry").exists(),
-            "retirement does not relocate physical objects before authenticated GC"
-        );
-        let fresh_tree = completed_secondary_tree(&blocks);
-        assert!(
-            fixture
-                .kura
-                .persist_historical_autonomous_lane_recovery_record(&record)
-                .is_err()
-        );
-        let session = crate::lane_consensus::CommittedLaneBlockSession {
-            proposal: certificate.proposal.clone(),
-            prepare_qc: certificate.prepare_qc.clone(),
-            commit_qc: certificate.commit_qc.clone(),
-        };
-        let pops = lane_keys
-            .iter()
-            .take(3)
-            .map(|key| {
-                (
-                    key.public_key().clone(),
-                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("real lane PoP"),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        Kura::validate_certified_lane_block_artifact(
-            &crate::kura::CertifiedLaneBlockArtifact::new(session.clone(), pops.clone()),
-        )
-        .expect("stale-QC control retains exact valid cryptographic evidence");
-        assert!(
-            fixture
-                .kura
-                .persist_committed_lane_block_session(&session, &pops)
-                .is_err()
-        );
-        assert!(matches!(
-            fixture.kura.classify_autonomous_lane_reservation_groups(
-                std::slice::from_ref(&record.reservation_group),
-                payload.network_id,
-                &[payload.epoch],
-            ),
-            Err(crate::kura::AutonomousLaneReservationEvidenceError::Kura(_))
-        ));
-        assert_eq!(completed_secondary_tree(&blocks), fresh_tree);
-        assert_eq!(completed_secondary_tree(&archive), archived_segment);
-        assert_eq!(std::fs::read(&archived_merge).unwrap(), old_merge_bytes);
-        assert_eq!(read_values(), expected_values);
-        assert!(
-            entrypoints
-                .iter()
-                .all(|hash| fixture.state.has_committed_entrypoint(*hash))
-        );
-        assert_completed_secondary_accounting(fixture.kura.as_ref());
-
-        // Body stores and Apply fixtures must not retain any old process owner.
-        // The lifecycle group is a Copy identity, not a lease; its process claim
-        // and lane-work owner were explicitly dropped above.
+        let original_segment = completed_secondary_tree(&blocks);
+        let original_merge = std::fs::read(old_lane.merge_log_path(root.path())).unwrap();
+        drop(lane_work);
+        drop(generation);
         drop(admission);
         drop(source);
-        drop(merge);
         let old_kura = Arc::downgrade(&fixture.kura);
         drop(fixture);
         assert!(
             old_kura.upgrade().is_none(),
-            "all old Kura owners are gone before cold reopen"
+            "cold reopen retains no old process owner"
         );
         let (reopened, count) =
             Kura::new_with_configured_lane_catalog(&config, &configured_lanes, &configured_catalog)
-                .expect("cold open actual canonical storage");
-        assert_eq!(count.0, 4);
+                .expect("cold reopen canonical source storage");
+        assert_eq!(count.0, 3);
         reopened
             .bind_lane_storage_network(payload.network_id)
-            .expect("bind the original authenticated chain network");
+            .unwrap();
         reopened
             .restore_lane_segments_with_geometry_at_height_and_lineage_root(
                 &runtime_lanes,
@@ -773,70 +592,46 @@ v2_apply_test!(
                 restore_height,
                 lineage_root,
             )
-            .expect(
-                "authenticate exact captured geometry and retained journal after strict startup",
-            );
-        reopened
-            .validate_retained_lane_pair_for_test(old_lane, &archive, &archived_merge)
-            .expect("cold reopen reauthenticates the retained journal and exact original pair");
-        assert!(
-            reopened
-                .historical_autonomous_lane_recovery_records_bounded(1)
-                .expect("cold fresh namespace inventory")
-                .is_empty()
-        );
+            .expect("restore exact original source geometry");
         assert_eq!(
             reopened
-                .get_block(NonZeroUsize::new(3).expect("source height"))
-                .expect("retain actual source")
+                .get_block(NonZeroUsize::new(3).unwrap())
+                .unwrap()
                 .hash(),
             source_hash
         );
         assert_eq!(
-            reopened
-                .v2_finality_artifact(3)
-                .expect("read retained actual source proof"),
+            reopened.v2_finality_artifact(3).unwrap(),
             Some(source_finality)
         );
-        assert!(
+        assert_eq!(
             reopened
-                .persist_historical_autonomous_lane_recovery_record(&record)
-                .is_err()
+                .historical_autonomous_lane_recovery_records_bounded(1)
+                .unwrap(),
+            vec![record]
         );
-        assert!(
-            reopened
-                .persist_committed_lane_block_session(&session, &pops)
-                .is_err()
+        assert_eq!(completed_secondary_tree(&blocks), original_segment);
+        assert_eq!(
+            std::fs::read(old_lane.merge_log_path(root.path())).unwrap(),
+            original_merge
         );
-        assert!(matches!(
-            reopened.classify_autonomous_lane_reservation_groups(
-                std::slice::from_ref(&record.reservation_group),
-                payload.network_id,
-                &[payload.epoch],
-            ),
-            Err(crate::kura::AutonomousLaneReservationEvidenceError::Kura(_))
-        ));
-        assert_eq!(completed_secondary_tree(&blocks), fresh_tree);
-        assert_eq!(completed_secondary_tree(&archive), archived_segment);
-        assert_eq!(std::fs::read(&archived_merge).unwrap(), old_merge_bytes);
-        // A copied old seal in the new namespace must be rejected read-only, even
-        // though its old public source and economic finality are still authentic.
-        let injected = blocks.join(&record_relative);
-        let injected_parent = injected.parent().expect("recovery directory");
-        std::fs::create_dir(injected_parent).expect("new recovery namespace for adverse control");
-        std::fs::write(&injected, &record_bytes).expect("inject old seal unchanged");
-        let injected_tree = completed_secondary_tree(&blocks);
+        let original_record = blocks.join(&record_relative);
+        let mut corrupt = record_bytes.clone();
+        corrupt.push(0xff);
+        std::fs::write(&original_record, &corrupt).unwrap();
+        let corrupt_tree = completed_secondary_tree(&blocks);
         assert!(
             reopened
                 .historical_autonomous_lane_recovery_records_bounded(1)
                 .is_err()
         );
-        assert_eq!(completed_secondary_tree(&blocks), injected_tree);
-        std::fs::remove_file(&injected).expect("remove exactly the injected old seal");
-        std::fs::remove_dir(injected_parent).expect("remove empty injected directory");
-        assert_eq!(completed_secondary_tree(&blocks), fresh_tree);
-        assert_eq!(completed_secondary_tree(&archive), archived_segment);
-        assert_eq!(std::fs::read(&archived_merge).unwrap(), old_merge_bytes);
+        assert_eq!(
+            completed_secondary_tree(&blocks),
+            corrupt_tree,
+            "cold source corruption is rejected without rewriting occupied evidence"
+        );
+        std::fs::write(original_record, record_bytes).unwrap();
+        assert_eq!(completed_secondary_tree(&blocks), original_segment);
         assert_completed_secondary_accounting(reopened.as_ref());
     }
 );

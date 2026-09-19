@@ -1,6 +1,6 @@
 // Actual State admission staging and finalized-carrier source authority.
 
-fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
+fn first_lane_input_fixture(seed: u8) -> (Box<LaneContextVerifiedFixture>, Vec<u8>) {
     let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
     let (binding, control) = queue_plan_admission_certificate_for_state_test(
         &state,
@@ -12,14 +12,41 @@ fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
         parent.header().height().get(),
         seed,
     );
+    let (block, opening, witness) = publish_first_lane_input_fixture(&state, &parent, &control);
+    (
+        Box::new(LaneContextVerifiedFixture {
+            state,
+            validators,
+            binding,
+            block,
+            opening,
+            witness,
+        }),
+        control,
+    )
+}
+
+// Keep the admission overlay and finality temporaries outside State/genesis
+// construction's call stack. The completed fixture also stays on the heap when
+// a reader test retains more than one independent State.
+fn publish_first_lane_input_fixture(
+    state: &State,
+    parent: &SignedBlock,
+    control: &[u8],
+) -> (
+    SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    ExecWitness,
+) {
     // Admission may be delayed after its signed proposal height. Preserve the
     // original binding while advancing the actual canonical source position.
-    let advance = empty_global_block_after(Some(&parent));
-    commit_block_metadata_to_state(&state, &advance);
+    let advance = empty_global_block_after(Some(parent));
+    commit_block_metadata_to_state(state, &advance);
     state.kura.store_block(Arc::new(advance.clone())).unwrap();
     let mut block = empty_global_block_after(Some(&advance));
+    let admissions = vec![control.to_vec()];
     let mut context = block.execution_context().cloned().unwrap_or_default();
-    context.queue_plan_admissions = vec![control.clone()];
+    context.queue_plan_admissions = admissions.clone();
     block.set_execution_context(Some(context));
     // Final admission controls change the proposal commitment and invalidate the
     // earlier result attachment. This carrier only admits inputs; retain an
@@ -48,9 +75,9 @@ fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
         .unwrap();
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
-    let opening = lane_opening_context_for_state_test(&state);
+    let opening = lane_opening_context_for_state_test(state);
     let mut overlay = state
-        .block_with_queue_plan_admissions(block.header(), &[control.clone()])
+        .block_with_queue_plan_admissions(block.header(), &admissions)
         .unwrap();
     overlay
         .finalize_lane_consensus_contexts(&block, Some(&opening))
@@ -67,22 +94,12 @@ fn first_lane_input_fixture(seed: u8) -> (LaneContextVerifiedFixture, Vec<u8>) {
     overlay.commit().unwrap();
     state.kura.store_block(Arc::new(block.clone())).unwrap();
     let (artifact, receipt) =
-        stage_lane_context_fixture_finality(&state, &block, opening.clone(), witness.clone());
+        stage_lane_context_fixture_finality(state, &block, opening.clone(), witness.clone());
     state
         .kura
         .promote_kagemusha_finality_sidecar(&artifact, &receipt)
         .unwrap();
-    (
-        LaneContextVerifiedFixture {
-            state,
-            validators,
-            binding,
-            block,
-            opening,
-            witness,
-        },
-        control,
-    )
+    (block, opening, witness)
 }
 
 state_test! { sync first_lane_input_reader_authenticates_original_carrier_and_transport_completion
@@ -161,14 +178,29 @@ state_test! { sync first_lane_input_reader_rejects_missing_proof_and_false_sourc
     assert!(state.first_lane_admitted_input(&observed, &observed.contexts()[0]).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), corrupt, "read cannot repair occupied corruption");
     std::fs::write(&path, exact).unwrap();
-    let inconsistent = lane_context_verified_fixture();
+    let mut inconsistent = lane_context_verified_fixture();
+    assert_eq!(inconsistent.block.execution_context().unwrap().queue_plan_admissions.len(), 1);
+    // Authenticate an explicitly false source position: the real carrier has
+    // index zero only, while its signed context witness claims index one.
+    let mut contexts = inconsistent.state.lane_consensus_contexts.view().get().clone();
+    contexts.contexts[0].admission_priority.admission_index = 1;
+    let commitment = LaneConsensusContextsCommitmentV1::from_contexts(
+        inconsistent.state.network_id, inconsistent.block.header().height().get(), &contexts,
+    ).unwrap();
+    inconsistent.witness.writes.iter_mut().find(|entry|
+        entry.key == super::lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY
+    ).unwrap().value = norito::to_bytes(&commitment).unwrap();
+    let mut cell = inconsistent.state.lane_consensus_contexts.block();
+    *cell.get_mut() = contexts;
+    cell.commit();
     let (artifact, receipt) = stage_lane_context_fixture_finality(
         &inconsistent.state, &inconsistent.block, inconsistent.opening, inconsistent.witness,
     );
     inconsistent.state.kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
     let false_source = inconsistent.state.verified_lane_consensus_contexts().unwrap().unwrap();
-    assert!(inconsistent.state.first_lane_admitted_input(&false_source, &false_source.contexts()[0]).is_err(),
-        "fixture-only raw registry seeding cannot supply an admission omitted from the actual carrier");
+    assert_eq!(inconsistent.state.first_lane_admitted_input(&false_source, &false_source.contexts()[0]).unwrap_err(),
+        "first-admission canonical index is absent from its carrier",
+        "signed context witness cannot supply an admission omitted from the actual carrier");
     assert!(matches!(state.first_lane_admitted_input(&observed, &false_source.contexts()[0]).unwrap(),
         FirstLaneAdmittedInputReadV1::InstanceNotCurrent));
 }

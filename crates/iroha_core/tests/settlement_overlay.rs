@@ -175,7 +175,7 @@ fn grant_exact_settlement_consent(
 #[test]
 fn dvp_overlay_rejects_underfunded_leg() {
     let (state, delivery_def_id, payment_def_id) = settlement_state();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let instruction = DvpIsi {
@@ -228,7 +228,7 @@ fn dvp_overlay_rejects_underfunded_leg() {
 #[test]
 fn pvp_overlay_executes_when_funded() {
     let (state, primary_def_id, counter_def_id) = settlement_state();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let instruction = PvpIsi {
@@ -277,7 +277,7 @@ fn pvp_overlay_executes_when_funded() {
 fn dvp_overlay_rejects_commit_first_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let instruction = DvpIsi {
@@ -327,7 +327,7 @@ fn dvp_overlay_rejects_commit_first_without_moving_assets() {
 fn dvp_overlay_rejects_commit_second_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let alice_delivery_before = asset_balance(&stx, &delivery_def_id, &ALICE_ID);

@@ -112,7 +112,6 @@ impl Fixture {
                 NonZeroU64::new(2).unwrap(),
                 Some(first.block_header.hash()),
                 None,
-                None,
                 genesis_ms + 1,
                 0,
             ),
@@ -122,7 +121,6 @@ impl Fixture {
             BlockHeader::new(
                 NonZeroU64::new(3).unwrap(),
                 Some(second.block_header.hash()),
-                None,
                 None,
                 genesis_ms + 2,
                 0,

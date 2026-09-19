@@ -82,9 +82,8 @@ use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{
-            Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
-            SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
-            kura_replica_advert_registry_key_capacity,
+            Fastpq as FastpqConfig, Kura as Config, LaneConfig, SnapshotBootstrapPolicy,
+            SumeragiV2RuntimeLimits, kura_replica_advert_registry_key_capacity,
         },
         defaults::{
             kura::{
@@ -894,9 +893,6 @@ pub struct Kura {
     /// Bitmask of observed canonical reader kinds after their initial prune-poison check.
     #[cfg(test)]
     canonical_read_kinds_after_prune_check: AtomicUsize,
-    /// Test hook failing a direct relabel after its block-directory move.
-    #[cfg(test)]
-    fail_next_relabel_after_block_move: AtomicBool,
     /// Test hook pausing after exact instance preparation and before reference publication.
     #[cfg(test)]
     pause_geometry_reference_publication: AtomicBool,
@@ -2578,7 +2574,7 @@ include!("kura/retired_pipeline_roster_rejection.rs");
 impl Kura {
     fn new_inner(
         config: &Config,
-        lane_config: &LaneConfig,
+        _lane_config: &LaneConfig,
         configured_catalog_hash: Option<Hash>,
         provisional_hash_only_prefix: Option<usize>,
         discover_signed_lineage_marker: bool,
@@ -3180,8 +3176,6 @@ impl Kura {
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
             #[cfg(test)]
-            fail_next_relabel_after_block_move: AtomicBool::new(false),
-            #[cfg(test)]
             pause_geometry_reference_publication: AtomicBool::new(false),
             #[cfg(test)]
             geometry_reference_publication_paused: AtomicBool::new(false),
@@ -3571,8 +3565,6 @@ impl Kura {
             observe_canonical_reads_after_prune_check: AtomicBool::new(false),
             #[cfg(test)]
             canonical_read_kinds_after_prune_check: AtomicUsize::new(0),
-            #[cfg(test)]
-            fail_next_relabel_after_block_move: AtomicBool::new(false),
             #[cfg(test)]
             pause_geometry_reference_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -9034,47 +9026,6 @@ impl Kura {
         };
         self.merge_entry_for_carrier(u64::try_from(block_height.get())?, block_hash)
     }
-    /// Return every globally carried execution entry in sparse carrier order.
-    ///
-    /// The result is complete regardless of merge-log cache capacity.
-    pub(crate) fn committed_merge_execution_entries(
-        &self,
-    ) -> Result<Vec<(MergeLedgerCarrierRecord, MergeLedgerEntry)>> {
-        self.ensure_prune_recovery_not_required()?;
-        #[cfg(test)]
-        {
-            let mut merge_log = self.merge_log.lock();
-            merge_log.complete_execution_scans =
-                merge_log.complete_execution_scans.saturating_add(1);
-        }
-        for _ in 0..2 {
-            let records = self.merge_carrier_records()?;
-            let generation = self.merge_carrier_index.lock().generation;
-            let mut committed = Vec::new();
-            for record in records {
-                let entry = self
-                    .merge_log
-                    .lock()
-                    .entry_by_hash(record.entry_hash)?
-                    .ok_or_else(|| {
-                        Error::MergeCarrierConflict(format!(
-                            "carrier block {} references a missing committed merge entry",
-                            record.block_height
-                        ))
-                    })?;
-                if entry.execution_batch.is_some() {
-                    committed.push((record, entry));
-                }
-            }
-            if self.merge_carrier_index.lock().generation == generation {
-                self.ensure_prune_recovery_not_required()?;
-                return Ok(committed);
-            }
-        }
-        Err(Error::MergeCarrierConflict(
-            "sparse merge carriers changed during complete query snapshot".to_owned(),
-        ))
-    }
     /// Snapshot every sparse merge carrier after validating each record against
     /// the canonical durable block hash. The result is ordered by block height.
     ///
@@ -11468,12 +11419,20 @@ impl Kura {
     ) -> Result<Option<MergeLedgerEntry>> {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
+        self.merge_entry_by_hash_with_sidecar_guard(hash, self.sidecar_lock.lock())
+    }
+    /// Consume the caller's exact sidecar guard, releasing it before merge-log access.
+    /// This lets nonblocking publication preparation use the same canonical lookup.
+    fn merge_entry_by_hash_with_sidecar_guard(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+        sidecar: PublicationGuard<'_>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
         let path = self.pending_merge_entry_path(hash);
-        let pending = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            self.read_pending_merge_entry_path(&path, Some(hash))?
-        };
+        let pending = self.read_pending_merge_entry_path(&path, Some(hash))?;
+        drop(sidecar);
         self.ensure_prune_recovery_not_required()?;
         if pending.is_some() {
             return Ok(pending);
@@ -12007,36 +11966,6 @@ impl Kura {
             merge_log.complete_execution_scans,
             merge_log.indexed_lookups,
         )
-    }
-    /// Exact identities attempted through this instance's indexed lookup path.
-    #[cfg(test)]
-    pub(crate) fn merge_query_indexed_hashes_for_test(&self) -> BTreeSet<HashOf<MergeLedgerEntry>> {
-        self.merge_log.lock().indexed_lookup_hashes.clone()
-    }
-    /// Corrupt a sidecar payload while retaining its frame index for fail-closed tests.
-    #[cfg(test)]
-    pub(crate) fn remove_merge_entry_payload_for_test(&self, hash: HashOf<MergeLedgerEntry>) {
-        let mut merge_log = self.merge_log.lock();
-        merge_log.in_memory_entries.remove(&hash);
-        let Some(frame) = merge_log.frames_by_hash.get(&hash).copied() else {
-            return;
-        };
-        let Some(path) = merge_log.file.as_ref().map(|file| file.path.clone()) else {
-            return;
-        };
-        let payload_len =
-            usize::try_from(frame.payload_len).expect("merge frame payload length fits usize");
-        let mut file = FileWrap::open_with(path, |options| {
-            options.write(true);
-        })
-        .expect("open indexed merge sidecar without append mode for test corruption");
-        file.try_io(|inner| {
-            inner.seek(SeekFrom::Start(frame.frame_offset.saturating_add(4)))?;
-            inner.write_all(&vec![0; payload_len])?;
-            inner.sync_data()?;
-            Ok(())
-        })
-        .expect("corrupt indexed merge sidecar payload for test");
     }
     #[cfg(test)]
     fn fail_next_merge_append_after_for_test(&self, point: MergeLedgerAppendFailurePoint) {
@@ -18678,11 +18607,16 @@ impl Kura {
         }
         Ok(true)
     }
-    fn pending_block_bytes_raw(&self, persisted_count: usize) -> Result<u64> {
+    fn pending_block_bytes_raw<E: From<Error>>(
+        &self,
+        persisted_count: usize,
+        mut resolve_merge: impl FnMut(HashOf<MergeLedgerEntry>) -> Result<Option<MergeLedgerEntry>, E>,
+    ) -> Result<u64, E> {
         if self.emergency_fast_startup_enabled() {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
                 subsystem: "pending canonical block cache",
-            });
+            }
+            .into());
         }
         #[cfg(test)]
         self.pending_budget_raw_scans
@@ -18707,7 +18641,7 @@ impl Kura {
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
             let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
-                Some(self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                Some(resolve_merge(reference.entry_hash)?.ok_or(
                     Error::MissingCertifiedMergeSidecar {
                         entry_hash: reference.entry_hash,
                     },
@@ -18724,11 +18658,23 @@ impl Kura {
         Ok(pending_bytes)
     }
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
+        self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash| {
+            self.merge_entry_by_hash(hash)
+        })
+    }
+    /// Share exact pending accounting while the caller owns merge lookup acquisition.
+    /// A resolver refusal leaves the pending-byte cache invalid for the next attempt.
+    fn pending_block_bytes_with_merge_resolver<E: From<Error>>(
+        &self,
+        persisted_count: usize,
+        unindexed_bytes: u64,
+        resolve_merge: impl FnMut(HashOf<MergeLedgerEntry>) -> Result<Option<MergeLedgerEntry>, E>,
+    ) -> Result<u64, E> {
         if self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
             let pending = self.pending_budget_bytes.load(Ordering::Relaxed);
             return Ok(pending.saturating_sub(unindexed_bytes));
         }
-        let pending_bytes = self.pending_block_bytes_raw(persisted_count)?;
+        let pending_bytes = self.pending_block_bytes_raw(persisted_count, resolve_merge)?;
         self.pending_budget_bytes
             .store(pending_bytes, Ordering::Relaxed);
         self.pending_budget_bytes_valid
@@ -18892,7 +18838,8 @@ impl Kura {
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, None)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
-        let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
+        let pending_raw =
+            self.pending_block_bytes_raw(persisted_count, |hash| self.merge_entry_by_hash(hash))?;
         let top_is_pending = block_count > persisted_count;
         let mut pending_raw_after = pending_raw;
         if top_is_pending {
@@ -42710,9 +42657,15 @@ include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
 #[path = "kura/native_lane_batch_source.rs"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: integrate the native lane reducer driver with production before removing this expectation"
+    )
+)]
 mod native_lane_batch_source;
 pub(crate) use native_lane_batch_source::FinalizedNativeLaneBatchV1;
-#[cfg(test)]
 pub(crate) use native_lane_batch_source::NativeLaneBatchCarrierReadV1;
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");

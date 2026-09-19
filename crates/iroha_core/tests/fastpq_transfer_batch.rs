@@ -45,7 +45,7 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xCD; Hash::LENGTH]));
@@ -105,7 +105,7 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xAB; Hash::LENGTH]));

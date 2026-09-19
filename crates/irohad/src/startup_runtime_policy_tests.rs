@@ -65,8 +65,10 @@ fn startup_compliance_is_installed_before_execution_policy_derivation_and_reused
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.compliance.enabled = true;
     nexus.compliance.policy_dir = Some(directory.path().to_path_buf());
+    let baseline = freeze_lane_manifests_for_startup_replay(&nexus)
+        .expect("freeze configured manifest baseline before State policy installation");
     let (_storage, mut state) = policy_startup_state(&nexus);
-    let policies = install_lane_policies_for_startup_replay(&mut state, nexus.clone())
+    let policies = install_lane_policies_for_startup_replay(&mut state, nexus.clone(), &baseline)
         .expect("validate and install all policies before geometry");
     let manifests = &policies.manifests;
     let engine = policies.compliance.as_ref().expect("enabled engine");
@@ -157,9 +159,11 @@ fn governed_startup_publishes_geometry_only_after_installing_frozen_policies() {
     std::fs::write(&path, br#"{"lane":"default","governance":"parliament"}"#)
         .expect("write configured governance manifest");
     let nexus = governed_nexus(directory.path());
+    let baseline = freeze_lane_manifests_for_startup_replay(&nexus)
+        .expect("freeze the actual governed manifest source");
     let (_storage, mut state) = policy_startup_state(&nexus);
     let original_catalog = state.nexus_snapshot().lane_catalog;
-    let policies = install_lane_policies_for_startup_replay(&mut state, nexus.clone())
+    let policies = install_lane_policies_for_startup_replay(&mut state, nexus.clone(), &baseline)
         .expect("complete governed policy snapshot");
     assert_eq!(
         state.nexus_snapshot().lane_catalog,
@@ -195,9 +199,16 @@ fn startup_policy_failure_preserves_prior_policies_and_geometry() {
     );
     let original_catalog = state.nexus_snapshot().lane_catalog;
     let original_manifests = state.lane_manifests.read().clone();
+    let original_baseline = freeze_lane_manifests_for_startup_replay(&state.nexus_snapshot())
+        .expect("freeze the original ungoverned configured baseline");
     assert!(
-        install_lane_policies_for_startup_replay(&mut state, nexus.clone()).is_err(),
-        "missing governed manifest fails before any installation"
+        freeze_lane_manifests_for_startup_replay(&nexus).is_err(),
+        "missing governed manifest fails at the actual source-freezing boundary"
+    );
+    assert!(
+        install_lane_policies_for_startup_replay(&mut state, nexus.clone(), &original_baseline)
+            .is_err(),
+        "the original ungoverned baseline cannot authorize a missing governed manifest"
     );
     assert!(Arc::ptr_eq(
         &original_manifests,
@@ -209,10 +220,12 @@ fn startup_policy_failure_preserves_prior_policies_and_geometry() {
         br#"{"lane":"default","governance":"parliament"}"#,
     )
     .expect("valid manifest before invalid compliance source");
+    let baseline = freeze_lane_manifests_for_startup_replay(&nexus)
+        .expect("freeze the actual newly supplied governed manifest");
     nexus.compliance.enabled = true;
     nexus.compliance.policy_dir = None;
     assert!(
-        install_lane_policies_for_startup_replay(&mut state, nexus).is_err(),
+        install_lane_policies_for_startup_replay(&mut state, nexus, &baseline).is_err(),
         "invalid compliance must not partially replace an otherwise valid manifest snapshot"
     );
     assert!(Arc::ptr_eq(

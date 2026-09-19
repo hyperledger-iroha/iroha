@@ -61,7 +61,7 @@ impl BenchState {
     }
 }
 fn bench_block_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0)
+    BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)
 }
 /// Construct a world state with a single domain and two accounts (authority + recipient)
 /// suitable for running isolated ISI executor benchmarks.

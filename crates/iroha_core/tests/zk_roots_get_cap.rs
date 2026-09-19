@@ -121,7 +121,7 @@ fn zk_roots_get_respects_cap_and_max() {
         })
         .expect("empty SCCP outbox accepts roots-cap test configuration");
     // Seed world: domain/account/asset and mint
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();

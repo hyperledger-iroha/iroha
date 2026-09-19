@@ -86,9 +86,11 @@ struct SnapshotPayloadCache {
 }
 /// Changed WSV keys captured during a block for incremental snapshotting.
 #[derive(Debug, Default, Clone)]
+#[cfg(test)]
 pub(crate) struct TieredSnapshotDiff {
     entries: Vec<TieredKeyHandle>,
 }
+#[cfg(test)]
 impl TieredSnapshotDiff {
     /// Record a touched entry.
     pub(crate) fn push(&mut self, entry: TieredKeyHandle) {
@@ -131,6 +133,7 @@ impl TieredSnapshotPayload {
         self.entries.is_empty()
     }
 }
+#[cfg(test)]
 impl From<&TieredSnapshotPayload> for TieredSnapshotDiff {
     fn from(payload: &TieredSnapshotPayload) -> Self {
         let mut diff = TieredSnapshotDiff::default();
@@ -210,6 +213,7 @@ impl TieredStateBackend {
         Ok(())
     }
     /// Record a snapshot using a diff of touched entries.
+    #[cfg(test)]
     pub(crate) fn record_world_snapshot_with_diff(
         &mut self,
         world: &World,
@@ -435,6 +439,7 @@ impl TieredStateBackend {
         let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
         Ok(Some(plan))
     }
+    #[cfg(test)]
     fn plan_world_snapshot_with_diff(
         &mut self,
         world: &World,
@@ -696,6 +701,7 @@ impl TieredStateBackend {
             cold_entries: cold_plans,
         })
     }
+    #[cfg(test)]
     fn apply_snapshot_diff(
         &mut self,
         world: &World,
@@ -4587,6 +4593,7 @@ impl TieredKeyHandle {
         let key_hash = sha256(&key_encoded);
         Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
     }
+    #[cfg(test)]
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{

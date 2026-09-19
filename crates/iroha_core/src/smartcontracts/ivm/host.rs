@@ -2590,6 +2590,7 @@ impl HostExecutionArtifacts {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn queued_instructions(&self) -> Vec<InstructionBox> {
         self.queued
             .iter()

@@ -6,6 +6,27 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[test]
+fn block_identity_binds_original_owner_predecessor_and_mode_without_reading_values() {
+    let target = Cell::new(10_u64);
+    let foreign = Cell::new(10_u64);
+    let mut block = target.block();
+    let identity = block.publication_identity();
+    assert!(block.belongs_to(&target));
+    assert!(!block.belongs_to(&foreign));
+    assert_eq!(identity, block.publication_identity());
+    assert_ne!(identity, foreign.block().publication_identity());
+    *block.get_mut() = 99;
+    assert!(block.belongs_to(&target));
+    assert_eq!(identity, block.publication_identity());
+    drop(block);
+    assert_eq!(identity, target.block().publication_identity());
+    assert_ne!(identity, target.block_and_revert().publication_identity());
+    target.block().commit();
+    assert_eq!(*target.view(), 10);
+    assert_ne!(identity, target.block().publication_identity());
+}
+
 fn detach<V: Value>(block: Block<'_, V>) -> Detached<V, ()> {
     block.try_detach(|_| Ok::<_, ()>(())).unwrap()
 }

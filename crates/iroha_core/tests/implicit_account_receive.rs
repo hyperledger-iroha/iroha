@@ -61,7 +61,6 @@ fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
         NonZeroU64::new(height).expect("height"),
         None,
         None,
-        None,
         timestamp_ms,
         0,
     )

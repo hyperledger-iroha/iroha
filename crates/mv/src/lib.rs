@@ -8,7 +8,9 @@ use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;
 mod publication;
-pub use publication::{PublicationPreparationError, PublicationPreparationResult};
+pub use publication::{
+    BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,
+};
 mod release;
 pub use release::{ReleaseFuture, ReleaseGuard, ReleaseNotification, ReleaseWait};
 

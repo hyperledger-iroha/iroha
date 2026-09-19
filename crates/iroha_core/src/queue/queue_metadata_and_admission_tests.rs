@@ -464,32 +464,71 @@ async fn push_rejects_without_governance_manifest() {
         1
     );
 }
+/// Preserve the signed operation while targeting the fixture's actual configured dataspace.
+fn accepted_uaid_dataspace_tx(
+    state: &State,
+    dataspace: DataSpaceId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    time_source: &TimeSource,
+) -> AcceptedTransaction<'static> {
+    let nexus = state.nexus_snapshot();
+    let alias = &nexus
+        .dataspace_catalog
+        .by_id(dataspace)
+        .expect("fixture target dataspace exists")
+        .alias;
+    let target = DomainId::try_new(&unique_test_domain_name("uaid"), alias)
+        .expect("domain in the actual configured target dataspace");
+    let tx = accepted_tx_with(
+        account.clone(),
+        key_pair,
+        time_source,
+        vec![Unregister::domain(target).into()],
+        Metadata::default(),
+    );
+    let plan = ConfigLaneRouter::new(
+        nexus.routing_policy,
+        nexus.dataspace_catalog,
+        nexus.lane_catalog,
+    )
+    .try_route_plan_with_view(&tx, &state.view())
+    .expect("signed instruction must resolve before UAID compliance is tested");
+    assert_eq!(
+        plan,
+        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, dataspace)),
+        "the actual instruction and the fixture router must name the same route"
+    );
+    tx
+}
+
 #[tokio::test]
 async fn uaid_without_dataspace_binding_is_rejected() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
     let dataspace = DataSpaceId::new(7);
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
-    let kura = Kura::blank_kura_for_testing();
+    let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
     let metrics = Arc::new(Metrics::default());
     #[cfg(feature = "telemetry")]
-    let state = {
-        let mut state = State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        );
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(new_queue_test_state_with_telemetry(
+        world,
+        nexus,
+        query_handle,
+        StateTelemetry::new(metrics.clone(), true),
+    ));
     #[cfg(not(feature = "telemetry"))]
-    let state = {
-        let mut state = State::new(world, kura, query_handle);
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        nexus,
+        query_handle,
+    ));
+    #[cfg(feature = "telemetry")]
+    assert!(std::ptr::eq(
+        state.metrics().metrics_ref(),
+        metrics.as_ref()
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -519,7 +558,7 @@ async fn uaid_without_dataspace_binding_is_rejected() {
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
     queue.install_lane_manifests(&manifests);
     let result = queue.push(
-        accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+        accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
     );
     match result {
@@ -578,27 +617,28 @@ async fn uaid_binding_allows_lane_identity_extraction() {
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::bound"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
-    let kura = Kura::blank_kura_for_testing();
+    let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
     let metrics = Arc::new(Metrics::default());
     #[cfg(feature = "telemetry")]
-    let state = {
-        let mut state = State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        );
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(new_queue_test_state_with_telemetry(
+        world,
+        nexus,
+        query_handle,
+        StateTelemetry::new(metrics.clone(), true),
+    ));
     #[cfg(not(feature = "telemetry"))]
-    let state = {
-        let mut state = State::new(world, kura, query_handle);
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        nexus,
+        query_handle,
+    ));
+    #[cfg(feature = "telemetry")]
+    assert!(std::ptr::eq(
+        state.metrics().metrics_ref(),
+        metrics.as_ref()
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -629,7 +669,7 @@ async fn uaid_binding_allows_lane_identity_extraction() {
     queue.install_lane_manifests(&manifests);
     queue
         .push(
-            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
             state.view(),
         )
         .expect("UAID with active dataspace binding should be admitted");
@@ -672,11 +712,11 @@ async fn uaid_binding_allows_matching_dataspace() {
     let dataspace = DataSpaceId::new(24);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::aligned"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-    let state = Arc::new(state);
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
+        LiveQueryStore::start_test(),
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test_with_router_for_routes(
         config_factory(),
@@ -689,7 +729,7 @@ async fn uaid_binding_allows_matching_dataspace() {
     );
     queue
         .push(
-            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
             state.view(),
         )
         .expect("UAID bound to dataspace should be admitted");
@@ -713,11 +753,11 @@ async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
     inactive.lifecycle.mark_expired(2);
     set.upsert(inactive);
     world.space_directory_manifests.insert(uaid, set);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-    let state = Arc::new(state);
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
+        LiveQueryStore::start_test(),
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test_with_router_for_routes(
         config_factory(),
@@ -729,7 +769,7 @@ async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
         &[(LaneId::SINGLE, dataspace)],
     );
     let result = queue.push(
-        accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+        accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
     );
     match result {

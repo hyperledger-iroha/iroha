@@ -3046,9 +3046,12 @@ def _extract_braced_item(source: str, declaration: re.Match[str]) -> str | None:
     """Return one brace-balanced Rust item while skipping comments and literals."""
 
     start = declaration.start()
-    index = source.find("{", declaration.end())
-    if index < 0:
-        return None
+    # A function signature may destructure a struct argument. Its braces belong
+    # to the balanced parameter list, not the function body. Scan the signature
+    # with the same literal/comment rules as the body; a raw first-brace search
+    # would bind only the argument pattern and miss the actual constructor.
+    index = declaration.end()
+    signature_delimiters: list[str] = []
     depth = 0
     state = "code"
     block_comment_depth = 0
@@ -3122,13 +3125,31 @@ def _extract_braced_item(source: str, declaration: re.Match[str]) -> str | None:
             index += 1
             continue
         if char == "'" and index + 1 < len(source):
-            # Rust lifetimes are followed by an identifier; character literals
-            # have a closing quote nearby.
-            closing = source.find("'", index + 1, min(index + 8, len(source)))
-            if closing >= 0:
+            # Distinguish actual character literals from adjacent lifetimes in
+            # signatures (for example &'a &'b T). Escaped characters retain the
+            # existing literal scanner through their closing quote.
+            if source[index + 1] == "\\" or (
+                index + 2 < len(source) and source[index + 2] == "'"
+            ):
                 state = "char"
                 index += 1
                 continue
+        if depth == 0:
+            if char in "([" or (signature_delimiters and char == "{"):
+                signature_delimiters.append(char)
+            elif char in ")]" or (signature_delimiters and char == "}"):
+                expected = {")": "(", "]": "[", "}": "{"}[char]
+                if not signature_delimiters or signature_delimiters.pop() != expected:
+                    return None
+            elif not signature_delimiters:
+                if char == ";":
+                    # A declaration without a body must not borrow the next
+                    # sibling's body as evidence for this item.
+                    return None
+                if char == "{":
+                    depth = 1
+            index += 1
+            continue
         if char == "{":
             depth += 1
         elif char == "}":
@@ -3432,14 +3453,16 @@ def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
     # implementation in the same file to satisfy the binding.
     # Retained ownership types have lifetime-parameterized inherent impls.
     # Keep the self type exact: a similarly named owner or a trait argument
-    # mentioning Owner must not satisfy its method obligation. Nested generic
-    # syntax remains unsupported and fails closed instead of guessing an owner.
-    generic = r"(?:<[^<>{}\n]*>)?"
+    # mentioning Owner must not satisfy its method obligation. Rustfmt may wrap
+    # the parameters, self type and opening brace onto separate lines. Nested
+    # generic syntax remains unsupported and fails closed instead of guessing
+    # an owner.
+    generic = r"(?:<[^<>{}]*>)?"
     exact_owner = rf"{re.escape(owner)}{generic}"
     impl_re = re.compile(
-        rf"(?m)^[ \t]*impl{generic}[ \t]+(?:"
-        rf"{exact_owner}|[^{{\n]+[ \t]+for[ \t]+{exact_owner}"
-        rf")[ \t]*(?=\{{)"
+        rf"(?m)^[ \t]*impl{generic}\s+(?:"
+        rf"{exact_owner}|[^{{}};]+?\s+for\s+{exact_owner}"
+        rf")\s*(?=\{{)"
     )
     return tuple(
         item

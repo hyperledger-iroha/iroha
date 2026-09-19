@@ -5,7 +5,7 @@ enum AutonomousRuntimeEffectFixture {
 }
 
 const AUTONOMOUS_RUNTIME_DATASPACE: &str = "catalogmerge";
-const AUTONOMOUS_RUNTIME_LANE: LaneId = LaneId::new(1);
+const AUTONOMOUS_RUNTIME_LANE: LaneId = LaneId::new(2);
 
 fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock)
 {
@@ -77,7 +77,7 @@ fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<Key
 }
 
 fn autonomous_runtime_effect_entrypoint(
-    state: &mut State,
+    state: &State,
     validator_keypairs: &[KeyPair],
     tag: u8,
     effect: AutonomousRuntimeEffectFixture,
@@ -187,33 +187,71 @@ fn autonomous_runtime_effect_entrypoint(
     )
 }
 
-fn autonomous_runtime_effect_fixture(
+fn install_native_runtime_startup_registry(state: &State, keys: &[KeyPair]) {
+    let nexus = state.nexus_snapshot();
+    let validators = keys
+        .iter()
+        .map(|key| {
+            let validator = AccountId::new(key.public_key().clone()).to_string();
+            let peer_id = PeerId::new(key.public_key().clone()).to_string();
+            norito::json!({ "validator": validator, "peer_id": peer_id })
+        })
+        .collect::<Vec<_>>();
+    let directory = tempfile::tempdir().unwrap();
+    for lane in nexus.lane_catalog.lanes() {
+        let alias = lane.alias.clone();
+        let lane_validators = validators.clone();
+        let manifest = norito::json!({
+            "lane": alias, "version": 1,
+            "validators": lane_validators, "quorum": 3,
+        });
+        std::fs::write(
+            directory
+                .path()
+                .join(format!("{}.manifest.json", lane.alias)),
+            norito::json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+    let registry = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        },
+    ));
+    assert!(registry.is_bound_to_catalog(&nexus.lane_catalog));
+    state.install_lane_manifests(&registry);
+}
+
+fn autonomous_native_runtime_effect_fixture(
     effect: AutonomousRuntimeEffectFixture,
-) -> (State, MergeLedgerEntry, SignedBlock) {
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_with_runtime_effect(
-            false,
-            false,
-            None,
-            false,
-            Some(effect),
-        );
-    assert!(
-        entry
-            .execution_batch
-            .as_ref()
-            .expect("runtime execution batch")
-            .lanes
-            .iter()
-            .all(|lane| lane.results.iter().all(|result| result.0.is_ok())),
-        "runtime-effect fixture must commit successful native parameter execution: {:?}",
-        entry
-            .execution_batch
-            .as_ref()
-            .expect("runtime execution batch")
-            .lanes
+) -> (Box<NativeEconomicFixture>, SignedBlock, HeightContext) {
+    native_publication_fixture_for_test(&[NativeEconomicCase::RuntimeEffect(effect)])
+}
+
+fn assert_native_application_recorded_for_test(state: &State, carrier: &SignedBlock) {
+    let batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap();
+    let identity = super::lane_decision_batch::native_application_identity(
+        &carrier.header(),
+        batch.canonical_hash().unwrap(),
     );
-    (state, entry, carrier)
+    let key = StatePath::from_str(&format!(
+        "native_lane_application_{}",
+        hex::encode(identity.as_ref())
+    ))
+    .unwrap();
+    assert_eq!(
+        state.world.smart_contract_state.view().get(&key),
+        Some(&norito::encode_canonical(&identity).unwrap()),
+        "exact once-only native application marker"
+    );
 }
 
 #[expect(
@@ -726,12 +764,6 @@ fn autonomous_merge_batch_transfer_commit_authorization_fixture(
         autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode), false);
     (state, entry, carrier)
 }
-fn autonomous_sealed_reveal_merge_commit_authorization_fixture()
--> (State, MergeLedgerEntry, SignedBlock) {
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_inner(false, false, None, true);
-    (state, entry, carrier)
-}
 #[derive(Clone, Copy)]
 enum QueuePlanTransferFixture {
     Single,
@@ -1061,33 +1093,64 @@ fn install_exact_merge_beacon_fixture(
     next
 }
 
-fn autonomous_merge_beacon_composition_fixture() -> (
-    State,
-    MergeLedgerEntry,
+// The native input Decision is the only economic source authority. The pulse
+// session and pending request are installed before admission finality; the
+// complete applying source base therefore commits them before reconstruction.
+fn autonomous_native_beacon_composition_fixture() -> (
+    Box<NativeEconomicFixture>,
     SignedBlock,
     iroha_data_model::block::consensus_v2::HeightContext,
 ) {
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture_with_beacon(
-        false, false, None, false, None, true,
+    let mut pulse = None;
+    let fixture = native_economic_fixture_with_initializers(
+        &[NativeEconomicCase::Transfer(25)],
+        false,
+        Some(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 8192,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
+        }),
+        None,
+        |_| {},
+        |state, parent| {
+            let keys = (0xD3_u8..=0xD6)
+                .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+                .collect::<Vec<_>>();
+            pulse = Some(install_exact_merge_beacon_fixture(state, &keys, parent));
+        },
     );
-    let artifact = state
+    let mut carrier = native_consumer_stage_carrier(&fixture);
+    carrier.set_npos_consensus_effects(Some(iroha_data_model::consensus::NposConsensusEffects {
+        finalized_global_beacon_pulse: pulse,
+        ..Default::default()
+    }));
+    let key = merge_carrier_finality_fixture_keypair();
+    carrier
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(key.private_key(), carrier.hash()),
+            ),
+        ]))
+        .unwrap();
+    let parent = fixture
+        .native
+        .state
         .kura
-        .v2_finality_artifact(carrier.header().height().get())
-        .expect("native carrier finality lookup")
-        .expect("native carrier finality retained");
-    artifact
-        .verify()
-        .expect("exact carrier finality is cryptographic");
-    (state, entry, carrier, artifact.height_context)
-}
-
-fn staged_native_merge_beacon_block<'state>(
-    state: &'state State,
-    carrier: &SignedBlock,
-    context: &iroha_data_model::block::consensus_v2::HeightContext,
-) -> Box<StateBlock<'state>> {
-    ValidBlock::state_block_for_execution_for_test(carrier, state, context)
-        .expect("production pulse admission and certified merge composition")
+        .v2_finality_artifact(fixture.native.block.header().height().get())
+        .unwrap()
+        .unwrap();
+    let context = crate::sumeragi::v2_context::build_successor_height_context(
+        &parent,
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&fixture.native.state)
+            .expect("derive Native applying policy from its exact committed predecessor"),
+        None,
+    )
+    .unwrap();
+    (fixture, carrier, context)
 }
 
 fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
@@ -1406,107 +1469,6 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
     );
     (state, entry, carrier, expired_axt_replay_key)
 }
-fn staged_autonomous_merge_commit_block<'state>(
-    state: &'state State,
-    entry: &MergeLedgerEntry,
-    carrier: &SignedBlock,
-) -> StateBlock<'state> {
-    let mut state_block = state
-        .block_with_certified_merge_entry(
-            carrier.header().clone(),
-            entry,
-            ConsensusMode::Permissioned,
-        )
-        .expect("certified autonomous execution must stage on its exact carrier");
-    assert!(
-        state_block
-            .canonical_wsv_merge_commit_authorization
-            .is_some(),
-        "successful re-execution must mint canonical WSV commit authorization"
-    );
-    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, carrier);
-    // TODO: migrate the callers' certified-merge preexecution to the authenticated
-    // native source capsule and its complete common owner. This legacy fixture
-    // must keep failing until that migration exists: its old empty Time tuple
-    // also executed maintenance and emitted an authorization-bound event.
-    let mut executed = carrier.canonical_resultless_proposal();
-    ValidBlock::execute_block_outputs_for_test(&mut executed, &mut state_block, None)
-        .expect("autonomous fixture requires the complete canonical native owner");
-    assert!(
-        executed.execution_outputs().iter().all(|output| matches!(
-            output,
-            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(_)
-        )),
-        "this fixture registers no internal invocation sources"
-    );
-    state_block
-        .validate_staged_merge_execution_authorization()
-        .expect("pre-vote authorization must bind deterministic carrier events");
-    let committed = ValidBlock::new_unverified_for_tests(carrier.clone())
-        .commit_unchecked()
-        .unpack(|_| {});
-    let topology = state.commit_topology_snapshot();
-    let (_events, authorization) = state_block.apply_without_execution_inner(
-        &committed,
-        topology,
-        ApplyTopologyAuthority::Fixture,
-    );
-    authorization.expect("fixture application must authorize the exact canonical carrier");
-    assert!(
-        state_block
-            .canonical_carrier_commit_metadata_authorization
-            .is_some(),
-        "exact finalized carrier application must mint metadata authorization"
-    );
-    state_block
-}
-fn production_validated_autonomous_merge_commit_block<'state>(
-    state: &'state State,
-    entry: &MergeLedgerEntry,
-    carrier: &SignedBlock,
-) -> StateBlock<'state> {
-    let mut state_block = state
-        .block_with_certified_merge_entry(
-            carrier.header().clone(),
-            entry,
-            ConsensusMode::Permissioned,
-        )
-        .expect("certified autonomous execution must stage on its exact carrier");
-    let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut state_block).unpack(|_| {});
-    let _witness = state_block
-        .take_exec_witness()
-        .expect("production validation must hand its execution witness to consensus");
-    assert!(
-        state_block.batch_transfer_outcomes.is_empty(),
-        "production carrier finalization must not inherit autonomous receipt rows"
-    );
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    assert_eq!(
-        committed.as_ref().hash(),
-        carrier.hash(),
-        "production validation must retain the certified carrier identity"
-    );
-    let topology = state.commit_topology_snapshot();
-    let (_events, authorization) = state_block.apply_without_execution_inner(
-        &committed,
-        topology,
-        ApplyTopologyAuthority::Fixture,
-    );
-    authorization.expect("production-validated carrier application must remain authorized");
-    assert!(
-        state_block
-            .canonical_carrier_commit_metadata_authorization
-            .is_some(),
-        "production carrier application must mint metadata authorization"
-    );
-    state_block
-        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::FinalizedCarrier {
-            carrier_height: carrier.header().height().get(),
-            carrier_hash: &carrier.hash(),
-        })
-        .expect("production consumer handoff must leave the exact finalized carrier surface");
-    state_block
-}
 fn stage_exact_autonomous_carrier_membership_for_pre_vote(
     state_block: &mut StateBlock<'_>,
     carrier: &SignedBlock,
@@ -1532,59 +1494,4 @@ fn autonomous_carrier_parent_height(carrier: &SignedBlock) -> usize {
             .expect("autonomous carrier has a parent"),
     )
     .expect("autonomous carrier parent height fits usize")
-}
-struct ExactTestStateBlockCommitAuthorization {
-    carrier_block_hash: HashOf<BlockHeader>,
-    execution_reference: iroha_data_model::block::CertifiedMergeLedgerReference,
-    lane_count: usize,
-}
-impl StateBlockCommitAuthorization for ExactTestStateBlockCommitAuthorization {
-    fn consume_for_state_commit(
-        self: Box<Self>,
-        carrier_block_hash: HashOf<BlockHeader>,
-        staged_merge_entry: Option<&MergeLedgerEntry>,
-    ) -> Result<(), String> {
-        let entry = staged_merge_entry
-            .filter(|entry| entry.execution_batch.is_some())
-            .ok_or_else(|| "test authorization requires one autonomous merge entry".to_owned())?;
-        let lane_count = entry
-            .execution_batch
-            .as_ref()
-            .expect("filtered autonomous execution entry")
-            .lanes
-            .len();
-        if carrier_block_hash != self.carrier_block_hash
-            || iroha_data_model::block::CertifiedMergeLedgerReference::new(entry)
-                != self.execution_reference
-            || lane_count != self.lane_count
-        {
-            return Err("test authorization identity changed before State commit".to_owned());
-        }
-        Ok(())
-    }
-}
-fn exact_test_state_commit_authorization(
-    state_block: &StateBlock<'_>,
-) -> Box<dyn StateBlockCommitAuthorization> {
-    let entry = state_block
-        .staged_merge_entry
-        .as_ref()
-        .filter(|entry| entry.execution_batch.is_some())
-        .expect("fixture State block carries autonomous execution");
-    Box::new(ExactTestStateBlockCommitAuthorization {
-        carrier_block_hash: state_block._curr_block.hash(),
-        execution_reference: iroha_data_model::block::CertifiedMergeLedgerReference::new(entry),
-        lane_count: entry
-            .execution_batch
-            .as_ref()
-            .expect("filtered autonomous execution entry")
-            .lanes
-            .len(),
-    })
-}
-fn commit_staged_autonomous_for_test(
-    state_block: StateBlock<'_>,
-) -> Result<(), TransactionsBlockError> {
-    let authorization = exact_test_state_commit_authorization(&state_block);
-    state_block.commit_with_state_commit_authorization(authorization)
 }

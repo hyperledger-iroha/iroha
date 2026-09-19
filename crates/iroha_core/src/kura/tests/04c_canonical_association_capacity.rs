@@ -108,7 +108,7 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         .persisted_count_and_unindexed_bytes()
         .expect("measure replacement durable frontier");
     let pending_raw = kura
-        .pending_block_bytes_raw(persisted_count)
+        .pending_block_bytes_raw(persisted_count, |hash| kura.merge_entry_by_hash(hash))
         .expect("measure raw pending replacement bytes");
     let pending_current = pending_raw.saturating_sub(unindexed_bytes);
     let terminal = kura

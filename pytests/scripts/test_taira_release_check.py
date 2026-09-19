@@ -24,7 +24,8 @@ from unittest.mock import MagicMock, patch
 # early supervisor build-identity control, six typed status contention controls,
 # three generated ledger/HTTP operator custody controls, and eleven finality witness
 # and native inspection controls, four prebuilt portability/admission controls,
-# three linked PendingKura owner recovery controls, and 56 MV ownership controls.
+# three linked PendingKura owner recovery controls, 56 MV ownership controls,
+# four typed lane-manifest controls, and authenticated default genesis staging.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -33,8 +34,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 1 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 1 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -846,7 +847,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1009, 1187)), ("linux", (1014, 1192))):
+        for platform, counts in (("darwin", (1014, 1192)), ("linux", (1019, 1197))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)
@@ -1211,6 +1212,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "taira_public_reset::host::occupied::tests::pinned_reader_rejects_oversized_snapshot_before_allocation_and_allows_empty",
             ),
             "kagami": (
+                "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
                 "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
                 "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
@@ -1928,6 +1930,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied',
                  'taira_dataspace_deploy::tests::init_builds_native_restricted_intent_from_policy_and_profile',
                  'taira_dataspace_deploy::tests::init_rejects_policy_drift_and_parses_explicit_caps',
+                 'taira_dataspace_deploy::lane_manifest::tests::generates_typed_manifest_from_executed_signed_genesis',
+                 'taira_dataspace_deploy::lane_manifest::tests::rejects_genesis_without_explicit_bindings_or_with_malformed_wire',
+                 'taira_dataspace_deploy::lane_manifest::tests::requires_unique_complete_activated_genesis_bindings',
+                 'taira_dataspace_deploy::lane_manifest::tests::rejects_changed_binding_and_non_four_trusted_roster',
                  'taira_dataspace_deploy::finality::tests::deployment_trust_derives_exact_genesis_roster_and_network',
                  'taira_dataspace_deploy::finality::tests::deployment_trust_rejects_wrong_network_key_and_changed_genesis_wire',
                  'taira_dataspace_deploy::finality::tests::deployment_trust_requires_four_distinct_genesis_peers_and_public_endpoints',
@@ -2001,26 +2007,29 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.args[0][:4], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test"])
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
-        with patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")), \
-             patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
-             patch.multiple(gate, MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
-                            MV_MAP_STAGES=(), CONFIG_UNIT_STAGES=()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")))
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]))
+            stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
+            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+                                               MV_EBR_STAGES=(), MV_MAP_STAGES=(),
+                                               CONFIG_UNIT_STAGES=()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
@@ -2031,26 +2040,29 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"}
         results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
                    subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
-        with patch.object(gate.subprocess, "check_output", return_value="a" * 40) as git, \
-             patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=results) as run, \
-             patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
-             patch.multiple(gate, MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
-                            MV_MAP_STAGES=(), CONFIG_UNIT_STAGES=()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            git = stack.enter_context(patch.object(gate.subprocess, "check_output", return_value="a" * 40))
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
+            stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
+            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+                                               MV_EBR_STAGES=(), MV_MAP_STAGES=(),
+                                               CONFIG_UNIT_STAGES=()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             gate.run_checks(Path("/mutable"), qualification_scope="full", environment=env, lock_fds=(77,))
         self.assertEqual(git.call_count, 2)
         self.assertTrue(all(call.kwargs["env"]["CARGO_HOME"] == "/isolated" for call in git.call_args_list))
@@ -2068,26 +2080,29 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                    subprocess.CompletedProcess([], 0, "route: test\n", ""),
                    subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
         output = io.StringIO()
-        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})) as compile, \
-             patch.object(gate.subprocess, "run", side_effect=results) as run, \
-             patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
-             patch.multiple(gate, MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
-                            MV_MAP_STAGES=(), CONFIG_UNIT_STAGES=()), \
-             patch.object(gate, "DATA_MODEL_STAGES", ()), \
-             patch.object(gate, "CRYPTO_STAGES", ()), \
-             patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "CORE_STAGES", ()), \
-             patch.object(gate, "DAEMON_STAGES", ()), \
-             patch.object(gate, "CLIENT_STAGES", ()), \
-             patch.object(gate, "TORII_UNIT_STAGES", ()), \
-             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
-             patch.object(gate, "NETWORK_STAGES", ()), \
-             patch.object(gate, "PROOF_STAGES", ()), \
-             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
-             patch.object(gate, "TORII_SHARED_STAGES", ()), \
-             patch.object(gate, "TORII_LIFECYCLE_STAGES", ()), \
-             patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)), \
-             contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.ExitStack() as stack:
+            compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
+            stack.enter_context(patch.object(gate, "STAGES", (("CLI", ("cli",)),)))
+            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+                                               MV_EBR_STAGES=(), MV_MAP_STAGES=(),
+                                               CONFIG_UNIT_STAGES=()))
+            stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CRYPTO_STAGES", ()))
+            stack.enter_context(patch.object(gate, "P2P_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CORE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DAEMON_STAGES", ()))
+            stack.enter_context(patch.object(gate, "CLIENT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
+            stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
+            stack.enter_context(patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)))
+            stack.enter_context(contextlib.redirect_stdout(output))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             with self.assertRaisesRegex(gate.CheckError, "route.*exit 101"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)

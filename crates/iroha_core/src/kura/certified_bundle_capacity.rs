@@ -2546,6 +2546,12 @@ impl Kura {
                 })
             })
     }
+    // TODO: remap certified_bundle_retirement_blocker to the active retirement owner
+    // before removing this helper from the formal recovery/capacity source binding.
+    #[expect(
+        dead_code,
+        reason = "retained for the formal recovery/capacity binding until its retirement owner is remapped"
+    )]
     fn ensure_lane_has_no_certified_bundle_capacity_reservation(
         &self,
         entry: &LaneStorageEntry,
