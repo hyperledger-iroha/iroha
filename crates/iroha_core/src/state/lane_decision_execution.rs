@@ -223,7 +223,7 @@ impl State {
         self.with_native_lane_execution_scope(
             header,
             groups,
-            || Ok(()),
+            |_| Ok(()),
             finish,
             |_, result, ()| Ok(result),
         )
@@ -237,7 +237,7 @@ impl State {
         &'state self,
         header: super::BlockHeader,
         groups: &[VerifiedLaneDecisionGroupV1],
-        enter: impl FnOnce() -> Result<Scope, super::MergeLedgerCommitError>,
+        enter: impl FnOnce(&mut StateBlock<'state>) -> Result<Scope, super::MergeLedgerCommitError>,
         finish_native: impl FnOnce(
             &mut StateBlock<'state>,
             Vec<PreexecutedLaneDecisionGroupV1>,
@@ -272,7 +272,7 @@ impl State {
                 overlay
                     .preflight_lane_decision_execution_inputs(groups)
                     .map_err(invalid)?;
-                let scope = enter()?;
+                let scope = enter(overlay)?;
                 Ok((
                     NativeLaneAfterStartV1 {
                         header: overlay._curr_block.clone(),

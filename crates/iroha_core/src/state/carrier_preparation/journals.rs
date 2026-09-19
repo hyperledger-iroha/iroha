@@ -258,6 +258,12 @@ impl<'state> PreparedCarrier<'state> {
 }
 
 impl<Admission> PreparedCarrierJournals<Admission> {
+    /// Inspect Native custody after every State writer has been released.
+    #[cfg(test)]
+    pub(in crate::state) fn native_source_for_test(&self) -> Option<&NativeExecutionCustody> {
+        self.source_prefix.native_for_test()
+    }
+
     /// Return the prefix authenticated before the complete deterministic tail.
     pub(crate) fn execution_prefix_commitment(
         &self,

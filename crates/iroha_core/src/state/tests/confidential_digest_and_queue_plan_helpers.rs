@@ -582,6 +582,7 @@ fn merge_carrier_finality_artifact_with_network(
             max_payload_size_bytes: 4096,
             max_chunk_count: 8,
         },
+        Hash::new(b"state merge finality execution policy"),
     )
 }
 
@@ -592,8 +593,12 @@ fn merge_carrier_finality_artifact_with_genesis_layout(
     parent: Option<&V2FinalityArtifact>,
     network_id: iroha_data_model::NetworkId,
     genesis_layout: DataAvailabilityLayout,
+    genesis_execution_policy_hash: Hash,
 ) -> V2FinalityArtifact {
     let da_layout = parent.map_or(genesis_layout, |artifact| artifact.height_context.da_layout);
+    let execution_policy_hash = parent.map_or(genesis_execution_policy_hash, |artifact| {
+        artifact.height_context.execution_policy_hash
+    });
     let mut keypairs = vec![merge_carrier_finality_fixture_keypair()];
     keypairs.extend((0xD4_u8..=0xD6).map(|seed| {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -609,7 +614,7 @@ fn merge_carrier_finality_artifact_with_genesis_layout(
     );
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
         crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
-    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout, leader_seed: [0xD3; 32], } };
+    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash, da_layout, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
     execution_commitment.executed_block_wire_len =

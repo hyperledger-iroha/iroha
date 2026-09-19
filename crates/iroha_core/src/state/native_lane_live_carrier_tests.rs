@@ -339,15 +339,20 @@ state_test! { sync finalized_native_batch_cannot_erase_additional_controls_befor
     let artifact = store_native_control_carrier_for_test(&fixture, &mut carrier);
     artifact.verify().unwrap();
     let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
-    let error = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap_err();
+    let NativeLaneBatchCarrierReadV1::Ready(included) = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
+        else { panic!("durable complete control carrier"); };
+    assert_eq!(included.carrier(), &carrier.canonical_resultless_proposal());
+    let error = state.replay_finalized_native_lane_batch(&included, &[]).err().expect("scratch cannot erase retained controls");
     assert!(error.to_string().contains("additional carrier controls"), "{error}");
     state.kura.evict_first_admission_body_for_testing(height, carrier.hash()).unwrap();
     let NativeLaneBatchCarrierReadV1::CanonicalBodyRecoveryRequired(required) = state.kura.read_finalized_native_lane_batch(height, carrier.hash()).unwrap()
         else { panic!("an evicted body must be recovered before its full input shape is known"); };
     let (request, response, outstanding) = authenticated_native_batch_body_response_for_test(&fixture.native.validators[0], required.finality(), &carrier);
-    let error = required.complete_from_authenticated_response(&request, &response).unwrap_err();
+    let recovered = required.complete_from_authenticated_response(&request, &response).unwrap();
+    assert_eq!(recovered.carrier(), included.carrier());
+    let error = state.replay_finalized_native_lane_batch(&recovered, &[]).err().expect("recovery retains the same complete control carrier");
     assert!(error.to_string().contains("additional carrier controls"), "{error}");
-    assert_eq!(outstanding.len(), 1, "rejected projection cannot discharge exact transport custody");
+    assert_eq!(outstanding.len(), 1, "projection cannot discharge exact transport custody");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before);
 }
 

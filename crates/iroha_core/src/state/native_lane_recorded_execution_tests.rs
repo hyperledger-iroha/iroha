@@ -15,6 +15,7 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
             }),
         );
         let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
         let carrier = native_consumer_stage_carrier(&fixture);
         let original_hash = carrier.hash();
         let original_signatures = carrier.signatures().cloned().collect::<Vec<_>>();
@@ -26,7 +27,7 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
             group.body().canonical_bytes().as_ptr(), group.body().source().canonical_control_bytes().as_ptr(),
             group.decisions().as_ptr(), group.contexts().as_ptr(),
         )).collect::<Vec<_>>();
-        let recorded = source.record_execution(carrier).unwrap().expect("same original State");
+        let recorded = source.record_execution(carrier, applying).unwrap().expect("same original State");
         let prepared = recorded.prepared_for_test();
         let overlay = prepared.overlay();
         assert_eq!(recorded.carrier().hash(), original_hash);
@@ -69,10 +70,11 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
 state_test! { sync native_recorded_execution_captures_due_start_hook_and_native_transfer_once
     let fixture = native_scratch_due_unlock_fixture();
     let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let carrier = native_consumer_stage_carrier(&fixture);
     let groups = native_economic_groups(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
-    let recorded = state.record_native_lane_decision_batch(carrier, groups).unwrap();
+    let recorded = state.record_native_lane_decision_batch(carrier, groups, applying).unwrap();
     let overlay = recorded.prepared_for_test().overlay();
     assert_native_scratch_unlock_applied(overlay, &fixture);
     let witness = overlay.exec_witness.as_ref().unwrap();
@@ -88,13 +90,14 @@ state_test! { sync native_recorded_execution_nested_recorder_refuses_without_mut
     use super::NativeLaneBatchSourcePreparationV1;
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
         else { panic!("original source"); };
     let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
     crate::sumeragi::witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
     let witness_before = norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap();
-    let error = source.record_execution(carrier).err().expect("nested capture must refuse rather than deadlock");
+    let error = source.record_execution(carrier, applying).err().expect("nested capture must refuse rather than deadlock");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
     assert!(error.to_string().contains("already belongs"), "{error}");
     assert_eq!(norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap(), witness_before);
@@ -145,10 +148,11 @@ state_test! { sync native_recorded_execution_captures_pipeline_and_time_without_
         block.commit();
     }
     let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let groups = native_economic_groups(&fixture);
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
-    let recorded = state.record_native_lane_decision_batch(carrier, groups).unwrap();
+    let recorded = state.record_native_lane_decision_batch(carrier, groups, applying).unwrap();
     let overlay = recorded.prepared_for_test().overlay();
     use iroha_data_model::block::execution_output::ExecutionOutputV1;
     let rows = recorded.carrier().execution_outputs();
@@ -173,6 +177,7 @@ state_test! { sync native_recorded_execution_late_failure_discards_hook_effects_
     use iroha_model_base::state_path::StatePath;
     let fixture = native_scratch_due_unlock_fixture();
     let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let groups = native_economic_groups(&fixture);
     let slot = &groups[0].body().payload().descriptor.slots[1];
     let marker: StatePath = format!("native_lane_applied_instance_{}", hex::encode(slot.instance_id.as_ref())).parse().unwrap();
@@ -184,7 +189,7 @@ state_test! { sync native_recorded_execution_late_failure_discards_hook_effects_
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
-    let error = state.record_native_lane_decision_batch(carrier, groups).err().expect("actual late marker collision");
+    let error = state.record_native_lane_decision_batch(carrier, groups, applying).err().expect("actual late marker collision");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
@@ -199,6 +204,7 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
     use std::sync::atomic::{AtomicBool, Ordering};
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
         else { panic!("original source"); };
     let header = carrier.header();
@@ -218,7 +224,7 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
             drop(overlay);
         });
         held_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        let result = source.record_execution(carrier);
+        let result = source.record_execution(carrier, applying);
         let refused_while_held = !released.load(Ordering::Acquire);
         let _ = release_tx.send(());
         holder.join().unwrap();
@@ -228,4 +234,67 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
         assert!(refused_while_held, "recorder eligibility must be checked before State acquisition");
     });
     drop(guard);
+}
+
+state_test! { sync native_recorded_cursor_postcheck_without_bundle_does_not_reenter_cold_cache
+    let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let groups = native_economic_groups(&fixture);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups).unwrap();
+    assert!(carrier.da_commitments().is_none());
+    // Reproduce the interval between a rewind clearing the cached result and
+    // waiting for the State writer retained by this original execution owner.
+    *state.da_indexes_hydrated.write() = None;
+    let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    prepared.overlay().validate_da_shard_cursors(&carrier).unwrap();
+    assert!(state.da_indexes_hydrated.read().is_none());
+    drop(recorder);
+    drop(prepared);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+}
+
+state_test! { sync native_recorded_controls_reject_foreign_pristine_state_and_stale_owner
+    let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
+    let (other, _) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let other_before = crate::snapshot::canonical_state_snapshot_hash(&other.native.state).unwrap();
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
+    let controls = crate::block::ValidBlock::prepare_native_execution_controls(&carrier, state, applying.clone()).unwrap();
+    let error = other.native.state.block_with_pristine_stage(carrier.header(), |overlay| {
+        let _recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+        controls.apply(overlay).map(|_| ())
+    }).err().expect("the same header cannot transfer original State ownership");
+    assert!(error.to_string().contains("original pristine State owner"), "{error}");
+    let controls = crate::block::ValidBlock::prepare_native_execution_controls(&carrier, state, applying).unwrap();
+    // A publication generation change invalidates captured control authority,
+    // even when the carrier hash and committed economic bytes remain equal.
+    drop(state.begin_state_view_write());
+    let error = state.block_with_pristine_stage(carrier.header(), |overlay| {
+        let _recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+        controls.apply(overlay).map(|_| ())
+    }).err().expect("stale control observation cannot execute");
+    assert!(error.to_string().contains("original pristine State owner"), "{error}");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&other.native.state).unwrap(), other_before);
+    assert_native_economic_relay_recorder_released();
+}
+
+state_test! { sync native_recorded_direct_entry_rejects_missing_or_foreign_da_policy
+    let (fixture, original) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
+    let state = &fixture.native.state;
+    let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
+    let groups = native_economic_groups(&fixture);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    for policy in [None, Some(crate::da::proof_policy_bundle(&iroha_config::parameters::actual::LaneConfig::default()))] {
+        let mut carrier = original.clone();
+        carrier.set_da_proof_policies(policy);
+        native_control_resign_carrier(&mut carrier);
+        let error = state.record_native_lane_decision_batch(carrier, groups.clone(), applying.clone())
+            .err().expect("direct recording has the same active policy boundary as source preparation");
+        assert!(error.to_string().contains("active pre-State policy"), "{error}");
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+        assert_native_economic_relay_recorder_released();
+    }
 }

@@ -136,7 +136,7 @@ state_test! { sync native_consumer_stage_rejects_membership_carrier_and_prefix_w
     let carrier = native_consumer_stage_carrier(&fixture);
     let groups = native_economic_groups(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    for mutation in 0..3 {
+    for mutation in 0..5 {
         let mut prepared = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap();
         let overlay = prepared.overlay_mut_for_test();
         overlay.validate_native_lane_execution().unwrap();
@@ -151,6 +151,8 @@ state_test! { sync native_consumer_stage_rejects_membership_carrier_and_prefix_w
                 let key: iroha_model_base::state_path::StatePath = "native_stage_unbound_write".parse().unwrap();
                 overlay.world.smart_contract_state.insert(key, vec![7]);
             },
+            3 => overlay.staged_queue_plan_admissions.push(vec![7]),
+            4 => overlay.applied_npos_consensus_effects_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"foreign pristine control"))),
             _ => unreachable!(),
         }
         assert!(overlay.validate_native_lane_execution().is_err(), "mutation {mutation}");

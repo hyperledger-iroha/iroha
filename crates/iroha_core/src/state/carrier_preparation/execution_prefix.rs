@@ -1,8 +1,8 @@
 //! Actual validated execution custody through the deterministic carrier tail.
 //!
 //! Only the original validator handoff enters this consuming seam. Native
-//! carriers remain inactive; no old-merge or empty application authorization can
-//! manufacture their source authority. Raw State keeps a closed transfer marker.
+//! preparation retains its actual source and verified context; the production
+//! gate remains closed. Raw State keeps a closed transfer marker.
 
 use super::{super::*, PreparedCarrier};
 use crate::{
@@ -15,6 +15,7 @@ use crate::{
 /// independent owners. There is no public constructor or mutable source access.
 pub(crate) struct ValidatedExecutionPrefix {
     sealed: output_capacity::SealedExecutionOutputs,
+    authority: PrefixSourceAuthority,
     inventory: Arc<FastpqSourceInventoryV1>,
     witness: ExecWitness,
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
@@ -23,7 +24,24 @@ pub(crate) struct ValidatedExecutionPrefix {
     >,
 }
 
+/// Exhaustive source custody: Native preparation cannot use an ordinary/empty
+/// merge projection as its authority. All original Native owners survive capture.
+enum PrefixSourceAuthority {
+    Ordinary,
+    Native(Box<lane_decision_batch::NativeExecutionCustody>),
+}
+
 impl ValidatedExecutionPrefix {
+    #[cfg(test)]
+    pub(in crate::state) fn native_for_test(
+        &self,
+    ) -> Option<&lane_decision_batch::NativeExecutionCustody> {
+        match &self.authority {
+            PrefixSourceAuthority::Ordinary => None,
+            PrefixSourceAuthority::Native(native) => Some(native),
+        }
+    }
+
     /// Actual finalized inventory, including rejected and zero-transcript calls.
     pub(in crate::state) fn inventory(&self) -> &Arc<FastpqSourceInventoryV1> {
         &self.inventory
@@ -66,7 +84,10 @@ impl ValidatedExecutionPrefix {
             && state.fastpq_source_inventory.is_none()
             && state.fastpq_witness_context.is_none()
             && state.parliament_timed_ovn_casting_bindings.is_none()
-            && state.native_lane_stage.is_none()
+            && match &self.authority {
+                PrefixSourceAuthority::Ordinary => state.native_lane_stage.is_none(),
+                PrefixSourceAuthority::Native(native) => native.retains_state(state),
+            }
     }
 }
 
@@ -82,6 +103,7 @@ impl<'state> PrefixPreparation<'state> {
     fn capture(
         mut state: Box<StateBlock<'state>>,
         valid: &ValidBlock,
+        native: Option<lane_decision_batch::NativeExecutionCustody>,
     ) -> Result<
         (
             Self,
@@ -91,22 +113,35 @@ impl<'state> PrefixPreparation<'state> {
         String,
     > {
         let block = valid.as_ref();
-        // The live validator currently refuses Native inputs. Keep that boundary
-        // explicit here as well; a test-only Native stage is not a live source.
-        if state.native_lane_stage.is_some()
-            || block
-                .execution_context()
-                .is_some_and(|context| context.native_lane_decisions.is_some())
-            || state.staged_merge_entry.is_some()
-            || !state.merge_carrier_entrypoints.is_empty()
+        // Certified merge retains its separate, unfinished source consumer.
+        // A Native source must arrive from the exact globally checked recorded
+        // constructor, retaining the actual stage, groups and verified context.
+        let authority = match native {
+            Some(native)
+                if native.retains_state(&state)
+                    && block
+                        .execution_context()
+                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>
+            {
+                PrefixSourceAuthority::Native(Box::new(native))
+            }
+            None if state.native_lane_stage.is_none()
+                && !block
+                    .execution_context()
+                    .is_some_and(|context| context.native_lane_decisions.is_some())
+                && state.merge_carrier_entrypoints.is_empty() =>
+            {
+                PrefixSourceAuthority::Ordinary
+            }
+            _ => return Err("carrier prefix has no exact Native or ordinary source owner".into()),
+        };
+        if state.staged_merge_entry.is_some()
             || state.canonical_wsv_merge_commit_authorization.is_some()
             || state
                 .canonical_carrier_commit_metadata_authorization
                 .is_some()
         {
-            return Err(
-                "carrier prefix has no active Native or certified-merge source owner".into(),
-            );
+            return Err("carrier prefix has no active certified-merge source owner".into());
         }
         // These checks must precede the permitted metadata/World tail: that tail
         // intentionally changes the World delta authenticated by the attachment.
@@ -131,8 +166,10 @@ impl<'state> PrefixPreparation<'state> {
         else {
             return Err("carrier prefix lost its sealed output owner".into());
         };
-        if sealed.sources().is_native() || sealed.sources().proposal() != block.hash() {
-            return Err("carrier prefix differs from its actual ordinary sources".into());
+        if sealed.sources().is_native() != matches!(&authority, PrefixSourceAuthority::Native(_))
+            || sealed.sources().proposal() != block.hash()
+        {
+            return Err("carrier prefix differs from its actual source owner".into());
         }
         let inventory = state
             .fastpq_source_inventory
@@ -147,6 +184,7 @@ impl<'state> PrefixPreparation<'state> {
             .ok_or("carrier prefix lost its original execution witness")?;
         let prefix = ValidatedExecutionPrefix {
             sealed,
+            authority,
             inventory,
             witness,
             fastpq_witness_context: state.fastpq_witness_context.take(),
@@ -214,10 +252,10 @@ impl<'state> PrefixPreparation<'state> {
 pub(super) fn prepare<'state>(
     input: ValidatedCarrierPreparationInput<'state>,
 ) -> Result<PreparedCarrier<'state>, (Box<iroha_data_model::block::SignedBlock>, String)> {
-    let (valid, state, context) = input.into_parts();
+    let (valid, state, context, native) = input.into_parts();
     let result = (|| {
         let (mut preparation, native_amx_manifest, execution_prefix) =
-            PrefixPreparation::capture(state, &valid)?;
+            PrefixPreparation::capture(state, &valid, native)?;
         let block = valid.as_ref();
         preparation
             .state

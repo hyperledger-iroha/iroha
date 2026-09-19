@@ -23,6 +23,12 @@ SEAL = "crates/iroha_core/src/state/output_seal.rs"
 TAIL = "crates/iroha_core/src/block/post_execution_tail.rs"
 NATIVE_METADATA = "crates/iroha_core/src/block/native_execution_metadata.rs"
 NATIVE_STAGE = "crates/iroha_core/src/state/lane_decision_batch.rs"
+CONTROLS = "crates/iroha_core/src/block.rs"
+NATIVE_SOURCE = "crates/iroha_core/src/state/native_lane_batch_replay.rs"
+NATIVE_KERNEL = "crates/iroha_core/src/state/lane_decision_execution.rs"
+NATIVE_CARRIER = "crates/iroha_core/src/block/native_lane_carrier.rs"
+NATIVE_FINALIZED = "crates/iroha_core/src/kura/native_lane_batch_source.rs"
+BODY_STORE = "crates/iroha_core/src/sumeragi/v2_body_store.rs"
 ORDINARY = "crates/iroha_core/src/kura/lane_artifact_budget.rs"
 CAPACITY = "crates/iroha_core/src/kura/native_amx_publication_capacity.rs"
 DURABLE = "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"
@@ -54,9 +60,226 @@ ORDINARY_ORDERED = (
     "Self::maximum_index_growth_for_unresolved_sidecar_write(",
     "Ok(total)",
 )
+# Recorded Native execution owns verified context and pristine controls, but
+# remains disposable: none of these relations opens the live ValidBlock gate.
+NATIVE_CONTROL_BINDINGS = (
+    (BODY_STORE, "fn", "verify_origin_block_signature", (
+        "context: &wire::HeightContext", "block: &SignedBlock", "policy: &BlockSignaturePolicy",
+        "context.leader(block.header().view_change_index())", "context.roster.get(leader_index)",
+        "let mut signatures = block.signatures()", "if signatures.next().is_some() || signature.index() != expected_index",
+        "verify_hash(expected_key, block.hash())",
+    )),
+    (BODY_STORE, "method", "V2BodyStore::validate_envelope", (
+        "envelope.manifest.validate(&self.context)?", "body_origin_view <= envelope.round.view",
+        "header.height().get() != envelope.round.height", "header.prev_block_hash() != expected_parent",
+        "verify_origin_block_signature(&self.context, &block, &self.signature_policy)?",
+    )),
+    (CONTROLS, "method", "ValidBlock::validate_execution_context_header", (
+        "Self::checked_execution_context_header(block)?", "bundle.native_lane_decisions.is_some()",
+        "return Err(Self::execution_context_error(",
+    )),
+    (CONTROLS, "method", "ValidBlock::validate_execution_context_with_state", (
+        "matches!(&validation_profile, ConsensusValidationProfile::NativePreparation { .. })",
+        "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
+        "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
+    )),
+    (BLOCK, "method", "ValidBlock::prepare_native_candidate", (
+        "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "ensure_state_access_without_exec_witness()",
+        "let Some((state, body, generation)) = source.preparation_input() else { return Ok(None); };",
+        "if !body.is_resultless_proposal()", "native_lane_batch_for_execution(body)",
+        "body.validate_proposal_commitments()", "frozen.height != body.header().height().get()",
+        "frozen.network_id != *state.network_id_ref()", "!= body.header().prev_block_hash()",
+        "verify_origin_block_signature(", "BlockSignaturePolicy::RotatingLeader",
+        "length > frozen.da_layout.max_payload_size_bytes", "ConsensusValidationProfile::NativePreparation",
+        "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
+        "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
+        "recorded.into_preparation_parts()", "Arc::new(native.context().context().clone())",
+        "PreparedCarrier::prepare(ValidatedCarrierPreparationInput", "native: Some(native)",
+    )),
+    (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
+        "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "ValidBlock::prepare_native_candidate(", "self, context, genesis_account, time_source, block_cadence",
+    )),
+    (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::preparation_input", (
+        "Option<(&'state State, &SignedBlock, u64)>",
+        "self.is_current().then_some((self.state, &self.input, self.generation))",
+    )),
+    (NATIVE_STAGE, "struct", "RecordedNativeLaneBatchV1", (
+        "prepared: PreparedLaneDecisionBatchV1<'state>", "carrier: iroha_data_model::block::SignedBlock",
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+    )),
+    (NATIVE_STAGE, "struct", "NativeExecutionCustody", (
+        "seal: Arc<NativeLaneStageSealV1>", "sources: Vec<VerifiedLaneDecisionGroupV1>",
+        "executions: Vec<Execution>", "context: crate::sumeragi::v2::VerifiedHeightContext",
+    )),
+    (NATIVE_STAGE, "method", "RecordedNativeLaneBatchV1::into_preparation_parts", (
+        "fn into_preparation_parts(self)", "self.prepared.verify_source_binding()", "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+        "let seal = Arc::clone(", "self.prepared.overlay.native_lane_stage.as_ref()",
+        "let PreparedLaneDecisionBatchV1", "overlay, executions, sources", "= self.prepared",
+        "NativeExecutionCustody { seal, sources, executions, context: self.context",
+    )),
+    (NATIVE_STAGE, "method", "NativeExecutionCustody::retains_state", (
+        "Arc::ptr_eq(seal, &self.seal)", "self.context.context().height == state._curr_block.height().get()",
+        "self.context.context().network_id == state.network_id", "self.sources.len() == self.seal.batch.groups.len()",
+        "self.executions.len() == self.sources.len()", "source.body().payload() == &wire.payload",
+        "source.decisions() == wire.decisions", "state.validate_native_lane_stage_membership().is_ok()",
+    )),
+    (NATIVE_FINALIZED, "struct", "FinalizedNativeLaneBatchV1", (
+        "source: NativeLaneBatchRecoveryV1", "carrier: SignedBlock",
+    )),
+    (NATIVE_FINALIZED, "method", "NativeLaneBatchRecoveryV1::project", (
+        "self.finality.validate_for_header(&block.header())", "block.hash() != self.finality.block_hash",
+        "canonical_proposal_wire_hash()", "!= self.finality.subject.payload_hash",
+        "if block.has_results()", "let executed = block.encode_wire()",
+        "let commitment = &self.finality.commit_qc.execution_commitment",
+        "u64::try_from(executed.len()).ok() != Some(commitment.executed_block_wire_len)",
+        "Hash::new(&executed) != commitment.executed_block_wire_hash",
+        "crate::block::native_lane_batch_for_execution(block)?",
+        "source: self.clone()", "carrier: block.canonical_resultless_proposal()",
+    )),
+    (CONTROLS, "struct", "PreparedNativeExecutionControls", (
+        "state: &'state State", "generation: u64", "header: BlockHeader",
+        "admissions: Vec<Vec<u8>>", "npos: Option<PreparedPristineConsensusEffects>",
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+    )),
+    (CONTROLS, "method", "ValidBlock::prepare_native_execution_controls", (
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "ensure_state_access_without_exec_witness()", "native_lane_batch_for_execution(block)",
+        "validate_proposal_commitments()", "ensure_da_indexes_hydrated()",
+        "let generation = state.state_view_generation()", "let frozen = context.context()",
+        "frozen.network_id != *view.network_id()", "frozen.height != block.header().height().get()",
+        "height.checked_add(1)", "!= Some(frozen.height)",
+        "block.header().prev_block_hash() != view.latest_block_hash()",
+        ".map(|qc| qc.subject.block_hash) != view.latest_block_hash()",
+        "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
+        "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
+        "committed_nexus_amx_context_hash(state)", "committed_execution_policy_hash(state)",
+        "frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy",
+        "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?",
+        "Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?",
+        "Ok(PreparedNativeExecutionControls { state, generation, header: block.header(),",
+        "admissions: block.execution_context()", ".queue_plan_admissions.clone()", "npos, context",
+    )),
+    (CONTROLS, "method", "PreparedNativeExecutionControls::apply", (
+        "self,", "validate_native_pristine_control_owner(self.state, self.generation, &self.header)",
+        "stage_queue_plan_admissions_for_carrier(&self.admissions)",
+        "if let Some(npos) = self.npos", "npos.apply(overlay)?", "Ok(self.context)",
+    )),
+    (CONTROLS, "method", "ValidBlock::prepare_pristine_consensus_effects", (
+        "active_runtime_abi_hash(", "&state.world_view()", "block.header().height().get()",
+        "block.npos_consensus_effects()", "authenticated_height_context.ok_or_else(",
+        "v2_committed_evidence_prune_keys_from_state(state, height, effects.v2_evidence_admissions.len(),)",
+        "expected_anchor: header.prev_block_hash().map(|block_hash|",
+        "height: height.saturating_sub(1)", "roster: context.roster.iter()",
+        "effects: effects.clone()", "header",
+    )),
+    (CONTROLS, "method", "PreparedPristineConsensusEffects::apply", (
+        "if state_block._curr_block != self.header", "return Err(",
+        "state_block.apply_pristine_npos_consensus_effects(",
+        "&self.effects, &self.prune_keys, self.expected_anchor, &self.roster,",
+        "self.header.height().get(), self.header.view_change_index(), self.header.creation_time_ms",
+    )),
+    (CONTROLS, "method", "ValidBlock::finalize_native_execution_contexts", (
+        "context: &crate::sumeragi::v2::VerifiedHeightContext",
+        "Self::validate_staged_execution_controls(block, state)?",
+        "validate_axt_envelopes(block, state)?", "state.validate_da_shard_cursors(block)?",
+        "Self::validate_sccp_commitment_root(block)?",
+        "finalize_lane_consensus_contexts(block, Some(context.context()))",
+    )),
+    (NATIVE_STAGE, "method", "StateBlock::validate_native_pristine_control_owner", (
+        "!std::ptr::eq(self.state_ref, state)",
+        "!super::is_stable_state_view_generation(generation, state.state_view_generation())",
+        "&self._curr_block != header", "self.start_of_block_effects_applied",
+        "self.applied_npos_consensus_effects_hash.is_some()",
+        "!self.staged_queue_plan_admissions.is_empty()", "self.staged_merge_entry.is_some()",
+        "self.native_lane_stage.is_some()", "!self.world.merge_execution_write_set_bytes().is_empty()",
+        "return Err(",
+    )),
+    (NATIVE_STAGE, "method", "State::record_native_lane_decision_batch", (
+        "groups: Vec<VerifiedLaneDecisionGroupV1>", "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "ensure_exec_witness_capture_available()", "with_stable_observation(self, ||",
+        "if !carrier.is_resultless_proposal()", "native_lane_batch_for_execution(&carrier)",
+        "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+        "self.prepare_lane_decision_batch(&groups)?", "if &batch != expected",
+        "self.with_native_lane_execution_scope(", "begin_exec_witness_capture()",
+        "controls.apply(overlay)", "Ok((recorder, context))",
+        "overlay.seal_native_lane_decision_batch(results, batch)",
+        "|overlay, executions, (recorder, context)|",
+        "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
+        "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+        "overlay.capture_exec_witness()", "verify_execution_output_seal(&carrier)",
+        "drop(recorder)", "Ok((executions, context))", "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
+        "Ok(RecordedNativeLaneBatchV1 { prepared, carrier, context, })",
+    )),
+    (NATIVE_KERNEL, "method", "State::with_native_lane_execution_scope", (
+        "enter: impl FnOnce(&mut StateBlock<'state>)",
+        "ensure_state_access_without_exec_witness()", "self.block_with_owned_start_stages(",
+        "overlay.start_of_block_effects_applied", "overlay.native_lane_stage.is_some()",
+        "overlay.staged_merge_entry.is_some()", "!overlay.staged_queue_plan_admissions.is_empty()",
+        "!overlay.world.merge_execution_write_set_bytes().is_empty()",
+        "preflight_lane_decision_execution_inputs(groups)", "let scope = enter(overlay)?",
+        "header: overlay._curr_block.clone()", "groups",
+        "overlay.produce_native_execution_outputs(preflight, finish_native)?",
+        "finish_scope(overlay, result, scope)",
+    )),
+    (NATIVE_SOURCE, "struct", "PreparedNativeLaneBatchSourceV1", (
+        "state: &'state State", "observed: VerifiedLaneContexts", "generation: u64",
+        "input: Arc<SignedBlock>",
+        "groups: Vec<VerifiedLaneDecisionGroupV1>",
+    )),
+    (NATIVE_SOURCE, "method", "State::prepare_native_lane_batch_from_pre_state", (
+        "carrier: &SignedBlock", "let header = carrier.header()",
+        "header.da_proof_policies_hash() != Some(expected_policy_hash)",
+        "self.import_recovered_lane_decision_group(&observed, execution, input)",
+        "self.import_lane_decision_group(&observed, execution)",
+        "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
+        "!observed.is_current(self)", "state: self, observed, generation,",
+        "input: Arc::new(carrier.clone()), groups",
+    )),
+    (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::record_execution", (
+        "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "ensure_exec_witness_capture_available()", "if !self.is_current()",
+        "if carrier != *self.input { return Err(", "drop(self.input)",
+        "record_native_lane_decision_batch(carrier, self.groups, context)",
+        "self.generation, self.state.state_view_generation()", "recorded.map(Some)",
+    )),
+    (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::stage_with_start_hooks", (
+        "ensure_state_access_without_exec_witness()", "native_lane_batch_for_scratch(&self.input)",
+        "if !self.is_current()", "self.state.lane_execution_state_hash()",
+        "let batch = crate::block::native_lane_batch_for_scratch(&self.input)",
+        "actual_base != batch.base_state_hash",
+        "replay_lane_decision_batch(&self.input.header(), batch, self.groups)",
+    )),
+    (NATIVE_CARRIER, "fn", "native_lane_batch_for_scratch", (
+        "let batch = native_lane_batch_for_execution(carrier)?",
+        ".queue_plan_admissions.is_empty()", "carrier.npos_consensus_effects().is_some()",
+        "carrier.header().npos_effects_hash().is_some()", "return Err(", "Ok(batch)",
+    )),
+    (NATIVE_STAGE, "method", "StateBlock::seal_native_lane_decision_batch", (
+        "queue_plan_admissions_hash: HashOf::new(&self.staged_queue_plan_admissions)",
+        "npos_effects_hash: self.applied_npos_consensus_effects_hash",
+    )),
+    (NATIVE_STAGE, "method", "StateBlock::validate_native_lane_stage_membership", (
+        "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
+        "self.applied_npos_consensus_effects_hash != seal.npos_effects_hash",
+        "self.canonical_wsv_merge_commit_authorization.is_some()",
+        "self.canonical_carrier_commit_metadata_authorization.is_some()",
+        "self._curr_block != seal.carrier", "return Err(",
+    )),
+    (NATIVE_STAGE, "method", "StateBlock::validate_native_output_carrier", (
+        "self.validate_native_lane_execution()", "seal.completed_write_set_root.is_none()",
+        "block.header() != seal.carrier", "block.header().npos_effects_hash() != seal.npos_effects_hash",
+        ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash)",
+        "!= Some(seal.batch.as_ref())", "return Err(",
+    )),
+)
+
 # The old direct Native manifest, receipt/latest and prune allowance obligations
 # now belong to the following owners; ordinary block bytes remain separate.
 PREPARATION_OWNER_BINDINGS = (
+    *NATIVE_CONTROL_BINDINGS,
     (TAIL, "method", "ValidBlock::finalize_owned_execution_metadata", (
         "Self::finalize_common_execution_metadata(",
         "Self::finalize_lane_settlement_evidence(block, state, &routed, &summaries)?",
@@ -128,8 +351,11 @@ PREPARATION_OWNER_BINDINGS = (
         "state: Box<StateBlock<'state>>", "prefix: ValidatedExecutionPrefix",
     )),
     (PREFIX, "method", "PrefixPreparation::capture", (
-        "state.native_lane_stage.is_some()", "context.native_lane_decisions.is_some()",
-        "state.staged_merge_entry.is_some()", "!state.merge_carrier_entrypoints.is_empty()",
+        "native: Option<lane_decision_batch::NativeExecutionCustody>", "let authority = match native",
+        "Some(native) if native.retains_state(&state) && block.execution_context().is_some_and(|context| context.native_lane_decisions.is_some()) =>",
+        "PrefixSourceAuthority::Native(Box::new(native))",
+        "None if state.native_lane_stage.is_none()", "state.merge_carrier_entrypoints.is_empty()",
+        "context.native_lane_decisions.is_some()", "state.staged_merge_entry.is_some()",
         "state.canonical_wsv_merge_commit_authorization.is_some()",
         "state.verify_execution_output_seal(block)?", "state.verified_fastpq_source_inventory_for_capture()?",
         "state.verify_cached_ordinary_witness_content(&verified_inventory)?", ".exec_witness",
@@ -145,6 +371,7 @@ PREPARATION_OWNER_BINDINGS = (
         "Some(output_capacity::ExecutionOutputPlanState::Captured)", "state.exec_witness.is_none()",
         "state.fastpq_source_inventory.is_none()", "state.fastpq_witness_context.is_none()",
         "state.parliament_timed_ovn_casting_bindings.is_none()", "state.native_lane_stage.is_none()",
+        "PrefixSourceAuthority::Native(native) => native.retains_state(state)",
     )),
     (PREFIX, "method", "PrefixPreparation::prepare_world_effects", (
         "let state = &mut *self.state", "!self.prefix.retains_closed_state(state)",
@@ -156,7 +383,7 @@ PREPARATION_OWNER_BINDINGS = (
         "world_commit::PreparedWorldCommit::prepare_overlay(",
     )),
     (PREFIX, "fn", "prepare", (
-        "input.into_parts()", "PrefixPreparation::capture(state, &valid)?",
+        "input.into_parts()", "PrefixPreparation::capture(state, &valid, native)?",
         "prepare_deterministic_carrier_metadata", "preparation.prepare_world_effects()?",
         "prepare_carrier_publication_events(block.header())", "PreparedTieredSnapshot::prepare(",
         "prefix: source_prefix", "Ok(PreparedCarrier {", "Err(error) => Err((Box::new(valid.into()), error))",
@@ -256,6 +483,7 @@ PREPARATION_OWNER_BINDINGS = (
 )
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
     APPLY, BLOCK, PREPARED, PREFIX, JOURNALS, OUTPUT, SEAL, TAIL, NATIVE_METADATA, NATIVE_STAGE,
+    CONTROLS, NATIVE_SOURCE, NATIVE_KERNEL, NATIVE_CARRIER, NATIVE_FINALIZED, BODY_STORE,
     ORDINARY, CAPACITY, DURABLE, KURA, AUTONOMOUS,
     "scripts/formal/sumeragi_v2_multilane_native_preparation_contract.py",
     "pytests/scripts/sumeragi_v2_multilane_native_preparation_contract_test.py",
@@ -306,13 +534,71 @@ def validate_native_preparation_contract(
                 return
             cursor = index + len(needle)
 
+    # One verified context and original pristine State owner are carried from
+    # pre-writer admission into the same recorder and authenticated suffix join.
+    ordered("ValidBlock::prepare_native_execution_controls",
+            "ensure_state_access_without_exec_witness()", "native_lane_batch_for_execution(block)",
+            "validate_proposal_commitments()", "ensure_da_indexes_hydrated()",
+            "let generation = state.state_view_generation();", "let view = state.view();",
+            "let expected_da_policy =", "drop(view);", "committed_nexus_amx_context_hash(state)",
+            "committed_execution_policy_hash(state)", "Self::validate_npos_effects_with_state(",
+            "Self::prepare_pristine_consensus_effects(", "Ok(PreparedNativeExecutionControls {")
+    ordered("PreparedNativeExecutionControls::apply",
+            "validate_native_pristine_control_owner(self.state, self.generation, &self.header)",
+            "stage_queue_plan_admissions_for_carrier(&self.admissions)",
+            "npos.apply(overlay)?;", "Ok(self.context)")
+    ordered("State::with_native_lane_execution_scope",
+            "ensure_state_access_without_exec_witness()", "self.block_with_owned_start_stages(",
+            "preflight_lane_decision_execution_inputs(groups)", "let scope = enter(overlay)?;",
+            "overlay.produce_native_execution_outputs(preflight, finish_native)?;",
+            "finish_scope(overlay, result, scope)")
+    ordered("State::record_native_lane_decision_batch",
+            "ensure_exec_witness_capture_available()", "with_stable_observation(self, ||",
+            "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+            "self.prepare_lane_decision_batch(&groups)?;", "if &batch != expected",
+            "self.with_native_lane_execution_scope(", "begin_exec_witness_capture()",
+            "controls.apply(overlay)", "Ok((recorder, context))",
+            "overlay.seal_native_lane_decision_batch(results, batch)",
+            "|overlay, executions, (recorder, context)|",
+            "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
+            "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+            "overlay.capture_exec_witness()", "verify_execution_output_seal(&carrier)",
+            "drop(recorder);", "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?;")
+    ordered("ValidBlock::finalize_native_execution_contexts",
+            "Self::validate_staged_execution_controls(block, state)?;",
+            "validate_axt_envelopes(block, state)?;", "state.validate_da_shard_cursors(block)?;",
+            "Self::validate_sccp_commitment_root(block)?;",
+            "finalize_lane_consensus_contexts(block, Some(context.context()))")
+    ordered("PreparedNativeLaneBatchSourceV1::record_execution",
+            "ensure_exec_witness_capture_available()", "if !self.is_current()",
+            "if carrier != *self.input { return Err(", "drop(self.input);",
+            "record_native_lane_decision_batch(carrier, self.groups, context)",
+            "self.generation, self.state.state_view_generation()", "recorded.map(Some)")
+    ordered("PreparedNativeLaneBatchSourceV1::stage_with_start_hooks",
+            "ensure_state_access_without_exec_witness()", "native_lane_batch_for_scratch(&self.input)",
+            "if !self.is_current()", "self.state.lane_execution_state_hash()",
+            "replay_lane_decision_batch(&self.input.header(), batch, self.groups)")
+    require("native_lane_batch_for_scratch",
+            'if !carrier.execution_context().expect("checked Native shape").queue_plan_admissions.is_empty() || carrier.npos_consensus_effects().is_some() || carrier.header().npos_effects_hash().is_some() { return Err(')
+    for symbol in ("State::record_native_lane_decision_batch", "PreparedNativeLaneBatchSourceV1::record_execution"):
+        body = items.get(symbol, "")
+        for forbidden in ("CheckedCarrierApplications", "groups.clone()", "commit_inner("):
+            if forbidden in body:
+                errors.append(f"Native preparation {symbol} has forbidden executable relation {forbidden}")
+
+    recorded = items.get("State::record_native_lane_decision_batch")
+    if recorded is not None:
+        for operation in ("begin_exec_witness_capture()", "overlay.capture_exec_witness()", "drop(recorder)"):
+            if recorded.count(_code(operation)) != 1:
+                errors.append(f"Native preparation recorder lifecycle repeats or omits {operation}")
+
     require("V2ApplyService::validate_candidate",
             "let prepared = ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(body.clone(), &topology, &self.genesis_account, &TimeSource::new_system(), self.block_cadence, crate::block::valid::SumeragiV2ValidationContext::from_height_context(context), self.state.as_ref(), &mut voting_block,)",
             "self.kura.validate_native_amx_participant_application_evidence_byte_budget(prepared.native_amx_manifest(), None,).map_err(Self::classify_native_amx_evidence_byte_budget_error)?;")
     require("ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block",
             "let context_matches = context.id() == validation_context.context_id && context.height == block.header().height().get() && context.network_id == *state.network_id_ref() && topology.as_ref().iter().eq(context.roster.iter().map(|entry| &entry.validator));",
             "let (valid, state) = Self::validate_sumeragi_v2_candidate_keep_voting_block(block, topology, genesis_account, time_source, block_cadence, validation_context, state, voting_block,).unpack(|_| {})?;",
-            "crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput { valid, state, context, })")
+            "crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput { valid, state, context, native: None, })")
     # Both finalizers consume the same complete metadata owner. The Native
     # route uses only its already-executed settlements and source-bound stage;
     # no ordinary drain/frontier, recorder reset or live Apply grant enters here.
@@ -364,6 +650,14 @@ def validate_native_preparation_contract(
     common = items.get("ValidBlock::finalize_common_execution_metadata", "")
     if common and common.find("finalize_axt_policy_transition_ratchets()") < common.find("evaluate_nexus_autoscale(block,fragments)"):
         errors.append("Native preparation common policy metadata before autoscale")
+    ordered("ValidBlock::prepare_native_candidate", "ensure_state_access_without_exec_witness()",
+            "source.preparation_input()", "verify_origin_block_signature(",
+            "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
+            "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
+            "recorded.into_preparation_parts()", "PreparedCarrier::prepare(ValidatedCarrierPreparationInput")
+    ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared.verify_source_binding()",
+            "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+            "let seal = Arc::clone(", "= self.prepared", "NativeExecutionCustody")
     require("PreparedCarrier::prepare", "execution_prefix::prepare(input)")
     require("PrefixPreparation::capture",
             "let block = valid.as_ref();",
@@ -372,14 +666,14 @@ def validate_native_preparation_contract(
             "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(str::to_owned)?;",
             "let inventory = state.fastpq_source_inventory.take().ok_or(",
             "let witness = state.exec_witness.take().ok_or(",
-            "let prefix = ValidatedExecutionPrefix { sealed, inventory, witness, fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
-    ordered("PrefixPreparation::capture", "if state.native_lane_stage.is_some()",
+            "let prefix = ValidatedExecutionPrefix { sealed, authority, inventory, witness, fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
+    ordered("PrefixPreparation::capture", "let authority = match native",
             "state.verify_execution_output_seal(block)?;",
             "state.verify_cached_ordinary_witness_content(&verified_inventory)?;",
             "let manifest =", "let commitment =", ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
             "let inventory =", "let witness = state.exec_witness.take()", "let prefix =")
-    ordered("prepare", "let (valid, state, context) = input.into_parts();",
-            "PrefixPreparation::capture(state, &valid)?;", "prepare_deterministic_carrier_metadata(",
+    ordered("prepare", "let (valid, state, context, native) = input.into_parts();",
+            "PrefixPreparation::capture(state, &valid, native)?;", "prepare_deterministic_carrier_metadata(",
             "preparation.prepare_world_effects()?;", "prepare_carrier_publication_events(block.header())",
             "PreparedTieredSnapshot::prepare(", "let PrefixPreparation { state, prefix: source_prefix, } = preparation;",
             "Ok(PreparedCarrier { valid, state, source_prefix, context, execution_prefix, native_amx_manifest,")
@@ -389,14 +683,16 @@ def validate_native_preparation_contract(
     require("StateBlock::seal_execution_outputs", "Ok(SealedExecutionOutputs { sources, world_delta,")
     if "prepare" in items:
         body = items["prepare"]
-        capture = body.find(_code("PrefixPreparation::capture(state, &valid)?;"))
+        capture = body.find(_code("PrefixPreparation::capture(state, &valid, native)?;"))
         tail = body.find(_code("prepare_deterministic_carrier_metadata("))
         if capture < 0 or tail < capture:
             errors.append("Native preparation stages metadata before prefix capture")
 
     # Type privacy and consuming field layout are part of the owner boundary;
     # no detached marker, caller-supplied scalar or mutable State accessor suffices.
-    for symbol in ("ValidatedExecutionPrefix", "PrefixPreparation", "SealedExecutionOutputs"):
+    for symbol in ("ValidatedExecutionPrefix", "PrefixPreparation", "SealedExecutionOutputs",
+                   "PreparedNativeExecutionControls", "PreparedNativeLaneBatchSourceV1",
+                   "FinalizedNativeLaneBatchV1", "RecordedNativeLaneBatchV1", "NativeExecutionCustody"):
         if symbol in items and re.search(r"(?:\{|,)pub(?:\([^)]*\))?\w+:", items[symbol]):
             errors.append(f"Native preparation {symbol} exposes mutable/forgeable owner fields")
 

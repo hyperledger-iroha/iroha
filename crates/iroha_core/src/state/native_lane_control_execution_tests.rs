@@ -32,7 +32,12 @@ fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixtu
     assert_eq!(original_contexts.len(), if atomic { 2 } else { 1 });
     let first: iroha_data_model::block::lane_admission::LaneAdmittedInputV1 =
         norito::decode_canonical(
-            &economic.native.block.execution_context().unwrap().queue_plan_admissions[0],
+            &economic
+                .native
+                .block
+                .execution_context()
+                .unwrap()
+                .queue_plan_admissions[0],
         )
         .unwrap();
     let routing = first.routing_plan().unwrap();
@@ -113,63 +118,104 @@ fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixtu
     overlay
         .finalize_lane_consensus_contexts(&block, Some(&opening))
         .unwrap();
-    assert_eq!(overlay.lane_consensus_contexts.get().contexts, original_contexts);
+    assert_eq!(
+        overlay.lane_consensus_contexts.get().contexts,
+        original_contexts
+    );
     let mut witness = ExecWitness::default();
-    overlay.capture_lane_consensus_contexts(&mut witness).unwrap();
-    overlay.stage_autoscale_sample_record_for_count(&block, 0).unwrap();
+    overlay
+        .capture_lane_consensus_contexts(&mut witness)
+        .unwrap();
+    overlay
+        .stage_autoscale_sample_record_for_count(&block, 0)
+        .unwrap();
     overlay.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &block);
     overlay.commit().unwrap();
     state.kura.store_block(Arc::new(block.clone())).unwrap();
     let (artifact, receipt) =
         stage_lane_context_fixture_finality(state, &block, opening.clone(), witness.clone());
-    state.kura.promote_kagemusha_finality_sidecar(&artifact, &receipt).unwrap();
+    state
+        .kura
+        .promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .unwrap();
     let published = state.verified_lane_consensus_contexts().unwrap().unwrap();
     assert_eq!(
-        published.contexts().iter().map(|context| context.frozen().clone()).collect::<Vec<_>>(),
+        published
+            .contexts()
+            .iter()
+            .map(|context| context.frozen().clone())
+            .collect::<Vec<_>>(),
         original_contexts,
         "later finalized admission preserves the original route head and its opening authority",
     );
     {
         let view = state.view();
         for input in [&first, &later] {
-            assert!(State::pending_queue_plan_binding_for_execution(
-                &view, &input.entrypoint, &routing, block.header().height().get() + 1,
-            ).unwrap().is_some());
+            assert!(
+                State::pending_queue_plan_binding_for_execution(
+                    &view,
+                    &input.entrypoint,
+                    &routing,
+                    block.header().height().get() + 1,
+                )
+                .unwrap()
+                .is_some()
+            );
         }
     }
     let applying = native_control_verified_context(state, artifact.height);
     assert_eq!(applying.context().network_id, state.network_id);
     assert_eq!(applying.context().roster.len(), 4);
-    assert_eq!(applying.context().da_layout.encoding, PayloadEncoding::ReedSolomon16);
+    assert_eq!(
+        applying.context().da_layout.encoding,
+        PayloadEncoding::ReedSolomon16
+    );
     economic.native.block = block;
     economic.native.opening = opening;
     economic.native.witness = witness;
-    NativeControlExecutionFixture { economic, later, applying }
+    NativeControlExecutionFixture {
+        economic,
+        later,
+        applying,
+    }
 }
 
 fn native_control_resign_carrier(carrier: &mut SignedBlock) {
     let key = merge_carrier_finality_fixture_keypair();
-    carrier.replace_signatures(BTreeSet::from([
-        iroha_data_model::block::BlockSignature::new(
-            0, iroha_crypto::SignatureOf::from_hash(key.private_key(), carrier.hash()),
-        ),
-    ])).unwrap();
+    carrier
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(key.private_key(), carrier.hash()),
+            ),
+        ]))
+        .unwrap();
 }
 
 fn native_control_verified_context(
     state: &State,
     parent_height: u64,
 ) -> crate::sumeragi::v2::VerifiedHeightContext {
-    let (parent, receipt) = state.kura.v2_finality_artifact_with_receipt(parent_height)
-        .unwrap().unwrap();
+    let (parent, receipt) = state
+        .kura
+        .v2_finality_artifact_with_receipt(parent_height)
+        .unwrap()
+        .unwrap();
     let next = crate::sumeragi::v2_context::build_successor_height_context(
-        &parent, parent.height_context.nexus_amx_context_hash, None,
-    ).unwrap();
+        &parent,
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state).unwrap(),
+        None,
+    )
+    .unwrap();
     crate::sumeragi::v2::VerifiedHeightContext::successor(
-        next, parent.validator_set_pops.clone(), &parent, &receipt,
+        next,
+        parent.validator_set_pops.clone(),
+        &parent,
+        &receipt,
         &parent.validator_set_pops,
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 fn assert_native_control_suffix(
@@ -184,38 +230,97 @@ fn assert_native_control_suffix(
     let overlay = prepared.overlay();
     let height = recorded.carrier().header().height().get();
     assert_native_economic_terminal(overlay, source, height);
-    assert_eq!(overlay.world.assets.get(&fixture.economic.source).unwrap().0, Quantity::from(75u32));
-    assert_eq!(overlay.world.assets.get(&fixture.economic.destination).unwrap().0, Quantity::from(25u32));
-    assert!(State::pending_queue_plan_binding_for_execution(
-        overlay, &fixture.later.entrypoint, &fixture.later.routing_plan().unwrap(), height,
-    ).unwrap().is_some(), "actual later admission remains pending, not executed or discarded");
-    assert!(overlay.transactions.get(&fixture.later.entrypoint.hash()).is_none());
+    assert_eq!(
+        overlay
+            .world
+            .assets
+            .get(&fixture.economic.source)
+            .unwrap()
+            .0,
+        Quantity::from(75u32)
+    );
+    assert_eq!(
+        overlay
+            .world
+            .assets
+            .get(&fixture.economic.destination)
+            .unwrap()
+            .0,
+        Quantity::from(25u32)
+    );
+    assert!(
+        State::pending_queue_plan_binding_for_execution(
+            overlay,
+            &fixture.later.entrypoint,
+            &fixture.later.routing_plan().unwrap(),
+            height,
+        )
+        .unwrap()
+        .is_some(),
+        "actual later admission remains pending, not executed or discarded"
+    );
+    assert!(
+        overlay
+            .transactions
+            .get(&fixture.later.entrypoint.hash())
+            .is_none()
+    );
     let next = overlay.lane_consensus_contexts.get();
     assert_eq!(next.contexts.len(), source.contexts().len());
     for old in source.contexts() {
         let old = old.frozen();
-        let successor = next.contexts.iter().find(|next| next.lane_id == old.lane_id).unwrap();
+        let successor = next
+            .contexts
+            .iter()
+            .find(|next| next.lane_id == old.lane_id)
+            .unwrap();
         assert_eq!(successor.lane_incarnation, old.lane_incarnation);
         assert_eq!(successor.dataspace_id, old.dataspace_id);
         assert_eq!(successor.predecessor_height, old.next_lane_height);
         assert_eq!(successor.next_lane_height, old.next_lane_height + 1);
-        assert_eq!(successor.predecessor_hash, Some(source.body().payload().descriptor.canonical_hash().unwrap()));
+        assert_eq!(
+            successor.predecessor_hash,
+            Some(source.body().payload().descriptor.canonical_hash().unwrap())
+        );
         assert_eq!(successor.predecessor_applied_global_height, height);
-        assert_eq!(successor.admitted_binding_hash, fixture.later.certificate.binding.canonical_hash());
+        assert_eq!(
+            successor.admitted_binding_hash,
+            fixture.later.certificate.binding.canonical_hash()
+        );
         assert_eq!(successor.opening_global_height, height);
-        assert_eq!(successor.opening_global_context_id, fixture.applying.context().id());
+        assert_eq!(
+            successor.opening_global_context_id,
+            fixture.applying.context().id()
+        );
         assert_eq!(successor.committee.len(), 4);
         assert_eq!(successor.validator_set_pops.len(), 4);
         assert_eq!(successor.da_layout.encoding, PayloadEncoding::ReedSolomon16);
-        assert_ne!(successor.canonical_hash().unwrap(), old.canonical_hash().unwrap());
+        assert_ne!(
+            successor.canonical_hash().unwrap(),
+            old.canonical_hash().unwrap()
+        );
     }
-    overlay.verify_execution_output_seal(recorded.carrier()).unwrap();
-    let witness = overlay.exec_witness.as_ref().expect("whole control+Native witness");
-    overlay.verify_lane_consensus_contexts_witness(witness).unwrap();
-    overlay.verified_fastpq_source_inventory_for_capture().unwrap()
-        .verify_ordinary_witness_bundles(&witness.fastpq_transcripts).unwrap();
-    assert!(crate::block::ValidBlock::validate_inactive_native_carrier_for_test(recorded.carrier())
-        .unwrap_err().to_string().contains("not active"));
+    overlay
+        .verify_execution_output_seal(recorded.carrier())
+        .unwrap();
+    let witness = overlay
+        .exec_witness
+        .as_ref()
+        .expect("whole control+Native witness");
+    overlay
+        .verify_lane_consensus_contexts_witness(witness)
+        .unwrap();
+    overlay
+        .verified_fastpq_source_inventory_for_capture()
+        .unwrap()
+        .verify_ordinary_witness_bundles(&witness.fastpq_transcripts)
+        .unwrap();
+    assert!(
+        crate::block::ValidBlock::validate_inactive_native_carrier_for_test(recorded.carrier())
+            .unwrap_err()
+            .to_string()
+            .contains("not active")
+    );
 }
 
 state_test! { sync native_recorded_control_suffix_requires_opening_after_real_later_admission
@@ -293,12 +398,199 @@ state_test! { sync native_recorded_control_rejects_changed_opening_and_stale_ver
     }
     let stale = native_control_verified_context(state, parent_height - 1);
     assert_eq!(stale.context().height + 1, fixture.applying.context().height);
-    let carrier = native_consumer_stage_carrier(&fixture.economic);
+    // Nexus policy is selected from the applying pre-State, independently from
+    // the parent QC's roster/policy proof. Its exact local join must still hold.
+    let mut wrong_nexus = fixture.applying.context().clone();
+    wrong_nexus.nexus_amx_context_hash = Hash::new(b"foreign Native opening Nexus policy");
+    let wrong_nexus = crate::sumeragi::v2::VerifiedHeightContext::successor(
+        wrong_nexus, parent.validator_set_pops.clone(), &parent, &receipt,
+        &parent.validator_set_pops,
+    ).unwrap();
+    for other in [stale, wrong_nexus] {
+        let carrier = native_consumer_stage_carrier(&fixture.economic);
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            else { panic!("exact original first-source owners"); };
+        let error = source.record_execution(carrier, other).err().expect("verified foreign context is not applying authority");
+        assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+        assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+        assert_native_economic_relay_recorder_released();
+    }
+}
+
+fn native_control_requested_beacon(
+    fixture: &NativeControlExecutionFixture,
+) -> iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1 {
+    let mut validators = (0xD3_u8..=0xD6)
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        .collect::<Vec<_>>();
+    validators.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    assert_eq!(
+        validators
+            .iter()
+            .map(KeyPair::public_key)
+            .collect::<Vec<_>>(),
+        fixture
+            .applying
+            .context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.public_key())
+            .collect::<Vec<_>>(),
+        "beacon authority is the authentic global committee, not a lane committee",
+    );
+    let pulse = install_exact_merge_beacon_fixture(
+        &fixture.economic.native.state,
+        &validators,
+        &fixture.economic.native.block,
+    );
+    assert_eq!(pulse.height, fixture.applying.context().height);
+    assert_eq!(pulse.network_id, fixture.applying.context().network_id);
+    assert_eq!(
+        pulse.finalized_chain_anchor.block_hash,
+        fixture.economic.native.block.hash()
+    );
+    let view = fixture.economic.native.state.view();
+    let slot = (
+        iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
+        pulse.height,
+    );
+    assert!(
+        view.world()
+            .parliament_required_beacon_pulse_slots()
+            .get(&slot)
+            .is_some_and(|attempts| !attempts.is_empty())
+    );
+    assert!(
+        view.world()
+            .global_beacon_pulses()
+            .get(&pulse.pulse_id)
+            .is_none()
+    );
+    pulse
+}
+
+fn native_control_attach_beacon(
+    carrier: &mut SignedBlock,
+    pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+) {
+    carrier.set_npos_consensus_effects(Some(iroha_data_model::consensus::NposConsensusEffects {
+        finalized_global_beacon_pulse: Some(pulse),
+        ..Default::default()
+    }));
+    native_control_resign_carrier(carrier);
+    carrier.validate_proposal_commitments().unwrap();
+}
+
+state_test! { sync native_recorded_control_executes_requested_beacon_before_suffix_and_retains_witness
+    use super::NativeLaneBatchSourcePreparationV1;
+    for atomic in [false, true] {
+        let fixture = native_control_execution_fixture(atomic);
+        let pulse = native_control_requested_beacon(&fixture);
+        let state = &fixture.economic.native.state;
+        let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+        let files = exact_test_tree_fingerprint(&state.kura.store_root());
+        let mut carrier = native_consumer_stage_carrier(&fixture.economic);
+        native_control_attach_beacon(&mut carrier, pulse);
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            else { panic!("actual source with mandatory beacon control"); };
+        let recorded = source.record_execution(carrier, fixture.applying.clone())
+            .unwrap().expect("same complete original pre-State");
+        assert_native_control_suffix(&fixture, &recorded);
+        let overlay = recorded.prepared_for_test().overlay();
+        assert_eq!(overlay.world.global_beacon_pulses.get(&pulse.pulse_id), Some(&pulse));
+        let expected_link = crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&pulse).unwrap();
+        assert_eq!(overlay.world.global_beacon_latest_pulse.get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY), Some(&expected_link));
+        let slot = (
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id),
+            pulse.height,
+        );
+        assert_eq!(overlay.world.global_beacon_pulse_slots.get(&slot), Some(&pulse.pulse_id));
+        assert!(!overlay.exec_witness.as_ref().unwrap().writes.is_empty());
+        assert_eq!(recorded.carrier().npos_consensus_effects().unwrap().finalized_global_beacon_pulse, Some(pulse));
+        drop(recorded);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+        assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+        assert_native_economic_relay_recorder_released();
+    }
+}
+
+state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon
+    use super::NativeLaneBatchSourcePreparationV1;
+    let fixture = native_control_execution_fixture(true);
+    let pulse = native_control_requested_beacon(&fixture);
+    let state = &fixture.economic.native.state;
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    for alteration in 0..3 {
+        let mut carrier = native_consumer_stage_carrier(&fixture.economic);
+        if alteration != 0 {
+            let mut changed = pulse;
+            match alteration {
+                1 => changed.signature[0] ^= 1,
+                2 => changed.finalized_chain_anchor.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign Native beacon parent")),
+                _ => unreachable!(),
+            }
+            native_control_attach_beacon(&mut carrier, changed);
+        }
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+            .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+            else { panic!("first input and Decisions remain authentic independently of controls"); };
+        let error = source.record_execution(carrier, fixture.applying.clone())
+            .err().expect("real requested beacon must be exact");
+        assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+        assert!(error.to_string().contains("beacon"), "{error}");
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+        assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+        assert_native_economic_relay_recorder_released();
+    }
+}
+
+state_test! { sync native_recorded_control_admits_same_carrier_input_without_executing_it
+    use super::NativeLaneBatchSourcePreparationV1;
+    let fixture = native_control_execution_fixture(true);
+    let state = &fixture.economic.native.state;
+    let signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
+    let mut builder = TransactionBuilder::new(
+        state.network_id, fixture.economic.source.account().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(Duration::from_millis(3));
+    builder.set_ttl(Duration::from_secs(1));
+    let entrypoint = TransactionEntrypoint::External(builder.with_instructions([
+        Transfer::asset_quantity(fixture.economic.source.clone(), 11u32, fixture.economic.destination.account().clone()),
+    ]).with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(signer.private_key()));
+    let routing = fixture.later.routing_plan().unwrap();
+    let (binding, control) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        state, routing.clone(), &fixture.economic.native.validators,
+        fixture.economic.native.block.header().height().get(), 0xB8, &entrypoint,
+    );
+    assert_ne!(binding.canonical_hash(), fixture.later.certificate.binding.canonical_hash());
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let mut carrier = native_consumer_stage_carrier(&fixture.economic);
+    let mut context = carrier.execution_context().unwrap().clone();
+    context.queue_plan_admissions = vec![control.clone()];
+    carrier.set_execution_context(Some(context));
+    native_control_resign_carrier(&mut carrier);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
         .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
-        else { panic!("exact original first-source owners"); };
-    let error = source.record_execution(carrier, stale).err().expect("valid old context is not applying authority");
-    assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+        else { panic!("earlier exact source remains independent from the fresh admission"); };
+    let recorded = source.record_execution(carrier, fixture.applying.clone())
+        .unwrap().expect("same applying pre-State");
+    assert_native_control_suffix(&fixture, &recorded);
+    let overlay = recorded.prepared_for_test().overlay();
+    let admitted = State::pending_queue_plan_binding_for_execution(
+        overlay, &entrypoint, &routing, recorded.carrier().header().height().get(),
+    ).unwrap().expect("same carrier's actual complete input remains a pending obligation");
+    assert_eq!(admitted.canonical_hash(), binding.canonical_hash());
+    assert!(overlay.transactions.get(&entrypoint.hash()).is_none());
+    assert_eq!(recorded.carrier().execution_outputs().len(), 1);
+    assert_eq!(recorded.carrier().execution_context().unwrap().queue_plan_admissions, vec![control]);
+    drop(recorded);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
     assert_native_economic_relay_recorder_released();

@@ -586,7 +586,16 @@ fn native_economic_fixture_from_state(
         .unwrap();
     block.validate_proposal_commitments().unwrap();
     block.validate_execution_result_structure().unwrap();
-    let opening = if let Some(layout) = genesis_layout {
+    let opening = {
+        let layout = genesis_layout.unwrap_or(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        });
+        let policy = crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state).unwrap();
         // Choose geometry before any signed finality or frozen lane instance.
         // Native historical recovery tests exercise the real enclosing batch,
         // whose carrier is larger than this helper's original 4 KiB default.
@@ -599,6 +608,7 @@ fn native_economic_fixture_from_state(
                 previous.as_ref(),
                 state.network_id,
                 layout,
+                policy,
             );
             kura.store_v2_finality_artifact(&artifact).unwrap();
             previous = Some(artifact);
@@ -610,8 +620,6 @@ fn native_economic_fixture_from_state(
             None,
         )
         .unwrap()
-    } else {
-        lane_opening_context_for_state_test(&state)
     };
     let mut overlay = state
         .block_with_queue_plan_admissions(block.header(), &controls)

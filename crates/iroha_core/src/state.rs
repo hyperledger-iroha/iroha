@@ -403,10 +403,11 @@ pub use fastpq_source_inventory::{
 };
 mod lane_admitted_input;
 mod lane_decision_batch;
+pub(crate) use lane_decision_batch::NativeExecutionCustody;
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
 pub(crate) use native_lane_batch_replay::{
-    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1, PreparedNativeLaneBatchSourceV1,
 };
 mod lane_decision_execution;
 pub(crate) use lane_decision_execution::PreexecutedLaneDecisionGroupV1;
@@ -13702,7 +13703,7 @@ pub struct StateBlock<'state> {
     staged_merge_entry: Option<MergeLedgerEntry>,
     /// Private native source seal; roots bind the shared start+native prefix.
     /// Publication remains forbidden until the sole consumer owns the final seal.
-    native_lane_stage: Option<Box<lane_decision_batch::NativeLaneStageSealV1>>,
+    native_lane_stage: Option<Arc<lane_decision_batch::NativeLaneStageSealV1>>,
     /// Exact proposal-native QueuePlan certificates staged before ordinary
     /// carrier-block effects. These controls are ordered by the Sumeragi QC,
     /// independently from the Nexus merge ledger.
@@ -52794,18 +52795,19 @@ impl<'state> StateBlock<'state> {
         &self,
         block: &SignedBlock,
     ) -> Result<(), BlockValidationError> {
+        // An absent bundle has no cursor work. Do not re-enter the live cache
+        // hydrator while this execution owns the State writers: a concurrent
+        // rewind can clear the cache before waiting for those same writers.
+        let Some(bundle) = block.da_commitments() else {
+            return Ok(());
+        };
         self.state_ref
             .ensure_da_indexes_hydrated()
             .map_err(BlockValidationError::from)?;
         let mut cursors = self.da_shard_cursors.read().clone();
         let height = block.header().height().get();
-        // DA bundles advance shard cursors; touched lanes require a cursor only when a
-        // commitment bundle is supplied for the block.
-        let bundle_opt = block.da_commitments();
-        if let Some(bundle) = bundle_opt {
-            self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
-            self.validate_touched_lane_cursors(&cursors, height)?;
-        }
+        self.validate_da_commitment_bundle(&mut cursors, height, bundle)?;
+        self.validate_touched_lane_cursors(&cursors, height)?;
         Ok(())
     }
     /// Drain the accumulated transfer transcripts recorded while executing this block.

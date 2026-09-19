@@ -42,6 +42,20 @@ pub(crate) struct PreparedCarrier<'state> {
 }
 
 impl<'state> PreparedCarrier<'state> {
+    /// Inspect the exact retained Native custody without source reconstruction.
+    #[cfg(test)]
+    pub(in crate::state) fn native_source_for_test(
+        &self,
+    ) -> Option<&super::NativeExecutionCustody> {
+        self.source_prefix.native_for_test()
+    }
+
+    /// Exercise the unchanged raw publication refusal after preparation.
+    #[cfg(test)]
+    pub(in crate::state) fn into_state_for_test(self) -> Box<StateBlock<'state>> {
+        self.state
+    }
+
     /// Consume the exact validator output; errors drop every staged journal.
     pub(crate) fn prepare(
         input: ValidatedCarrierPreparationInput<'state>,

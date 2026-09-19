@@ -44,6 +44,8 @@ pub(super) struct NativeLaneStageSealV1 {
     authenticated_aliases: Vec<Option<Hash>>,
     settlement_hashes: Vec<HashOf<super::LaneBlockCommitment>>,
     membership: HashSet<HashOf<TransactionEntrypoint>>,
+    queue_plan_admissions_hash: HashOf<Vec<Vec<u8>>>,
+    npos_effects_hash: Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,
     application_write_set_root: Hash,
     write_set_root: Hash,
     completed_write_set_root: Option<Hash>,
@@ -66,9 +68,53 @@ pub(crate) struct PreparedLaneDecisionBatchV1<'state> {
 pub(crate) struct RecordedNativeLaneBatchV1<'state> {
     prepared: PreparedLaneDecisionBatchV1<'state>,
     carrier: iroha_data_model::block::SignedBlock,
+    context: crate::sumeragi::v2::VerifiedHeightContext,
 }
 
-impl RecordedNativeLaneBatchV1<'_> {
+impl<'state> RecordedNativeLaneBatchV1<'state> {
+    /// Move the original execution and authenticated context into the canonical
+    /// preparation owner. This grants no global validation or publication by itself.
+    pub(crate) fn into_preparation_parts(
+        self,
+    ) -> std::result::Result<
+        (
+            iroha_data_model::block::SignedBlock,
+            Box<StateBlock<'state>>,
+            NativeExecutionCustody,
+        ),
+        String,
+    > {
+        self.prepared
+            .verify_source_binding()
+            .map_err(|error| error.to_string())?;
+        self.prepared
+            .overlay
+            .verify_native_execution_metadata(&self.carrier, &self.prepared.executions)?;
+        let seal = Arc::clone(
+            self.prepared
+                .overlay
+                .native_lane_stage
+                .as_ref()
+                .ok_or("Native preparation lost its actual stage")?,
+        );
+        let PreparedLaneDecisionBatchV1 {
+            overlay,
+            executions,
+            sources,
+            ..
+        } = self.prepared;
+        Ok((
+            self.carrier,
+            overlay,
+            NativeExecutionCustody {
+                seal,
+                sources,
+                executions,
+                context: self.context,
+            },
+        ))
+    }
+
     /// The result-bearing carrier produced by the retained execution owner.
     pub(crate) fn carrier(&self) -> &iroha_data_model::block::SignedBlock {
         &self.carrier
@@ -81,6 +127,46 @@ impl RecordedNativeLaneBatchV1<'_> {
         &self.prepared
     }
 }
+/// Original Native source, execution and frozen context retained through the
+/// common tail and detached journals. The stage is immutable after capture;
+/// sharing its allocation with State preserves the same membership authority.
+pub(crate) struct NativeExecutionCustody {
+    seal: Arc<NativeLaneStageSealV1>,
+    sources: Vec<VerifiedLaneDecisionGroupV1>,
+    executions: Vec<Execution>,
+    context: crate::sumeragi::v2::VerifiedHeightContext,
+}
+impl NativeExecutionCustody {
+    #[cfg(test)]
+    pub(in crate::state) fn sources_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
+        &self.sources
+    }
+
+    /// Original authenticated context carried through execution and suffix opening.
+    pub(crate) fn context(&self) -> &crate::sumeragi::v2::VerifiedHeightContext {
+        &self.context
+    }
+
+    pub(in crate::state) fn retains_state(&self, state: &StateBlock<'_>) -> bool {
+        state
+            .native_lane_stage
+            .as_ref()
+            .is_some_and(|seal| Arc::ptr_eq(seal, &self.seal))
+            && self.context.context().height == state._curr_block.height().get()
+            && self.context.context().network_id == state.network_id
+            && self.sources.len() == self.seal.batch.groups.len()
+            && self.executions.len() == self.sources.len()
+            && self
+                .sources
+                .iter()
+                .zip(&self.seal.batch.groups)
+                .all(|(source, wire)| {
+                    source.body().payload() == &wire.payload && source.decisions() == wire.decisions
+                })
+            && state.validate_native_lane_stage_membership().is_ok()
+    }
+}
+
 impl<'state> PreparedLaneDecisionBatchV1<'state> {
     pub(super) fn from_stage(
         overlay: Box<StateBlock<'state>>,
@@ -183,6 +269,7 @@ impl State {
         &self,
         mut carrier: iroha_data_model::block::SignedBlock,
         groups: Vec<VerifiedLaneDecisionGroupV1>,
+        context: crate::sumeragi::v2::VerifiedHeightContext,
     ) -> Result<RecordedNativeLaneBatchV1<'_>> {
         crate::sumeragi::witness::ensure_exec_witness_capture_available()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
@@ -194,41 +281,54 @@ impl State {
                 ));
             }
             let expected =
-                crate::block::native_lane_batch_for_scratch(&carrier).map_err(invalid)?;
+                crate::block::native_lane_batch_for_execution(&carrier).map_err(invalid)?;
+            let controls = crate::block::ValidBlock::prepare_native_execution_controls(
+                &carrier, self, context,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
             let batch = self.prepare_lane_decision_batch(&groups)?;
             if &batch != expected {
                 return Err(invalid(
                     "recorded Native execution lost its exact source or pre-State".into(),
                 ));
             }
-            let (overlay, executions) = self.with_native_lane_execution_scope(
+            let (overlay, (executions, context)) = self.with_native_lane_execution_scope(
                 carrier.header(),
                 &groups,
-                || {
-                    crate::sumeragi::witness::begin_exec_witness_capture()
-                        .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)
+                |overlay| {
+                    let recorder = crate::sumeragi::witness::begin_exec_witness_capture()
+                        .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
+                    let context = controls
+                        .apply(overlay)
+                        .map_err(|error| invalid(error.to_string()))?;
+                    Ok((recorder, context))
                 },
                 |overlay, results| overlay.seal_native_lane_decision_batch(results, batch),
-                |overlay, executions, recorder| {
+                |overlay, executions, (recorder, context)| {
                     crate::block::ValidBlock::seal_native_execution_outputs(
                         &mut carrier,
                         overlay,
                         &executions,
                     )
                     .map_err(|error| invalid(error.to_string()))?;
-                    overlay
-                        .finalize_lane_consensus_contexts(&carrier, None)
-                        .map_err(invalid)?;
+                    crate::block::ValidBlock::finalize_native_execution_contexts(
+                        &carrier, overlay, &context,
+                    )
+                    .map_err(|error| invalid(error.to_string()))?;
                     overlay.capture_exec_witness().map_err(invalid)?;
                     overlay
                         .verify_execution_output_seal(&carrier)
                         .map_err(invalid)?;
                     drop(recorder);
-                    Ok(executions)
+                    Ok((executions, context))
                 },
             )?;
             let prepared = PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?;
-            Ok(RecordedNativeLaneBatchV1 { prepared, carrier })
+            Ok(RecordedNativeLaneBatchV1 {
+                prepared,
+                carrier,
+                context,
+            })
         })
     }
 
@@ -312,6 +412,30 @@ impl State {
 }
 
 impl StateBlock<'_> {
+    /// Check control custody without rereading State while holding its writers.
+    /// Only the original unchanged State and pristine constructor cut may consume
+    /// these controls; a same-header overlay from another State is insufficient.
+    pub(crate) fn validate_native_pristine_control_owner(
+        &self,
+        state: &State,
+        generation: u64,
+        header: &BlockHeader,
+    ) -> std::result::Result<(), String> {
+        if !std::ptr::eq(self.state_ref, state)
+            || !super::is_stable_state_view_generation(generation, state.state_view_generation())
+            || &self._curr_block != header
+            || self.start_of_block_effects_applied
+            || self.applied_npos_consensus_effects_hash.is_some()
+            || !self.staged_queue_plan_admissions.is_empty()
+            || self.staged_merge_entry.is_some()
+            || self.native_lane_stage.is_some()
+            || !self.world.merge_execution_write_set_bytes().is_empty()
+        {
+            return Err("Native controls lost their original pristine State owner".into());
+        }
+        Ok(())
+    }
+
     /// Seal actual results supplied only by the constructor-owned after-start kernel.
     fn seal_native_lane_decision_batch(
         &mut self,
@@ -322,7 +446,6 @@ impl StateBlock<'_> {
         if !self.start_of_block_effects_applied
             || self.native_lane_stage.is_some()
             || self.staged_merge_entry.is_some()
-            || !self.staged_queue_plan_admissions.is_empty()
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
                 .canonical_carrier_commit_metadata_authorization
@@ -360,13 +483,15 @@ impl StateBlock<'_> {
             native_application_identity(&self._curr_block, batch_hash),
         )?;
         let write_set_root = self.merge_execution_write_set_root();
-        self.native_lane_stage = Some(Box::new(NativeLaneStageSealV1 {
+        self.native_lane_stage = Some(Arc::new(NativeLaneStageSealV1 {
             carrier: self._curr_block.clone(),
             batch: Arc::new(batch),
             batch_hash,
             authenticated_aliases,
             settlement_hashes,
             membership,
+            queue_plan_admissions_hash: HashOf::new(&self.staged_queue_plan_admissions),
+            npos_effects_hash: self.applied_npos_consensus_effects_hash,
             application_write_set_root,
             write_set_root,
             completed_write_set_root: None,
@@ -415,7 +540,8 @@ impl StateBlock<'_> {
             .as_ref()
             .ok_or_else(|| invalid("native stage has no source seal".into()))?;
         if self.staged_merge_entry.is_some()
-            || !self.staged_queue_plan_admissions.is_empty()
+            || HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash
+            || self.applied_npos_consensus_effects_hash != seal.npos_effects_hash
             || self.canonical_wsv_merge_commit_authorization.is_some()
             || self
                 .canonical_carrier_commit_metadata_authorization
@@ -498,7 +624,8 @@ impl StateBlock<'_> {
         let seal = self
             .native_lane_stage
             .as_mut()
-            .ok_or("native tail lost its stage")?;
+            .and_then(Arc::get_mut)
+            .ok_or("native tail lost exclusive ownership of its stage")?;
         if seal.completed_write_set_root.is_some() {
             return Err("native tail was completed twice".into());
         }
@@ -559,6 +686,11 @@ impl StateBlock<'_> {
             .ok_or("native output has no stage")?;
         if seal.completed_write_set_root.is_none()
             || block.header() != seal.carrier
+            || block.header().npos_effects_hash() != seal.npos_effects_hash
+            || block
+                .execution_context()
+                .map(|bundle| HashOf::new(&bundle.queue_plan_admissions))
+                != Some(seal.queue_plan_admissions_hash)
             || !block.external_entrypoints_slice().is_empty()
             || block
                 .execution_context()

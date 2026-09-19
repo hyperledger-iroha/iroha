@@ -56,7 +56,7 @@ fn prefix_capture_moves_original_sources_inventory_and_witness_without_publishin
     };
     assert!(!sealed.sources().entries().is_empty());
     let sources = sealed.sources().entries().as_ptr();
-    let (prepared, _, commitment) = PrefixPreparation::capture(staged, &valid)
+    let (prepared, _, commitment) = PrefixPreparation::capture(staged, &valid, None)
         .unwrap_or_else(|error| panic!("capture exact prefix: {error}"));
     assert_eq!(commitment, expected);
     assert!(Arc::ptr_eq(prepared.prefix.inventory(), &inventory));
@@ -126,7 +126,7 @@ fn prefix_capture_rejects_missing_witness_and_changed_owned_inventory_before_tai
             }
             _ => unreachable!(),
         }
-        let error = PrefixPreparation::capture(staged, &valid)
+        let error = PrefixPreparation::capture(staged, &valid, None)
             .err()
             .expect("missing original owner must refuse");
         assert!(
@@ -164,7 +164,7 @@ fn prefix_capture_rejects_changed_world_and_competing_membership_without_publica
                 },
             );
         }
-        let error = PrefixPreparation::capture(staged, &valid)
+        let error = PrefixPreparation::capture(staged, &valid, None)
             .err()
             .expect("changed execution refused");
         assert!(
@@ -241,7 +241,7 @@ fn transferred_prefix_keeps_both_transaction_apply_paths_closed() {
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     for consensus_only in [false, true] {
         let (valid, staged) = validated(&state, proposal.clone(), &topology, &context);
-        let (mut prepared, _, _) = PrefixPreparation::capture(staged, &valid)
+        let (mut prepared, _, _) = PrefixPreparation::capture(staged, &valid, None)
             .unwrap_or_else(|error| panic!("capture exact prefix: {error}"));
         let writes = prepared.prefix.witness().writes.as_ptr();
         let key = MusubiResolverIndexRevisionV1::new(2).unwrap();
@@ -302,7 +302,7 @@ fn world_carrier_tail_rejects_a_scope_without_owned_execution() {
     let before = crate::state::world_projection::WorldStateBaseline::capture_current(&block.world)
         .unwrap()
         .root();
-    assert!(PrefixPreparation::capture(block, &valid).is_err());
+    assert!(PrefixPreparation::capture(block, &valid, None).is_err());
     assert_eq!(
         crate::state::world_projection::WorldStateBaseline::capture_current(&state.world.block())
             .unwrap()

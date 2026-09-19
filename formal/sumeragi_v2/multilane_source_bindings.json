@@ -11254,10 +11254,14 @@
           "kind": "method",
           "symbol": "PrefixPreparation::capture",
           "required_tokens": [
-            "state.native_lane_stage.is_some()",
+            "native: Option<lane_decision_batch::NativeExecutionCustody>",
+            "let authority = match native",
+            "Some(native) if native.retains_state(&state) && block.execution_context().is_some_and(|context| context.native_lane_decisions.is_some()) =>",
+            "PrefixSourceAuthority::Native(Box::new(native))",
+            "None if state.native_lane_stage.is_none()",
+            "state.merge_carrier_entrypoints.is_empty()",
             "context.native_lane_decisions.is_some()",
             "state.staged_merge_entry.is_some()",
-            "!state.merge_carrier_entrypoints.is_empty()",
             "state.canonical_wsv_merge_commit_authorization.is_some()",
             "state.verify_execution_output_seal(block)?",
             "state.verified_fastpq_source_inventory_for_capture()?",
@@ -11285,7 +11289,8 @@
             "state.fastpq_source_inventory.is_none()",
             "state.fastpq_witness_context.is_none()",
             "state.parliament_timed_ovn_casting_bindings.is_none()",
-            "state.native_lane_stage.is_none()"
+            "state.native_lane_stage.is_none()",
+            "PrefixSourceAuthority::Native(native) => native.retains_state(state)"
           ]
         },
         {
@@ -11313,7 +11318,7 @@
           "symbol": "prepare",
           "required_tokens": [
             "input.into_parts()",
-            "PrefixPreparation::capture(state, &valid)?",
+            "PrefixPreparation::capture(state, &valid, native)?",
             "prepare_deterministic_carrier_metadata",
             "preparation.prepare_world_effects()?",
             "prepare_carrier_publication_events(block.header())",
@@ -11468,6 +11473,459 @@
             "execution.settlement_hash != *settlement",
             "super::canonical_merge_settlement_hash(&execution.settlement_commitment)",
             "!= *settlement"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "struct",
+          "symbol": "PreparedNativeExecutionControls",
+          "required_tokens": [
+            "state: &'state State",
+            "generation: u64",
+            "header: BlockHeader",
+            "admissions: Vec<Vec<u8>>",
+            "npos: Option<PreparedPristineConsensusEffects>",
+            "context: crate::sumeragi::v2::VerifiedHeightContext"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::prepare_native_execution_controls",
+          "required_tokens": [
+            "context: crate::sumeragi::v2::VerifiedHeightContext",
+            "ensure_state_access_without_exec_witness()",
+            "native_lane_batch_for_execution(block)",
+            "validate_proposal_commitments()",
+            "ensure_da_indexes_hydrated()",
+            "let generation = state.state_view_generation()",
+            "let frozen = context.context()",
+            "frozen.network_id != *view.network_id()",
+            "frozen.height != block.header().height().get()",
+            "height.checked_add(1)",
+            "!= Some(frozen.height)",
+            "block.header().prev_block_hash() != view.latest_block_hash()",
+            ".map(|qc| qc.subject.block_hash) != view.latest_block_hash()",
+            "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
+            "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
+            "committed_nexus_amx_context_hash(state)",
+            "committed_execution_policy_hash(state)",
+            "frozen.nexus_amx_context_hash != nexus || frozen.execution_policy_hash != policy",
+            "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?",
+            "Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?",
+            "Ok(PreparedNativeExecutionControls { state, generation, header: block.header(),",
+            "admissions: block.execution_context()",
+            ".queue_plan_admissions.clone()",
+            "npos, context"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "PreparedNativeExecutionControls::apply",
+          "required_tokens": [
+            "self,",
+            "validate_native_pristine_control_owner(self.state, self.generation, &self.header)",
+            "stage_queue_plan_admissions_for_carrier(&self.admissions)",
+            "if let Some(npos) = self.npos",
+            "npos.apply(overlay)?",
+            "Ok(self.context)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::prepare_pristine_consensus_effects",
+          "required_tokens": [
+            "active_runtime_abi_hash(",
+            "&state.world_view()",
+            "block.header().height().get()",
+            "block.npos_consensus_effects()",
+            "authenticated_height_context.ok_or_else(",
+            "v2_committed_evidence_prune_keys_from_state(state, height, effects.v2_evidence_admissions.len(),)",
+            "expected_anchor: header.prev_block_hash().map(|block_hash|",
+            "height: height.saturating_sub(1)",
+            "roster: context.roster.iter()",
+            "effects: effects.clone()",
+            "header"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "PreparedPristineConsensusEffects::apply",
+          "required_tokens": [
+            "if state_block._curr_block != self.header",
+            "return Err(",
+            "state_block.apply_pristine_npos_consensus_effects(",
+            "&self.effects, &self.prune_keys, self.expected_anchor, &self.roster,",
+            "self.header.height().get(), self.header.view_change_index(), self.header.creation_time_ms"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::finalize_native_execution_contexts",
+          "required_tokens": [
+            "context: &crate::sumeragi::v2::VerifiedHeightContext",
+            "Self::validate_staged_execution_controls(block, state)?",
+            "validate_axt_envelopes(block, state)?",
+            "state.validate_da_shard_cursors(block)?",
+            "Self::validate_sccp_commitment_root(block)?",
+            "finalize_lane_consensus_contexts(block, Some(context.context()))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::validate_native_pristine_control_owner",
+          "required_tokens": [
+            "!std::ptr::eq(self.state_ref, state)",
+            "!super::is_stable_state_view_generation(generation, state.state_view_generation())",
+            "&self._curr_block != header",
+            "self.start_of_block_effects_applied",
+            "self.applied_npos_consensus_effects_hash.is_some()",
+            "!self.staged_queue_plan_admissions.is_empty()",
+            "self.staged_merge_entry.is_some()",
+            "self.native_lane_stage.is_some()",
+            "!self.world.merge_execution_write_set_bytes().is_empty()",
+            "return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "State::record_native_lane_decision_batch",
+          "required_tokens": [
+            "groups: Vec<VerifiedLaneDecisionGroupV1>",
+            "context: crate::sumeragi::v2::VerifiedHeightContext",
+            "ensure_exec_witness_capture_available()",
+            "with_stable_observation(self, ||",
+            "if !carrier.is_resultless_proposal()",
+            "native_lane_batch_for_execution(&carrier)",
+            "ValidBlock::prepare_native_execution_controls(&carrier, self, context,)",
+            "self.prepare_lane_decision_batch(&groups)?",
+            "if &batch != expected",
+            "self.with_native_lane_execution_scope(",
+            "begin_exec_witness_capture()",
+            "controls.apply(overlay)",
+            "Ok((recorder, context))",
+            "overlay.seal_native_lane_decision_batch(results, batch)",
+            "|overlay, executions, (recorder, context)|",
+            "ValidBlock::seal_native_execution_outputs(&mut carrier, overlay, &executions,)",
+            "ValidBlock::finalize_native_execution_contexts(&carrier, overlay, &context,)",
+            "overlay.capture_exec_witness()",
+            "verify_execution_output_seal(&carrier)",
+            "drop(recorder)",
+            "Ok((executions, context))",
+            "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
+            "Ok(RecordedNativeLaneBatchV1 { prepared, carrier, context, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_execution.rs",
+          "kind": "method",
+          "symbol": "State::with_native_lane_execution_scope",
+          "required_tokens": [
+            "enter: impl FnOnce(&mut StateBlock<'state>)",
+            "ensure_state_access_without_exec_witness()",
+            "self.block_with_owned_start_stages(",
+            "overlay.start_of_block_effects_applied",
+            "overlay.native_lane_stage.is_some()",
+            "overlay.staged_merge_entry.is_some()",
+            "!overlay.staged_queue_plan_admissions.is_empty()",
+            "!overlay.world.merge_execution_write_set_bytes().is_empty()",
+            "preflight_lane_decision_execution_inputs(groups)",
+            "let scope = enter(overlay)?",
+            "header: overlay._curr_block.clone()",
+            "groups",
+            "overlay.produce_native_execution_outputs(preflight, finish_native)?",
+            "finish_scope(overlay, result, scope)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "struct",
+          "symbol": "PreparedNativeLaneBatchSourceV1",
+          "required_tokens": [
+            "state: &'state State",
+            "observed: VerifiedLaneContexts",
+            "generation: u64",
+            "input: Arc<SignedBlock>",
+            "groups: Vec<VerifiedLaneDecisionGroupV1>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "method",
+          "symbol": "State::prepare_native_lane_batch_from_pre_state",
+          "required_tokens": [
+            "carrier: &SignedBlock",
+            "let header = carrier.header()",
+            "header.da_proof_policies_hash() != Some(expected_policy_hash)",
+            "self.import_recovered_lane_decision_group(&observed, execution, input)",
+            "self.import_lane_decision_group(&observed, execution)",
+            "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
+            "!observed.is_current(self)",
+            "state: self, observed, generation,",
+            "input: Arc::new(carrier.clone()), groups"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "method",
+          "symbol": "PreparedNativeLaneBatchSourceV1::record_execution",
+          "required_tokens": [
+            "self,",
+            "context: crate::sumeragi::v2::VerifiedHeightContext",
+            "ensure_exec_witness_capture_available()",
+            "if !self.is_current()",
+            "if carrier != *self.input { return Err(",
+            "drop(self.input)",
+            "record_native_lane_decision_batch(carrier, self.groups, context)",
+            "self.generation, self.state.state_view_generation()",
+            "recorded.map(Some)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "method",
+          "symbol": "PreparedNativeLaneBatchSourceV1::stage_with_start_hooks",
+          "required_tokens": [
+            "ensure_state_access_without_exec_witness()",
+            "native_lane_batch_for_scratch(&self.input)",
+            "if !self.is_current()",
+            "self.state.lane_execution_state_hash()",
+            "let batch = crate::block::native_lane_batch_for_scratch(&self.input)",
+            "actual_base != batch.base_state_hash",
+            "replay_lane_decision_batch(&self.input.header(), batch, self.groups)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_lane_carrier.rs",
+          "kind": "fn",
+          "symbol": "native_lane_batch_for_scratch",
+          "required_tokens": [
+            "let batch = native_lane_batch_for_execution(carrier)?",
+            ".queue_plan_admissions.is_empty()",
+            "carrier.npos_consensus_effects().is_some()",
+            "carrier.header().npos_effects_hash().is_some()",
+            "return Err(",
+            "Ok(batch)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::seal_native_lane_decision_batch",
+          "required_tokens": [
+            "queue_plan_admissions_hash: HashOf::new(&self.staged_queue_plan_admissions)",
+            "npos_effects_hash: self.applied_npos_consensus_effects_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::validate_native_lane_stage_membership",
+          "required_tokens": [
+            "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
+            "self.applied_npos_consensus_effects_hash != seal.npos_effects_hash",
+            "self.canonical_wsv_merge_commit_authorization.is_some()",
+            "self.canonical_carrier_commit_metadata_authorization.is_some()",
+            "self._curr_block != seal.carrier",
+            "return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::validate_native_output_carrier",
+          "required_tokens": [
+            "self.validate_native_lane_execution()",
+            "seal.completed_write_set_root.is_none()",
+            "block.header() != seal.carrier",
+            "block.header().npos_effects_hash() != seal.npos_effects_hash",
+            ".map(|bundle| HashOf::new(&bundle.queue_plan_admissions)) != Some(seal.queue_plan_admissions_hash)",
+            "!= Some(seal.batch.as_ref())",
+            "return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_lane_batch_source.rs",
+          "kind": "struct",
+          "symbol": "FinalizedNativeLaneBatchV1",
+          "required_tokens": [
+            "source: NativeLaneBatchRecoveryV1",
+            "carrier: SignedBlock"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_lane_batch_source.rs",
+          "kind": "method",
+          "symbol": "NativeLaneBatchRecoveryV1::project",
+          "required_tokens": [
+            "self.finality.validate_for_header(&block.header())",
+            "block.hash() != self.finality.block_hash",
+            "canonical_proposal_wire_hash()",
+            "!= self.finality.subject.payload_hash",
+            "if block.has_results()",
+            "let executed = block.encode_wire()",
+            "let commitment = &self.finality.commit_qc.execution_commitment",
+            "u64::try_from(executed.len()).ok() != Some(commitment.executed_block_wire_len)",
+            "Hash::new(&executed) != commitment.executed_block_wire_hash",
+            "crate::block::native_lane_batch_for_execution(block)?",
+            "source: self.clone()",
+            "carrier: block.canonical_resultless_proposal()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/carrier_preparation.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::prepare_native_candidate",
+          "required_tokens": [
+            "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
+            "context: crate::sumeragi::v2::VerifiedHeightContext",
+            "ensure_state_access_without_exec_witness()",
+            "let Some((state, body, generation)) = source.preparation_input() else { return Ok(None); };",
+            "if !body.is_resultless_proposal()",
+            "native_lane_batch_for_execution(body)",
+            "body.validate_proposal_commitments()",
+            "frozen.height != body.header().height().get()",
+            "frozen.network_id != *state.network_id_ref()",
+            "!= body.header().prev_block_hash()",
+            "verify_origin_block_signature(",
+            "BlockSignaturePolicy::RotatingLeader",
+            "length > frozen.da_layout.max_payload_size_bytes",
+            "ConsensusValidationProfile::NativePreparation",
+            "Self::validate_static_state_dependent(",
+            "Self::validate_static_with_snapshot(",
+            "if generation != state.state_view_generation()",
+            "source.record_execution(body, context)?",
+            "recorded.into_preparation_parts()",
+            "Arc::new(native.context().context().clone())",
+            "PreparedCarrier::prepare(ValidatedCarrierPreparationInput",
+            "native: Some(native)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "method",
+          "symbol": "PreparedNativeLaneBatchSourceV1::prepare_candidate",
+          "required_tokens": [
+            "self,",
+            "context: crate::sumeragi::v2::VerifiedHeightContext",
+            "ValidBlock::prepare_native_candidate(",
+            "self, context, genesis_account, time_source, block_cadence"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "struct",
+          "symbol": "RecordedNativeLaneBatchV1",
+          "required_tokens": [
+            "prepared: PreparedLaneDecisionBatchV1<'state>",
+            "carrier: iroha_data_model::block::SignedBlock",
+            "context: crate::sumeragi::v2::VerifiedHeightContext"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "struct",
+          "symbol": "NativeExecutionCustody",
+          "required_tokens": [
+            "seal: Arc<NativeLaneStageSealV1>",
+            "sources: Vec<VerifiedLaneDecisionGroupV1>",
+            "executions: Vec<Execution>",
+            "context: crate::sumeragi::v2::VerifiedHeightContext"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "RecordedNativeLaneBatchV1::into_preparation_parts",
+          "required_tokens": [
+            "fn into_preparation_parts(self)",
+            "self.prepared.verify_source_binding()",
+            "verify_native_execution_metadata(&self.carrier, &self.prepared.executions)",
+            "let seal = Arc::clone(",
+            "self.prepared.overlay.native_lane_stage.as_ref()",
+            "let PreparedLaneDecisionBatchV1",
+            "overlay, executions, sources",
+            "= self.prepared",
+            "NativeExecutionCustody { seal, sources, executions, context: self.context"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "NativeExecutionCustody::retains_state",
+          "required_tokens": [
+            "Arc::ptr_eq(seal, &self.seal)",
+            "self.context.context().height == state._curr_block.height().get()",
+            "self.context.context().network_id == state.network_id",
+            "self.sources.len() == self.seal.batch.groups.len()",
+            "self.executions.len() == self.sources.len()",
+            "source.body().payload() == &wire.payload",
+            "source.decisions() == wire.decisions",
+            "state.validate_native_lane_stage_membership().is_ok()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+          "kind": "fn",
+          "symbol": "verify_origin_block_signature",
+          "required_tokens": [
+            "context: &wire::HeightContext",
+            "block: &SignedBlock",
+            "policy: &BlockSignaturePolicy",
+            "context.leader(block.header().view_change_index())",
+            "context.roster.get(leader_index)",
+            "let mut signatures = block.signatures()",
+            "if signatures.next().is_some() || signature.index() != expected_index",
+            "verify_hash(expected_key, block.hash())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::validate_envelope",
+          "required_tokens": [
+            "envelope.manifest.validate(&self.context)?",
+            "body_origin_view <= envelope.round.view",
+            "header.height().get() != envelope.round.height",
+            "header.prev_block_hash() != expected_parent",
+            "verify_origin_block_signature(&self.context, &block, &self.signature_policy)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::validate_execution_context_header",
+          "required_tokens": [
+            "Self::checked_execution_context_header(block)?",
+            "bundle.native_lane_decisions.is_some()",
+            "return Err(Self::execution_context_error("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::validate_execution_context_with_state",
+          "required_tokens": [
+            "matches!(&validation_profile, ConsensusValidationProfile::NativePreparation { .. })",
+            "native_lane_batch_for_execution(block)",
+            "Self::checked_execution_context_header(block)?",
+            "Self::validate_execution_context_header(block)?",
+            "Self::validate_execution_context_alignment(block, bundle)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/native_lane_batch_replay.rs",
+          "kind": "method",
+          "symbol": "PreparedNativeLaneBatchSourceV1::preparation_input",
+          "required_tokens": [
+            "Option<(&'state State, &SignedBlock, u64)>",
+            "self.is_current().then_some((self.state, &self.input, self.generation))"
           ]
         }
       ]

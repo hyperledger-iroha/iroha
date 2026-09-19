@@ -101,6 +101,22 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
 
 
 @pytest.mark.parametrize("owner,symbol,old,new", [
+    ("BODY_STORE", "verify_origin_block_signature", "context.leader(block.header().view_change_index())", "context.leader(0)"),
+    ("BODY_STORE", "verify_origin_block_signature", "signatures.next().is_some() || signature.index() != expected_index", "false"),
+    ("BODY_STORE", "validate_envelope", "verify_origin_block_signature(&self.context, &block, &self.signature_policy)?", "Ok::<(), V2BodyStoreError>(())?"),
+    ("CONTROLS", "validate_execution_context_header", "bundle.native_lane_decisions.is_some()", "false"),
+    ("BLOCK", "prepare_native_candidate", "verify_origin_block_signature(", "unchecked_origin_signature("),
+    ("BLOCK", "prepare_native_candidate", "length > frozen.da_layout.max_payload_size_bytes", "false"),
+    ("BLOCK", "prepare_native_candidate", "Self::validate_static_state_dependent(", "unchecked_static_state("),
+    ("BLOCK", "prepare_native_candidate", "Self::validate_static_with_snapshot(", "unchecked_snapshot("),
+    ("BLOCK", "prepare_native_candidate", "generation != state.state_view_generation()", "false"),
+    ("NATIVE_SOURCE", "preparation_input", "self.is_current()", "true"),
+    ("NATIVE_SOURCE", "preparation_input", "self.generation", "self.state.state_view_generation()"),
+    ("BLOCK", "prepare_native_candidate", "native: Some(native)", "native: None"),
+    ("NATIVE_STAGE", "into_preparation_parts", "context: self.context", "context: other_context"),
+    ("NATIVE_STAGE", "retains_state", "Arc::ptr_eq(seal, &self.seal)", "true"),
+    ("NATIVE_STAGE", "retains_state", "source.decisions() == wire.decisions", "true"),
+    ("PREFIX", "retains_closed_state", "native.retains_state(state)", "true"),
     ("TAIL", "finalize_owned_execution_metadata", "            block,\n            state,\n            routes,", "            other_block,\n            state,\n            routes,"),
     ("TAIL", "finalize_common_execution_metadata", "routes.len() != block.network_entrypoint_count()", "routes.len() == block.network_entrypoint_count()"),
     ("TAIL", "finalize_common_execution_metadata", "evaluate_nexus_autoscale(block, fragments)", "evaluate_nexus_autoscale(block, 0)"),
@@ -137,7 +153,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("PREPARED", "prepare", "execution_prefix::prepare(input)", "execution_prefix::prepare(other_input)"),
     ("PREFIX", "capture", "state.verify_execution_output_seal(block)?;", "// state.verify_execution_output_seal(block)?;"),
     ("PREFIX", "capture", "state.staged_merge_entry.is_some()", "state.staged_merge_entry.is_none()"),
-    ("PREFIX", "capture", "state.native_lane_stage.is_some()", "state.native_lane_stage.is_none()"),
+    ("PREFIX", "capture", "native.retains_state(&state)", "true"),
     ("PREFIX", "capture", "context.native_lane_decisions.is_some()", "context.native_lane_decisions.is_none()"),
     ("PREFIX", "capture", "verify_cached_ordinary_witness_content(&verified_inventory)", "verify_cached_ordinary_witness_content(&other_inventory)"),
     ("PREFIX", "capture", "execution_commitment_from_validated_block(witness,", "execution_commitment_from_validated_block(other_witness,"),
@@ -146,7 +162,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("PREFIX", "capture", ".replace(output_capacity::ExecutionOutputPlanState::Captured)", ".take()"),
     ("PREFIX", "capture", "Arc::ptr_eq(&inventory, &verified_inventory)", "Arc::ptr_eq(&inventory, &inventory)"),
     ("PREFIX", "capture", "fastpq_witness_context: state.fastpq_witness_context.take()", "fastpq_witness_context: None"),
-    ("PREFIX", "prepare", "PrefixPreparation::capture(state, &valid)?", "PrefixPreparation::capture(other_state, &valid)?"),
+    ("PREFIX", "prepare", "PrefixPreparation::capture(state, &valid, native)?", "PrefixPreparation::capture(other_state, &valid, native)?"),
     ("PREFIX", "prepare", "Err(error) => Err((Box::new(valid.into()), error))", "Err(error) => retain_partial(error)"),
     ("PREFIX", "prepare_world_effects", "!self.prefix.retains_closed_state(state)", "false"),
     ("PREFIX", "prepare_world_effects", "state.verify_lane_consensus_contexts_publication()?;", "// state.verify_lane_consensus_contexts_publication()?;"),
@@ -242,8 +258,8 @@ def test_native_preparation_rejects_source_capture_after_metadata_tail(fixture):
     root, helper, checker, _ = fixture
     path = root / checker.native_preparation_contract.PREFIX
     helper.replace_once_after(path, "fn prepare<'state>",
-        "PrefixPreparation::capture(state, &valid)?;",
-        "prepare_deterministic_carrier_metadata(); PrefixPreparation::capture(state, &valid)?;")
+        "PrefixPreparation::capture(state, &valid, native)?;",
+        "prepare_deterministic_carrier_metadata(); PrefixPreparation::capture(state, &valid, native)?;")
     # The additional pre-capture tail is forbidden even when the original owner
     # calls remain in order later in the function.
     assert any("before prefix capture" in error for error in validate(fixture))
@@ -272,3 +288,60 @@ def test_native_common_metadata_refuses_policy_before_autoscale(fixture):
     # The original calls still exist later: the first policy mutation cannot
     # precede asset/autoscale processing in this one common owner.
     assert any("metadata before" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("CONTROLS", "prepare_native_execution_controls",
+                 "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
+                 "block.header().da_proof_policies_hash() != block.header().da_proof_policies_hash()",
+                 id="active-da-policy"),
+    pytest.param("NATIVE_FINALIZED", "project",
+                 "carrier: block.canonical_resultless_proposal()", "carrier: carrier_without_controls(block)",
+                 id="complete-finalized-projection"),
+    pytest.param("NATIVE_STAGE", "validate_native_pristine_control_owner",
+                 "!std::ptr::eq(self.state_ref, state)", "!std::ptr::eq(self.state_ref, self.state_ref)",
+                 id="original-state-owner"),
+    pytest.param("CONTROLS", "prepare_native_execution_controls",
+                 "Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;",
+                 "// Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;",
+                 id="authenticated-npos-controls"),
+    pytest.param("NATIVE_SOURCE", "record_execution",
+                 "carrier != *self.input", "carrier.header() != self.input.header()",
+                 id="complete-original-carrier"),
+    pytest.param("NATIVE_SOURCE", "record_execution",
+                 "record_native_lane_decision_batch(carrier, self.groups, context)",
+                 "record_native_lane_decision_batch(carrier, self.groups.clone(), context)",
+                 id="original-source-custody"),
+    pytest.param("NATIVE_SOURCE", "stage_with_start_hooks",
+                 "crate::block::native_lane_batch_for_scratch(&self.input)",
+                 "crate::block::native_lane_batch_for_execution(&self.input)",
+                 id="scratch-cannot-drop-controls"),
+    pytest.param("NATIVE_STAGE", "validate_native_lane_stage_membership",
+                 "HashOf::new(&self.staged_queue_plan_admissions) != seal.queue_plan_admissions_hash",
+                 "HashOf::new(&self.staged_queue_plan_admissions) == seal.queue_plan_admissions_hash",
+                 id="sealed-control-rejoin"),
+    pytest.param("CONTROLS", "finalize_native_execution_contexts",
+                 "finalize_lane_consensus_contexts(block, Some(context.context()))",
+                 "finalize_lane_consensus_contexts(block, None)",
+                 id="authenticated-suffix-opening"),
+])
+def test_native_control_owner_rejects_semantic_mutation(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner),
+                              f"fn {symbol}", old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+def test_native_control_recording_refuses_capture_before_final_contexts(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.NATIVE_STAGE
+    helper.replace_once_after(path, "fn record_native_lane_decision_batch(",
+        "crate::block::ValidBlock::finalize_native_execution_contexts(",
+        "overlay.capture_exec_witness().map_err(invalid)?; "
+        "crate::block::ValidBlock::finalize_native_execution_contexts(")
+    # Keeping the original correct tail must not mask an earlier reset/capture.
+    errors = validate(fixture)
+    assert any("recorder lifecycle" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors

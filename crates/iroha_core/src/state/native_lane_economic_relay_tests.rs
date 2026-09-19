@@ -252,6 +252,8 @@ fn native_recorded_economic_relay_success(atomic_group: bool) {
     use super::NativeLaneBatchSourcePreparationV1;
     let (fixture, gas, manifest_root) = native_economic_relay_fixture(atomic_group, true);
     let state = &fixture.native.state;
+    let applying =
+        native_control_verified_context(state, fixture.native.block.header().height().get());
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
@@ -270,7 +272,7 @@ fn native_recorded_economic_relay_success(atomic_group: bool) {
         group.contexts().as_ptr(),
     );
     let recorded = source
-        .record_execution(carrier)
+        .record_execution(carrier, applying)
         .unwrap()
         .expect("the exact captured source State remains current");
     let prepared = recorded.prepared_for_test();
@@ -380,6 +382,8 @@ fn native_recorded_economic_relay_missing_manifest(atomic_group: bool) {
     let (fixture, gas, root) = native_economic_relay_fixture(atomic_group, false);
     assert!(root.is_none());
     let state = &fixture.native.state;
+    let applying =
+        native_control_verified_context(state, fixture.native.block.header().height().get());
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
@@ -409,7 +413,7 @@ fn native_recorded_economic_relay_missing_manifest(atomic_group: bool) {
         panic!("the complete source remains authentic without a relay policy root");
     };
     let error = source
-        .record_execution(carrier)
+        .record_execution(carrier, applying)
         .err()
         .expect("a real receipt cannot be sealed without a manifest root");
     let reason = error.to_string();

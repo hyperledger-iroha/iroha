@@ -1645,3 +1645,65 @@ coverage, aggregate resource admission, complete consuming publication,
 Validate-to-Apply custody and production activation remain required. Real
 unchanged four/seven-validator fault/restart/final-transaction qualification,
 full workspace/release checks and all L1–L6 outcomes remain open.
+
+### Authenticated Native controls and complete source custody, September 19, 2026
+
+Ordinary and recorded Native execution now share the actual pristine NPoS
+preparation and application owner. Native construction requires the original
+verified height context and rejoins it to the current State generation, network,
+height, parent, execution policy, Nexus context and mandatory DA proof policy.
+Beacon validation runs against actual committed State. Complete QueuePlan inputs
+and prepared NPoS effects apply on the same pristine State overlay, after writer
+and recorder acquisition and before shared hooks. A foreign State or changed
+pristine owner is refused before writes. Admission and applied-NPoS hashes join
+the staged Native seal, preventing control replacement after execution.
+
+The original verified context authorizes pending suffix opening. Actual staged
+control, AXT, DA and SCCP postchecks precede context finalization and the single
+witness capture. No-bundle DA cursor validation returns before live cache
+hydration: there is no cursor work, and reacquiring the hydrator while retaining
+State writers can deadlock with cache rewind waiting for those writers. Actual
+DA bundles retain the existing checks; Native DA/pin/SCCP payload execution still
+requires its own complete owners and remains explicitly unsupported.
+
+Both proposed and authenticated finalized/recovered Native sources retain the
+whole resultless carrier, including its controls. The recording consumer compares
+the complete carrier before releasing its duplicate and moving the original
+source groups into execution. The source and finalized owners no longer retain
+a second cloned batch. Scratch explicitly refuses controls it cannot execute,
+so it cannot erase an admission or NPoS attachment during projection or replay.
+
+New runtime controls use real signed single/atomic inputs, four-validator Kura
+finality and actual RS16 contexts. They cover a genuine pending suffix and exact
+successor opening, a third same-carrier admission retained for later execution,
+real requested threshold beacons, missing/corrupt/foreign-parent refusals,
+constructor and consumer context mismatches, active DA policy binding, foreign
+or stale State owners, seal replacement and cold-cache validation under retained
+writers. Failure paths require unchanged State and recorder release. Economic
+fixtures sign their actual execution policy at genesis instead of patching a
+verified successor. Existing genuine PipelineGas relay regressions still pass.
+
+Combined build29 passes Core, Torii, test-network, Kagami and daemon compilation
+on 7,037 unchanged compiler inputs. All 359 distinct exact-binary runtime controls
+pass: 244 composition/output/publication, 68 Native custody/control/economic,
+17 original-review and 30 storage. Build28 also passed all 359; the only two
+Rust files changed for build29 remove redundant batch/header storage, and the
+complete runtime selection passes again. No stack override was used. All 109
+Native preparation checks, 22 source-inventory checks and two original-review
+binding joins pass. The final formal source set contains 8,113 unchanged inputs;
+all live-index cases run, with the main index and HEAD unchanged during that run.
+An earlier serial Python harness was stopped and superseded by four disjoint
+Native shards plus concurrent inventory; its partial output is not qualification.
+The externally advanced `optimizations` HEAD is recorded in both final manifests.
+All 15 changed Rust files pass formatting and the codec guard passes; unrelated
+existing workspace formatting differences remain. Local terminal evidence is
+`dist/sumeragi-main-work/validation29.json`.
+
+This is scoped component progress. The actual global validator still needs to
+retain complete Native preparation and authenticated context through the
+validated prefix, cache/reproposal/recovery, voting and original Apply. Aggregate
+resource admission, the complete consuming publisher, genuine remaining control
+families and atomic production cutover remain required. The production Native
+gate stays closed. Real unchanged four/seven-validator loss, reordering,
+backpressure, leader-failure, restart and final-transaction qualification, full
+workspace/release checks and all L1–L6 outcomes remain open.
