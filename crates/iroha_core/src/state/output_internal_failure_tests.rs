@@ -136,10 +136,10 @@ fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quaran
     );
     assert!(block.gas_used_in_block > 0);
     assert!(block.batch_transfer_outcomes.is_empty());
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
     let view = state.view();
     let original = view.world.triggers.pipeline_triggers().get(&root).unwrap();
     assert!(crate::smartcontracts::isi::triggers::trigger_is_enabled(
@@ -271,10 +271,10 @@ fn oversized_real_pipeline_rejection_omits_diagnostic_but_quarantines_and_keeps_
         );
         assert_eq!(block.committed_fragment_count(), fragments + 3);
         assert!(block.gas_used_in_block > 0);
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
         let view = state.view();
         assert!(
             view.world

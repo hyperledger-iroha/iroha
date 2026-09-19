@@ -28,6 +28,7 @@ mod execution_prefix;
     )
 )]
 mod journals;
+pub(crate) use journals::PreparedCarrierJournals;
 
 /// A prepared candidate with all execution ownership retained and no Apply API.
 pub(crate) struct PreparedCarrier<'state> {
@@ -45,7 +46,6 @@ pub(crate) struct PreparedCarrier<'state> {
     // Event admission happens before voting. Delivery requires consuming the
     // final durable publication owner; dropping a candidate drops its events.
     _publication_events: Vec<EventBox>,
-    _tiered_snapshot: super::tiered_publication::PreparedTieredSnapshot,
 }
 
 impl<'state> PreparedCarrier<'state> {

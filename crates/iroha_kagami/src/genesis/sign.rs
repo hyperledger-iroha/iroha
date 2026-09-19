@@ -1034,26 +1034,27 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         [Account::new(authority.clone()).build(&authority)],
         [],
     );
-    let default_nexus;
-    let dataspace_catalog = if let Some(config) = config {
-        &config.nexus.dataspace_catalog
-    } else {
-        default_nexus = actual::Nexus::default();
-        &default_nexus.dataspace_catalog
+    let nexus = match config {
+        Some(config) => config.nexus.clone(),
+        None => staged_default_nexus(genesis)?,
     };
     // Match fresh-node and `iroha3d --check-config` semantics exactly: genesis aliases are
     // pre-seeded before the block executes so declarative EnsureAlias instructions repair
     // derived state without charging or depending on policy activation order.
-    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &provisional.0, dataspace_catalog);
-    let kura = match config {
-        Some(config) => Kura::new_temporary_with_configured_lane_catalog(
-            &config.kura,
-            &config.nexus.lane_config,
-            &config.nexus.configured_lane_catalog,
-        )
-        .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
-        None => Kura::blank_kura_for_testing(),
-    };
+    iroha_core::sns::seed_genesis_alias_bootstrap(
+        &mut world,
+        &provisional.0,
+        &nexus.dataspace_catalog,
+    );
+    // Even the generic default profile needs an authenticated configured catalog.
+    // A blank test Kura has no production network/geometry binding to restore.
+    let kura_config = config.map_or_else(staged_default_kura, |config| config.kura.clone());
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?;
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         Arc::clone(&kura),
@@ -1062,7 +1063,7 @@ fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
         staging_network_id,
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
-    configure_staged_genesis_state(&mut state, genesis, config)?;
+    configure_staged_genesis_state(&mut state, genesis, config, nexus)?;
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
         .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
     if voters.is_empty() {
@@ -1196,15 +1197,28 @@ fn staged_default_pipeline(
     )?;
     Ok(staged_genesis_pipeline(pipeline))
 }
+fn staged_default_kura() -> actual::Kura {
+    actual::Kura {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        // The temporary constructor substitutes its own owned directory before opening storage.
+        store_dir: iroha_config::base::WithOrigin::inline(PathBuf::from(defaults::kura::STORE_DIR)),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: defaults::kura::FSYNC_MODE,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+    }
+}
 fn configure_staged_genesis_state(
     state: &mut State,
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
+    nexus: actual::Nexus,
 ) -> Result<(), color_eyre::eyre::Error> {
-    let nexus = match config {
-        Some(config) => config.nexus.clone(),
-        None => staged_default_nexus(genesis)?,
-    };
     // Every governed runtime projection requires its validated manifest baseline, including
     // the views taken while configuring and reconciling the pre-genesis lane catalog.
     install_staged_nexus_policies(state, genesis, &nexus)?;
@@ -1218,23 +1232,19 @@ fn configure_staged_genesis_state(
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
-        state
-            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
-            .map_err(|error| eyre!("invalid primary Nexus geometry for staged genesis: {error}"))?;
-        state
-            .restore_kura_lane_segments_before_startup_replay()
-            .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
-        state
-            .set_nexus_from_config(nexus)
-            .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
-        state.set_crypto(config.crypto.clone());
     } else {
         state.set_pipeline(staged_default_pipeline(genesis)?);
-        state
-            .set_nexus(nexus)
-            .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
-        state.set_crypto(actual::Crypto::default());
     }
+    state
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .map_err(|error| eyre!("invalid primary Nexus geometry for staged genesis: {error}"))?;
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
+    state
+        .set_nexus_from_config(nexus)
+        .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+    state.set_crypto(config.map_or_else(actual::Crypto::default, |config| config.crypto.clone()));
     Ok(())
 }
 fn install_staged_nexus_policies(
@@ -2040,6 +2050,53 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .contains("changed the signed execution policy"),
             "unexpected execution-policy tamper error: {execution_error:#}"
         );
+    }
+
+    #[test]
+    fn default_genesis_staging_authenticates_catalog_and_reproduces_signed_context() {
+        let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
+            .expect("derive deterministic default staging key");
+        let raw =
+            GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
+                .set_topology_for_test(valid_test_topology_entries(4))
+                .build_raw()
+                .expect("complete generic four-validator genesis")
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+                .with_consensus_meta();
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+            raw,
+            &genesis_key_pair,
+            None,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .expect("no-config signing must authenticate default storage before executing genesis");
+        assert!(signed.0.network_entrypoint_count() > 0);
+        assert!(signed.0.has_results());
+        assert!(
+            signed
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
+        signed
+            .0
+            .validate_output_merkle_cache()
+            .expect("complete executed genesis outputs");
+        assert_genesis_signatures_verify(&signed.0, &genesis_key_pair);
+        let restaged = restage_signed_sumeragi_v2_context_hashes(&bound_manifest, None, &signed.0)
+            .expect("default staging must also accept the final signed network identity");
+        let parameters = bound_manifest.sumeragi_v2_context_parameters();
+        assert_eq!(
+            restaged.nexus_amx_context_hash,
+            Hash::prehashed(parameters.nexus_amx_context_hash)
+        );
+        assert_eq!(
+            restaged.execution_policy_hash,
+            Hash::prehashed(parameters.execution_policy_hash)
+        );
+        assert_eq!(restaged.executed_block.hash(), signed.0.hash());
     }
 
     fn checked_genesis_sign_keypair() -> CryptoKeyPair {

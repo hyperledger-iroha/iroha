@@ -397,14 +397,27 @@ PREPARATION_OWNER_BINDINGS = (
     (PREFIX, "fn", "prepare", (
         "input.into_parts()", "PrefixPreparation::capture(state, &valid, native)?",
         "prepare_deterministic_carrier_metadata", "preparation.prepare_world_effects()?",
-        "prepare_carrier_publication_events(block.header())", "PreparedTieredSnapshot::prepare(",
+        "prepare_carrier_publication_events(block.header())",
         "prefix: source_prefix", "Ok(PreparedCarrier {", "Err(error) => Err((Box::new(valid.into()), error))",
     )),
     (JOURNALS, "method", "PreparedCarrier::prepare_journals", (
         "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
-        "let admission;", "source_prefix,", "admit_journals(CarrierJournalInputs {",
-        "state: &state", "prefix: &source_prefix", "state.prepare_carrier_geometry()?",
-        "world.try_detach_journals", "transactions.prepare_commit()?.detach()", "admission,\n        })",
+        "let admission = match admit_journals(CarrierJournalInputs {",
+        "state: &self.state", "prefix: &self.source_prefix",
+        "provider: provider_capture.as_ref()", "reputation: reputation_capture.as_ref()",
+        'CarrierJournalPreparationError::JournalAdmission {\n                    carrier: self,\n                    provider: provider_capture,\n                    reputation: reputation_capture,\n                    error,\n                }',
+        "let mut provider_capture = provider_capture;", "let mut reputation_capture = reputation_capture;",
+        'PreparedTieredSnapshot::prepare(\n            &state.world,\n            &state.state_ref.tiered_snapshot_worker,\n        )',
+        "state.prepare_carrier_geometry()?", "owner.capture_original(state.as_ref())",
+        "world.try_detach_journals", "transactions.prepare_commit()?.detach()",
+        "let journals = PreparedCarrierJournals {", "admission,", "StagedCarrierCapture {",
+        ".try_complete()", "carrier: Box::new(carrier)",
+    )),
+    (JOURNALS, "method", "StagedCarrierCapture::try_complete", (
+        "if let Some(error) = &self.capture_refusal", "return Err(error.clone());",
+        'provider\n                    .try_prepare()', 'reputation\n                    .try_prepare()', "return Err((self, error));",
+        "self.journals.provider_capture = self.provider.take()", "self.journals.reputation_capture = self.reputation.take()",
+        'owner\n                .into_prepared()', "Ok(self.journals)",
     )),
     (OUTPUT, "struct", "SealedExecutionOutputs", (
         "proposal:", "wire_hash: Hash", "wire_bytes: u64", "world_delta:", "sources: OwnedExecutionSources",
@@ -535,11 +548,19 @@ TERMINAL_OWNER_BINDINGS = (
         "self.journals.provider_capture.as_mut()", "self.journals.reputation_capture.as_mut()",
         "provider\n                .publish(receipt)", "reputation\n                .publish(receipt)",
     )),
+    (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_new", (
+        "let owner = Self { decision, kura };", "let original = &owner.decision;",
+        'owner\n                .kura\n                .reauthenticate_checkpoint(\n                    &original.checkpoint,\n                    original.finality.artifact(),\n                    original.journals.checkpoint,\n                )',
+        'original\n                .journals\n                .source_prefix\n                .authenticate_durable_carrier(\n                    original.block(),\n                    &original.journals.context,\n                    &original.journals.execution_prefix,\n                    &owner.kura,\n                )',
+        "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()",
+        'capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )',
+        "Err(error) => Err((owner.release(), error))",
+    )),
     (PHYSICAL_CARRIER, "fn", "try_prepare_physical", (
         "admit: impl FnOnce(&Self, &State)", "admit(&original, target)",
         "target.matches_kura_instance(&original.journals.kura)", "original.publish_execution_witness()", "original.publish_archives()",
-        "target.kura.try_publication_lease()", "kura.reauthenticate_checkpoint(",
-        "kura.reauthenticate_execution_witness(original.finality.artifact())",
+        "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
+        "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
         "StateFences::try_acquire(target)", "journals.try_map_components(",
         "Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n                installation,\n            })",
     )),
@@ -562,7 +583,7 @@ TERMINAL_OWNER_BINDINGS = (
         "journals.effects.pending_autoscale_lifecycle.is_some()", "journals.native_amx_manifest.entries().is_empty()",
         "return Err((self.abort(), error))", "target.begin_state_view_write()",
         "transactions.publish()", "runtime.publish()", "world.publish()", "world_effects.publish(target)",
-        "target.apply_committed_da_commitment_bundle(pending, false)",
+        "effects.publish(target, &generation, true)",
         "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
         "block_hashes.publish()", "target.update_latest_block_header_cache(effects.header)",
         "drop(generation)", "fences.release_for_completion()", "effects.publish_observability(target)",
@@ -578,7 +599,7 @@ PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
 QUEUE_OWNER = "crates/iroha_core/src/queue.rs"
 PUBLICATION_MUTEX = "crates/iroha_core/src/publication_lock.rs"
 GEOMETRY_OWNER = "crates/iroha_core/src/kura/lane_geometry.rs"
-GUARDED_GEOMETRY = "crates/iroha_core/src/kura/lane_geometry/guarded_publication.rs"
+RAW_GEOMETRY = "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs"
 # These existing Queue/Kura owners remain distinct from State publication
 # permission. Binding their actual guard transfer does not authorize an arbitrary
 # Queue, nor open the terminal publisher's nonidentity-geometry refusal.
@@ -683,76 +704,145 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "parking_lot::MutexGuard::unlock_fair(guard);", "else {\n                drop(guard);\n            }",
     )),
     (WITNESS_LEASE, "struct", "KuraPublicationLease", (
-        "kura: &'kura Kura", "_sidecar: PublicationGuard<'kura>",
+        "kura: &'kura Kura", "pending_canonical_bytes: u64", "_sidecar: PublicationGuard<'kura>",
         "_geometry: PublicationGuard<'kura>", "_canonical: PublicationGuard<'kura>",
         "_prune: PublicationGuard<'kura>",
     )),
-    (WITNESS_LEASE, "method", "KuraPublicationLease::from_geometry_guards", (
-        "pub(super) fn from_geometry_guards(", "kura: &'kura Kura",
-        "sidecar: PublicationGuard<'kura>", "geometry: PublicationGuard<'kura>",
-        "canonical: PublicationGuard<'kura>", "prune: PublicationGuard<'kura>",
-        "Self {\n            kura,\n            _sidecar: sidecar,\n            _geometry: geometry,\n            _canonical: canonical,\n            _prune: prune,\n        }",
+    (WITNESS_LEASE, "method", "Kura::try_publication_lease", (
+        "lock.try_lock_or_wait()", "KuraPublicationPreparationError::Busy { field, wait }",
+        'let prune = acquire("prune_lock", &self.prune_lock)?;',
+        'let canonical = acquire("canonical_chain_lock", &self.canonical_chain_lock)?;',
+        'let pending_canonical_bytes =\n            self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;',
+        'let geometry = acquire("lane_geometry_lock", &self.lane_geometry_lock)?;',
+        'let sidecar = acquire("sidecar_lock", &self.sidecar_lock)?;',
+        "self.ensure_prune_recovery_not_required()", "self.ensure_canonical_storage_not_poisoned()",
+        'Ok(KuraPublicationLease {\n            kura: self,\n            pending_canonical_bytes,\n            _sidecar: sidecar,\n            _geometry: geometry,\n            _canonical: canonical,\n            _prune: prune,\n        })',
     )),
-    (WITNESS_LEASE, "method", "KuraPublicationLease::kura_under_publication_guards", (
-        "pub(super) fn kura_under_publication_guards(&self) -> &'kura Kura", "self.kura",
+    (WITNESS_LEASE, "method", "KuraPublicationLease::pending_canonical_bytes", (
+        "pub(super) fn pending_canonical_bytes(&self) -> u64", "self.pending_canonical_bytes",
     )),
-    (GEOMETRY_OWNER, "method", "Kura::apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner", (
-        "let _prune_guard = self.prune_lock.lock();", "self.ensure_prune_recovery_not_required()?;",
-        "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
-        "self.resolve_canonical_storage_before_mutation()?;",
-        "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;",
-        "let _geometry_guard = self.lane_geometry_lock.lock();",
-        "let mut journal = self.read_lane_geometry_journal()?;",
-        "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
-        "KuraPublicationLease::from_geometry_guards(\n            self,\n            self.sidecar_lock.lock(),\n            _geometry_guard,\n            _canonical_chain_guard,\n            _prune_guard,\n        )",
-        "lease.apply_prepared_lane_geometry(guarded_publication::PreparedLaneGeometryTransition {",
-        "certified_retirements,\n            transition_height,\n            namespace_receipts,\n            pending_canonical_bytes,",
-        "previous_bindings,\n            updated_bindings,\n            previous_catalog,\n            updated_catalog,\n            journal_was_present,\n            journal",
+    (WITNESS_LEASE, "method", "Kura::try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards", (
+        "Result<u64, KuraPublicationPreparationError>",
+        "self.persisted_count_and_unindexed_bytes()?",
+        "self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash|",
+        "self.sidecar_lock.try_lock_or_wait()",
+        'KuraPublicationPreparationError::Busy {\n                    field: "sidecar_lock",\n                    wait,\n                }',
+        "self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)",
     )),
-    (GEOMETRY_OWNER, "method", "Kura::mark_lane_geometry_catalog_published_with_lineage_root", (
-        "let _prune_guard = self.prune_lock.lock();", "self.ensure_prune_recovery_not_required()?;",
-        "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
-        "self.resolve_canonical_storage_before_mutation()?;", "let _geometry_guard = self.lane_geometry_lock.lock();",
-        "let mut journal = self.read_lane_geometry_journal()?;",
-        "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
-        "KuraPublicationLease::from_geometry_guards(\n            self,\n            self.sidecar_lock.lock(),\n            _geometry_guard,\n            _canonical_chain_guard,\n            _prune_guard,\n        )",
-        "lease.publish_prepared_lane_geometry_catalog(\n            guarded_publication::PreparedLaneGeometryCatalog {\n                bindings,\n                fingerprint,\n                lineage_root,\n                configured_baseline,\n                journal,\n            },\n        )",
+    (WITNESS_LEASE, "method", "KuraPublicationLease::original_kura", (
+        "pub(super) fn original_kura(&self) -> &Kura", "self.kura",
     )),
-    (GUARDED_GEOMETRY, "method", "KuraPublicationLease::apply_prepared_lane_geometry", (
-        "pub(in crate::kura::lane_geometry) fn apply_prepared_lane_geometry(",
-        "let kura = self.kura_under_publication_guards();", "PreparedLaneGeometryTransition {",
-        "certified_retirements,\n            transition_height,\n            mut namespace_receipts,\n            pending_canonical_bytes,",
-        "updated_catalog,\n            journal_was_present,\n            mut journal,\n        } = prepared;",
-        "record.previous_catalog == previous_catalog", "record.previous_lineage_root == previous_lineage_root",
-        "record.updated_catalog == updated_catalog", "record.updated_lineage_root == updated_lineage_root",
-        "existing.previous_bindings != previous_bindings", "existing.updated_bindings != updated_bindings",
-        "kura.ensure_lane_retirement_admissible_locked(\n                pending_canonical_bytes,\n                &retiring,\n                &certified_retirements,\n            )?;",
-        "PreparedGeometryJournalTransition::prepare(kura, journal, record_index)?",
-        "prepared.persist(kura, LaneGeometryPhase::Intent)?;",
-        "GeometryEvidencePolicy::FreshJournalIntent", "GeometryEvidencePolicy::AllowJournalIntentProvisioning",
-        'kura.poison_canonical_storage("lane geometry apply rollback", &ambiguous);',
-        "prepared.persist(kura, LaneGeometryPhase::RolledBack)?;",
-        "prepared.persist(kura, LaneGeometryPhase::FilesApplied)?;",
-        "kura.ensure_authoritative_lane_markers_with_receipts(",
-        "*kura.lane_storage_entries.lock() = kura.lane_storage_entries_from_geometry(",
+    (RAW_GEOMETRY, "struct", "RawGeometryAttempt", (
+        "kura: KuraInstanceIdentity", "request: OwnedRequest",
+        "previous_entries: Option<BTreeMap<LaneId, LaneStorageEntry>>",
+        "updated_entries: Option<BTreeMap<LaneId, LaneStorageEntry>>",
+        "maintenance: RawGeometryMaintenance", "target: Option<PreparedGeometryJournalTransition>",
+        "pending_phase: Option<LaneGeometryPhase>", "intent_complete: bool", "operation_cursor: usize",
+        "provisioning_failure: Option<RawGeometryProvisioningFailure>", "claim: RawGeometryClaim",
     )),
-    (GUARDED_GEOMETRY, "method", "KuraPublicationLease::publish_prepared_lane_geometry_catalog", (
-        "pub(in crate::kura::lane_geometry) fn publish_prepared_lane_geometry_catalog(",
-        "let kura = self.kura_under_publication_guards();",
-        "PreparedLaneGeometryCatalog {\n            bindings,\n            fingerprint,\n            lineage_root,\n            configured_baseline,\n            mut journal,\n        } = prepared;",
-        "let prior_journal_bytes = kura.read_geometry_file_bytes(&journal_path)?;",
-        "record.updated_catalog != fingerprint", "record.updated_lineage_root != lineage_root",
-        "record.updated_bindings != bindings", "journal.records[index].phase = LaneGeometryPhase::CatalogPublished;",
-        "kura.validate_lane_geometry_journal(&journal)?;", "let published_journal_bytes = journal.encode();",
-        "kura.atomic_write_geometry_file(\n            &journal_path,\n            &publication_temp,\n            &published_journal_bytes,\n        )",
-        "kura.restore_lane_geometry_journal_file(\n                prior_journal_bytes.as_deref(),\n                &published_journal_bytes,\n                publication_temp_preexisted,\n            )",
-        "Error::LaneGeometryPublicationRestoreFailed", "return Err(publication_error);",
+    (RAW_GEOMETRY, "method", "RawGeometryClaim::authorizes", (
+        "Arc::ptr_eq(&self.state, &gate.state)", "!state.abandoned",
+        "state.active.ptr_eq(&Arc::downgrade(&self.signal))", "!self.complete",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryClaim::drop", (
+        "state.active.ptr_eq(&Arc::downgrade(&self.signal))",
+        "state.abandoned |= self.effects_started && !self.complete;",
+        "drop(state);", "self.signal.released.send_replace(true);",
+    )),
+    (RAW_GEOMETRY, "method", "KuraPublicationLease::begin_raw_geometry_attempt", (
+        "let kura = self.original_kura();", "kura.durable_mutation_authorized()?;",
+        "kura.require_raw_geometry_canonical_recovery_complete()?;",
+        "let claim = kura.raw_geometry_claim.claim()?;",
+        "kura.validate_certified_lane_drain_frontier_under_publication_lease(",
+        "kura.read_lane_geometry_journal_structure()?",
+        "retained_journal::RetainedGeometryJournal::capture(kura, journal.encode().len())?",
+        "if observed != journal", "kura: kura.instance_identity()",
+        "request: OwnedRequest::capture(request, replaced, certified_frontiers)",
+        "previous_entries: Some(previous_entries)", "updated_entries: Some(updated_entries)",
+        "phase: RawGeometryPhase::Captured", 'namespace_receipts: Vec::new(),\n            claim',
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::authenticate", (
+        "let kura = lease.original_kura();",
+        "!self.kura.matches(kura) || !self.claim.authorizes(&kura.raw_geometry_claim)",
+        "if let Some(failure) = &self.provisioning_failure", "return Err(failure.error());",
+        "kura.ensure_prune_recovery_not_required()?;", "kura.durable_mutation_authorized()?;",
+        "kura.require_raw_geometry_canonical_recovery_complete()?;",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::persist_target", (
+        "self.pending_phase.is_some_and(|pending| pending != phase)",
+        "self.pending_phase = Some(phase);", 'self.target\n            .as_mut()',
+        ".persist(kura, phase)?;", "self.pending_phase = None;",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::prepare_target", (
+        "PreparedGeometryJournalTransition::prepare_with_retained_writer(",
+        'kura,\n            self.journal.clone(),\n            index,\n            &mut self.maintenance.writer',
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::select_plan", (
+        "record.transition_height == self.request.transition_height",
+        "record.previous_catalog == previous_catalog",
+        "record.previous_lineage_root == self.request.previous_lineage_root",
+        "record.updated_catalog == updated_catalog",
+        "record.updated_lineage_root == self.request.updated_lineage_root",
+        "record.previous_bindings != self.previous_bindings",
+        "record.updated_bindings != self.updated_bindings",
+        "TargetKind::Published", "TargetKind::Retained", "TargetKind::Fresh",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::resume_under", (
+        "let kura = self.authenticate(lease)?;", "RawGeometryPhase::FilesApplied => return Ok(())",
+        "self.maintenance.flush(kura)?;", "self.claim.effects_started = true;",
+        'kura.finish_pending_lane_geometry_gc_with_custody(\n                &mut self.journal,\n                Some(&mut mutation),\n            )?;',
+        "self.plan = Some(self.select_plan(kura)?);",
+        "kura.reconcile_lane_geometry_history_to_count_with_custody(",
+        "if self.target.is_none()", 'if !matches!(kind, TargetKind::Published) {\n                    let retiring = kura.geometry_retirement_identities(',
+        "let pending = lease.pending_canonical_bytes();",
+        "kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;",
+        "self.target = Some(self.prepare_target(kura, index)?);",
+        "self.persist_target(kura, LaneGeometryPhase::Intent)?;", "self.intent_complete = true;",
+        "GeometryEvidencePolicy::FreshJournalIntent", "GeometryEvidencePolicy::RequireDurableEvidence",
+        "while self.operation_cursor < target.operations().len()",
+        "kura.apply_geometry_operations_forward_with_progress(",
+        "if matches!(kind, TargetKind::Fresh) && provisioning_started",
+        "self.provisioning_failure = Some(failure);", "self.phase = RawGeometryPhase::RecoveryRequired;",
+        "self.operation_cursor += 1;", "self.persist_target(kura, LaneGeometryPhase::FilesApplied)?;",
+        '&self.request.updated,\n            &self.request.updated_incarnations,\n            &self.request.updated_activation_heights,',
+        "self.updated_entries.take()", "*kura.lane_storage_entries.lock() = entries;",
+        "self.phase = RawGeometryPhase::FilesApplied;",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::publish_catalog_under", (
+        "let kura = self.authenticate(lease)?;",
+        "RawGeometryPhase::FilesApplied | RawGeometryPhase::PublishingCatalog",
+        'self\n            .catalog_baseline\n            .is_some_and(|original| original != configured_baseline)',
+        "self.journal.configured_catalog_hash != Some(expected)",
+        "self.journal.configured_primary_binding.as_ref() != self.updated_bindings.first()",
+        "kura.require_lane_marker(primary)?;", "self.catalog_baseline = Some(configured_baseline);",
+        "self.phase = RawGeometryPhase::PublishingCatalog;",
+        "self.persist_target(kura, LaneGeometryPhase::CatalogPublished)?;",
+        "self.phase = RawGeometryPhase::CatalogPublished;", "self.claim.finish();",
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::reauthenticate_catalog_under", (
+        "let kura = lease.original_kura();", "!self.kura.matches(kura)",
+        "self.phase != RawGeometryPhase::CatalogPublished", "!self.claim.complete",
+        "self.has_pending_journal_write()", "kura.raw_geometry_claim.ensure_unclaimed()?;",
+        "target.reauthenticate_completed(kura, LaneGeometryPhase::CatalogPublished)?;",
+        "writer.reauthenticate_current(kura)?;", "installed.len() != self.updated_bindings.len()",
+        'installed.get(&binding.lane_id).map(|entry| entry.identity)\n                    != Some(binding.identity())',
+    )),
+    (RAW_GEOMETRY, "method", "RawGeometryAttempt::rollback_under", (
+        "let kura = self.authenticate(lease)?;", "self.maintenance.pending.is_some()",
+        'self.phase != RawGeometryPhase::RollingBack\n                    || phase != LaneGeometryPhase::RolledBack',
+        'RawGeometryPhase::PublishingCatalog\n                | RawGeometryPhase::CatalogPublished\n                | RawGeometryPhase::RolledBack',
+        "GeometryEvidencePolicy::AllowJournalIntentProvisioning", "GeometryEvidencePolicy::RequireDurableEvidence",
+        "let index = target.operations().len() - self.operation_cursor - 1;",
+        'kura.apply_geometry_operations_rollback(\n                    &target.operations()[index..index + 1],\n                    policy,\n                )?;',
+        "self.persist_target(kura, LaneGeometryPhase::RolledBack)?;",
+        '&self.request.previous,\n                &self.request.previous_incarnations,\n                &self.request.previous_activation_heights,',
+        "self.previous_entries.take()", "*kura.lane_storage_entries.lock() = entries;", "self.claim.finish();",
     )),
 )
 PREPARATION_OWNER_BINDINGS += QUEUE_GEOMETRY_OWNER_BINDINGS
 
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
-    QUEUE_OWNER, PUBLICATION_MUTEX, GEOMETRY_OWNER, GUARDED_GEOMETRY,
+    QUEUE_OWNER, PUBLICATION_MUTEX, GEOMETRY_OWNER, RAW_GEOMETRY,
     PHYSICAL_CARRIER, TERMINAL_CARRIER, ARCHIVE_CARRIER, GEOMETRY_CARRIER, WITNESS_CARRIER, WITNESS_LEASE,
     APPLY, BLOCK, PREPARED, PREFIX, JOURNALS, OUTPUT, SEAL, TAIL, NATIVE_METADATA, NATIVE_STAGE,
     CONTROLS, NATIVE_SOURCE, NATIVE_KERNEL, NATIVE_CARRIER, NATIVE_FINALIZED, BODY_STORE,
@@ -873,52 +963,69 @@ def validate_native_preparation_contract(
     ordered("KuraPublicationLease", "_sidecar: PublicationGuard<'kura>",
             "_geometry: PublicationGuard<'kura>", "_canonical: PublicationGuard<'kura>",
             "_prune: PublicationGuard<'kura>")
-    for owner in (
-        "Kura::apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner",
-        "Kura::mark_lane_geometry_catalog_published_with_lineage_root",
-    ):
-        ordered(owner, "self.prune_lock.lock()", "self.ensure_prune_recovery_not_required()?;",
-                "self.canonical_chain_lock.lock()", "self.resolve_canonical_storage_before_mutation()?;",
-                "self.lane_geometry_lock.lock()", "self.read_lane_geometry_journal()?;",
-                "self.finish_pending_lane_geometry_gc_locked(&mut journal)?;",
-                "KuraPublicationLease::from_geometry_guards(", "self.sidecar_lock.lock()")
-    ordered("Kura::apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner",
-            "self.resolve_canonical_storage_before_mutation()?;",
-            "self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;",
-            "self.lane_geometry_lock.lock()", "self.sidecar_lock.lock()",
-            "lease.apply_prepared_lane_geometry(")
-    ordered("Kura::mark_lane_geometry_catalog_published_with_lineage_root",
-            "self.sidecar_lock.lock()", "lease.publish_prepared_lane_geometry_catalog(")
-    ordered("KuraPublicationLease::apply_prepared_lane_geometry",
-            "PreparedGeometryJournalTransition::prepare(kura, journal, record_index)?;",
-            "prepared.persist(kura, LaneGeometryPhase::Intent)?;",
-            "if let Err(error) = kura.apply_geometry_operations_forward(",
-            "GeometryEvidencePolicy::FreshJournalIntent",
-            "if let Err(rollback_error) = kura.apply_geometry_operations_rollback(",
-            "GeometryEvidencePolicy::AllowJournalIntentProvisioning",
-            'kura.poison_canonical_storage("lane geometry apply rollback", &ambiguous);',
-            "prepared.persist(kura, LaneGeometryPhase::RolledBack)?;", "return Err(error);",
-            "prepared.persist(kura, LaneGeometryPhase::FilesApplied)?;",
+    ordered("Kura::try_publication_lease",
+            'acquire("prune_lock", &self.prune_lock)',
+            "self.ensure_prune_recovery_not_required()",
+            'acquire("canonical_chain_lock", &self.canonical_chain_lock)',
+            "self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;",
+            'acquire("lane_geometry_lock", &self.lane_geometry_lock)',
+            'acquire("sidecar_lock", &self.sidecar_lock)', "Ok(KuraPublicationLease {")
+    ordered("KuraPublicationLease::begin_raw_geometry_attempt",
+            "kura.durable_mutation_authorized()?;", "kura.require_raw_geometry_canonical_recovery_complete()?;",
+            "let claim = kura.raw_geometry_claim.claim()?;",
+            "kura.validate_certified_lane_drain_frontier_under_publication_lease(",
+            "kura.read_lane_geometry_journal_structure()?",
+            "retained_journal::RetainedGeometryJournal::capture(", "if observed != journal", "Ok(RawGeometryAttempt {")
+    ordered("RawGeometryAttempt::persist_target", "self.pending_phase = Some(phase);",
+            ".persist(kura, phase)?;", "self.pending_phase = None;")
+    ordered("RawGeometryAttempt::resume_under", "self.authenticate(lease)?;",
+            "self.maintenance.flush(kura)?;", "kura.finish_pending_lane_geometry_gc_with_custody(",
+            "self.plan = Some(self.select_plan(kura)?);",
+            "kura.reconcile_lane_geometry_history_to_count_with_custody(",
+            "if self.target.is_none()", "let pending = lease.pending_canonical_bytes();",
+            "kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;",
+            "self.target = Some(self.prepare_target(kura, index)?);",
+            "self.persist_target(kura, LaneGeometryPhase::Intent)?;", "self.intent_complete = true;",
+            "kura.apply_geometry_operations_forward_with_progress(", "self.operation_cursor += 1;",
+            "self.persist_target(kura, LaneGeometryPhase::FilesApplied)?;",
             "kura.ensure_authoritative_lane_markers_with_receipts(",
-            "*kura.lane_storage_entries.lock() =")
-    ordered("KuraPublicationLease::publish_prepared_lane_geometry_catalog",
-            "let prior_journal_bytes = kura.read_geometry_file_bytes(&journal_path)?;",
-            "kura.validate_lane_geometry_journal(&journal)?;", "let published_journal_bytes = journal.encode();",
-            "kura.atomic_write_geometry_file(", "if let Err(publication_error) = publication_result",
-            "kura.restore_lane_geometry_journal_file(", "return Err(publication_error);")
-    for owner in ("KuraPublicationLease::apply_prepared_lane_geometry",
-                  "KuraPublicationLease::publish_prepared_lane_geometry_catalog",
-                  "KuraPublicationLease::from_geometry_guards"):
+            "self.updated_entries.take()", "*kura.lane_storage_entries.lock() = entries;")
+    ordered("RawGeometryAttempt::publish_catalog_under", "self.authenticate(lease)?;",
+            'self\n            .catalog_baseline\n            .is_some_and(|original| original != configured_baseline)',
+            "self.catalog_baseline = Some(configured_baseline);",
+            "self.phase = RawGeometryPhase::PublishingCatalog;",
+            "self.persist_target(kura, LaneGeometryPhase::CatalogPublished)?;",
+            "self.phase = RawGeometryPhase::CatalogPublished;", "self.claim.finish();")
+    ordered("RawGeometryAttempt::reauthenticate_catalog_under", "!self.kura.matches(kura)",
+            "kura.raw_geometry_claim.ensure_unclaimed()?;", "target.reauthenticate_completed(",
+            "let installed = kura.lane_storage_entries.lock();", "installed.len() != self.updated_bindings.len()")
+    ordered("RawGeometryAttempt::rollback_under", "self.authenticate(lease)?;",
+            "self.maintenance.pending.is_some()", "kura.apply_geometry_operations_rollback(",
+            "self.persist_target(kura, LaneGeometryPhase::RolledBack)?;",
+            "kura.ensure_authoritative_lane_markers_with_receipts(",
+            "self.previous_entries.take()", "*kura.lane_storage_entries.lock() = entries;",
+            "self.phase = RawGeometryPhase::RolledBack;", "self.claim.finish();")
+    for owner in ("KuraPublicationLease::begin_raw_geometry_attempt", "RawGeometryAttempt::authenticate",
+                  "RawGeometryAttempt::resume_under", "RawGeometryAttempt::publish_catalog_under",
+                  "RawGeometryAttempt::reauthenticate_catalog_under", "RawGeometryAttempt::rollback_under"):
         held = items.get(owner, "")
         for forbidden in (".prune_lock.lock(", ".canonical_chain_lock.lock(",
                           ".lane_geometry_lock.lock(", ".sidecar_lock.lock(",
-                          ".try_publication_lease(", ".pending_canonical_capacity_bytes_under_prune_and_canonical_guards(",
-                          ".finish_pending_lane_geometry_gc_locked("):
+                          ".try_publication_lease(", ".finish_pending_lane_geometry_gc_locked(",
+                          ".pending_canonical_capacity_bytes_under_prune_and_canonical_guards(",
+                          ".try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards("):
             if forbidden in held:
-                errors.append(f"Native preparation guarded geometry {owner} reenters prelude or locking owner: {forbidden}")
-    applied = items.get("KuraPublicationLease::apply_prepared_lane_geometry", "")
-    if applied and applied.count(_code("kura.ensure_lane_retirement_admissible_locked(pending_canonical_bytes, &retiring, &certified_retirements,)?;")) != 2:
-        errors.append("Native preparation guarded geometry must admit both retained retry and new retirement")
+                errors.append(f"Native preparation retained geometry {owner} reenters prelude or locking owner: {forbidden}")
+    resumed = items.get("RawGeometryAttempt::resume_under", "")
+    if resumed and resumed.count(_code("kura.ensure_lane_retirement_admissible_locked(pending, &retiring, &certified)?;")) != 1:
+        errors.append("Native preparation retained geometry requires one shared new/retained retirement admission")
+    for owner in ("RawGeometryAttempt::resume_under", "RawGeometryAttempt::publish_catalog_under",
+                  "RawGeometryAttempt::rollback_under"):
+        body = items.get(owner, "")
+        for forbidden in ("begin_raw_geometry_attempt(", "RetainedGeometryJournal::capture(",
+                          "read_lane_geometry_journal(", "read_lane_geometry_journal_structure("):
+            if forbidden in body:
+                errors.append(f"Native preparation retained geometry {owner} reconstructs original custody: {forbidden}")
 
     ordered("publish_execution_witness",
             "try_publication_lease()", "reauthenticate_checkpoint(", "drop(lease)",
@@ -929,10 +1036,15 @@ def validate_native_preparation_contract(
     ordered("publish_archives",
             "try_publication_lease()", "reauthenticate_checkpoint(", "drop(lease)",
             "provider.publish(receipt)", "reputation.publish(receipt)")
+    ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
+            "original.journals.source_prefix.authenticate_durable_carrier(",
+            "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()")
     ordered("try_prepare_physical",
             "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
+            "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
             "original.publish_execution_witness()", "original.publish_archives()", "target.kura.try_publication_lease()",
-            "kura.reauthenticate_checkpoint(", "kura.reauthenticate_execution_witness(original.finality.artifact())",
+            "SourceAuthenticatedCarrier::try_new(original, kura)",
+            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
             "StateFences::try_acquire(target)", "journals.try_map_components(")
     ordered("PhysicallyPreparedCarrier::publish",
             "return Err((self.abort(), error))", "target.begin_state_view_write()",
@@ -1105,11 +1217,16 @@ def validate_native_preparation_contract(
     ordered("prepare", "let (valid, state, context, native) = input.into_parts();",
             "PrefixPreparation::capture(state, &valid, native)?;", "prepare_deterministic_carrier_metadata(",
             "preparation.prepare_world_effects()?;", "prepare_carrier_publication_events(block.header())",
-            "PreparedTieredSnapshot::prepare(", "let PrefixPreparation { state, prefix: source_prefix, } = preparation;",
+            "let PrefixPreparation { state, prefix: source_prefix, } = preparation;",
             "Ok(PreparedCarrier { valid, state, source_prefix, context, execution_prefix, native_amx_manifest,")
-    ordered("PreparedCarrier::prepare_journals", "let admission;", "let Self {",
-            "admit_journals(CarrierJournalInputs { state: &state, prefix: &source_prefix, })",
-            "state.prepare_carrier_geometry()?;", "world.try_detach_journals(", "Ok(PreparedCarrierJournals {")
+    ordered("PreparedCarrier::prepare_journals", "let admission = match admit_journals(",
+            "let mut provider_capture = provider_capture;", "let Self {",
+            "PreparedTieredSnapshot::prepare(", "state.prepare_carrier_geometry()?;",
+            "owner.capture_original(state.as_ref())", "world.try_detach_journals(",
+            "let journals = PreparedCarrierJournals {", "StagedCarrierCapture {", ".try_complete()")
+    ordered("StagedCarrierCapture::try_complete", "self.capture_refusal", 'provider\n                    .try_prepare()',
+            'reputation\n                    .try_prepare()', "return Err((self, error));", "self.provider.take()",
+            "self.reputation.take()", "Ok(self.journals)")
     require("StateBlock::seal_execution_outputs", "Ok(SealedExecutionOutputs { witness_hash: None, witness_surface: None, sources, world_delta,")
     if "prepare" in items:
         body = items["prepare"]

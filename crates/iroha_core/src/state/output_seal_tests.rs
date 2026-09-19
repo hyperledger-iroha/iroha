@@ -188,10 +188,10 @@ fn actual_three_phase_seal_keeps_proposal_and_exact_wire_and_blocks_publication(
             Some(&Json::new(1))
         );
     }
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -275,10 +275,10 @@ fn combined_driver_owns_actual_phases_and_finalizer_once() {
             .is_err()
     );
     assert_eq!(block.committed_fragment_count(), fragments);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -310,10 +310,10 @@ fn finalizer_error_and_unwind_poison_the_consumed_owner() {
             block.execution_output_plan,
             Some(ExecutionOutputPlanState::Poisoned)
         ));
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
     }
 }
 
@@ -400,10 +400,10 @@ fn state_transaction_cannot_apply_after_output_seal() {
         );
         assert_eq!(block.committed_fragment_count(), fragments);
         assert!(block.verify_execution_output_seal(&source).is_err());
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
     }
 }
 
@@ -438,10 +438,10 @@ fn actual_seal_binds_finalizer_world_values_and_refuses_late_durable_changes() {
             .unwrap_err()
             .contains("World values changed")
     );
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -474,8 +474,8 @@ fn seal_verification_uses_values_instead_of_noop_or_rolled_back_touch_history() 
             .unwrap_err()
             .contains("World values changed")
     );
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }

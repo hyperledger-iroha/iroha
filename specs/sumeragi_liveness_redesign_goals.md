@@ -1189,7 +1189,7 @@ prepared transition; reconstruction failure is a local recovery condition and mu
 not become a second canonical rejection. Retain actual writer ownership instead
 of introducing a diagnostic-generation counter as predecessor authority.
 
-The current isolated archive preparation owns exact projections, admitted byte/count limits and original archive writers. Its publish step authenticates the exact Kura receipt and retries retained bytes without recomputing State; both archive unit suites pass in471. Carrier journal decomposition and exact captured geometry pass their scoped484/485 controls: capture read-only projections first, then retain the original World/runtime/hash/topology/context journals and consuming membership reservation. The Kura phase owner retains one encoding, bounded verified phase differences and exact operations. Neither exposes a complete publication operation yet. The positive archive-composition and five startup-anchor fixtures pass in493/500; all remaining configured-startup fixtures pass in510. Explicit retirement maintenance and pure Native evidence observation with consuming durability attestation pass their505/506 and509/510 checks; the combined657-case regression passes on unchanged508 in511. The Native/historical geometry formal contracts pass31/32 checks and audited source inventory526 passes20; its full structural gate still reports168 diagnostics. Historical observation/attestation compiles in524 and passes all six controls in525 after correcting the fixture's canonical root;173 existing controls pass in521. The selected527/529 design replaces alias-based moves with stable canonical storage, immutable incarnation directories and authenticated reference publication, with physical retirement deferred to GC. Do not add a consensus-spanning evidence freeze to preserve mutable paths. Exact historical completion authority, cross-route pending-work closure, capacity admission, predecessor/successor recovery pins and an instance-local GC deletion fence remain required. The storage cutover and consuming publisher are not implemented; retain current guards until the complete path exists. Archive failures remain local admission/recovery conditions, not evidence that a consensus-valid block is invalid. Formal531/532 subsequently passes66 membership/delegated-State controls; the structural gate remains failing with140 diagnostics. Prototype530 was withdrawn after review found route-dependent retained descriptors acquired only after finality. The actual validator currently drops PreparedCarrier and returns only an execution hash; cached/reproposal markers can bypass preparation. Complete the exact worker-local resource handoff, typed local deferral, cached/recovered authority and consuming Apply together. Do not treat a reservation field in a discarded object, a lower local route cap, or a reopened inode comparison as that fix. Canonical terminal/compaction fixtures now preserve certified source bytes once and finalize outputs after attachments. Core/MV546 compiles545; all176 targeted Native/receipt/capacity/compaction/restart controls pass in547 without source/executable drift. Design549 selects one immutable authenticated Native proof bundle per canonical carrier plus bounded complete route/incarnation history references. Preserve exact compact-merge source, finality and WSV joins before source release; charge entire shared bundles until their last route/snapshot/recovery pin releases. Replace derived per-route application repair vetoes only through the complete representation cutover. See the dated530–549 evidence; full publication and network qualification remain open.
+Current isolated archive preparation owns exact projections, admitted byte/count limits and original logical capture reservations while physical index writers are released. Its publish step authenticates the exact Kura receipt, verified finality and signed result-bearing body through one guarded oracle, then retries retained bytes without recomputing State. Under a held Kura publication lease, index acquisition is nonblocking: refusal retains the original capture and returns the actual physical index release observation. Every archive reader/writer notifies after unlocking, and poison remains a storage error. Both archive unit suites and the joint capture, checkpoint, physical publication and release controls pass in the 196-test DPN development build14 selection; the complete Validate-to-Apply consumer remains unfinished. Earlier archive unit evidence passed in471. Carrier journal decomposition and exact captured geometry pass their scoped484/485 controls: capture read-only projections first, then retain the original World/runtime/hash/topology/context journals and consuming membership reservation. The Kura phase owner retains one encoding, bounded verified phase differences and exact operations. Neither exposes a complete publication operation yet. The positive archive-composition and five startup-anchor fixtures pass in493/500; all remaining configured-startup fixtures pass in510. Explicit retirement maintenance and pure Native evidence observation with consuming durability attestation pass their505/506 and509/510 checks; the combined657-case regression passes on unchanged508 in511. The Native/historical geometry formal contracts pass31/32 checks and audited source inventory526 passes20; its full structural gate still reports168 diagnostics. Historical observation/attestation compiles in524 and passes all six controls in525 after correcting the fixture's canonical root;173 existing controls pass in521. The selected527/529 design replaces alias-based moves with stable canonical storage, immutable incarnation directories and authenticated reference publication, with physical retirement deferred to GC. Do not add a consensus-spanning evidence freeze to preserve mutable paths. Exact historical completion authority, cross-route pending-work closure, capacity admission, predecessor/successor recovery pins and an instance-local GC deletion fence remain required. The storage cutover and consuming publisher are not implemented; retain current guards until the complete path exists. Archive failures remain local admission/recovery conditions, not evidence that a consensus-valid block is invalid. Formal531/532 subsequently passes66 membership/delegated-State controls; the structural gate remains failing with140 diagnostics. Prototype530 was withdrawn after review found route-dependent retained descriptors acquired only after finality. The actual validator currently drops PreparedCarrier and returns only an execution hash; cached/reproposal markers can bypass preparation. Complete the exact worker-local resource handoff, typed local deferral, cached/recovered authority and consuming Apply together. Do not treat a reservation field in a discarded object, a lower local route cap, or a reopened inode comparison as that fix. Canonical terminal/compaction fixtures now preserve certified source bytes once and finalize outputs after attachments. Core/MV546 compiles545; all176 targeted Native/receipt/capacity/compaction/restart controls pass in547 without source/executable drift. Design549 selects one immutable authenticated Native proof bundle per canonical carrier plus bounded complete route/incarnation history references. Preserve exact compact-merge source, finality and WSV joins before source release; charge entire shared bundles until their last route/snapshot/recovery pin releases. Replace derived per-route application repair vetoes only through the complete representation cutover. See the dated530–549 evidence; full publication and network qualification remain open.
 
 State-owned proof/read capture, whole-source admission/finality and allocation
 bounds, canonical metadata and genesis/native/merge integration, and the SCCP
@@ -1383,6 +1383,59 @@ raw publication guards remain enforced until that path replaces its callers.
 
 
 ### Current exact-decision and geometry handoff, September 19, 2026
+
+The DPN development continuation now retains the original raw and tiered geometry
+attempts in State across local refusal, including replay State/receipt custody.
+Build17 passes all 170 geometry controls. Build19 compiles and passes all 76
+selected local-refusal, Queue-release, autoscale, carrier and recovery-fixture
+controls on unchanged source and executable. Typed drain/storage failures remain
+local through candidate validation and emit no rejection event; deterministic
+errors still reject. Autoscale evaluation preserves its original sample/count
+across refusal and marks lifecycle completion only after success. Eight strict
+replay controls remain failed at fixture publication because the complete
+consuming publisher is missing; they are not included as passes in these later
+selections. See the [dated DPN record](../docs/history/2026-09-19/dpn-recovery-geometry.md)
+for the preceding failed builds and exact validation scope. The carrier now
+resumes its original geometry under the retained Kura lease; local backend
+contention releases all physical ownership before returning its actual release
+observation. Complete pre-vote resource admission and source/Native authority
+remain required before exposing the production consumer. Build28 separately passes
+43 focused controls for original CatalogPublished completion, terminal journal
+identity, retained DA/lifecycle projections, cursor persistence after generation
+close, corrected DA fixtures and lock ordering. Actual index allocation and
+complete resource/custody handoff remain unfinished. Build24 passes all 289
+selected Core controls; all 105 MV tests and strict MV library/test Clippy also
+pass. Original archive captures and their detached carrier survive insertion
+refusal. The canonical runtime writer is acquired before State fences, preserving
+undo and avoiding the prebuilt-block lifecycle deadlock. A private complete
+decision-plus-lease owner now joins sealed wire, original witness commitment and
+exact original Native admission evidence before State acquisition. Its pure
+retained-evidence reads preserve body/hash/query caches. This immutable source
+join grants no source release or State publication authority.
+
+The private retained-validation service now reserves its bounded descriptor tables
+before candidate preparation, installs the original journals before success-marker
+fsync, and retains pending occurrences separately from confirmed receipts. Cached
+and reproposed validation requires the same original owner. Selection abort restores
+that owner; successful consumption keeps a subject tombstone until height-store
+retirement so a delayed earlier round cannot execute again. Store-instance and
+full original context/proposal checks fail closed. This adapter does not yet replace
+the live scalar validator or supply aggregate resource admission.
+
+The exact locked Concread source now has an EBR allocation-custody hook: admission
+precedes cloning, the writer owns its allocated generation, commit moves that
+allocation, and actual reclamation destroys/deallocates it before returning its
+charge. Unrelated epoch pins delay both; clone/destructor unwind conservatively
+retains the charge. Build29 passes 105 MV tests, four allocator/epoch controls and
+two negative API checks. It passes 75/76 selected Core controls; build30 closes the
+original store before the reopened-incarnation fixture and passes all six final
+custody controls on unchanged production source. Strict MV Clippy passes. Build31 adds original current/undo MV Cell ownership through detach, retry, abort
+and publication, a finite requested-layout credit pool, and raw-acquisition panic
+wakes for Cell and Storage. All 120 MV library tests, five allocator/epoch tests,
+75 focused Core controls, strict MV Clippy and the charged-API compile-fail control
+pass on unchanged source. Existing State fields remain untracked. Original B+tree
+successors, complete node/cursor/nested payload custody and an explicit configured
+aggregate policy remain required before activating the live handoff.
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing
 verified-finality transition. It retains the original World/runtime/membership/hash

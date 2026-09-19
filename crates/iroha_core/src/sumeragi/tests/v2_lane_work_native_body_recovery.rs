@@ -1534,7 +1534,10 @@ fn grouped_native_amx_prevote_local_capacity_refusal_preserves_kura_and_wsv() {
     assert!(
         crate::sumeragi::v2_body_store::BodyValidationError::rejection_identity(&error).is_none()
     );
-    assert!(crate::sumeragi::v2_body_store::BodyValidationError::local_busy(&error).is_none());
+    assert!(matches!(
+        crate::sumeragi::v2_body_store::BodyValidationError::local_refusal(&error),
+        Some(crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(_)),
+    ));
     assert_eq!(negative.state.committed_height(), 3);
     assert_eq!(
         negative

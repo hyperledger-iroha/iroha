@@ -10,6 +10,142 @@ fn pending_canonical_capacity_fixture() -> (TempDir, Arc<Kura>) {
     kura.append_pending_block_for_bench(DummyBlocks::new().next());
     (temp_dir, kura)
 }
+fn pending_canonical_merge_capacity_fixture() -> (TempDir, Arc<Kura>, u64, HashOf<MergeLedgerEntry>)
+{
+    let temp_dir = TempDir::new().expect("pending merge capacity temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (mut kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &two_lane_runtime_config())
+            .expect("pending merge capacity Kura");
+    Arc::get_mut(&mut kura)
+        .expect("exclusive pending merge capacity Kura")
+        .max_disk_usage_bytes = u64::MAX / 4;
+    let mut blocks = DummyBlocks::new();
+    let parent = blocks.next();
+    let mut entry = sample_merge_entry(1);
+    let carrier = next_merge_carrier(&mut blocks, &mut entry);
+    let expected = Kura::block_required_bytes(&parent).unwrap()
+        + kura
+            .block_required_bytes_for_budget(&carrier, Some(&entry), kura.max_disk_usage_bytes)
+            .unwrap();
+    kura.persist_pending_certified_merge_entry(&entry)
+        .expect("persist exact pending carrier association");
+    kura.append_pending_block_for_bench(parent);
+    kura.append_pending_block_for_bench(carrier);
+    kura.invalidate_durable_budget_snapshot();
+    kura.pending_budget_raw_scans.store(0, Ordering::Relaxed);
+    (temp_dir, kura, expected, entry.canonical_hash())
+}
+
+#[test]
+fn publication_lease_captures_cold_pending_merge_capacity_before_geometry() {
+    let (_temp_dir, kura, expected, _) = pending_canonical_merge_capacity_fixture();
+    let geometry = kura.lane_geometry_lock.lock();
+    assert!(matches!(
+        kura.try_publication_lease(),
+        Err(KuraPublicationPreparationError::Busy {
+            field: "lane_geometry_lock",
+            ..
+        })
+    ));
+    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+    assert_eq!(kura.pending_budget_bytes.load(Ordering::Relaxed), expected);
+    assert!(kura.pending_budget_bytes_valid.load(Ordering::Relaxed));
+    drop(geometry);
+    let lease = kura
+        .try_publication_lease()
+        .expect("retry original geometry owner");
+    assert_eq!(lease.pending_canonical_bytes(), expected);
+    kura.invalidate_pending_budget_cache();
+    assert_eq!(lease.pending_canonical_bytes(), expected);
+    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+    drop(lease);
+    let lease = kura
+        .try_publication_lease()
+        .expect("refresh on new physical attempt");
+    assert_eq!(lease.pending_canonical_bytes(), expected);
+    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn publication_lease_cold_merge_capacity_returns_busy_and_retries_exact_sidecar() {
+    let (_temp_dir, kura, expected, _) = pending_canonical_merge_capacity_fixture();
+    let sidecar = kura.sidecar_lock.lock();
+    let worker_kura = Arc::clone(&kura);
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let result = worker_kura
+            .try_publication_lease()
+            .map(|lease| lease.pending_canonical_bytes());
+        done_tx
+            .send(result)
+            .expect("report cold capacity acquisition");
+    });
+    let result = match done_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(result) => result,
+        Err(error) => {
+            drop(sidecar);
+            worker.join().expect("release blocked capacity worker");
+            panic!("cold capacity must return before sidecar release: {error}");
+        }
+    };
+    worker.join().expect("join cold capacity acquisition");
+    let wait = match result {
+        Err(KuraPublicationPreparationError::Busy {
+            field: "sidecar_lock",
+            wait,
+        }) => wait,
+        other => panic!("expected exact sidecar refusal, got {other:?}"),
+    };
+    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 1);
+    assert!(!kura.pending_budget_bytes_valid.load(Ordering::Relaxed));
+    for lock in [
+        &kura.prune_lock,
+        &kura.canonical_chain_lock,
+        &kura.lane_geometry_lock,
+    ] {
+        drop(
+            lock.try_lock_or_wait()
+                .expect("refusal releases earlier owners"),
+        );
+    }
+    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(std::future::Future::poll(future.as_mut(), &mut context).is_pending());
+    drop(sidecar);
+    assert!(std::future::Future::poll(future.as_mut(), &mut context).is_ready());
+    let lease = kura
+        .try_publication_lease()
+        .expect("retry after exact sidecar release");
+    assert_eq!(lease.pending_canonical_bytes(), expected);
+    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 2);
+    assert!(kura.pending_budget_bytes_valid.load(Ordering::Relaxed));
+}
+
+#[test]
+fn publication_lease_missing_cold_merge_capacity_releases_fences() {
+    let (_temp_dir, kura, _, entry_hash) = pending_canonical_merge_capacity_fixture();
+    std::fs::remove_file(kura.pending_merge_entry_path(entry_hash)).unwrap();
+    assert!(matches!(
+        kura.try_publication_lease(),
+        Err(KuraPublicationPreparationError::Storage(
+            Error::MissingCertifiedMergeSidecar { entry_hash: missing }
+        )) if missing == entry_hash
+    ));
+    assert!(!kura.pending_budget_bytes_valid.load(Ordering::Relaxed));
+    for lock in [
+        &kura.prune_lock,
+        &kura.canonical_chain_lock,
+        &kura.lane_geometry_lock,
+        &kura.sidecar_lock,
+    ] {
+        drop(
+            lock.try_lock_or_wait()
+                .expect("storage refusal releases every fence"),
+        );
+    }
+}
+
 fn pending_canonical_capacity_snapshot(kura: &Kura) -> u64 {
     let _prune_guard = kura.prune_lock.lock();
     kura.ensure_prune_recovery_not_required()

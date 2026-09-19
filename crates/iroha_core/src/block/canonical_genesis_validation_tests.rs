@@ -459,9 +459,11 @@ fn authenticated_genesis_uses_the_actual_whole_output_owner() {
     );
     assert_eq!(source.header(), committed_fixture.header());
     block.verify_execution_output_seal(&source).unwrap();
-    assert_eq!(
-        block.commit().unwrap_err(),
-        crate::state::storage_transactions::TransactionsBlockError::ExecutionOutputCapacity,
+    assert!(
+        matches!(
+            block.commit().unwrap_err(),
+            crate::state::storage_transactions::TransactionsBlockError::ExecutionOutputCapacity
+        ),
         "execution does not invent the unfinished publication authority"
     );
 }

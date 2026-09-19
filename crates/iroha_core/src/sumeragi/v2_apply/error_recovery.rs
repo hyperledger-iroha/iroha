@@ -1,6 +1,9 @@
 /// Fail-closed application or recovery failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2ApplyError {
+    /// Local resource ownership cannot authorize deterministic proposal rejection.
+    #[error(transparent)]
+    LocalValidation(#[from] super::v2_body_store::LocalValidationRefusal),
     /// A complete committed snapshot identity could not be acquired.
     #[error(transparent)]
     SnapshotCapture(#[from] crate::snapshot::SnapshotCaptureError),
@@ -26,22 +29,6 @@ pub(crate) enum V2ApplyError {
     /// This is not a deterministic rejection of the incoming candidate.
     #[error("Sumeragi v2 canonical State recovery failed: {0}")]
     LocalCanonicalState(String),
-    /// Actual local lock contention, with an original release observation.
-    #[error(transparent)]
-    LocalValidationBusy(super::v2_body_store::BodyValidationBusy),
-    /// Local Queue promises still need a canonical retirement/drain outcome.
-    /// Their presence cannot establish that the agreed proposal is invalid.
-    #[error(
-        "local Queue ownership blocks retirement of lane {lane_id:?}, dataspace {dataspace_id:?}, incarnation {lane_incarnation}"
-    )]
-    LocalRetirementPending {
-        /// Exact retiring lane.
-        lane_id: LaneId,
-        /// Exact retiring dataspace.
-        dataspace_id: DataSpaceId,
-        /// Exact retiring incarnation.
-        lane_incarnation: Hash,
-    },
     /// The configured local stable evidence ceiling cannot hold the exact pair.
     /// This is a configuration deficit, not current occupancy or a body verdict.
     #[error(
@@ -113,6 +100,11 @@ pub(crate) enum V2ApplyError {
         /// Underlying persistence diagnostic.
         detail: String,
     },
+    /// State refused publication after Kura committed; retain the original local owner diagnostic.
+    #[error(
+        "Sumeragi v2 committed transition requires restart recovery at WSV publication after Kura commit: {0}"
+    )]
+    CommittedStatePublication(#[source] crate::state::storage_transactions::TransactionsBlockError),
     /// Test-only crash boundary after Kura commits and before WSV publication.
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
@@ -142,10 +134,13 @@ impl V2ApplyError {
     pub(crate) const fn requires_restart_recovery(&self) -> bool {
         match self {
             Self::Kura(error) => error.requires_restart_recovery(),
-            Self::CommittedRecoveryRequired { .. }
+            Self::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_),
+            )
+            | Self::CommittedRecoveryRequired { .. }
+            | Self::CommittedStatePublication(_)
             | Self::CanonicalStorageRead(_)
             | Self::LocalCanonicalState(_)
-            | Self::LocalRetirementPending { .. }
             | Self::LocalEvidenceCapacity { .. }
             | Self::StateAheadOfKura => true,
             #[cfg(test)]
@@ -167,7 +162,8 @@ impl BodyValidationError for V2ApplyError {
             Self::Validation(_)
             | Self::ResultBearingProposal
             | Self::ExecutionCommitmentMismatch => Some(BodyValidationRejectionIdentity::Rejected),
-            Self::SnapshotCapture(_)
+            Self::LocalValidation(_)
+            | Self::SnapshotCapture(_)
             | Self::Wire(_)
             | Self::Finality(_)
             | Self::FinalityCryptography(_)
@@ -175,8 +171,6 @@ impl BodyValidationError for V2ApplyError {
             | Self::Kura(_)
             | Self::CanonicalStorageRead(_)
             | Self::LocalCanonicalState(_)
-            | Self::LocalValidationBusy(_)
-            | Self::LocalRetirementPending { .. }
             | Self::LocalEvidenceCapacity { .. }
             | Self::TaskMismatch
             | Self::HeightOverflow
@@ -188,7 +182,8 @@ impl BodyValidationError for V2ApplyError {
             | Self::CanonicalBlock(_)
             | Self::MissingCertifiedMergeSidecar { .. }
             | Self::Commit(_)
-            | Self::CommittedRecoveryRequired { .. } => None,
+            | Self::CommittedRecoveryRequired { .. }
+            | Self::CommittedStatePublication(_) => None,
             #[cfg(test)]
             Self::InjectedCrashAfterKuraStore
             | Self::InjectedCrashAfterWsvCheckpoint
@@ -197,16 +192,32 @@ impl BodyValidationError for V2ApplyError {
         }
     }
 
-    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+    fn local_refusal(&self) -> Option<super::v2_body_store::LocalValidationRefusal> {
+        use super::v2_body_store::LocalValidationRefusal;
         match self {
-            Self::MissingCertifiedMergeSidecar { reference } => Some(reference),
+            Self::LocalValidation(refusal) => Some(refusal.clone()),
+            Self::Kura(_)
+            | Self::CanonicalStorageRead(_)
+            | Self::LocalCanonicalState(_)
+            | Self::LocalEvidenceCapacity { .. }
+            | Self::SnapshotCapture(_)
+            | Self::StateAhead { .. }
+            | Self::StateGap { .. }
+            | Self::StateAheadOfKura
+            | Self::CommittedRecoveryRequired { .. }
+            | Self::CommittedStatePublication(_) => {
+                Some(LocalValidationRefusal::RecoveryRequired(self.to_string()))
+            }
+            Self::Body(super::v2_body_store::V2BodyStoreError::LocalValidation(refusal)) => {
+                Some(refusal.clone())
+            }
+            Self::Body(_) => Some(LocalValidationRefusal::RecoveryRequired(self.to_string())),
             _ => None,
         }
     }
-
-    fn local_busy(&self) -> Option<&super::v2_body_store::BodyValidationBusy> {
+    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {
-            Self::LocalValidationBusy(busy) => Some(busy),
+            Self::MissingCertifiedMergeSidecar { reference } => Some(reference),
             _ => None,
         }
     }

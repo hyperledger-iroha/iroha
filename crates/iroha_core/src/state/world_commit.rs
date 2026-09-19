@@ -28,7 +28,8 @@ pub(in crate::state) struct PreparedWorldEffects {
 }
 
 impl PreparedWorldEffects {
-    /// Consume only the cache records retained from the published World.
+    /// Consume the exact deferred cache records after their World is published.
+    /// The enclosing State publisher retains all authorization and writer gates.
     pub(in crate::state) fn publish(self, state: &State) {
         state.publish_prepared_da_pins(self.da_pins);
     }

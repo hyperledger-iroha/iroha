@@ -165,8 +165,16 @@ fn autonomous_nonmember_test_fixture(
     );
     assert_eq!(adapter.context.roster.len(), 4);
     assert_eq!(
-        adapter.context.roster.iter().map(|entry| entry.validator.clone()).collect::<Vec<_>>(),
-        global_keys.iter().map(|key| PeerId::new(key.public_key().clone())).collect::<Vec<_>>(),
+        adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>(),
+        global_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
         "registered lane-only peers do not expand the frozen global committee",
     );
     assert!(

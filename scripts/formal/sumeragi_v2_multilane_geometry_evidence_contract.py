@@ -1,8 +1,8 @@
 """Scoped source obligations for Native geometry observation and maintenance.
 
 These are structural mutation checks, not proof that retirement admission is
-pure or reserved across consensus. The current scanner still invokes explicit
-maintenance and durability attestation under its existing locks.
+reserved across consensus. The scanner explicitly dispatches observation or
+maintenance and durability attestation under its inherited locks.
 """
 
 from __future__ import annotations
@@ -18,10 +18,13 @@ NATIVE_MODULE = "SumeragiV2NativeApplicationEvidence"
 GEOMETRY = "crates/iroha_core/src/kura/lane_geometry.rs"
 EVIDENCE = "crates/iroha_core/src/kura/lane_geometry/native_evidence.rs"
 MAINTENANCE = "crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs"
+EFFECTS = "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs"
 OBSERVER = "observe_geometry_native_amx_per_height_evidence"
 WRAPPER = "read_and_attest_geometry_native_amx_per_height_evidence"
-SCANNER = "ensure_first_release_lane_retirement_admissible_with_certified_locked"
-ARCHIVED = "ensure_archived_lane_work_released"
+ADMISSION = "ensure_first_release_lane_retirement_admissible_with_certified_locked"
+OBSERVED_ADMISSION = "observe_lane_retirement_locked"
+SCANNER = "scan_lane_retirement_locked"
+ARCHIVED = "ensure_archived_lane_work_released_with_custody"
 MAINTAIN = "maintain_lane_retirement_route_locked"
 COMMITTED_REWRITE = "certified_history_has_committed_rewrite_locked"
 
@@ -49,6 +52,11 @@ GEOMETRY_EVIDENCE_BINDINGS = (
         "files.try_reserve(1)", "bytes_hash: before.bytes_hash",
     )),
     (EVIDENCE, "fn", WRAPPER, (OBSERVER, ".attest()")),
+    (EVIDENCE, "fn", "into_observed", (
+        "fn into_observed(self)", "read_regular_sidecar_snapshot",
+        "after.bytes_hash != observed.bytes_hash", "stable_sidecar_metadata_unchanged",
+        "geometry_bound_progress_directory_snapshot", "Ok((self.manifests, self.receipts))",
+    )),
     (EVIDENCE, "fn", "attest", (
         "fn attest(self)", "geometry_bound_progress_directory_snapshot",
         "sidecar_file_metadata_unchanged", "file.sync_all",
@@ -78,7 +86,7 @@ GEOMETRY_EVIDENCE_BINDINGS = (
         "recover_geometry_progress_pairs_before_snapshot",
     )),
     (GEOMETRY, "fn", SCANNER, (
-        MAINTAIN, WRAPPER, "require_active_lane_incarnation",
+        "effects.prepare_route", OBSERVER, "effects.native", "require_active_lane_incarnation",
         "require_active_lane_artifact", "native_amx_participant_receipt_matches_manifest_leaf",
         "native_amx_retained_windows_are_complete",
         "validate_native_amx_retained_history_continuity",
@@ -86,7 +94,7 @@ GEOMETRY_EVIDENCE_BINDINGS = (
         "confirmed_snapshot != artifact_snapshot",
     )),
     (GEOMETRY, "fn", ARCHIVED, (
-        WRAPPER,
+        "custody.authenticate(self)?", "custody.is_none().then(|| self.sidecar_lock.lock())", WRAPPER,
         "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
         "native_amx_retained_windows_are_complete",
         "validate_native_amx_retained_history_continuity",
@@ -94,12 +102,25 @@ GEOMETRY_EVIDENCE_BINDINGS = (
         "decode_native_amx_participant_receipt_latest_index_for_route",
         "latest.matches_receipt", "confirmed_snapshot != artifact_snapshot",
     )),
+    (GEOMETRY, "fn", ADMISSION, (
+        SCANNER, "RetirementScanEffects::MaintainAndAttest", "pending_canonical_bytes", ".map(drop)",
+    )),
+    (GEOMETRY, "fn", OBSERVED_ADMISSION, (
+        "validate_certified_retirements_against_geometry", SCANNER, "RetirementScanEffects::Observe",
+    )),
+    (EFFECTS, "fn", "prepare_route", (
+        "Self::MaintainAndAttest", MAINTAIN, "Self::Observe", "observe_lane_retirement_route_locked",
+    )),
+    (EFFECTS, "fn", "native", (
+        "ObservedNativeAmxEvidence", "Self::Observe => observation.into_observed()",
+        "Self::MaintainAndAttest { .. } => observation.attest()",
+    )),
 )
 
 GEOMETRY_EVIDENCE_SOURCE_RELATIVES = (
     Path(__file__).relative_to(Path(__file__).resolve().parents[2]),
     Path("pytests/scripts/sumeragi_v2_multilane_geometry_evidence_contract_test.py"),
-    *(Path(path) for path in (GEOMETRY, EVIDENCE, MAINTENANCE)),
+    *(Path(path) for path in (GEOMETRY, EVIDENCE, MAINTENANCE, EFFECTS)),
 )
 
 
@@ -170,8 +191,9 @@ def validate_geometry_evidence_contract(
 
     for forbidden in ("sync_all(", "sync_dir(", ".attest(", "recover_", "compact_",
                       ".write(", ".create(", ".truncate(", "fs::write("):
-        if forbidden in items.get(OBSERVER, ""):
-            errors.append(f"geometry evidence observer contains storage effect {forbidden!r}")
+        for symbol in (OBSERVER, "into_observed"):
+            if forbidden in items.get(symbol, ""):
+                errors.append(f"geometry evidence observer contains storage effect {forbidden!r} in {symbol}")
     require(OBSERVER,
         "if temporary { return Err(",
         "if retained_count >= retained_record_limit {",
@@ -196,6 +218,15 @@ def validate_geometry_evidence_contract(
     count(OBSERVER, "if &self.geometry_bound_progress_directory_snapshot(&directory, artifact_snapshot.len(), context)? != artifact_snapshot { return Err(", 2)
     require(WRAPPER,
         "self.observe_geometry_native_amx_per_height_evidence(lane_artifacts, artifact_snapshot, retained_record_limit, context)?.attest()",
+    )
+    require("into_observed", "fn into_observed(self) -> Result<NativeGeometryEvidence>",
+        "if after.bytes_hash != observed.bytes_hash || !Kura::stable_sidecar_metadata_unchanged(&observed.metadata, &after.metadata) { return Err(",
+        "if &self.kura.geometry_bound_progress_directory_snapshot(&self.directory, self.inventory.len(), self.context)? != self.inventory { return Err(",
+    )
+    ordered("into_observed", "for observed in &self.files {",
+        "read_regular_sidecar_snapshot(&observed.path, &self.directory.expected_path, self.payload_limit)",
+        "after.bytes_hash != observed.bytes_hash", "geometry_bound_progress_directory_snapshot(",
+        "Ok((self.manifests, self.receipts))",
     )
     require("attest", "fn attest(self) -> Result<NativeGeometryEvidence> {",
         "let Self { kura, directory, inventory, manifests, receipts, files, payload_limit, context } = self;",
@@ -244,15 +275,31 @@ def validate_geometry_evidence_contract(
     )
     if ".lock(" in items.get(MAINTAIN, ""):
         errors.append("geometry evidence maintenance reacquires an inherited lock")
+    require(ADMISSION,
+        "self.scan_lane_retirement_locked(retiring, certified_retirements, RetirementScanEffects::MaintainAndAttest { pending_canonical_bytes }).map(drop)",
+    )
+    require(OBSERVED_ADMISSION,
+        "self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?; self.scan_lane_retirement_locked(retiring, certified_retirements, RetirementScanEffects::Observe)",
+    )
+    require("prepare_route",
+        "match self { Self::MaintainAndAttest { pending_canonical_bytes } => kura.maintain_lane_retirement_route_locked(pending_canonical_bytes, lane, entry, retiring, pairs), Self::Observe => kura.observe_lane_retirement_route_locked(entry) }",
+    )
+    require("native",
+        "match self { Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
+    )
     require(SCANNER,
         "let fixed_progress_pairs: [(&Path, &Path, &str); 7] = [ (&lane_data, &lane_index, \"\"), (&input_data, &input_index, \"\"), (&preflight_data, &preflight_index, \"\"), (&certified_data, &certified_index, \"\"), (&merge_bundle_data, &merge_bundle_index, \"\"), (&canonical_replica_data, &canonical_replica_index, CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL), (&receipt_data, &receipt_index, \"\") ];",
-        "let lane_artifacts_guard = self.maintain_lane_retirement_route_locked(pending_canonical_bytes, storage_lane_id, &entry, &retiring, &fixed_progress_pairs)?; let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(",
+        "let lane_artifacts_guard = effects.prepare_route(self, storage_lane_id, &entry, &retiring, &fixed_progress_pairs)?; let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(",
+        "let (retained_native_manifests, retained_native_receipts) = effects.native(native_observation)?;",
     )
-    ordered(SCANNER, "self.maintain_lane_retirement_route_locked(",
+    ordered(SCANNER, "effects.prepare_route(",
         "let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(",
-        "self.read_and_attest_geometry_native_amx_per_height_evidence(",
+        "self.observe_geometry_native_amx_per_height_evidence(",
+        "effects.native(native_observation)?",
     )
-    ordered(ARCHIVED, "let _sidecar_guard = self.sidecar_lock.lock();",
+    require(ARCHIVED, "if let Some(custody) = custody { custody.authenticate(self)?; }")
+    ordered(ARCHIVED, "custody.authenticate(self)?;",
+        "let _sidecar_guard = custody.is_none().then(|| self.sidecar_lock.lock());",
         "self.read_and_attest_geometry_native_amx_per_height_evidence(",
         "confirmed_snapshot != artifact_snapshot",
     )

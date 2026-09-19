@@ -5239,3 +5239,46 @@ async fn queue_plan_canonical_peer_retry_retains_or_refuses_complete_read_reserv
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
     assert_eq!(app.queue.active_len(), 0);
 }
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queue_plan_canonical_peer_retry_preserves_original_read_deadline() {
+    let (app, request, original) = canonical_queue_plan_retry_fixture(0x72);
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        admission_binding: Some(binding),
+        expected_plan,
+        ..
+    } = &request.request
+    else {
+        panic!("canonical retry fixture carries an exact submission binding");
+    };
+    let route = super::validate_proxy_routing_plan_hint(expected_plan.clone())
+        .unwrap()
+        .coordinator_route();
+    let expired = super::canonical_queue_plan_synced_response(
+        &app,
+        binding,
+        route,
+        None,
+        tokio::time::Instant::now(),
+    )
+    .expect("canonical owner is present");
+    assert!(super::is_queue_plan_outcome_unknown_response(&expired));
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+    assert_eq!(app.queue.active_len(), 0);
+    let response = super::canonical_queue_plan_synced_response(
+        &app,
+        binding,
+        route,
+        None,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .expect("late delivery cannot consume or replace the canonical owner");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref(), original.body);
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+    assert_eq!(app.queue.active_len(), 0);
+}

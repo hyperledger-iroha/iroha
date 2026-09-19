@@ -6624,7 +6624,7 @@ state_test! { sync unbound_merge_entrypoint_membership_is_rejected
     state_block.merge_carrier_entrypoints.insert(merge_hash);
     apply_empty_test_block_metadata(&state, &mut state_block, &block);
     let_row! { error = state_block .commit() .expect_err("uncertified merge membership must not enter the canonical index") };
-    assert_eq!(error, TransactionsBlockError::MergeAdmission);
+    assert!(matches!(error, TransactionsBlockError::MergeAdmission));
     assert_eq!(state.committed_entrypoint_height(&merge_hash), None);
     assert_eq!(state.committed_height(), 0);
 }
@@ -9523,7 +9523,9 @@ fn committed_drain_suppresses_hot_scale_out_and_only_later_commitment_retires_hi
         if certified {
             let same_carrier = state.block(third.header());
             assert_eq!(
-                same_carrier.select_autoscale_scale_in_action(&third),
+                same_carrier
+                    .select_autoscale_scale_in_action(&third)
+                    .expect("observe exact retirement action"),
                 None,
                 "the certificate carrier itself must never retire its lane"
             );
@@ -11392,10 +11394,7 @@ state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geo
     let_row! { AutoscaleCommitRevalidationStage { state_block, elastic_blocks_dir, elastic_snapshot_dir, } = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root) };
     kura.fail_next_lane_geometry_publication_for_test();
     let_row! { err = state_block .commit() .expect_err("publication failure must abort before transaction/catalog commit") };
-    assert!(matches!(
-        err,
-        TransactionsBlockError::AutoscaleLaneLifecycle
-    ));
+    assert!(matches!(err, TransactionsBlockError::LocalLaneGeometry(_)));
     assert_eq!(
         state
             .nexus_snapshot()
@@ -11444,142 +11443,145 @@ fn exact_test_tree_fingerprint(root: &Path) -> Vec<(PathBuf, bool, Vec<u8>)> {
     visit(root, root, &mut out);
     out
 }
-state_test! { sync replay_geometry_live_failure_preserves_state_kura_and_nexus_exactly
-    const CHILD_CASE: &str = "IROHA_CORE_REPLAY_GEOMETRY_ISOLATED_CHILD";
-    if std::env::var_os(CHILD_CASE).is_none() {
-        // The assertions below cover process-global diagnostic caches. Other
-        // state tests may legitimately publish those caches concurrently.
-        let output = std::process::Command::new(
-            std::env::current_exe().expect("resolve core test executable"),
-        )
-        .args([
-            "--exact",
-            "state::tests::replay_geometry_live_failure_preserves_state_kura_and_nexus_exactly",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_CASE, "1")
-        .output()
-        .expect("run isolated lifecycle replay regression");
-        assert!(
-            output.status.success(),
-            "isolated lifecycle replay failed: {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-        return;
-    }
+state_test! { sync replay_geometry_local_refusal_retains_prefix_and_original_receipt_cursor
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-    let_row! { staged = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root) };
-    let_row! { mut height_one = staged .state_block .pending_autoscale_lifecycle .clone() .expect("capture exact staged geometry receipt") };
-    height_one.transition_height = 1;
-    let mut height_two = height_one.clone();
-    height_two.transition_height = 2;
+    *state.tiered_backend.lock() = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+    let staged = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root);
+    let mut first = staged.state_block.pending_autoscale_lifecycle.clone().expect("exact staged receipt");
+    first.transition_height = 1;
     drop(staged);
-    let process_status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
-    let_row! { isolated = isolated_state_for_replay_prevalidation(&state, &kura) .expect("construct inert lifecycle replay probe") };
-    {
-        let _state_write_lock = isolated.state_write_lock.lock();
-        let publication = isolated.begin_state_view_write();
-        isolated.apply_committed_autoscale_lane_lifecycle(&height_one, false, &publication);
-    }
-    assert_eq!(
-        crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
-        process_status_before,
-        "an isolated lifecycle replay must not prune process-global Sumeragi status"
-    );
-    drop(isolated);
-    // Startup replay begins from retained immutable transition history
-    // rolled back to the snapshot cursor. Seed that exact condition rather
-    // than testing an impossible first-time geometry publication.
-    let update = &height_one.catalog_update;
-    state
-        .apply_lane_geometry_updates(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
-            &update.previous_lane_incarnations,
-            &update.updated_lane_incarnations,
-            &update.previous_lane_incarnation_activation_heights,
-            &update.updated_lane_incarnation_activation_heights,
-            &update.previous_lane_incarnation_lineage,
-            &update.updated_lane_incarnation_lineage,
-            &update.replaced_lane_ids,
-            height_one.transition_height,
-        )
-        .expect("seed retained replay geometry");
-    state
-        .mark_lane_geometry_catalog_published(
-            &update.updated_lane_config,
-            &update.updated_lane_incarnations,
-            &update.updated_lane_incarnation_activation_heights,
-            &update.updated_lane_incarnation_lineage,
-            None,
-        )
-        .map_err(|failure| failure.error)
-        .expect("publish retained replay geometry");
-    state
-        .rollback_lane_geometry_updates(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
-            &update.previous_lane_incarnations,
-            &update.previous_lane_incarnation_activation_heights,
-            &update.previous_lane_incarnation_lineage,
-            &update.replaced_lane_ids,
-            height_one.transition_height,
-        )
-        .expect("restore retained geometry to the snapshot cursor");
+    let mut second = first.clone();
+    second.transition_height = 2;
+    let update = &mut second.catalog_update;
+    update.previous_lane_config = update.updated_lane_config.clone();
+    update.previous_lane_incarnations = update.updated_lane_incarnations.clone();
+    update.previous_lane_incarnation_activation_heights = update.updated_lane_incarnation_activation_heights.clone();
+    update.previous_lane_incarnation_lineage = update.updated_lane_incarnation_lineage.clone();
+    update.replaced_lane_ids.clear();
+    let geometry = vec![first, second];
     let state_before = crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state);
-    let nexus_before = state.nexus_snapshot();
-    let shard_cursors_before = format!("{:?}", state.da_shard_cursors.read());
-    let tiered_before = format!("{:?}", state.tiered_backend.lock());
+    let cursors_before = format!("{:?}", state.da_shard_cursors.read());
     let kura_before = exact_test_tree_fingerprint(&store_root);
-    let_row! { cold_before = cold_root .exists() .then(|| exact_test_tree_fingerprint(&cold_root)) };
-    for (failure_index, geometry) in [
-        (0, vec![height_one.clone()]),
-        (1, vec![height_one.clone(), height_two.clone()]),
-    ] {
-        REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(failure_index));
-        REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(|observed| observed.set(false));
-        let_row! { error = apply_replay_geometry_receipts(&state, &geometry, None) .expect_err("injected live geometry failure must reject before publication") };
-        assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
-        assert_eq!(
-            REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get),
-            failure_index == 1,
-            "height-two injection must observe height-one geometry physically published"
-        );
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
-            state_before,
-            "one- and two-receipt failures must preserve exact State"
-        );
-        assert_eq!(
-            format!("{:?}", state.nexus_snapshot()),
-            format!("{nexus_before:?}"),
-            "geometry rollback must restore the in-memory Nexus configuration"
-        );
-        assert_eq!(
-            format!("{:?}", state.da_shard_cursors.read()),
-            shard_cursors_before,
-            "geometry rollback must restore the in-memory DA cursor map"
-        );
-        assert_eq!(
-            format!("{:?}", state.tiered_backend.lock()),
-            tiered_before,
-            "geometry rollback must restore the in-memory tiered backend"
-        );
-        assert_eq!(exact_test_tree_fingerprint(&store_root), kura_before);
-        assert_eq!(
-            cold_root
-                .exists()
-                .then(|| exact_test_tree_fingerprint(&cold_root)),
-            cold_before,
-            "geometry rollback must restore the external tiered tree exactly"
-        );
+    let cold_before = exact_test_tree_fingerprint(&cold_root);
+    let mut cursor = 0;
+    REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(0));
+    let error = apply_replay_geometry_receipts(&state, &geometry, &mut cursor, None).expect_err("pause before first receipt");
+    assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
+    assert_eq!(cursor, 0);
+    assert_eq!(exact_test_tree_fingerprint(&store_root), kura_before);
+    assert_eq!(exact_test_tree_fingerprint(&cold_root), cold_before);
+    REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(1));
+    let error = apply_replay_geometry_receipts(&state, &geometry, &mut cursor, None).expect_err("pause after first original receipt");
+    assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
+    assert_eq!(cursor, 1);
+    assert!(REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state), state_before);
+    assert_eq!(format!("{:?}", state.da_shard_cursors.read()), cursors_before,
+        "startup geometry must not publish the live DA mapping before the validated State image");
+    apply_replay_geometry_receipts(&state, &geometry, &mut cursor, None).expect("resume at original next receipt");
+    assert_eq!(cursor, 2);
+    let published_kura = exact_test_tree_fingerprint(&store_root);
+    let published_cold = exact_test_tree_fingerprint(&cold_root);
+    apply_replay_geometry_receipts(&state, &geometry, &mut cursor, None).expect("completed cursor has no work");
+    assert_eq!(exact_test_tree_fingerprint(&store_root), published_kura);
+    assert_eq!(exact_test_tree_fingerprint(&cold_root), published_cold);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state), state_before);
+}
+state_test! { sync state_geometry_retry_retains_original_operation_and_rejects_changed_request
+    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
+    let staged = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root);
+    let pending = staged.state_block.pending_autoscale_lifecycle.clone().expect("exact staged receipt");
+    drop(staged);
+    let request = replay_geometry_request(&state, &pending);
+    let replaced = &pending.catalog_update.replaced_lane_ids;
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    let error = state.resume_lane_geometry_publication(&request, replaced, &BTreeMap::new(), None, false)
+        .expect_err("local journal sync refusal");
+    assert!(matches!(error, LaneLifecycleError::GeometryStorage(_)), "{error:?}");
+    let owner_address = {
+        let slot = state.geometry_publication.lock();
+        let original = slot.as_ref().expect("original operation retained");
+        assert!(original.raw.as_ref().unwrap().has_pending_journal_write());
+        std::ptr::from_ref(original) as usize
+    };
+    let mut changed = replay_geometry_request(&state, &pending);
+    changed.transition_height += 1;
+    state.resume_lane_geometry_publication(&changed, replaced, &BTreeMap::new(), None, false)
+        .expect_err("changed request cannot replace original owner");
+    assert_eq!(std::ptr::from_ref(state.geometry_publication.lock().as_ref().unwrap()) as usize, owner_address);
+    state.resume_lane_geometry_publication(&request, replaced, &BTreeMap::new(), None, false)
+        .expect("resume original pending journal write");
+    assert_eq!(std::ptr::from_ref(state.geometry_publication.lock().as_ref().unwrap()) as usize, owner_address);
+    let held = kura.try_publication_lease().expect("hold actual physical publisher");
+    let error = state.finish_lane_geometry_publication(request.updated, request.updated_incarnations,
+        request.updated_activation_heights, request.updated_lineage_root, None, None)
+        .expect_err("physical publication owner is busy");
+    assert!(matches!(error.error, LaneLifecycleError::PublicationBusy { .. }));
+    assert!(!error.rollback_safe);
+    drop(held);
+    state.finish_lane_geometry_publication(request.updated, request.updated_incarnations,
+        request.updated_activation_heights, request.updated_lineage_root, None, None)
+        .map_err(|failure| failure.error).expect("consume original owner after release");
+    assert!(state.geometry_publication.lock().is_none());
+}
+state_test! { sync state_geometry_admission_refusal_keeps_original_tiered_paths
+    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
+    *state.tiered_backend.lock() = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+    let staged = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root);
+    let pending = staged.state_block.pending_autoscale_lifecycle.clone().expect("exact staged receipt");
+    drop(staged);
+    let request = replay_geometry_request(&state, &pending);
+    let held = kura.try_publication_lease().expect("hold actual Kura fence");
+    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids,
+        &BTreeMap::new(), None, false).expect_err("Kura admission refuses after tiered capture");
+    assert!(matches!(error, LaneLifecycleError::PublicationBusy { .. }));
+    let tiered_address = {
+        let slot = state.geometry_publication.lock();
+        let original = slot.as_ref().expect("aggregate preparation retained");
+        assert!(original.raw.is_none());
+        std::ptr::from_ref(original.tiered.as_ref().expect("original descriptors retained")) as usize
+    };
+    drop(held);
+    std::fs::rename(&cold_root, temp_dir.path().join("original-cold-owner")).unwrap();
+    std::fs::create_dir(&cold_root).unwrap();
+    let substituted = exact_test_tree_fingerprint(&cold_root);
+    let error = state.resume_lane_geometry_publication(&request, &pending.catalog_update.replaced_lane_ids,
+        &BTreeMap::new(), None, false).expect_err("retry cannot recapture substituted tiered root");
+    assert!(error.to_string().contains("original directory was replaced"), "{error:?}");
+    let slot = state.geometry_publication.lock();
+    assert_eq!(std::ptr::from_ref(slot.as_ref().unwrap().tiered.as_ref().unwrap()) as usize, tiered_address);
+    assert_eq!(exact_test_tree_fingerprint(&cold_root), substituted);
+}
+state_test! { sync state_geometry_owned_rollback_retries_original_pending_sync
+    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
+    *state.tiered_backend.lock() = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+    let staged = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root);
+    let pending = staged.state_block.pending_autoscale_lifecycle.clone().expect("exact staged receipt");
+    drop(staged);
+    let original_cold = exact_test_tree_fingerprint(&cold_root);
+    let request = replay_geometry_request(&state, &pending);
+    let update = &pending.catalog_update;
+    state.resume_lane_geometry_publication(&request, &update.replaced_lane_ids, &BTreeMap::new(), None, false)
+        .expect("apply original operation");
+    let rollback = || state.rollback_lane_geometry_updates(&update.previous_lane_config, &update.updated_lane_config,
+        &update.previous_lane_incarnations, &update.previous_lane_incarnation_activation_heights,
+        &update.previous_lane_incarnation_lineage, &update.replaced_lane_ids, pending.transition_height);
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    rollback().expect_err("rollback journal sync fails after original reverse moves");
+    {
+        let slot = state.geometry_publication.lock();
+        let retained = slot.as_ref().expect("reverse owner retained");
+        assert_eq!(retained.raw.as_ref().unwrap().phase(), crate::kura::RawGeometryPhase::RollingBack);
+        assert!(retained.raw.as_ref().unwrap().has_pending_journal_write());
+        assert!(retained.tiered.as_ref().unwrap().is_rolled_back());
     }
+    rollback().expect("resume pending reverse journal with same owner");
+    assert!(state.geometry_publication.lock().is_none());
+    assert_eq!(exact_test_tree_fingerprint(&cold_root), original_cold);
 }
 struct AutoscaleScaleInCommitRevalidationStage<'state> {
     state_block: StateBlock<'state>,
@@ -12002,12 +12004,12 @@ fn assert_autoscale_rejects_canonical_catalog_tamper(case: CommittedAutoscaleDri
         }
         _ => panic!("canonical catalog tamper requires a catalog case"),
     }
-    assert_eq!(
+    assert!(matches!(
         state_block
             .commit()
             .expect_err("unowned catalog changes must reject before storage"),
-        TransactionsBlockError::AutoscaleLaneLifecycle,
-    );
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    ));
     assert_eq!(state.canonical_runtime.view().get(), &retained);
     let nexus = state.nexus_snapshot();
     assert_lane_ids!(nexus, vec![LaneId::SINGLE]);
@@ -12212,10 +12214,10 @@ fn assert_autoscale_scale_out_preflight_failure_is_atomic(
         .expect("seed autoscale storage conflict");
 
     let_row! { error = state_block .commit() .expect_err("autoscale storage preflight failure must abort state commit") };
-    assert!(matches!(
-        error,
-        TransactionsBlockError::AutoscaleLaneLifecycle
-    ));
+    assert!(
+        matches!(error, TransactionsBlockError::LocalLaneGeometry(_)),
+        "local geometry storage refusal must retain its cause: {error:?}"
+    );
     let nexus = state.nexus_snapshot();
     assert_lane_ids!(nexus, vec![LaneId::SINGLE]);
     assert_eq!(nexus.autoscale.last_transition_height, 0);
@@ -12300,11 +12302,6 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetiremen
             "autoscale-scale-in-tiered-preflight-failure-pin",
         ),
     };
-    if let Some(parent) = conflict_path.parent() {
-        std::fs::create_dir_all(parent).expect("create retired storage parent");
-    }
-    std::fs::write(&conflict_path, b"autoscale retirement blocker")
-        .expect("seed invalid retained-instance marker or tiered retirement target");
     let_row! { cleanup_fixture = seed_lane_scoped_cleanup_fixture_for_lifecycle_test( &state, retired_lane_id, cleanup_tag, epoch, ) };
     let retired_status_bonded = Quantity::from(bonded);
     record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
@@ -12326,11 +12323,19 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetiremen
         &cleanup_fixture,
         "autoscale retire preflight failure",
     );
+    // Admit retirement against the original intact storage, then exercise the
+    // commit boundary's refusal if that storage changes before publication.
+    // Corruption during admission correctly prevents staging the transition.
+    if let Some(parent) = conflict_path.parent() {
+        std::fs::create_dir_all(parent).expect("create retired storage parent");
+    }
+    std::fs::write(&conflict_path, b"autoscale retirement blocker")
+        .expect("seed invalid retained-instance marker or tiered retirement target");
     let_row! { error = commit_state_block_with_empty_autoscale_queue(state_block) .expect_err("autoscale retire preflight failure must abort state commit") };
-    assert!(matches!(
-        error,
-        TransactionsBlockError::AutoscaleLaneLifecycle
-    ));
+    assert!(
+        matches!(error, TransactionsBlockError::LocalLaneGeometry(_)),
+        "local retirement storage refusal must retain its cause: {error:?}"
+    );
     let nexus = state.nexus_snapshot();
     assert_lane_ids!(nexus, vec![LaneId::SINGLE, retired_lane_id]);
     assert_eq!(nexus.autoscale.last_transition_height, 1);
@@ -12361,6 +12366,72 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetiremen
 }
 state_test! { sync autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state assert_autoscale_scale_in_preflight_failure_is_atomic(LaneRetirementStorageConflict::Kura); }
 state_test! { sync autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state assert_autoscale_scale_in_preflight_failure_is_atomic(LaneRetirementStorageConflict::Tiered); }
+#[test]
+fn autoscale_local_observation_retry_retains_sample_and_requires_complete_evaluation() {
+    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    let lane = LaneId::new(1);
+    state
+        .set_nexus(autoscale_transition_test_nexus(
+            vec![LaneConfig::default()],
+            1,
+            2,
+            200,
+        ))
+        .expect("configure autoscale");
+    let elastic = autoscale_elastic_lane_config(lane, DataSpaceId::UNIVERSAL, 1);
+    seed_elastic_lane!(state, elastic);
+    install_certified_autoscale_drain_for_test(&state, lane);
+    let close = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+    let carrier = autoscale_signed_block_with_committed_fragments(Some(&close), 200, 0);
+    commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &close);
+    commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &carrier);
+    let retirement = autoscale_signed_block_with_committed_fragments(Some(&carrier), 300, 0);
+    let marker = state
+        .lane_storage_identity(lane)
+        .expect("exact retiring lane")
+        .blocks_dir(&store_root)
+        .join(".lane-incarnation.norito");
+    let original = std::fs::read(&marker).expect("capture original marker");
+    std::fs::write(&marker, b"unreadable retirement evidence").unwrap();
+    let mut staged = state.block(retirement.header());
+    let first = staged.evaluate_nexus_autoscale(&retirement, 0).unwrap_err();
+    assert!(
+        matches!(first, LaneLifecycleError::DrainObservation(_)),
+        "{first:?}"
+    );
+    let sample = staged.autoscale_sample_history.clone();
+    assert_eq!(staged.autoscale_evaluated_committed_fragment_count, Some(0));
+    assert!(!staged.autoscale_lifecycle_evaluated);
+    assert!(staged.pending_autoscale_lifecycle.is_none());
+    assert!(matches!(
+        staged.evaluate_nexus_autoscale(&retirement, 0),
+        Err(LaneLifecycleError::DrainObservation(_))
+    ));
+    assert_eq!(staged.autoscale_sample_history, sample);
+    assert!(matches!(
+        staged.evaluate_nexus_autoscale(&retirement, 1),
+        Err(LaneLifecycleError::RuntimeCatalog(_))
+    ));
+    assert!(!staged.autoscale_lifecycle_evaluated);
+    assert_eq!(staged.autoscale_sample_history, sample);
+    std::fs::write(&marker, original).expect("restore authenticated original evidence");
+    staged
+        .evaluate_nexus_autoscale(&retirement, 0)
+        .expect("resume original evaluation");
+    assert!(staged.autoscale_lifecycle_evaluated);
+    assert!(staged.pending_autoscale_lifecycle.is_some());
+    assert_eq!(staged.autoscale_sample_history, sample);
+    let lifecycle_height = staged.nexus.autoscale.last_transition_height;
+    staged
+        .evaluate_nexus_autoscale(&retirement, 0)
+        .expect("completed same-input retry");
+    assert_eq!(staged.autoscale_sample_history, sample);
+    assert_eq!(
+        staged.nexus.autoscale.last_transition_height,
+        lifecycle_height
+    );
+    assert_eq!(state.committed_height(), 2);
+}
 #[derive(Clone, Copy, Debug)]
 enum AutoscaleNoopReason {
     AutoscaleDisabled,
@@ -13927,12 +13998,12 @@ state_test! { sync autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fe
             .map(|pending| &pending.transition),
         Some(PendingAutoscaleTransition::ScaleIn { lane, .. }) if *lane == retired_lane_id
     ));
-    assert_eq!(
+    assert!(matches!(
         state_block
             .commit()
             .expect_err("live scale-in without a final Queue veto must fail closed"),
         TransactionsBlockError::AutoscaleLaneLifecycle
-    );
+    ));
     let mut state_block = state.block(retirement.header());
     insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
     let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
@@ -13947,7 +14018,10 @@ state_test! { sync autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fe
     let_row! { mut queue_veto = |lane_id, dataspace_id, lane_incarnation| { assert!( state.lane_lifecycle_lock.try_lock().is_none(), "the final Queue veto must execute inside the lifecycle commit fence" ); observed_binding = Some((lane_id, dataspace_id, lane_incarnation)); Err("injected exact local Queue owner".to_owned()) } };
     let_row! { error = state_block .commit_with_autoscale_retirement_queue_veto(&mut queue_veto) .expect_err("an exact local Queue owner must veto final scale-in publication") };
     drop(queue_veto);
-    assert_eq!(error, TransactionsBlockError::AutoscaleLaneLifecycle);
+    assert!(matches!(
+        error,
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    ));
     assert_eq!(
         observed_binding,
         Some((
@@ -14555,7 +14629,7 @@ state_test! { sync certified_autoscale_scale_in_rechecks_late_authenticated_unme
             retired_lane_id,
             DataSpaceId::UNIVERSAL,
             late_relay.lane_incarnation,
-        ),
+        ).expect("observe exact lane drain evidence"),
         "authenticated pre-close relay must remain a drain blocker after the close height"
     );
     let_row! { error = commit_state_block_with_empty_autoscale_queue(state_block) .expect_err("late authenticated unmerged work must veto retirement") };
@@ -15365,7 +15439,10 @@ state_test! { sync autoscale_commit_rejects_live_validator_staged_after_lifecycl
     let error = state_block
         .commit_with_autoscale_retirement_queue_veto(&mut queue_veto)
         .expect_err("final active validator state must veto autoscale scale-in");
-    assert_eq!(error, TransactionsBlockError::AutoscaleLaneLifecycle);
+    assert!(matches!(
+        error,
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    ));
     assert!(
         !queue_veto_called,
         "final staking revalidation must run before the Queue retirement veto"
@@ -19687,7 +19764,7 @@ state_test! { sync apply_lane_lifecycle_kura_preflight_failure_does_not_create_t
     std::fs::write(&conflicting_blocks_dir, b"blocker file").expect("seed conflicting Kura file");
     let added_snapshot_dir = cold_root.join("lanes").join(&added_entry.kura_segment);
     let_row! { err = state .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![added_lane], retire: Vec::new(), }) .expect_err("Kura preflight should fail before tiered geometry changes") };
-    assert!(matches!(err, LaneLifecycleError::Storage(_)));
+    assert!(matches!(err, LaneLifecycleError::GeometryStorage(_)));
     assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
     assert!(
         !added_snapshot_dir.exists(),
@@ -22132,11 +22209,9 @@ state_test! { sync set_tiered_backend_restores_scale_out_lane_geometry_from_effe
     let mut state = blank_test_state();
     let_row! { expanded_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "restored-scale-out".to_owned(), ..LaneConfig::default() }, ], ) .expect("expanded lane catalog") };
     let expanded_config = RuntimeLaneConfig::from_catalog(&expanded_catalog);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.lane_catalog = expanded_catalog;
-        nexus.lane_config = expanded_config.clone();
-    }
+    let mut expanded_nexus = state.nexus_snapshot();
+    expanded_nexus.lane_catalog = expanded_catalog;
+    install_existing_nexus_geometry_for_test(&state, expanded_nexus);
     state
         .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
         .expect("restore tiered geometry for expanded Nexus");
@@ -31042,20 +31117,22 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
     assert_eq!(stored_bundle.commitments, vec![record]);
 }
 state_test! { sync block_and_revert_requires_fresh_da_shard_cursor
-    let (mut state, kura) = blank_test_state_with_kura();
     let lane0 = LaneConfig::default();
     let_row! { lane1 = LaneConfig { id: LaneId::new(1), alias: "secondary".to_owned(), ..LaneConfig::default() } };
     let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let dataspace_catalog = dataspace_catalog_for_lane_catalog(&catalog);
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
+    let state = State::new_with_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus {
             lane_catalog: catalog,
             lane_config: lane_config.clone(),
             dataspace_catalog,
             ..Default::default()
-        })
-        .expect("apply Nexus catalog for block-and-revert test");
+        },
+        LiveQueryStore::start_test(),
+    );
+    let kura = Arc::clone(&state.kura);
     let keypair = crate::state::checked_keypair();
     let_row! { make_record = |lane_id: LaneId, sequence: u64| { let lane_byte = u8::try_from(lane_id.as_u32()).unwrap_or(0x7F); let sequence_byte = u8::try_from(sequence).unwrap_or(0x7F); let tag = lane_byte .wrapping_mul(17) .wrapping_add(sequence_byte) .max(1); DaCommitmentRecord::new( lane_id, 1, sequence, BlobDigest::new([0xA0 ^ tag; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB0 ^ tag; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC0 ^ tag; 32]), None, RetentionClass::default(), StorageTicketId::new([0xD0 ^ tag; 32]), checked_da_ack_signature(0xE0 ^ tag), ) } };
     let first_bundle = DaCommitmentBundle::new(vec![make_record(LaneId::new(0), 1)]);
@@ -31147,10 +31224,35 @@ state_test! { sync apply_without_execution_persists_da_shard_cursor_journal_in_b
     let bundle = DaCommitmentBundle::new(vec![record.clone()]);
     let keypair = crate::state::checked_keypair();
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
-    let signed: SignedBlock = block.into();
+    let mut signed: SignedBlock = block.into();
+    // This component fixture starts at Apply's result-bearing input boundary.
+    // It tests DA materialization, not genesis admission or source execution.
+    let hashes: Vec<_> = signed.network_input_hashes().collect();
+    let outputs = crate::execution_output_test_support::structural_network_outputs(
+        &signed,
+        &hashes,
+        hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+            .collect(),
+    );
+    let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+    signed
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("result-bearing DA materialization fixture");
     let mut state_block = state.block(signed.header());
-    let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = ValidBlock::new_unverified_for_tests(signed)
+        .commit_unchecked()
+        .unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit state block");
     let path = state.da_shard_cursor_journal_path();
@@ -31260,7 +31362,7 @@ state_test! { sync missing_insert_block_rejects_world_only_commit
         AccountValue::new(iroha_data_model::account::AccountDetails::default()),
     );
     let_row! { error = state_block .commit() .expect_err("world-only state commit must require canonical transaction membership") };
-    assert_eq!(error, TransactionsBlockError::MissingInsertBlock);
+    assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
     assert!(
         state.view().world().accounts().get(&account_id).is_none(),
         "a missing canonical transaction block must not persist WSV mutations"
@@ -31305,7 +31407,7 @@ state_test! { sync explicit_world_overlay_fixture_rejects_block_runtime_sidecars
         .get_mut()
         .push(PeerId::from(crate::state::checked_keypair().public_key().clone()));
     let_row! { error = state_block .commit_world_overlay_for_testing() .expect_err("world-only fixture must reject canonical block sidecars") };
-    assert_eq!(error, TransactionsBlockError::MergeAdmission);
+    assert!(matches!(error, TransactionsBlockError::MergeAdmission));
     assert!(state.commit_topology.view().is_empty());
     assert_eq!(state.transactions.view().latest_height_for_tests(), 0);
 }
@@ -31804,7 +31906,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
         "lane cursor should be cleared after reshard"
     );
 }
-state_test! { sync apply_without_execution_records_da_cursor_errors_without_panic
+state_test! { sync apply_without_execution_retains_filtered_da_bundle_without_unknown_lane_cursor
     let (mut state, _kura) = blank_test_state_with_kura();
     let lane_count = nonzero!(1_u32);
     let catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
@@ -31819,17 +31921,42 @@ state_test! { sync apply_without_execution_records_da_cursor_errors_without_pani
     let_row! { record = DaCommitmentRecord::new( LaneId::new(9), 1, 1, BlobDigest::new([0xA1; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xC3; 32]), None, RetentionClass::default(), StorageTicketId::new([0xE5; 32]), checked_da_ack_signature(0xF6), ) };
     let bundle = DaCommitmentBundle::new(vec![record]);
     let keypair = crate::state::checked_keypair();
-    let_row! { block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
+    let_row! { mut block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
+    // Production validation rejects this unknown lane before Apply. This explicit
+    // component fixture tests only bundle retention and cursor-error containment.
+    let hashes: Vec<_> = block.network_input_hashes().collect();
+    let outputs = crate::execution_output_test_support::structural_network_outputs(
+        &block,
+        &hashes,
+        hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+            .collect(),
+    );
+    let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("result-bearing DA cursor-error fixture");
     let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let committed = ValidBlock::new_unverified_for_tests(block)
+        .commit_unchecked()
+        .unpack(|_| {});
     let _events = state_block.apply_without_execution(&committed, Vec::new());
     state_block
         .commit()
-        .expect("commit block with DA cursor advance warning");
+        .expect("commit fixture with filtered unknown-lane DA record");
     assert!(
         state.da_commitments.read().bundle_at(1).is_some(),
-        "apply should retain the DA commitment bundle even when cursor advance fails"
+        "apply should retain the original bundle when an inactive lane is excluded from cursor materialization"
     );
     assert!(
         state
@@ -31837,7 +31964,7 @@ state_test! { sync apply_without_execution_records_da_cursor_errors_without_pani
             .read()
             .get(9, LaneId::new(9))
             .is_none(),
-        "unknown-lane cursor advance failure must not create a cursor"
+        "filtered unknown-lane record must not create a cursor"
     );
 }
 #[cfg(feature = "telemetry")]

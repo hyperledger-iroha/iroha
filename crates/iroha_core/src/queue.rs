@@ -3991,6 +3991,10 @@ pub struct Queue {
     /// A waiting reservation operation therefore cannot hold `push_remove_lock` while another
     /// operation is completing a storage barrier.
     lane_reservation_transition_lock: PublicationMutex,
+    /// Exact pending lane-retirement conditions awaiting queue ownership release.
+    /// Same-scope observers share a source until the protected condition clears.
+    lane_retirement_releases:
+        parking_lot::Mutex<BTreeMap<(LaneId, DataSpaceId, Hash), mv::ReleaseNotification>>,
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
@@ -4097,6 +4101,16 @@ pub(crate) struct QueueLaneRetirementObserver<'queue> {
     queue: &'queue Queue,
     _reservation_transition_guard: PublicationGuard<'queue>,
 }
+/// Permanent refusal of a queue lane-retirement observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub(crate) enum QueueLaneRetirementUnavailable {
+    /// A zero incarnation cannot identify an actual lane owner.
+    #[error("lane retirement requires a nonzero incarnation")]
+    InvalidIncarnation,
+    /// Queue ownership is ambiguous and requires restart recovery.
+    #[error("lane retirement queue ownership requires durability recovery")]
+    DurabilityFault,
+}
 impl<'queue> QueueLaneRetirementObserver<'queue> {
     /// Distinguish recovery-required durability faults from ordinary pending work.
     ///
@@ -4105,6 +4119,25 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
     #[must_use]
     pub(crate) fn durability_faulted(&self) -> bool {
         self.queue.transaction_selection_durability_faulted()
+    }
+
+    /// Observe pending retirement work during synchronous State publication.
+    /// The transition fence already precedes State's lifecycle fence; acquire
+    /// and release only the inner Queue owners inside the publication callback.
+    pub(crate) fn lane_pending_work_release(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+        let _mutation = self.queue.push_remove_lock.lock();
+        let reservations = self.queue.lane_reservations.lock();
+        self.queue.lane_pending_work_release_locked(
+            &reservations,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
     }
 
     /// Retain the original mutation and reservation owners without blocking.
@@ -4182,6 +4215,22 @@ pub(crate) struct QueueLaneRetirementCut<'queue> {
 }
 
 impl QueueLaneRetirementCut<'_> {
+    /// Register the exact pending condition without reacquiring retained Queue owners.
+    /// A wake grants no authority: callers reacquire the cut and recheck the predicate.
+    pub(crate) fn lane_pending_work_release(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+        self.observer.queue.lane_pending_work_release_locked(
+            &self.reservations,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+
     /// Check exact current ownership while enqueue, removal and reservation changes are fenced.
     #[must_use]
     pub(crate) fn lane_has_pending_work(
@@ -5226,6 +5275,7 @@ impl Drop for TransactionGuard {
                         &self.tx,
                         &self.routing_plan,
                         telemetry_ref,
+                        None,
                     );
                     None
                 }
@@ -5251,6 +5301,9 @@ impl Drop for TransactionGuard {
         }
         self.queue
             .publish_backpressure_state(self.queue.active_len(), telemetry_ref);
+        if self.queue.transaction_selection_durability_faulted() {
+            self.queue.notify_lane_retirement_fault();
+        }
         self.queue.release_inflight_guard();
         self.released = true;
     }
@@ -5434,6 +5487,7 @@ impl Queue {
                 "pending Kagemusha V1 operation index lost exact Queue ownership; disabled admission and transaction selection until restart recovery"
             );
         }
+        self.notify_lane_retirement_fault();
     }
 
     /// Remove an operation claim with its transaction while holding `push_remove_lock`.
@@ -5910,6 +5964,7 @@ impl Queue {
         self.apply_durable_fifo_order_reconciliation_locked(fifo_plan);
         self.remove_hashes_from_fifo_locked(&hashes);
         *store = candidate_store;
+        self.notify_lane_retirement_releases_locked(&store);
         // Even an empty owner replay must remain closed until the exact
         // QueuePlan replay and State/Kura lifecycle cut are reconciled. Opening
         // here would let ingress change live claims beneath the startup receipt.
@@ -6444,6 +6499,7 @@ impl Queue {
                     if let Err(reason) = self.restore_popped_hash_locked(*selected_hash) {
                         self.accepted_work_validation_fault
                             .store(true, Ordering::Release);
+                        self.notify_lane_retirement_fault();
                         iroha_logger::error!(
                             tx = %selected_hash,
                             %reason,
@@ -6493,6 +6549,7 @@ impl Queue {
                 if let Err(reason) = self.restore_popped_hash_locked(*hash) {
                     self.accepted_work_validation_fault
                         .store(true, Ordering::Release);
+                    self.notify_lane_retirement_fault();
                     iroha_logger::error!(
                         tx = %hash,
                         %reason,
@@ -8846,7 +8903,7 @@ impl Queue {
         debug_assert_eq!(removed_fifo, hashes.len());
         for (hash, tx, plan) in &rows {
             self.durable_plan_claims.remove(hash);
-            self.remove_transaction_locked(tx, plan, None);
+            self.remove_transaction_locked(tx, plan, None, None);
             self.removed_hashes.remove(hash);
         }
         {
@@ -9412,7 +9469,7 @@ impl Queue {
             }
             self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
             if let Some((tx, plan)) = queued_owner {
-                self.remove_transaction_locked(&tx, &plan, None);
+                self.remove_transaction_locked(&tx, &plan, None, Some(&store));
             }
             // Payload-less startup owners still carry the FIFO identity
             // reconstructed from their reservation journal. The canonical
@@ -10363,6 +10420,99 @@ impl Queue {
                 })
         })
     }
+    /// Register before checking while the caller retains mutation and reservation guards.
+    /// Both synchronous observers and nonblocking cuts use the same scoped condition.
+    fn lane_pending_work_release_locked(
+        &self,
+        reservations: &LaneQueueReservationStore,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+        if hash_is_zero(lane_incarnation) {
+            return Err(QueueLaneRetirementUnavailable::InvalidIncarnation);
+        }
+        let scope = (lane_id, dataspace_id, lane_incarnation);
+        let wait = self
+            .lane_retirement_releases
+            .lock()
+            .entry(scope)
+            .or_default()
+            .observe();
+        let result = if self.transaction_selection_durability_faulted() {
+            Err(QueueLaneRetirementUnavailable::DurabilityFault)
+        } else if Self::lane_retirement_reservation_snapshot(
+            reservations,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+        .is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))
+        {
+            Ok(Some(wait))
+        } else {
+            Ok(None)
+        };
+        if !matches!(&result, Ok(Some(_))) {
+            let source = self.lane_retirement_releases.lock().remove(&scope);
+            if let Some(source) = source {
+                drop(source.guard(scope));
+            }
+        }
+        result
+    }
+    /// Retire only conditions actually cleared by this queue ownership publication.
+    /// The caller retains the queue and reservation-store fences; unrelated changes
+    /// leave every still-blocked scope and its observation untouched.
+    fn notify_lane_retirement_releases_locked(&self, reservations: &LaneQueueReservationStore) {
+        // Registration also owns the queue fence, so no observer can join while these
+        // sources are checked. Do not hold their registry while reading DashMap shards:
+        // a shard reader may concurrently publish a permanent queue fault.
+        let mut releases = core::mem::take(&mut *self.lane_retirement_releases.lock());
+        let mut retired = false;
+        releases.retain(|scope, source| {
+            let pending = !self.transaction_selection_durability_faulted()
+                && Self::lane_retirement_reservation_snapshot(
+                    reservations,
+                    scope.0,
+                    scope.1,
+                    scope.2,
+                )
+                .is_none_or(|owned| self.lane_has_pending_route_work(&owned, scope.0, scope.1));
+            if !pending {
+                drop(source.guard(*scope));
+                retired = true;
+            }
+            pending
+        });
+        {
+            let mut registry = self.lane_retirement_releases.lock();
+            // A fault published while the registry was detached must still retire every
+            // retained source. A later fault takes this same registry lock after us.
+            if !self.transaction_selection_durability_faulted() {
+                registry.append(&mut releases);
+            }
+        }
+        for (scope, source) in releases {
+            drop(source.guard(scope));
+            retired = true;
+        }
+        if retired {
+            self.wake_sumeragi();
+        }
+    }
+    /// A permanent ownership fault wakes retained observers to quarantine their
+    /// original work instead of waiting for a condition that cannot clear.
+    fn notify_lane_retirement_fault(&self) {
+        let releases = core::mem::take(&mut *self.lane_retirement_releases.lock());
+        if releases.is_empty() {
+            return;
+        }
+        for (scope, source) in releases {
+            drop(source.guard(scope));
+        }
+        self.wake_sumeragi();
+    }
     /// Return whether crash-safe lane reservation ownership is available on this queue.
     #[must_use]
     pub fn lane_reservation_journal_installed(&self) -> bool {
@@ -11274,6 +11424,7 @@ impl Queue {
         }
         self.publish_backpressure_state(self.active_len(), telemetry);
         status::set_tx_queue_pressure(self.pressure_snapshot());
+        self.notify_lane_retirement_fault();
     }
     #[cfg(test)]
     fn wait_for_durability_observer_lock_handoff_for_test(&self) {
@@ -11307,6 +11458,7 @@ impl Queue {
         }
         self.publish_backpressure_state(self.active_len(), telemetry);
         status::set_tx_queue_pressure(self.pressure_snapshot());
+        self.notify_lane_retirement_fault();
     }
     /// Latch an ambiguous reservation-journal boundary while its writer is locked.
     ///
@@ -11329,6 +11481,7 @@ impl Queue {
                 "lane queue reservation durability became ambiguous; disabling all transaction selection until restart recovery"
             );
         }
+        self.notify_lane_retirement_fault();
         true
     }
     /// Fail closed after a queue-plan tombstone has made reservation reconciliation irreversible
@@ -11346,6 +11499,7 @@ impl Queue {
                 "lane queue reservation reconciliation failed after durable plan consumption; disabling all transaction selection until restart recovery"
             );
         }
+        self.notify_lane_retirement_fault();
         true
     }
     /// Fail closed when an already durable reservation release cannot be published against the
@@ -11364,6 +11518,7 @@ impl Queue {
                 "lane queue reservation publication failed after a durable journal transition; disabling all transaction selection until restart recovery"
             );
         }
+        self.notify_lane_retirement_fault();
     }
     /// Execute one blocking reservation-journal transition without queue or owner-index locks.
     ///
@@ -11442,6 +11597,7 @@ impl Queue {
         store.missing_payload_hashes = missing_payload_hashes;
         self.missing_reservation_payload_count
             .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
+        self.notify_lane_retirement_releases_locked(store);
     }
     /// Publish a reservation durability fault after every reservation-store guard is released.
     fn publish_latched_lane_reservation_durability_fault(
@@ -12738,7 +12894,7 @@ impl Queue {
         }
         self.durable_plan_claims.remove(&hash);
         self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
-        self.remove_transaction_locked(transaction, routing_plan, None);
+        self.remove_transaction_locked(transaction, routing_plan, None, None);
         // FIFO filtering above is synchronous, so no stale hash remains for
         // `pop_from_queue` to skip. Retry rejection is authoritative in the
         // globally committed admission registry and the durable plan-journal
@@ -13990,6 +14146,7 @@ impl Queue {
                 durability_transitions: parking_lot::Mutex::new(HashSet::new()),
                 durability_transition_done: parking_lot::Condvar::new(),
                 lane_reservation_transition_lock: PublicationMutex::default(),
+                lane_retirement_releases: parking_lot::Mutex::new(BTreeMap::new()),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
@@ -14076,7 +14233,7 @@ impl Queue {
         }
         std::task::Waker::from(Arc::new(QueueWake(Arc::downgrade(self))))
     }
-    fn wake_sumeragi(&self) {
+    pub(crate) fn wake_sumeragi(&self) {
         if let Some(wake) = self.sumeragi_wake.get() {
             let _ = wake.try_send(());
         }
@@ -15417,6 +15574,7 @@ impl Queue {
             .remove(&hash)
             .map(|(_, claim)| claim.routing_plan);
         if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+            self.notify_lane_retirement_releases_locked(&self.lane_reservations.lock());
             let journal_removal =
                 indexed_removal.filter(|(_, plan_digest, _)| *plan_digest == plan.digest());
             return (Some(plan.coordinator_route()), Some(plan), journal_removal);
@@ -16636,6 +16794,7 @@ impl Queue {
                     let reason = "durable claim ownership changed during its journal rollover";
                     self.accepted_work_validation_fault
                         .store(true, Ordering::Release);
+                    self.notify_lane_retirement_fault();
                     return Err(Failure {
                         tx: tx.into(),
                         err: Error::PlanJournalDurabilityIndeterminate {
@@ -17653,6 +17812,7 @@ impl Queue {
                         self.fee_admission_reservations.lock().release(&hash);
                     }
                     self.routing_plans.remove(&hash);
+                    self.notify_lane_retirement_releases_locked(&self.lane_reservations.lock());
                     self.remove_tx_encoded_len(&hash);
                     self.tx_gas_cost.remove(&hash);
                     self.tx_enqueued_at_ms.remove(&hash);
@@ -17704,6 +17864,7 @@ impl Queue {
             if !restored_reservation && let Err(reason) = self.restore_popped_hash_locked(hash) {
                 self.accepted_work_validation_fault
                     .store(true, Ordering::Release);
+                self.notify_lane_retirement_fault();
                 failure = Some(Failure {
                     tx: Box::new(tx_arc.as_accepted().clone()),
                     err: Error::PlanJournalDurabilityIndeterminate {
@@ -20222,6 +20383,7 @@ impl Queue {
         }
         self.publish_backpressure_state(self.active_len(), telemetry);
         status::set_tx_queue_pressure(self.pressure_snapshot());
+        self.notify_lane_retirement_fault();
     }
     #[cfg(test)]
     fn push_queued_hash(&self, hash: EntrypointHash, enqueued_at_ms: u64) -> bool {
@@ -20629,6 +20791,7 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         _routing_plan: &RoutingPlan,
         telemetry: Option<&StateTelemetry>,
+        reservations: Option<&LaneQueueReservationStore>,
     ) {
         let hash = tx.hash_as_entrypoint();
         if self.txs.remove(&hash).is_some() {
@@ -20653,6 +20816,11 @@ impl Queue {
         self.removed_hashes.remove(&hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_dequeue(&hash, telemetry);
+        if let Some(reservations) = reservations {
+            self.notify_lane_retirement_releases_locked(reservations);
+        } else {
+            self.notify_lane_retirement_releases_locked(&self.lane_reservations.lock());
+        }
     }
     /// Release a group of popped transaction guards under a single queue lock.
     #[cfg(test)]
@@ -20691,7 +20859,12 @@ impl Queue {
                 let guard_telemetry = guard.telemetry.as_ref();
                 #[cfg(not(feature = "telemetry"))]
                 let guard_telemetry: Option<&StateTelemetry> = None;
-                self.remove_transaction_locked(&guard.tx, &guard.routing_plan, guard_telemetry);
+                self.remove_transaction_locked(
+                    &guard.tx,
+                    &guard.routing_plan,
+                    guard_telemetry,
+                    None,
+                );
                 self.release_inflight_guard();
                 guard.released = true;
             }
@@ -20932,6 +21105,7 @@ impl Queue {
                                 &guard.tx,
                                 &guard.routing_plan,
                                 guard_telemetry,
+                                None,
                             );
                         }
                         if let Some(removal) =
@@ -20962,6 +21136,7 @@ impl Queue {
                                 &guard.tx,
                                 &guard.routing_plan,
                                 guard_telemetry,
+                                None,
                             );
                         }
                         if let Some(removal) =

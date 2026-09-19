@@ -114,3 +114,104 @@ impl<T> std::fmt::Debug for PublicationMutex<T> {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll, Wake, Waker},
+    };
+
+    #[test]
+    fn typed_guard_notifies_after_unlock_and_preserves_value() {
+        struct AcquireOnWake {
+            original: Arc<PublicationMutex<Vec<u8>>>,
+            observed: AtomicBool,
+        }
+        impl Wake for AcquireOnWake {
+            fn wake(self: Arc<Self>) {
+                let value = self
+                    .original
+                    .try_lock()
+                    .expect("wake follows physical unlock");
+                assert_eq!(&*value, &[1, 2]);
+                self.observed.store(true, Ordering::SeqCst);
+            }
+        }
+        let original = Arc::new(PublicationMutex::new(vec![1_u8]));
+        let mut held = original.lock();
+        held.push(2);
+        let wait = match original.try_lock_or_wait() {
+            Err(wait) => wait,
+            Ok(_) => panic!("original backend is still held"),
+        };
+        let probe = Arc::new(AcquireOnWake {
+            original: Arc::clone(&original),
+            observed: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut context = Context::from_waker(&waker);
+        let mut pending = Box::pin(wait.wait_for_release());
+        assert!(pending.as_mut().poll(&mut context).is_pending());
+        let foreign = PublicationMutex::new(vec![8_u8]);
+        drop(foreign.lock());
+        assert!(!probe.observed.load(Ordering::SeqCst));
+        assert!(pending.as_mut().poll(&mut context).is_pending());
+        drop(held);
+        assert!(probe.observed.load(Ordering::SeqCst));
+        assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+    }
+
+    #[test]
+    fn typed_fair_unlock_and_release_before_poll_are_observable() {
+        let original = PublicationMutex::new(String::from("original"));
+        let mut held = original.lock();
+        held.push_str(" retained");
+        let wait = match original.try_lock_or_wait() {
+            Err(wait) => wait,
+            Ok(_) => panic!("original backend is still held"),
+        };
+        held.unlock_fair();
+        let mut pending = Box::pin(wait.wait_for_release());
+        assert_eq!(
+            pending
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(())
+        );
+        assert_eq!(&*original.lock(), "original retained");
+    }
+
+    #[test]
+    fn typed_unwind_releases_original_value_without_poisoning() {
+        let original = PublicationMutex::new(vec![1_u8]);
+        let mut wait = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut held = original.lock();
+            held.push(3);
+            wait = original.try_lock_or_wait().err();
+            panic!("exercise the real backend guard's unwind release");
+        }));
+        assert!(result.is_err());
+        let mut pending = Box::pin(
+            wait.expect("held original returns its wait")
+                .wait_for_release(),
+        );
+        assert_eq!(
+            pending
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(())
+        );
+        let value = original
+            .try_lock_or_wait()
+            .ok()
+            .expect("parking-lot is not poisoned");
+        assert_eq!(&*value, &[1, 3]);
+    }
+}

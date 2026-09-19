@@ -224,6 +224,14 @@ impl Kura {
 }
 
 impl ObservedHistoricalRecoveryEvidence<'_> {
+    /// Consume exact read evidence without declaring it durable or authorizing retirement.
+    pub(super) fn into_observed(
+        self,
+    ) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> {
+        self.ensure_unchanged()?;
+        Ok((self.records, self.encoded_bytes))
+    }
+
     /// Re-enumerate within the already admitted count/byte budget, including absence.
     fn ensure_unchanged(&self) -> Result<()> {
         let kura = self.kura;

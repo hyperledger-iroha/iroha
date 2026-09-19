@@ -1389,6 +1389,65 @@ macro_rules! strict_replay_test {
         }
     };
 }
+strict_replay_test!(
+    production_replay_retry_retains_the_original_complete_image,
+    {
+        let fixture = StrictReplayFixture::new();
+        let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
+        let before = StateFingerprint::capture(&replay_state);
+        let foreign_kura = fixture.exact_kura_copy();
+        super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+            .expect_err("fresh replay requires the original State storage instance");
+        assert!(replay_state.pending_replay_publication.is_none());
+        before.assert_unchanged(&replay_state);
+        super::REPLAY_PUBLICATION_PAUSE_PREPARATION.with(|pause| pause.set(true));
+        let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect_err("pause after actual complete-range prevalidation");
+        assert!(format!("{error:#}").contains("injected local replay preparation refusal"));
+        before.assert_unchanged(&replay_state);
+        let original_image = std::ptr::from_ref(
+            replay_state
+                .pending_replay_publication
+                .as_ref()
+                .expect("original batch retained")
+                .receipt
+                .as_ref()
+                .expect("unconsumed receipt")
+                .final_state
+                .as_ref(),
+        ) as usize;
+        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 2)
+            .expect_err("changed range cannot replace retained execution");
+        super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+            .expect_err("equal durable bytes on another Kura cannot replace original owner");
+        super::REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL.with(|pause| pause.set(true));
+        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect_err("second refusal retains same executed image");
+        assert_eq!(
+            std::ptr::from_ref(
+                replay_state
+                    .pending_replay_publication
+                    .as_ref()
+                    .unwrap()
+                    .receipt
+                    .as_ref()
+                    .unwrap()
+                    .final_state
+                    .as_ref()
+            ) as usize,
+            original_image
+        );
+        before.assert_unchanged(&replay_state);
+        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect("resume original receipt and install exactly once");
+        assert!(replay_state.pending_replay_publication.is_none());
+        assert_eq!(replay_state.committed_height(), 1);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
+            fixture.expected_snapshot
+        );
+    }
+);
 strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
     let fixture = StrictReplayFixture::new();
     let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));

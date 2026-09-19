@@ -3454,14 +3454,16 @@ def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
     # implementation in the same file to satisfy the binding.
     # Retained ownership types have lifetime-parameterized inherent impls.
     # Keep the self type exact: a similarly named owner or a trait argument
-    # mentioning Owner must not satisfy its method obligation. Nested generic
-    # syntax remains unsupported and fails closed instead of guessing an owner.
-    generic = r"(?:<[^<>{}\n]*>)?"
+    # mentioning Owner must not satisfy its method obligation. Rustfmt may wrap
+    # the parameters, self type and opening brace onto separate lines. Nested
+    # generic syntax remains unsupported and fails closed instead of guessing
+    # an owner.
+    generic = r"(?:<[^<>{}]*>)?"
     exact_owner = rf"{re.escape(owner)}{generic}"
     impl_re = re.compile(
-        rf"(?m)^[ \t]*impl{generic}[ \t]+(?:"
-        rf"{exact_owner}|[^{{\n]+[ \t]+for[ \t]+{exact_owner}"
-        rf")[ \t]*(?=\{{)"
+        rf"(?m)^[ \t]*impl{generic}\s+(?:"
+        rf"{exact_owner}|[^{{}};]+?\s+for\s+{exact_owner}"
+        rf")\s*(?=\{{)"
     )
     return tuple(
         item

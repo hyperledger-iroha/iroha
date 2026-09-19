@@ -91,10 +91,10 @@ fn prefix_capture_moves_original_sources_inventory_and_witness_without_publishin
         state: staged,
         prefix,
     } = prepared;
-    assert_eq!(
+    assert!(matches!(
         (*staged).commit().unwrap_err(),
         storage_transactions::TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
     // Even retaining every valid prefix owner separately never opens raw commit.
     assert_eq!(prefix.witness().writes.as_ptr(), writes);
     drop(prefix);
@@ -202,6 +202,11 @@ fn completed_tail_retains_prefix_under_whole_candidate_admission_and_static_hand
         prepared.state.world.musubi_resolver_index_checkpoints.len(),
         1
     );
+    prepared
+        .source_prefix
+        .sealed
+        .verify_wire_binding(prepared.block())
+        .expect("post-tail source authentication preserves the original World seal meaning");
     let mut calls = 0;
     let journals = prepared
         .prepare_journals(None, None, |inputs| {
@@ -280,10 +285,10 @@ fn transferred_prefix_keeps_both_transaction_apply_paths_closed() {
             Some(output_capacity::ExecutionOutputPlanState::Poisoned)
         ));
         assert_eq!(prepared.prefix.witness().writes.as_ptr(), writes);
-        assert_eq!(
+        assert!(matches!(
             (*prepared.state).commit().unwrap_err(),
             storage_transactions::TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
         drop(prepared.prefix);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),

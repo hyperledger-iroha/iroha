@@ -1,5 +1,540 @@
 // Admitted archive persistence controls; these lower-level fixtures confer no consensus finality.
 #[test]
+fn provider_candidate_reservation_freezes_exact_cut_without_holding_index() {
+    use std::{
+        future::Future as _,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let first = projection(7);
+    archive.insert(first.clone()).unwrap();
+    let successor = advance_projection(&first, 8);
+    let before_bytes = archive.read_index().unwrap().total_bytes;
+
+    let reader = archive.read_index().unwrap();
+    let wait = match archive.try_reserve_candidate(successor.key, &kura) {
+        Err(ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait }) => wait,
+        _ => panic!("preexecution reservation must not wait on a physical archive reader"),
+    };
+    archive.capture_gate.ensure_unreserved().unwrap();
+    let mut released = wait.wait_for_release();
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut released).poll(&mut context).is_pending());
+    drop(reader);
+    assert!(Pin::new(&mut released).poll(&mut context).is_ready());
+
+    let candidate = archive.try_reserve_candidate(successor.key, &kura).unwrap();
+    assert_eq!(candidate.key, successor.key);
+    assert!(Arc::ptr_eq(&candidate.kura, &kura));
+    let wait = archive.capture_gate.ensure_unreserved().unwrap_err();
+    assert!(matches!(
+        archive.try_reserve_candidate(successor.key, &kura),
+        Err(ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. })
+    ));
+    assert!(matches!(
+        archive.insert(successor),
+        Err(ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. })
+    ));
+    // Committed readers and their exact predecessor remain available.
+    let index = archive.read_index().unwrap();
+    assert_eq!(
+        reconstruct_projection(&index, &first.key, bounds()).unwrap(),
+        first
+    );
+    assert_eq!(index.generation, 1);
+    assert_eq!(index.total_bytes, before_bytes);
+    drop(index);
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 1);
+    assert!(!wait.is_released());
+    let candidate = match candidate.into_prepared() {
+        Err(original) => original,
+        Ok(_) => panic!("reservation alone cannot manufacture an admitted plan"),
+    };
+    assert!(!wait.is_released());
+    drop(candidate);
+    assert!(wait.is_released());
+    archive.capture_gate.ensure_unreserved().unwrap();
+}
+
+#[test]
+fn provider_candidate_reservation_rejects_fork_and_gap_before_claim() {
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let first = projection(7);
+    archive.insert(first.clone()).unwrap();
+    for altered_key in [
+        ProviderIngestFinalizedArchiveKeyV1 {
+            block_hash: [0xD1; 32],
+            ..first.key
+        },
+        ProviderIngestFinalizedArchiveKeyV1 {
+            finalized_at_unix_ms: first.key.finalized_at_unix_ms + 1,
+            ..first.key
+        },
+    ] {
+        assert!(matches!(
+            archive.try_reserve_candidate(altered_key, &kura),
+            Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork { height: 7, .. })
+        ));
+        archive.capture_gate.ensure_unreserved().unwrap();
+    }
+    assert!(matches!(
+        archive.try_reserve_candidate(key(9), &kura),
+        Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
+            missing_height: 8,
+            observed_height: 9,
+            ..
+        })
+    ));
+    archive.capture_gate.ensure_unreserved().unwrap();
+    // Exact replay and the sole successor both retain the real predecessor.
+    drop(archive.try_reserve_candidate(first.key, &kura).unwrap());
+    drop(archive.try_reserve_candidate(key(8), &kura).unwrap());
+    assert_eq!(archive.read_index().unwrap().generation, 1);
+}
+
+#[test]
+fn provider_candidate_plan_refusal_retains_original_projection_and_reservation() {
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let expected = projection(7);
+    let mut candidate = archive.try_reserve_candidate(expected.key, &kura).unwrap();
+    // This archive-local fixture supplies projection data only. Original State
+    // capture is exercised by the joint carrier tests; all admission, storage
+    // checks, predecessor custody and encoding below use the production path.
+    candidate.capture_attempted = true;
+    candidate.projection = Some(expected.clone());
+    let original_projection = candidate.projection.as_ref().unwrap().providers.as_ptr();
+    let reservation = archive.capture_gate.ensure_unreserved().unwrap_err();
+    let reader = archive.read_index().unwrap();
+    assert!(matches!(
+        candidate.try_prepare(),
+        Err(ProviderIngestFinalizedArchiveErrorV1::IndexBusy { .. })
+    ));
+    drop(reader);
+    assert!(candidate.plan.is_none());
+    let mut candidate = match candidate.into_prepared() {
+        Err(original) => original,
+        Ok(_) => panic!("refused preparation must return the original candidate owner"),
+    };
+    assert_eq!(
+        candidate.projection.as_ref().unwrap().providers.as_ptr(),
+        original_projection
+    );
+    assert!(!reservation.is_released());
+
+    let held_records = directory.path().join("original-records");
+    fs::rename(&archive.records, &held_records).unwrap();
+    fs::create_dir(&archive.records).unwrap();
+    assert!(candidate.try_prepare().is_err());
+    assert!(candidate.plan.is_none());
+    assert_eq!(candidate.projection.as_ref().unwrap(), &expected);
+    assert_eq!(
+        candidate.projection.as_ref().unwrap().providers.as_ptr(),
+        original_projection
+    );
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+    assert!(!reservation.is_released());
+    fs::remove_dir(&archive.records).unwrap();
+    fs::rename(&held_records, &archive.records).unwrap();
+
+    candidate.try_prepare().unwrap();
+    let original_bytes = candidate
+        .plan
+        .as_ref()
+        .unwrap()
+        .record
+        .as_ref()
+        .unwrap()
+        .bytes
+        .as_ptr();
+    candidate.try_prepare().unwrap();
+    assert_eq!(
+        candidate
+            .plan
+            .as_ref()
+            .unwrap()
+            .record
+            .as_ref()
+            .unwrap()
+            .bytes
+            .as_ptr(),
+        original_bytes
+    );
+    let mut prepared = match candidate.into_prepared() {
+        Ok(prepared) => prepared,
+        Err(_) => panic!("successful planning must hand off its original reservation"),
+    };
+    assert_eq!(
+        prepared
+            .insertion
+            .plan
+            .record
+            .as_ref()
+            .unwrap()
+            .bytes
+            .as_ptr(),
+        original_bytes
+    );
+    assert!(!reservation.is_released());
+    assert_eq!(archive.read_index().unwrap().generation, 0);
+    // Lower-level archive persistence does not confer consensus finality.
+    assert_eq!(
+        prepared.insertion.try_persist().unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert_eq!(
+        reconstruct_projection(&archive.read_index().unwrap(), &expected.key, bounds()).unwrap(),
+        expected
+    );
+    assert!(!reservation.is_released());
+    drop(prepared);
+    assert!(reservation.is_released());
+}
+
+#[test]
+fn provider_candidate_failed_original_capture_is_never_retried() {
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let state = Box::new(crate::state::State::new_for_testing(
+        crate::state::World::default(),
+        Arc::clone(&kura),
+        crate::query::store::LiveQueryStore::start_test(),
+    ));
+    let mut candidate = archive.try_reserve_candidate(key(1), &kura).unwrap();
+    let reservation = archive.capture_gate.ensure_unreserved().unwrap_err();
+    let view = state.view();
+    assert!(matches!(
+        candidate.capture_original(&view),
+        Err(ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { .. })
+    ));
+    assert!(candidate.capture_attempted);
+    assert!(candidate.projection.is_none());
+    assert!(matches!(
+        candidate.capture_original(&view),
+        Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+            reason: "candidate archive capture was already attempted",
+        })
+    ));
+    assert!(candidate.try_prepare().is_err());
+    assert!(!reservation.is_released());
+    assert_eq!(archive.read_index().unwrap().generation, 0);
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+    drop(candidate);
+    assert!(reservation.is_released());
+}
+
+#[test]
+fn provider_candidate_reservation_poison_is_storage_refusal_without_claim() {
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    let kura = Kura::blank_kura_for_testing();
+    assert!(
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _writer = archive.index.write().unwrap();
+            panic!("poison candidate archive index");
+        }))
+        .is_err()
+    );
+    assert!(matches!(
+        archive.try_reserve_candidate(key(1), &kura),
+        Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
+    ));
+    archive.capture_gate.ensure_unreserved().unwrap();
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+}
+
+fn provider_capture_with_durable_finality() -> (
+    tempfile::TempDir,
+    Arc<ProviderIngestFinalizedArchiveV1>,
+    PreparedProviderIngestCapture,
+    ProviderIngestFinalizedProjectionV1,
+    KuraV2CommitReceipt,
+) {
+    let (kura, block, finality, receipt) = crate::kura::tests::carrier_checkpoint_receipt_fixture();
+    let directory = physical_tempdir().unwrap();
+    let archive = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap(),
+    );
+    // This archive-local projection tests durable authentication and custody,
+    // not execution or permission to publish State.
+    let mut expected = projection(block.header().height().get());
+    expected.key = ProviderIngestFinalizedArchiveKeyV1::try_new(
+        finality.height_context.network_id,
+        block.header().height().get(),
+        *block.hash().as_ref(),
+        block.header().creation_time_ms,
+    )
+    .unwrap();
+    let capture = PreparedProviderIngestCapture {
+        insertion: archive.prepare_insert(expected.clone()).unwrap(),
+        kura: Arc::clone(&kura),
+    };
+    (directory, archive, capture, expected, receipt)
+}
+
+#[test]
+fn prepared_provider_capture_authenticates_under_held_kura_lease_and_retains_retry() {
+    let (_directory, archive, mut capture, expected, receipt) =
+        provider_capture_with_durable_finality();
+    let kura = Arc::clone(&capture.kura);
+    let record = capture.insertion.plan.record.as_ref().unwrap();
+    let path = record.entry.path.clone();
+    let bytes = record.bytes.clone();
+    let original_buffer = record.bytes.as_ptr();
+    let expected_total = record.total_bytes;
+    let wait = archive.capture_gate.ensure_unreserved().unwrap_err();
+    let foreign = Kura::blank_kura_for_testing();
+    let foreign_lease = foreign.try_publication_lease().unwrap();
+    assert!(matches!(
+        capture.publish_under_publication_lease(&foreign_lease, &receipt),
+        Err(ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { .. })
+    ));
+    drop(foreign_lease);
+    let lease = kura.try_publication_lease().unwrap();
+    assert!(kura.try_publication_lease().is_err());
+    let network = capture.insertion.plan.key.network_id;
+    capture.insertion.plan.key.network_id = test_network_id(0xFA);
+    assert!(matches!(
+        capture.publish_under_publication_lease(&lease, &receipt),
+        Err(ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { .. })
+    ));
+    capture.insertion.plan.key.network_id = network;
+    capture.insertion.plan.key.finalized_at_unix_ms += 1;
+    assert!(matches!(
+        capture.publish_under_publication_lease(&lease, &receipt),
+        Err(ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { .. })
+    ));
+    capture.insertion.plan.key.finalized_at_unix_ms -= 1;
+    capture
+        .reauthenticate_under_publication_lease(&lease, &receipt)
+        .unwrap();
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+    assert_eq!(archive.read_index().unwrap().generation, 0);
+    assert!(!wait.is_released());
+    fs::create_dir(&path).unwrap();
+    assert!(
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .is_err()
+    );
+    assert_eq!(archive.read_index().unwrap().generation, 0);
+    assert_eq!(archive.read_index().unwrap().total_bytes, 0);
+    assert_eq!(
+        capture
+            .insertion
+            .plan
+            .record
+            .as_ref()
+            .unwrap()
+            .bytes
+            .as_ptr(),
+        original_buffer
+    );
+    assert!(!wait.is_released());
+    fs::remove_dir(&path).unwrap();
+    assert_eq!(
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(archive.read_index().unwrap().total_bytes, expected_total);
+    assert_eq!(archive.read_index().unwrap().generation, 1);
+    assert_eq!(
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+    );
+    assert_eq!(archive.read_index().unwrap().generation, 1);
+    assert!(!wait.is_released());
+    drop(lease);
+    assert_eq!(
+        capture.publish(&receipt).unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+    );
+    drop(capture);
+    assert!(wait.is_released());
+    assert_eq!(
+        reconstruct_projection(&archive.read_index().unwrap(), &expected.key, bounds()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn prepared_provider_capture_index_busy_releases_kura_and_retries_original_owner() {
+    use std::{
+        future::Future as _,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+
+    let (_directory, archive, mut capture, expected, receipt) =
+        provider_capture_with_durable_finality();
+    let kura = Arc::clone(&capture.kura);
+    let original_buffer = capture
+        .insertion
+        .plan
+        .record
+        .as_ref()
+        .unwrap()
+        .bytes
+        .as_ptr();
+    let original_bytes = capture
+        .insertion
+        .plan
+        .record
+        .as_ref()
+        .unwrap()
+        .bytes
+        .clone();
+    let reservation = archive.capture_gate.ensure_unreserved().unwrap_err();
+    std::thread::scope(|scope| {
+        let (held, acquired) = std::sync::mpsc::channel();
+        let (progress, progressed) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let reader_archive = Arc::clone(&archive);
+        let reader_kura = Arc::clone(&kura);
+        let height = receipt.height();
+        let lease = kura.try_publication_lease().unwrap();
+        let reader = scope.spawn(move || {
+            let index = reader_archive.read_index().unwrap();
+            held.send(()).unwrap();
+            // This is the real index -> Kura edge in archive qualification.
+            reader_kura
+                .v2_finality_artifact_with_receipt(height)
+                .unwrap()
+                .unwrap();
+            progress.send(()).unwrap();
+            released.recv().unwrap();
+            drop(index);
+        });
+        acquired.recv().unwrap();
+        let wait = match capture.publish_under_publication_lease(&lease, &receipt) {
+            Err(ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait }) => wait,
+            other => panic!("held archive reader must return its actual release wait: {other:?}"),
+        };
+        assert_eq!(
+            capture
+                .insertion
+                .plan
+                .record
+                .as_ref()
+                .unwrap()
+                .bytes
+                .as_ptr(),
+            original_buffer
+        );
+        assert_eq!(
+            capture.insertion.plan.record.as_ref().unwrap().bytes,
+            original_bytes
+        );
+        assert!(!reservation.is_released());
+        assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+        // Release every outer fence before waiting for the blocked reader.
+        drop(lease);
+        progressed.recv().unwrap();
+        let mut wait = wait.wait_for_release();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+        release.send(()).unwrap();
+        reader.join().unwrap();
+        assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    });
+    assert!(!reservation.is_released());
+    assert_eq!(archive.read_index().unwrap().generation, 0);
+    assert_eq!(archive.read_index().unwrap().total_bytes, 0);
+    let lease = kura.try_publication_lease().unwrap();
+    assert_eq!(
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert_eq!(
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
+    );
+    assert_eq!(archive.read_index().unwrap().generation, 1);
+    drop(lease);
+    drop(capture);
+    assert!(reservation.is_released());
+    assert_eq!(
+        reconstruct_projection(&archive.read_index().unwrap(), &expected.key, bounds()).unwrap(),
+        expected,
+    );
+}
+
+#[test]
+fn prepared_provider_capture_index_poison_is_storage_failure_not_busy() {
+    let (_directory, archive, mut capture, _expected, receipt) =
+        provider_capture_with_durable_finality();
+    let kura = Arc::clone(&capture.kura);
+    let original_buffer = capture
+        .insertion
+        .plan
+        .record
+        .as_ref()
+        .unwrap()
+        .bytes
+        .as_ptr();
+    let reservation = archive.capture_gate.ensure_unreserved().unwrap_err();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _writer = archive.index.write().unwrap();
+            panic!("poison original archive index writer");
+        }))
+        .is_err()
+    );
+    let lease = kura.try_publication_lease().unwrap();
+    assert!(matches!(
+        capture.publish_under_publication_lease(&lease, &receipt),
+        Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
+    ));
+    assert!(matches!(
+        archive.read_index(),
+        Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
+    ));
+    assert_eq!(
+        capture
+            .insertion
+            .plan
+            .record
+            .as_ref()
+            .unwrap()
+            .bytes
+            .as_ptr(),
+        original_buffer
+    );
+    assert!(!reservation.is_released());
+    assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
+    drop(lease);
+    drop(capture);
+    assert!(reservation.is_released());
+}
+
+#[test]
 fn prepared_provider_capture_reserves_writer_and_drop_has_no_effects() {
     let directory = physical_tempdir().unwrap();
     let archive = Arc::new(

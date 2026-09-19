@@ -333,6 +333,47 @@ impl PreparedLifecycleValidateCompletionV1 {
         })
     }
 
+    /// Separate local waiting from semantic completion without replacing the row.
+    pub(in crate::sumeragi) fn into_local_or_publication(
+        self,
+    ) -> Result<Self, RetainedLocalLifecycleValidateV1> {
+        if matches!(
+            self.guarded.result(),
+            LifecycleValidateWorkerResultV1::Completed(_)
+        ) {
+            return Ok(self);
+        }
+        let Self {
+            guarded,
+            queue,
+            physical_completion,
+        } = self;
+        let (key, result, drop_guard) = (*guarded).into_parts();
+        let LifecycleValidateWorkerResultV1::Deferred { dispatch, refusal } = result else {
+            unreachable!("local branch retains the local dispatch")
+        };
+        let release = match &refusal {
+            super::v2_body_store::LocalValidationRefusal::PhysicalBusy(dependency) => {
+                Some(dependency.wait.clone().wait_for_release())
+            }
+            super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, .. } => {
+                Some(wait.clone().wait_for_release())
+            }
+            super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
+        };
+        Err(RetainedLocalLifecycleValidateV1 {
+            dispatch,
+            refusal,
+            release,
+            ack: LifecycleValidateCompletionAckV1 {
+                key,
+                queue,
+                drop_guard,
+                physical_completion,
+            },
+        })
+    }
+
     /// Split the executed dispatch from its still-armed queue/publication owner.
     pub(in crate::sumeragi) fn into_publication_parts(
         self,
@@ -346,8 +387,8 @@ impl PreparedLifecycleValidateCompletionV1 {
             physical_completion,
         } = self;
         let (key, result, drop_guard) = (*guarded).into_parts();
-        let LifecycleValidateWorkerResultV1::Executed(dispatch) = result else {
-            panic!("physical Validate wait cannot enter semantic publication");
+        let LifecycleValidateWorkerResultV1::Completed(dispatch) = result else {
+            panic!("local validation refusal cannot enter semantic publication")
         };
         (
             dispatch,
@@ -360,93 +401,6 @@ impl PreparedLifecycleValidateCompletionV1 {
         )
     }
 }
-/// Result of resuming the same physical Validate operation. The coordinator
-/// remains at its original external wait throughout physical contention.
-#[must_use = "a local Validate retry retains its original guarded request"]
-pub(in crate::sumeragi) enum LifecycleValidateLocalRetryV1 {
-    /// Deterministic execution completed and can enter semantic publication.
-    Executed(PreparedLifecycleValidateCompletionV1),
-    /// The actual dependency or worker capacity has not released yet.
-    Waiting(PreparedLifecycleValidateCompletionV1),
-    /// The original dispatch re-entered the same keyed worker queue.
-    Requeued,
-    /// Original worker ownership no longer matches; output must remain closed.
-    RestartRequired,
-}
-impl PreparedLifecycleValidateCompletionV1 {
-    /// Retry only after the original physical release, retaining both dispatch
-    /// and queue index until successful republication. No logical wake or new
-    /// lifecycle ordinal is minted by a physical retry.
-    pub(in crate::sumeragi) fn retry_local(mut self) -> LifecycleValidateLocalRetryV1 {
-        let Some(LifecycleValidateWorkerResultV1::LocalBusy {
-            dependency,
-            release,
-            ..
-        }) = self.guarded.result.as_mut()
-        else {
-            return LifecycleValidateLocalRetryV1::Executed(self);
-        };
-        if self.guarded.drop_guard.output_guard.restart_required() {
-            return LifecycleValidateLocalRetryV1::RestartRequired;
-        }
-        if let Some(future) = release.as_mut() {
-            let mut context = std::task::Context::from_waker(dependency.waker());
-            if std::future::Future::poll(std::pin::Pin::new(future), &mut context).is_pending() {
-                return LifecycleValidateLocalRetryV1::Waiting(self);
-            }
-            *release = None;
-        }
-        let Self {
-            guarded,
-            queue,
-            physical_completion,
-        } = self;
-        let (key, result, mut drop_guard) = (*guarded).into_parts();
-        let LifecycleValidateWorkerResultV1::LocalBusy {
-            dispatch,
-            dependency,
-            ..
-        } = result
-        else {
-            unreachable!("only the retained physical wait reaches retry");
-        };
-        match queue.retry_lifecycle_validate(LifecycleValidateTaskV1 { key, dispatch }) {
-            Ok(()) => {
-                drop_guard.disarm();
-                LifecycleValidateLocalRetryV1::Requeued
-            }
-            Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release }) => {
-                let mut release = release.wait_for_release();
-                let mut context = std::task::Context::from_waker(dependency.waker());
-                if std::future::Future::poll(std::pin::Pin::new(&mut release), &mut context)
-                    .is_ready()
-                {
-                    // A release between the capacity probe and registration
-                    // must schedule another bounded turn, never spin here.
-                    dependency.waker().wake_by_ref();
-                }
-                LifecycleValidateLocalRetryV1::Waiting(Self {
-                    guarded: Box::new(GuardedLifecycleValidateWorkerResultV1 {
-                        key,
-                        result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
-                            dispatch: task.dispatch,
-                            dependency,
-                            release: Some(release),
-                        }),
-                        drop_guard,
-                    }),
-                    queue,
-                    physical_completion,
-                })
-            }
-            Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(_task)) => {
-                drop(drop_guard);
-                LifecycleValidateLocalRetryV1::RestartRequired
-            }
-        }
-    }
-}
-
 /// Armed owner of one completion-pending lifecycle Validate queue index.
 #[must_use = "lifecycle Validate ownership must be acknowledged or restored"]
 pub(in crate::sumeragi) struct LifecycleValidateCompletionAckV1 {
@@ -481,6 +435,110 @@ impl LifecycleValidateCompletionAckV1 {
         }
     }
 }
+/// Original Validate dispatch and completion acknowledgement parked on local ownership.
+#[must_use = "local refusal must retain the same dispatch until retry or recovery"]
+pub(in crate::sumeragi) struct RetainedLocalLifecycleValidateV1 {
+    dispatch: DurableValidateDispatch,
+    refusal: super::v2_body_store::LocalValidationRefusal,
+    release: Option<mv::ReleaseFuture>,
+    ack: LifecycleValidateCompletionAckV1,
+}
+/// Result of revisiting a retained local dependency; no lifecycle row was rewritten.
+pub(in crate::sumeragi) enum LocalLifecycleValidateRetryV1 {
+    /// The actual dependency or command capacity has not released.
+    Waiting(RetainedLocalLifecycleValidateV1),
+    /// The exact original dispatch re-entered the worker queue.
+    Requeued,
+    /// The original owner remains quarantined while output is closed for recovery.
+    RecoveryRequired(RetainedLocalLifecycleValidateV1),
+}
+impl RetainedLocalLifecycleValidateV1 {
+    /// Retry only after the original local dependency or worker capacity releases.
+    /// The exact dispatch, acknowledgement and lifecycle row stay unchanged.
+    pub(in crate::sumeragi) fn retry(mut self) -> LocalLifecycleValidateRetryV1 {
+        use super::v2_body_store::LocalValidationRefusal;
+        use std::{future::Future, pin::Pin, task::Context};
+
+        let wake = match &self.refusal {
+            LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
+            LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
+            LocalValidationRefusal::RecoveryRequired(reason) => {
+                self.ack
+                    .drop_guard
+                    .output_guard
+                    .retain_effect_failure(reason.clone());
+                self.ack
+                    .drop_guard
+                    .output_guard
+                    .close_admission_for_restart();
+                return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+            }
+        };
+        if self.ack.drop_guard.output_guard.restart_required() {
+            return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+        }
+        if let Some(release) = self.release.as_mut() {
+            if Pin::new(release)
+                .poll(&mut Context::from_waker(&wake))
+                .is_pending()
+            {
+                return LocalLifecycleValidateRetryV1::Waiting(self);
+            }
+            self.release = None;
+        }
+        let output_guard = Arc::clone(&self.ack.drop_guard.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+        };
+        let Self {
+            dispatch,
+            refusal,
+            release,
+            mut ack,
+        } = self;
+        let task = LifecycleValidateTaskV1 {
+            key: ack.key,
+            dispatch,
+        };
+        match ack.queue.retry_lifecycle_validate(task) {
+            Ok(()) => {
+                ack.drop_guard.disarm();
+                operation.complete();
+                LocalLifecycleValidateRetryV1::Requeued
+            }
+            Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release }) => {
+                let mut release = release.wait_for_release();
+                if Pin::new(&mut release)
+                    .poll(&mut Context::from_waker(&wake))
+                    .is_ready()
+                {
+                    // A release between the failed probe and registration schedules
+                    // one bounded turn instead of spinning or losing the wake.
+                    wake.wake_by_ref();
+                }
+                let retained = Self {
+                    dispatch: task.dispatch,
+                    refusal,
+                    release: Some(release),
+                    ack,
+                };
+                operation.complete();
+                LocalLifecycleValidateRetryV1::Waiting(retained)
+            }
+            Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(task)) => {
+                let retained = Self {
+                    dispatch: task.dispatch,
+                    refusal,
+                    release,
+                    ack,
+                };
+                operation.fail("local Validate retry lost its exact queue owner".to_owned());
+                LocalLifecycleValidateRetryV1::RecoveryRequired(retained)
+            }
+        }
+    }
+}
+
 /// Missing-sidecar Validate completion retained under its exact worker/publication owner.
 #[must_use = "deferred lifecycle Validate must register and wake its exact row"]
 pub(in crate::sumeragi) struct PreparedDeferredLifecycleValidateCompletionV1 {
@@ -777,21 +835,18 @@ impl Drop for LifecycleValidateCompletionDropGuardV1 {
         }
     }
 }
-/// The worker retains the original request on a failed physical probe. A local
-/// wait is not an executed semantic outcome and cannot enter Ready publication.
 enum LifecycleValidateWorkerResultV1 {
-    Executed(ExecutedDurableValidateDispatch),
-    LocalBusy {
+    Completed(ExecutedDurableValidateDispatch),
+    Deferred {
         dispatch: DurableValidateDispatch,
-        dependency: super::v2_body_store::BodyValidationBusy,
-        release: Option<mv::ReleaseFuture>,
+        refusal: super::v2_body_store::LocalValidationRefusal,
     },
 }
 impl LifecycleValidateWorkerResultV1 {
     fn matches_dispatch_key(&self, key: LifecycleValidateDispatchKeyV1) -> bool {
         match self {
-            Self::Executed(result) => result.matches_dispatch_key(key),
-            Self::LocalBusy { dispatch, .. } => dispatch.matches_dispatch_key(key),
+            Self::Completed(dispatch) => dispatch.matches_dispatch_key(key),
+            Self::Deferred { dispatch, .. } => dispatch.matches_dispatch_key(key),
         }
     }
 }
@@ -808,24 +863,19 @@ impl GuardedLifecycleValidateWorkerResultV1 {
     ) -> Self {
         Self {
             key,
-            result: Some(LifecycleValidateWorkerResultV1::Executed(result)),
+            result: Some(LifecycleValidateWorkerResultV1::Completed(result)),
             drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
         }
     }
-    fn local_busy(
+    fn deferred(
         key: LifecycleValidateDispatchKeyV1,
         dispatch: DurableValidateDispatch,
-        dependency: super::v2_body_store::BodyValidationBusy,
+        refusal: super::v2_body_store::LocalValidationRefusal,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Self {
-        let release = Some(dependency.wait.clone().wait_for_release());
         Self {
             key,
-            result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
-                dispatch,
-                dependency,
-                release,
-            }),
+            result: Some(LifecycleValidateWorkerResultV1::Deferred { dispatch, refusal }),
             drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
         }
     }
@@ -864,15 +914,15 @@ fn lifecycle_validate_worker_completion(
 ) -> Result<V2IoCompletion, String> {
     let guarded = match result {
         Ok(executed) => GuardedLifecycleValidateWorkerResultV1::new(key, executed, output_guard),
-        Err((super::v2_body_store::V2BodyStoreError::LocalBusy(dependency), dispatch)) => {
-            GuardedLifecycleValidateWorkerResultV1::local_busy(
-                key,
-                dispatch,
-                dependency,
-                output_guard,
-            )
+        Err((error, dispatch)) => {
+            let refusal = match error {
+                super::v2_body_store::V2BodyStoreError::LocalValidation(refusal) => refusal,
+                error => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                    error.to_string(),
+                ),
+            };
+            GuardedLifecycleValidateWorkerResultV1::deferred(key, dispatch, refusal, output_guard)
         }
-        Err((error, _dispatch)) => return Err(error.to_string()),
     };
     Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
 }
@@ -965,6 +1015,18 @@ enum V2IoCompletion {
     Failed(String),
 }
 impl V2IoCompletion {
+    fn local_validation_recovery_reason(&self) -> Option<&str> {
+        match self {
+            Self::LifecycleValidate(guarded) => match guarded.result() {
+                LifecycleValidateWorkerResultV1::Deferred {
+                    refusal: super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason),
+                    ..
+                } => Some(reason),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     const fn is_dedicated_lifecycle_completion(&self) -> bool {
         matches!(
             self,
@@ -1733,10 +1795,7 @@ impl V2IoHandle {
                                                 },
                                                 |key| {
                                                     command_rx
-                                                        .complete_lifecycle_validate_result(
-                                                            key,
-                                                            guarded.result(),
-                                                        )
+                                                        .complete_lifecycle_validate_result(key, guarded.result())
                                                         .map(|()| true)
                                                 },
                                             )
@@ -1776,13 +1835,14 @@ impl V2IoHandle {
                                             false
                                         }
                                         Ok(true) => {
+                                            let recovery_required = completion.local_validation_recovery_reason().is_some();
                                             send_completion_with_lifecycle_ordinal(
                                                 &completion_tx,
                                                 &worker_admission,
                                                 Ok(completion),
                                                 runtime_lifecycle_ordinal,
                                             );
-                                            false
+                                            recovery_required
                                         }
                                     }
                                 }

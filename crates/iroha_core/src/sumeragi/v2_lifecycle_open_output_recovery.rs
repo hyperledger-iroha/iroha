@@ -143,7 +143,8 @@ impl PreparedLifecycleOutputRecoveryV1 {
     fn attach_pending_apply(
         &mut self,
         ledger: &LifecycleLedgerV1,
-        comparison: super::PendingKuraApplyComparisonV1,
+        verified: &VerifiedHeightContext,
+        mut comparison: super::PendingKuraApplyComparisonV1,
     ) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
         let mut live = ledger.records().iter().filter(|record| {
             record.terminal() == Some(None)
@@ -152,12 +153,23 @@ impl PreparedLifecycleOutputRecoveryV1 {
         let Some(record) = live.next() else {
             return Ok(());
         };
-        if live.next().is_some()
-            || !comparison.matches_record(ledger.context(), record)
-            || self.pending_apply.is_some()
-            || self.entries.contains_key(&record.ordinal())
-        {
-            return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+        if live.next().is_some() {
+            return Err(LifecycleRecoveryAssemblyErrorKind::PendingKuraApply(
+                "pending Kura retained more than one live Apply",
+            ));
+        }
+        if self.pending_apply.is_some() || self.entries.contains_key(&record.ordinal()) {
+            return Err(LifecycleRecoveryAssemblyErrorKind::PendingKuraApply(
+                "pending Kura retained Apply already has an output owner",
+            ));
+        }
+        if !comparison.bind_retained_owner(verified, ledger) {
+            return Err(LifecycleRecoveryAssemblyErrorKind::PendingKuraApply(
+                "pending Kura retained Apply lost its authenticated original predecessor chain",
+            ));
+        }
+        if !comparison.matches_ledger(ledger) || !comparison.matches_record(record) {
+            return Err(LifecycleRecoveryAssemblyErrorKind::PendingKuraApply(
                 "pending Kura retained Apply does not match its exact Decision and BodyFrame",
             ));
         }
@@ -175,17 +187,7 @@ impl PreparedLifecycleOutputRecoveryV1 {
         self.pending_apply
             .as_ref()
             .is_some_and(|(ordinal, comparison)| {
-                *ordinal == record.ordinal()
-                    && record.owner() == OwnerId::new(comparison.candidate().causal_root, *ordinal)
-                    && record.key() == Some(comparison.candidate().key)
-                    && record.work_class() == Some(LifecycleWorkClass::Apply)
-                    && record.stage() == Some(comparison.candidate().stage)
-                    && record.terminal() == Some(None)
-                    && record.reconstruction_source()
-                        == comparison.candidate().reconstruction_source
-                    && record.durable_payload() == Some(comparison.candidate().payload)
-                    && record.continuation() == Some(DurableContinuation::None)
-                    && record.replay_matches_candidate(comparison.candidate())
+                *ordinal == record.ordinal() && comparison.matches_record(record)
             })
             || self.entries.get(&record.ordinal()).is_some_and(|output| {
                 output.owner() == record.owner()
@@ -252,10 +254,11 @@ impl PreparedLifecycleOutputRecoveryV1 {
         }
         if let Some((ordinal, comparison)) = &self.pending_apply {
             if !coordinator.ready_index.contains(ordinal)
+                || !comparison.matches_coordinator(coordinator)
                 || !recovered_candidate_matches_ready_coordinator_row(
                     coordinator,
                     comparison.candidate(),
-                    OwnerId::new(comparison.candidate().causal_root, *ordinal),
+                    comparison.owner(*ordinal),
                     *ordinal,
                 )
                 || !ordinals.insert(*ordinal)
@@ -404,12 +407,13 @@ impl super::ProductionLifecycleOwnerV1 {
         };
         let ordinal = *ordinal;
         if !comparison.matches_expected(installed.expected())
+            || !comparison.matches_coordinator(&self.coordinator)
             || self.coordinator.active_lease.is_some()
             || !self.coordinator.ready_index.contains(&ordinal)
             || !recovered_candidate_matches_ready_coordinator_row(
                 &self.coordinator,
                 comparison.candidate(),
-                OwnerId::new(comparison.candidate().causal_root, ordinal),
+                comparison.owner(ordinal),
                 ordinal,
             )
         {

@@ -484,10 +484,15 @@ state_test! { sync canonical_queue_plan_input_enforces_cumulative_read_budget
     let (fixture, control) = first_lane_input_fixture(0x98);
     let state = &fixture.state;
     let hash = fixture.binding.entrypoint_hash;
-    let budget = crate::kura::canonical_admission_read_decode_limits().unwrap();
-    assert_eq!(budget, norito::canonical_decode_limits(
+    let budget = State::canonical_queue_plan_input_decode_limits().unwrap();
+    let body = norito::canonical_decode_limits(
         usize::try_from(iroha_data_model::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES).unwrap(),
-    ));
+    );
+    let kura = crate::kura::canonical_admission_read_decode_limits().unwrap();
+    assert!(kura.max_total_allocated_bytes() > body.max_total_allocated_bytes(),
+        "valid maximum-body allocations retain their complete allowance after metadata reads");
+    assert!(budget.max_total_allocated_bytes() > kura.max_total_allocated_bytes(),
+        "pre-read and post-read State observations have separate cumulative allowances");
     assert!(State::canonical_queue_plan_input_read_working_set_bytes().unwrap()
         > budget.max_total_allocated_bytes());
     let generation = state.state_view_generation();

@@ -17,8 +17,13 @@
 //! retired state-root domain and cannot pass canonical decode/validation; operators must reset that
 //! disposable archive namespace rather than migrate it.
 use super::archive_capture::{ArchiveCaptureGate, ArchiveCaptureReservation, ArchiveCaptureWait};
+use super::archive_index::{
+    ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
+};
 use crate::{
-    kura::{Kura, KuraV2CommitReceipt},
+    kura::{
+        Kura, KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraV2CommitReceipt,
+    },
     secure_file_metadata::{self, SecureMetadata},
     state::{StateReadOnly, WorldReadOnly as _},
 };
@@ -51,7 +56,7 @@ use std::{
     io::{self, Read},
     num::NonZeroUsize,
     path::{Component, Path, PathBuf},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::Arc,
 };
 use thiserror::Error;
 const ARCHIVE_VERSION_V1: u16 = 1;
@@ -1338,7 +1343,7 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     checkpoints_identity: ArchiveFileIdentity,
     writer_lock_identity: ArchiveFileIdentity,
     writer_lock: fs::File,
-    index: RwLock<ArchiveIndexV1>,
+    index: ArchiveIndexLock<ArchiveIndexV1>,
     capture_gate: ArchiveCaptureGate,
 }
 /// An admitted immutable capture retaining the exact archive and Kura owners.
@@ -1350,11 +1355,131 @@ pub(crate) struct PreparedProviderIngestCapture {
     insertion: PreparedProviderInsertion,
     kura: Arc<Kura>,
 }
-#[expect(
-    dead_code,
-    reason = "TODO: connect retained archive reservations to the production carrier publisher"
-)]
+/// Original archive predecessor reserved before the candidate owns State writers.
+///
+/// Capture reads its one original State scope without an archive index guard.
+/// Planning later borrows that retained projection under a nonblocking reserved
+/// writer. Neither stage supplies finality or aggregate resource admission.
+pub(crate) struct ProviderCandidateCapture {
+    archive: Arc<ProviderIngestFinalizedArchiveV1>,
+    kura: Arc<Kura>,
+    key: ProviderIngestFinalizedArchiveKeyV1,
+    capture_attempted: bool,
+    projection: Option<ProviderIngestFinalizedProjectionV1>,
+    plan: Option<ProviderInsertionPlan>,
+    // The exact predecessor stays reserved until all original payloads drop.
+    reservation: ArchiveCaptureReservation,
+}
+
+impl ProviderCandidateCapture {
+    /// Observe retained bytes in carrier tests without exposing publication authority.
+    #[cfg(test)]
+    pub(crate) fn prepared_bytes_identity_for_test(&self) -> Option<usize> {
+        self.plan
+            .as_ref()?
+            .record
+            .as_ref()
+            .map(|record| record.bytes.as_ptr() as usize)
+    }
+
+    /// Capture the original candidate once, without acquiring any archive writer.
+    /// Even a failed capture cannot be retried against another State scope.
+    pub(crate) fn capture_original(
+        &mut self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        if self.capture_attempted {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "candidate archive capture was already attempted",
+            });
+        }
+        self.capture_attempted = true;
+        let key = candidate_capture_key(state_ro, &self.kura)?;
+        if key != self.key {
+            return Err(
+                ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
+                    reason: "candidate differs from its reserved exact archive key",
+                },
+            );
+        }
+        self.projection = Some(capture_projection(state_ro, key, self.archive.bounds)?);
+        Ok(())
+    }
+
+    /// Admit the retained projection after State writers have been released.
+    /// Refusal retains the same projection and predecessor reservation for retry.
+    pub(crate) fn try_prepare(&mut self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        if self.plan.is_some() {
+            return Ok(());
+        }
+        let projection = self.projection.as_ref().ok_or(
+            ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "candidate archive has no successful original capture",
+            },
+        )?;
+        let index = self.archive.try_write_reserved_index(&self.reservation)?;
+        self.plan = Some(self.archive.prepare_insert_locked(projection, &index)?);
+        Ok(())
+    }
+
+    /// Transfer the actual admitted plan and original reservation only when ready.
+    pub(crate) fn into_prepared(mut self) -> Result<PreparedProviderIngestCapture, Self> {
+        let Some(plan) = self.plan.take() else {
+            return Err(self);
+        };
+        let Self {
+            archive,
+            kura,
+            key: _,
+            capture_attempted: _,
+            projection,
+            plan: _,
+            reservation,
+        } = self;
+        drop(projection);
+        Ok(PreparedProviderIngestCapture {
+            insertion: PreparedProviderInsertion {
+                plan,
+                archive,
+                reservation,
+            },
+            kura,
+        })
+    }
+}
+
 impl PreparedProviderIngestCapture {
+    /// Rejoin the original capture to durable evidence without reacquiring Kura fences.
+    /// The immutable insertion and its reservation remain owned on every refusal.
+    pub(crate) fn reauthenticate_under_publication_lease(
+        &self,
+        lease: &KuraPublicationLease<'_>,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        let key = &self.insertion.plan.key;
+        lease
+            .authenticate_archive_capture(
+                &self.kura,
+                key.network_id,
+                key.height,
+                key.block_hash,
+                key.finalized_at_unix_ms,
+                receipt,
+            )
+            .map_err(capture_authentication_error)
+    }
+
+    /// Persist the original admitted insertion while the exact Kura lease remains held.
+    pub(crate) fn publish_under_publication_lease(
+        &mut self,
+        lease: &KuraPublicationLease<'_>,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        self.reauthenticate_under_publication_lease(lease, receipt)?;
+        self.insertion.try_persist()
+    }
+
     /// Authenticate exact durable finality and persist only the admitted bytes.
     ///
     /// Storage or authorization errors retain the reservation for retry; no State is recaptured
@@ -1386,6 +1511,14 @@ struct PreparedProviderInsertion {
     reservation: ArchiveCaptureReservation,
 }
 impl PreparedProviderInsertion {
+    fn try_persist(
+        &mut self,
+    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        let mut index = self.archive.try_write_reserved_index(&self.reservation)?;
+        self.plan.persist(&self.archive, &mut index)
+    }
+
     fn persist(
         &mut self,
     ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
@@ -1561,7 +1694,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             checkpoints_identity,
             writer_lock_identity,
             writer_lock,
-            index: RwLock::new(index),
+            index: ArchiveIndexLock::new(index),
             capture_gate: ArchiveCaptureGate::default(),
         };
         archive.verify_storage_boundaries()?;
@@ -2024,24 +2157,97 @@ impl ProviderIngestFinalizedArchiveV1 {
         let key = authenticate_capture_view(state_ro, kura, receipt)?;
         self.insert(capture_projection(state_ro, key, self.bounds)?)
     }
-    /// Capture and admit one exact candidate projection before durability exists.
+    /// Reserve the original archive cut before acquiring candidate State writers.
     ///
-    /// The scoped State header and hash journal identify the candidate; they grant no finality.
-    /// Publication still requires the exact durable Kura receipt for that retained identity.
-    /// The returned owner is lifetime-free and releases the physical index guard;
-    /// a conflicting writer receives the exact reservation's release event.
-    pub(crate) fn prepare_candidate_capture(
+    /// This probe never waits on an archive reader. The logical owner excludes
+    /// every insertion and retention writer while State capture and bounded plan
+    /// admission happen later. It grants no finality or State publication right.
+    pub(crate) fn try_reserve_candidate(
         self: &Arc<Self>,
-        state_ro: &impl StateReadOnly,
+        key: ProviderIngestFinalizedArchiveKeyV1,
         kura: &Arc<Kura>,
-    ) -> Result<PreparedProviderIngestCapture, ProviderIngestFinalizedArchiveErrorV1> {
-        let key = candidate_capture_key(state_ro, kura)?;
-        let projection = capture_projection(state_ro, key, self.bounds)?;
-        Ok(PreparedProviderIngestCapture {
-            insertion: self.prepare_insert(projection)?,
+    ) -> Result<ProviderCandidateCapture, ProviderIngestFinalizedArchiveErrorV1> {
+        key.validate()?;
+        let ProviderIngestFinalizedArchiveKeyV1 {
+            network_id, height, ..
+        } = key;
+        let index = self.index.try_write().map_err(Self::index_lock_error)?;
+        self.capture_gate
+            .ensure_unreserved()
+            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
+        self.verify_storage_boundaries()?;
+        validate_index_coverage(&index, self.bounds)?;
+        if let Some(base) = index.virtual_bases.get(&network_id)
+            && height < base.checkpoint.material.retention_floor.height
+        {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor {
+                requested_height: height,
+                retention_height: base.checkpoint.material.retention_floor.height,
+            });
+        }
+        let base_height = index
+            .virtual_bases
+            .get(&network_id)
+            .map(|base| base.checkpoint.material.retention_floor.height);
+        let existing_key = index
+            .by_height
+            .get(&(network_id, height))
+            .map(|entry| &entry.record.material.key)
+            .or_else(|| {
+                index.virtual_bases.get(&network_id).and_then(|base| {
+                    (base.checkpoint.material.retention_floor.height == height)
+                        .then_some(&base.checkpoint.material.retention_floor)
+                })
+            });
+        if existing_key.is_some_and(|existing| existing != &key) {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
+                network_id,
+                height,
+            });
+        }
+        if !index.by_height.contains_key(&(network_id, height)) && base_height != Some(height) {
+            let previous_height = index
+                .by_height
+                .range((network_id, 0)..=(network_id, u64::MAX))
+                .next_back()
+                .map(|((_, height), _)| *height)
+                .or(base_height);
+            if let Some(previous_height) = previous_height {
+                let expected = previous_height.checked_add(1);
+                if expected != Some(height) {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
+                        network_id,
+                        missing_height: expected.unwrap_or(u64::MAX),
+                        observed_height: height,
+                    });
+                }
+            }
+        }
+        let reservation = self
+            .capture_gate
+            .try_reserve()
+            .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
+        drop(index);
+        Ok(ProviderCandidateCapture {
+            archive: Arc::clone(self),
             kura: Arc::clone(kura),
+            key,
+            capture_attempted: false,
+            projection: None,
+            plan: None,
+            reservation,
         })
     }
+
+    /// Hold an actual committed reader across a deterministic carrier test probe.
+    #[cfg(test)]
+    pub(crate) fn with_index_reader_for_test<R>(&self, action: impl FnOnce() -> R) -> R {
+        let _index = self
+            .read_index()
+            .expect("test archive reader must be healthy");
+        action()
+    }
+
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
     /// Preparation is read-only. Every physical prefix anchor and the fence's finality artifact are
@@ -2260,7 +2466,7 @@ impl ProviderIngestFinalizedArchiveV1 {
     ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         let mut index = self.write_index()?;
-        self.prepare_insert_locked(projection, &index)?
+        self.prepare_insert_locked(&projection, &index)?
             .persist(self, &mut index)
     }
     fn prepare_insert(
@@ -2272,7 +2478,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             .capture_gate
             .try_reserve()
             .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        let plan = self.prepare_insert_locked(projection, &index)?;
+        let plan = self.prepare_insert_locked(&projection, &index)?;
         drop(index);
         Ok(PreparedProviderInsertion {
             plan,
@@ -2282,7 +2488,7 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     fn prepare_insert_locked(
         &self,
-        projection: ProviderIngestFinalizedProjectionV1,
+        projection: &ProviderIngestFinalizedProjectionV1,
         index: &ArchiveIndexV1,
     ) -> Result<ProviderInsertionPlan, ProviderIngestFinalizedArchiveErrorV1> {
         projection.validate(self.bounds)?;
@@ -2303,7 +2509,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                         height: projection.key.height,
                     });
                 }
-                if projection == base.checkpoint.material.projection {
+                if projection == &base.checkpoint.material.projection {
                     return Ok(ProviderInsertionPlan {
                         key: projection.key,
                         record: None,
@@ -2325,7 +2531,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 });
             }
             let reconstructed = reconstruct_projection(index, &projection.key, self.bounds)?;
-            if reconstructed == projection {
+            if &reconstructed == projection {
                 return Ok(ProviderInsertionPlan {
                     key: projection.key,
                     record: None,
@@ -2373,12 +2579,12 @@ impl ProviderIngestFinalizedArchiveV1 {
                     observed_height: projection.key.height,
                 });
             }
-            validate_projection_transition(previous, &projection)?;
+            validate_projection_transition(previous, projection)?;
         }
-        validate_historical_policy_transition(index, &projection, self.bounds)?;
-        validate_historical_order_transition(index, &projection, self.bounds)?;
-        validate_projection_completion_anchors_before_insert(index, &projection)?;
-        let deltas = build_provider_deltas(previous_projection.as_ref(), &projection);
+        validate_historical_policy_transition(index, projection, self.bounds)?;
+        validate_historical_order_transition(index, projection, self.bounds)?;
+        validate_projection_completion_anchors_before_insert(index, projection)?;
+        let deltas = build_provider_deltas(previous_projection.as_ref(), projection);
         let provider_state_root = provider_state_root(&projection.providers)?;
         let predecessor = previous_entry.map_or_else(
             || {
@@ -2400,7 +2606,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         let record = ProviderIngestFinalizedArchiveRecordV1::try_new(
             ProviderIngestFinalizedArchiveRecordMaterialV1 {
                 version: ARCHIVE_VERSION_V1,
-                key: projection.key.clone(),
+                key: projection.key,
                 predecessor,
                 deltas,
                 provider_state_root,
@@ -2593,20 +2799,17 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     fn read_index(
         &self,
-    ) -> Result<RwLockReadGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1> {
-        self.index
-            .read()
-            .map_err(|_| ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
+    ) -> Result<ArchiveIndexReadGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        self.index.read().map_err(Self::index_lock_error)
     }
     // All mutators acquire index -> logical gate. Reservation drop takes only
     // the gate, and no wait is entered while retaining an archive index guard.
     fn write_index(
         &self,
-    ) -> Result<RwLockWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1> {
-        let index = self
-            .index
-            .write()
-            .map_err(|_| ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)?;
+    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        let index = self.index.write().map_err(Self::index_lock_error)?;
         self.capture_gate
             .ensure_unreserved()
             .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
@@ -2616,15 +2819,35 @@ impl ProviderIngestFinalizedArchiveV1 {
     fn write_reserved_index(
         &self,
         reservation: &ArchiveCaptureReservation,
-    ) -> Result<RwLockWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1> {
-        let index = self
-            .index
-            .write()
-            .map_err(|_| ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)?;
+    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        let index = self.index.write().map_err(Self::index_lock_error)?;
         if !reservation.authorizes(&self.capture_gate) {
             return Err(ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch);
         }
         Ok(index)
+    }
+    /// A held Kura lease must never wait on an archive reader that needs Kura.
+    fn try_write_reserved_index(
+        &self,
+        reservation: &ArchiveCaptureReservation,
+    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
+    {
+        let index = self.index.try_write().map_err(Self::index_lock_error)?;
+        if !reservation.authorizes(&self.capture_gate) {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch);
+        }
+        Ok(index)
+    }
+    fn index_lock_error(error: ArchiveIndexLockError) -> ProviderIngestFinalizedArchiveErrorV1 {
+        match error {
+            ArchiveIndexLockError::Poisoned => {
+                ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned
+            }
+            ArchiveIndexLockError::Busy(wait) => {
+                ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait }
+            }
+        }
     }
     fn verify_storage_boundaries(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         verify_absolute_directory_ancestry(&self.root)?;
@@ -5122,92 +5345,30 @@ fn authenticate_capture_key(
     kura: &Kura,
     receipt: &KuraV2CommitReceipt,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let height = key.height;
-    let block_hash = key.block_hash;
-    if receipt.height() != height || *receipt.block_hash().as_ref() != block_hash {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "retained capture anchor differs from the durable Kura receipt",
-            },
-        );
-    }
-    let height_index = usize::try_from(height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "durable Kura receipt height is not representable",
-            },
-        )?;
-    let durable_tip = kura.exact_durable_blocks_count().map_err(|error| {
-        ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-            operation: "read exact durable block count",
-            detail: error.to_string(),
-        }
-    })?;
-    if durable_tip < height_index.get()
-        || kura
-            .get_durable_block_hash(height_index)
-            .map(|hash| *hash.as_ref())
-            != Some(block_hash)
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "Kura canonical block log differs from the durable receipt",
-            },
-        );
-    }
-    let (artifact, recovered_receipt) = kura
-        .v2_finality_artifact_with_receipt(height)
-        .map_err(
-            |error| ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
-                operation: "authenticate v2 finality artifact",
-                detail: error.to_string(),
-            },
-        )?
-        .ok_or(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "Kura has no v2 finality artifact for the capture height",
-            },
-        )?;
-    if !same_kura_receipt(receipt, &recovered_receipt)
-        || artifact.height_context.network_id != key.network_id
-        || artifact.height != height
-        || *artifact.block_hash.as_ref() != block_hash
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "Kura artifact, receipt, and state identify different blocks",
-            },
-        );
-    }
-    let block = kura.get_block(height_index).ok_or(
-        ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-            reason: "result-bearing committed block is unavailable to the retained capture",
-        },
-    )?;
-    let finalized_at_unix_ms = block.header().creation_time_ms;
-    if block.header().height().get() != height
-        || *block.hash().as_ref() != block_hash
-        || finalized_at_unix_ms == 0
-        || finalized_at_unix_ms == u64::MAX
-        || finalized_at_unix_ms != key.finalized_at_unix_ms
-    {
-        return Err(
-            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication {
-                reason: "result-bearing block has a mismatched identity or timestamp",
-            },
-        );
-    }
-    Ok(())
+    kura.authenticate_archive_capture(
+        key.network_id,
+        key.height,
+        key.block_hash,
+        key.finalized_at_unix_ms,
+        receipt,
+    )
+    .map_err(capture_authentication_error)
 }
-fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) -> bool {
-    left.height() == right.height()
-        && left.block_hash() == right.block_hash()
-        && left.context_id() == right.context_id()
-        && left.subject() == right.subject()
-        && left.certificate() == right.certificate()
-        && left.artifact_hash() == right.artifact_hash()
+
+fn capture_authentication_error(
+    error: KuraArchiveCaptureAuthenticationError,
+) -> ProviderIngestFinalizedArchiveErrorV1 {
+    match error {
+        KuraArchiveCaptureAuthenticationError::Identity(reason) => {
+            ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason }
+        }
+        KuraArchiveCaptureAuthenticationError::Storage(error) => {
+            ProviderIngestFinalizedArchiveErrorV1::KuraAuthentication {
+                operation: "authenticate retained archive capture",
+                detail: error.to_string(),
+            }
+        }
+    }
 }
 fn encode_bounded_record(
     record: &ProviderIngestFinalizedArchiveRecordV1,
@@ -6813,6 +6974,12 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
 /// Fail-closed errors returned by the finalized provider-ingest archive.
 #[derive(Debug, Error)]
 pub enum ProviderIngestFinalizedArchiveErrorV1 {
+    /// A physical index reader or writer currently prevents retained publication.
+    #[error("finalized provider-ingest archive index is busy")]
+    IndexBusy {
+        /// Release Kura and State fences before awaiting this actual index owner.
+        wait: mv::ReleaseWait,
+    },
     /// An exact prepared capture retains the archive predecessor and capacity.
     #[error("finalized provider-ingest archive is reserved by a prepared capture")]
     CaptureReserved {

@@ -4,12 +4,35 @@ fn physical_validate_retry_preserves_original_owner(
     release_before_poll: bool,
     fill_capacity: bool,
 ) {
+    // All three cases call the same full lifecycle fixture. Its compiled frame
+    // includes the launched-service branch even when fill_capacity is false.
+    // Use the surrounding lifecycle tests' explicit stack for every invocation.
+    let handle = std::thread::Builder::new()
+        .name("physical-validate-retry".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            physical_validate_retry_preserves_original_owner_fixture(
+                release_before_poll,
+                fill_capacity,
+            );
+        })
+        .expect("spawn physical Validate lifecycle fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+fn physical_validate_retry_preserves_original_owner_fixture(
+    release_before_poll: bool,
+    fill_capacity: bool,
+) {
     use crate::sumeragi::{
         output_guard::ConsensusOutputGuard,
         v2_apply::V2ApplyError,
-        v2_body_store::BodyValidationBusy,
+        v2_body_store::{BodyValidationBusy, LocalValidationRefusal},
         v2_runner::LifecycleProducerClaimDispositionV1 as Claim,
-        v2_worker::{LifecycleCompletionTakeV1, LifecycleValidateLocalRetryV1},
+        v2_worker::{LifecycleCompletionTakeV1, LocalLifecycleValidateRetryV1},
     };
     use std::sync::Arc;
     let marker = 0_u8;
@@ -96,12 +119,12 @@ fn physical_validate_retry_preserves_original_owner(
     worker.activate_one_lifecycle_validate();
     assert_eq!(
         worker.execute_held_lifecycle_validate_result_fixture(
-            Err::<wire::ExecutionCommitment, _>(V2ApplyError::LocalValidationBusy(
-                BodyValidationBusy::new(
+            Err::<wire::ExecutionCommitment, _>(V2ApplyError::LocalValidation(
+                LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
                     "lane_reservation_transition_lock",
                     wait,
-                    queue.sumeragi_waker()
-                ),
+                    queue.sumeragi_waker(),
+                )),
             )),
             Arc::clone(&output_guard),
         ),
@@ -121,11 +144,15 @@ fn physical_validate_retry_preserves_original_owner(
         registry
     );
     assert!(!output_guard.restart_required());
-    let completion = if release_before_poll {
+    let retained = match completion.into_local_or_publication() {
+        Err(retained) => retained,
+        Ok(_) => panic!("physical dependency cannot authorize publication"),
+    };
+    let retained = if release_before_poll {
         drop(held);
-        completion
+        retained
     } else {
-        let LifecycleValidateLocalRetryV1::Waiting(completion) = completion.retry_local() else {
+        let LocalLifecycleValidateRetryV1::Waiting(retained) = retained.retry() else {
             panic!("no retry before the actual physical owner releases");
         };
         // An unrelated Queue release must not authorize this dispatch or notify its runner.
@@ -136,14 +163,14 @@ fn physical_validate_retry_preserves_original_owner(
         );
         drop(foreign.lock_lane_retirement_observer());
         assert!(wake_rx.try_recv().is_err());
-        let LifecycleValidateLocalRetryV1::Waiting(completion) = completion.retry_local() else {
+        let LocalLifecycleValidateRetryV1::Waiting(retained) = retained.retry() else {
             panic!("foreign physical release cannot resume the original request");
         };
         drop(held);
         wake_rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("actual release wakes the original runner");
-        completion
+        retained
     };
     if fill_capacity {
         let queued = worker.fill_validate_retry_capacity_for_test(durable.subject());
@@ -157,7 +184,7 @@ fn physical_validate_retry_preserves_original_owner(
             super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
                 owner, executor, services, ingress,
             );
-        launched.park_validate_completion_for_test(completion);
+        launched.park_local_validate_completion_for_test(retained);
         let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, worker);
         let assert_completion_claim = |launched: &ReadyLocalProposalSignLaunchedFixtureGuard| {
             assert_eq!(
@@ -321,8 +348,8 @@ fn physical_validate_retry_preserves_original_owner(
         return;
     }
     assert!(matches!(
-        completion.retry_local(),
-        LifecycleValidateLocalRetryV1::Requeued
+        retained.retry(),
+        LocalLifecycleValidateRetryV1::Requeued
     ));
     assert_eq!(worker.lifecycle_validate_io_snapshot().queued(), 1);
     assert_eq!(
@@ -347,7 +374,7 @@ fn physical_validate_retry_preserves_original_owner(
         LifecycleCompletionTakeV1::Validate(completion) => completion,
         _ => panic!("same request returns its exact semantic completion"),
     };
-    let LifecycleValidateLocalRetryV1::Executed(completion) = completion.retry_local() else {
+    let Ok(completion) = completion.into_local_or_publication() else {
         panic!("successful validation proceeds to its original publication transaction");
     };
     let (dispatch, ack) = completion.into_publication_parts();
@@ -382,14 +409,5 @@ fn physical_validate_retry_observes_release_before_registration() {
 #[cfg(feature = "bls")]
 #[test]
 fn physical_validate_retry_retains_dispatch_through_worker_backpressure() {
-    // This launched-service fixture uses the existing lifecycle test stack convention.
-    // The two smaller physical-release fixtures above retain the default test stack.
-    let handle = std::thread::Builder::new()
-        .name("physical-validate-worker-backpressure".to_owned())
-        .stack_size(32 * 1024 * 1024)
-        .spawn(|| physical_validate_retry_preserves_original_owner(false, true))
-        .expect("spawn launched Validate worker backpressure fixture");
-    if let Err(payload) = handle.join() {
-        std::panic::resume_unwind(payload);
-    }
+    physical_validate_retry_preserves_original_owner(false, true);
 }

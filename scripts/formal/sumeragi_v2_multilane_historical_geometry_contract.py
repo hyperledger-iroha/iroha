@@ -17,12 +17,13 @@ NATIVE_MODULE = "SumeragiV2NativeApplicationEvidence"
 GEOMETRY = "crates/iroha_core/src/kura/lane_geometry.rs"
 HISTORICAL = "crates/iroha_core/src/kura/lane_geometry/historical_evidence.rs"
 RECOVERY = "crates/iroha_core/src/kura/historical_autonomous_recovery.rs"
+EFFECTS = "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs"
 OBSERVER = "observe_geometry_historical_autonomous_recovery_records"
 WRAPPER = "read_and_attest_geometry_historical_autonomous_recovery_records"
 EXACT_READ = "read_historical_autonomous_recovery_record_with_identity"
 BOUNDED = "bounded_historical_autonomous_recovery_entries"
-SCANNER = "ensure_first_release_lane_retirement_admissible_with_certified_locked"
-ARCHIVED = "ensure_archived_lane_work_released"
+SCANNER = "scan_lane_retirement_locked"
+ARCHIVED = "ensure_archived_lane_work_released_with_custody"
 
 HISTORICAL_GEOMETRY_BINDINGS = (
     (HISTORICAL, "struct", "ObservedHistoricalRecoveryFile", (
@@ -65,6 +66,13 @@ HISTORICAL_GEOMETRY_BINDINGS = (
         "sync_dir(&namespace.directory.expected_path)", "Ok((self.records, self.encoded_bytes))",
     )),
     (HISTORICAL, "fn", WRAPPER, (OBSERVER, ".attest()")),
+    (HISTORICAL, "fn", "into_observed", (
+        "self.ensure_unchanged()?", "Ok((self.records, self.encoded_bytes))",
+    )),
+    (EFFECTS, "fn", "historical", (
+        "ObservedHistoricalRecoveryEvidence", "Self::Observe => observation.into_observed()",
+        "Self::MaintainAndAttest { .. } => observation.attest()",
+    )),
     (RECOVERY, "fn", EXACT_READ, (
         "read_regular_sidecar_snapshot", "HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES",
         "historical_autonomous_recovery_read_matches_accounting",
@@ -92,7 +100,7 @@ HISTORICAL_GEOMETRY_BINDINGS = (
 HISTORICAL_GEOMETRY_SOURCE_RELATIVES = (
     Path("scripts/formal/sumeragi_v2_multilane_historical_geometry_contract.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_historical_geometry_contract_test.py"),
-    *(Path(path) for path in (GEOMETRY, HISTORICAL, RECOVERY)),
+    *(Path(path) for path in (GEOMETRY, HISTORICAL, RECOVERY, EFFECTS)),
 )
 
 
@@ -148,7 +156,7 @@ def validate_historical_geometry_contract(
         if re.search(r"pub(?:\([^)]*\))?\w+:", code) or "&mut" in code:
             errors.append(f"historical geometry {symbol} exposes mutable ownership")
     require("ObservedHistoricalRecoveryEvidence", "kura: &'kura Kura", "outer_inventory: &'kura BoundProgressDirectorySnapshot")
-    for symbol in (OBSERVER, "ensure_unchanged", EXACT_READ, BOUNDED):
+    for symbol in (OBSERVER, "ensure_unchanged", "into_observed", EXACT_READ, BOUNDED):
         for forbidden in ("sync_all(", "sync_dir(", ".attest(", ".write(", ".create(", ".truncate(", "fs::write(", "fs::remove", "fs::rename(", ".lock("):
             if forbidden in items.get(symbol, ""):
                 errors.append(f"historical geometry {symbol} contains forbidden observation effect {forbidden!r}")
@@ -192,6 +200,9 @@ def validate_historical_geometry_contract(
     require(WRAPPER,
         "self.observe_geometry_historical_autonomous_recovery_records(lane_artifacts, artifact_snapshot, lane_id, expected_dataspace_id, expected_incarnation, activation_height, entry_limit, aggregate_byte_limit, context)?.attest()",
     )
+    require("into_observed",
+        "fn into_observed(self) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> { self.ensure_unchanged()?; Ok((self.records, self.encoded_bytes)) }",
+    )
     require(EXACT_READ,
         "if accounted.is_some_and(|accounted| { !historical_autonomous_recovery_read_matches_accounting(accounted, &snapshot) }) { return Err(",
         "if historical_autonomous_recovery_record_bytes(&record) != snapshot.bytes || path.file_name().and_then(std::ffi::OsStr::to_str) != Some(expected_name.as_str()) { return Err(",
@@ -207,8 +218,18 @@ def validate_historical_geometry_contract(
         "if metadata.file_type().is_symlink() || !metadata.file_type().is_file() || !Kura::sidecar_is_single_link(&metadata) || metadata.len() == 0 || metadata.len() > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)? { return Err(",
         "checked_add(metadata.len()).filter(|bytes| *bytes <= aggregate_byte_limit).ok_or_else(",
     )
-    for symbol in (SCANNER, ARCHIVED):
-        count(symbol, f"self.{WRAPPER}(", 2)
+    require("historical",
+        "match self { Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
+    )
+    count(SCANNER, f"self.{OBSERVER}(", 2)
+    count(SCANNER, "effects.historical(", 2)
+    ordered(SCANNER, f"self.{OBSERVER}(",
+        "effects.historical(historical_observation)?",
+        f"self.{OBSERVER}(",
+        "effects.historical(confirmed_historical_observation)?",
+        "confirmed_route_historical_recoveries != expected_route_historical_recoveries",
+    )
+    count(ARCHIVED, f"self.{WRAPPER}(", 2)
     require(SCANNER,
         "if confirmed_route_historical_recoveries != expected_route_historical_recoveries || confirmed_historical_recovery_bytes != historical_recovery_bytes { return Err(",
     )

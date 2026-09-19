@@ -141,14 +141,14 @@ impl LaunchedProductionLifecycleV1 {
         }
     }
 
-    /// Park an actual worker completion in the same sole slot used by the driver.
-    pub(in crate::sumeragi) fn park_validate_completion_for_test(
+    /// Park the original local dependency in the same sole slot used by the driver.
+    pub(in crate::sumeragi) fn park_local_validate_completion_for_test(
         &mut self,
-        completion: PreparedLifecycleValidateCompletionV1,
+        retained: RetainedLocalLifecycleValidateV1,
     ) {
         assert!(self.pending_lifecycle_completion.is_none());
         self.pending_lifecycle_completion =
-            Some(PendingLifecycleCompletionV1::Validate(completion));
+            Some(PendingLifecycleCompletionV1::LocalValidate(retained));
     }
 
     /// Snapshot the serialized runtime without consuming its pending progress owner.

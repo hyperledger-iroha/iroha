@@ -1802,8 +1802,6 @@ dependencies = [
 [[package]]
 name = "concread"
 version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6588e9e68e11207fb9a5aabd88765187969e6bcba98763c40bcad87b2a73e9f5"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
@@ -6968,6 +6966,7 @@ name = "mv"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "concread",
+ "crossbeam-epoch",
  "norito",
 ]
 

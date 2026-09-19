@@ -24,6 +24,9 @@ pub(crate) struct ConsensusOutputGuard {
     authoritative_worker_launch_claimed: AtomicBool,
     output: RwLock<()>,
     restart_origin: OnceLock<ConsensusRestartOrigin>,
+    // Diagnostic only: retaining the first reported effect error cannot grant
+    // output or replace the atomic admission state and original permit owner.
+    effect_failure: OnceLock<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ConsensusRestartOrigin {
@@ -39,6 +42,7 @@ impl Default for ConsensusOutputGuard {
             authoritative_worker_launch_claimed: AtomicBool::new(false),
             output: RwLock::new(()),
             restart_origin: OnceLock::new(),
+            effect_failure: OnceLock::new(),
         }
     }
 }
@@ -241,6 +245,19 @@ impl ConsensusOutputGuard {
     pub(crate) fn restart_required(&self) -> bool {
         self.state.load(Ordering::Acquire) != OPEN
     }
+    /// Preserve the first reported fatal effect before closing admission.
+    /// Later generic closure errors must not erase the actual storage failure.
+    pub(crate) fn retain_effect_failure(&self, reason: String) {
+        let _ = self.effect_failure.set(reason);
+    }
+    /// Report closed output with its retained cause, if an effect supplied one.
+    /// This diagnostic does not inspect or consume the worker completion queue.
+    pub(crate) fn restart_error(&self) -> String {
+        match self.effect_failure.get() {
+            Some(reason) => format!("Sumeragi v2 consensus requires process restart: {reason}"),
+            None => "Sumeragi v2 consensus requires process restart".to_owned(),
+        }
+    }
 }
 impl<'a> ConsensusOutputPermit<'a> {
     /// Return whether this live permit belongs to the exact guard.
@@ -291,6 +308,12 @@ impl ConsensusFailStopOperation<'_> {
     pub(crate) fn complete(mut self) {
         drop(self.permit.take());
     }
+    /// Retain the precise error before the ordinary fail-stop drop closes output.
+    /// The existing permit transition still owns closure and nonblocking drain.
+    pub(crate) fn fail(self, reason: String) {
+        self.output_guard.retain_effect_failure(reason);
+        drop(self);
+    }
 }
 impl Drop for ConsensusFailStopOperation<'_> {
     fn drop(&mut self) {
@@ -321,6 +344,27 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn effect_failure_survives_closure_and_later_failures_without_waiting_for_a_permit() {
+        let guard = ConsensusOutputGuard::isolated();
+        let admitted = guard.acquire().expect("retain earlier output");
+        let first = guard.begin_fail_stop_operation().expect("admit first I/O");
+        let later = guard.begin_fail_stop_operation().expect("admit later I/O");
+        first.fail("exact checkpoint publication failed".to_owned());
+        assert_eq!(guard.state.load(Ordering::Acquire), super::ACTIVATING);
+        assert!(guard.acquire().is_none());
+        assert_eq!(
+            guard.restart_error(),
+            "Sumeragi v2 consensus requires process restart: exact checkpoint publication failed"
+        );
+        later.fail("completion queue is closed".to_owned());
+        drop(admitted);
+        assert_eq!(guard.state.load(Ordering::Acquire), super::RESTART_REQUIRED);
+        assert_eq!(
+            guard.restart_error(),
+            "Sumeragi v2 consensus requires process restart: exact checkpoint publication failed"
+        );
+    }
     #[test]
     fn activation_drains_existing_output_and_rejects_every_later_output() {
         let guard = ConsensusOutputGuard::isolated();

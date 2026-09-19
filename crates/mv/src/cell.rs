@@ -1,67 +1,153 @@
+use std::{alloc::Layout, marker::PhantomData};
+
+use concread::ebrcell::{EbrCellOwned, Untracked};
+
 use crate::{
     BlockMode, PublicationPreparationError, PublicationPreparationResult, ReleaseGuard,
     ReleaseNotification, Value,
     publication::{CapturedPublication, NextPublication, Publication},
 };
-/// Multi-version storage for single value
-pub struct Cell<V: Value> {
+/// Multi-version storage for a single value.
+///
+/// Charged cells require both original allocation owners before cloning either
+/// writer. The untracked convenience API is unavailable in that mode.
+/// ```compile_fail
+/// use mv::{allocation::AllocationCharge, cell::Cell};
+/// fn cannot_skip_admission(cell: &Cell<u64, AllocationCharge>) {
+///     let _block = cell.block();
+/// }
+/// ```
+pub struct Cell<V: Value, Charge: Send + Sync + 'static = Untracked> {
     /// Process-local identity of the jointly published current/undo pair.
     pub(crate) publication: Publication,
     pub(crate) revert_released: ReleaseNotification,
     pub(crate) blocks_released: ReleaseNotification,
     /// Previous version of value, required to perform revert of the latest changes
-    pub(crate) revert: EbrCell<Option<V>>,
+    pub(crate) revert: EbrCell<Option<V>, Charge>,
     /// Value which represent aggregated changes of multiple blocks
-    pub(crate) blocks: EbrCell<V>,
+    pub(crate) blocks: EbrCell<V, Charge>,
 }
+/// Prepaid ownership for one current and one undo EBR allocation.
+///
+/// Both owners must exist before either writer clones its payload. These charges
+/// cover only the resources their caller actually admitted; the outer allocation
+/// layouts do not include nested values, mutation growth, preimage/capture copies,
+/// publication identities, release notifications, or epoch collector bookkeeping.
+/// Each charge moves into its actual allocation and survives published readers.
+pub struct CellAllocationCharges<Charge> {
+    current: Charge,
+    undo: Charge,
+}
+
+impl<Charge> CellAllocationCharges<Charge> {
+    /// Bind the original prepaid owners in current/undo order, without cloning.
+    pub fn new(current: Charge, undo: Charge) -> Self {
+        Self { current, undo }
+    }
+}
+
+impl CellAllocationCharges<Untracked> {
+    fn untracked() -> Self {
+        Self::new(Untracked, Untracked)
+    }
+}
+
 impl<V: Value> Cell<V> {
-    /// Construct new [`Self`]
+    /// Construct an explicitly untracked cell.
     pub fn new(v: V) -> Self {
+        Self::new_charged(v, CellAllocationCharges::untracked())
+    }
+
+    /// Replace current at the same logical cut, preserving retained undo.
+    /// The caller owns cross-field visibility and replacement authorization.
+    pub fn replace_current_preserving_predecessor(&self, value: V) {
+        self.current_replacement().publish(value);
+    }
+
+    /// Acquire both original writers for an untracked same-cut replacement.
+    /// Acquire before enclosing publication fences that another block can need.
+    pub fn current_replacement(&self) -> CurrentReplacement<'_, V> {
+        self.current_replacement_charged(CellAllocationCharges::untracked())
+    }
+
+    /// Create an untracked block to aggregate updates.
+    pub fn block(&self) -> Block<'_, V> {
+        self.block_charged(CellAllocationCharges::untracked())
+    }
+
+    /// Undo the published tip before staging an untracked replacement block.
+    pub fn block_and_revert(&self) -> Block<'_, V> {
+        self.block_and_revert_charged(CellAllocationCharges::untracked())
+    }
+}
+
+impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
+    /// Exact requested EBR allocation layouts, in current/undo order.
+    ///
+    /// These are concrete outer layouts, not estimates of nested or total heap
+    /// memory. Reserve both before constructing either writer generation.
+    pub fn allocation_layouts() -> [Layout; 2] {
+        [
+            EbrCell::<V, Charge>::allocation_layout(),
+            EbrCell::<Option<V>, Charge>::allocation_layout(),
+        ]
+    }
+
+    /// Construct current and empty undo with their already prepaid charges.
+    /// The caller must separately admit any payload before constructing `v`.
+    pub fn new_charged(v: V, charges: CellAllocationCharges<Charge>) -> Self {
+        let CellAllocationCharges { current, undo } = charges;
         Self {
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
-            revert: EbrCell::new(None),
-            blocks: EbrCell::new(v),
+            revert: EbrCell::new_charged(None, undo),
+            blocks: EbrCell::new_charged(v, current),
         }
     }
-    /// Create persistent view of storage at certain point in time
+
+    /// Create a persistent view of the current value without cloning it.
     pub fn view(&self) -> View<'_, V> {
         View {
             blocks: self.blocks.read(),
-            _marker: core::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
+
     /// Borrow the retained predecessor of the most recently committed block.
     ///
-    /// `None` means that block did not change the value. This immutable EBR
-    /// view performs no clone of `V` and remains stable across later commits.
-    /// Consumers combining current and predecessor views must bind both reads
-    /// to their own publication generation; this method is not a joint snapshot.
+    /// `None` means that block did not change the value. This immutable EBR view
+    /// performs no clone. Consumers joining current and predecessor must bind
+    /// both reads to their own publication generation; this is not a joint view.
     pub fn predecessor_view(&self) -> View<'_, Option<V>> {
         View {
             blocks: self.revert.read(),
-            _marker: core::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
-    /// Replace the current value at the same logical cut, preserving retained undo.
+
+    /// Acquire the original current/undo pair for a same-cut replacement.
     ///
-    /// This is for validated bootstrap, restore, or configuration projection at
-    /// an existing cut. It must not publish a new block: use [`Self::block`] for
-    /// a height transition. The caller owns any cross-field publication generation.
-    /// Both writers are acquired in the same order as block scopes; no observer
-    /// can mutate predecessor storage concurrently with this current replacement.
-    pub fn replace_current_preserving_predecessor(&self, value: V) {
-        let _revert = self.revert_released.poisoning_guard(self.revert.write());
-        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
-        *blocks.get_mut() = value;
-        self.publication
-            .publish(|| blocks.release_with(|guard| guard.commit()));
+    /// Both charges are owned before either clone. Acquire before enclosing
+    /// publication fences that another block can need. Abandonment changes no
+    /// value or publication identity. The replacement payload needs separate
+    /// admission; this method accounts for the requested EBR allocations only.
+    pub fn current_replacement_charged(
+        &self,
+        charges: CellAllocationCharges<Charge>,
+    ) -> CurrentReplacement<'_, V, Charge> {
+        let (revert, blocks) = self.acquire_charged_writers(charges);
+        CurrentReplacement {
+            blocks,
+            _revert: revert,
+            publication: &self.publication,
+        }
     }
-    /// Create block to aggregate updates
-    pub fn block(&self) -> Block<'_, V> {
-        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
-        let blocks = self.blocks_released.poisoning_guard(self.blocks.write());
+
+    /// Create a block using a prepaid current/undo pair before either clone.
+    /// Preimage copies and later payload growth require separate admission.
+    pub fn block_charged(&self, charges: CellAllocationCharges<Charge>) -> Block<'_, V, Charge> {
+        let (mut revert, blocks) = self.acquire_charged_writers(charges);
         let predecessor = self.publication.capture();
         *revert.get_mut() = None;
         Block::new(
@@ -73,16 +159,17 @@ impl<V: Value> Cell<V> {
             BlockMode::Ordinary,
         )
     }
-    /// Create block to aggregate updates and revert changes made in latest block
-    pub fn block_and_revert(&self) -> Block<'_, V> {
-        let mut revert = self.revert_released.poisoning_guard(self.revert.write());
-        let mut blocks = self.blocks_released.poisoning_guard(self.blocks.write());
+
+    /// Undo the published tip before staging a replacement with prepaid owners.
+    /// The original undo/current semantics and writer order remain unchanged.
+    pub fn block_and_revert_charged(
+        &self,
+        charges: CellAllocationCharges<Charge>,
+    ) -> Block<'_, V, Charge> {
+        let (mut revert, mut blocks) = self.acquire_charged_writers(charges);
         let predecessor = self.publication.capture();
-        {
-            let revert = core::mem::take(revert.get_mut());
-            if let Some(revert) = revert {
-                *blocks.get_mut() = revert;
-            }
+        if let Some(revert) = core::mem::take(revert.get_mut()) {
+            *blocks.get_mut() = revert;
         }
         Block::new(
             revert,
@@ -93,7 +180,35 @@ impl<V: Value> Cell<V> {
             BlockMode::Replace,
         )
     }
+
+    fn acquire_charged_writers(
+        &self,
+        charges: CellAllocationCharges<Charge>,
+    ) -> (CellWriter<'_, Option<V>, Charge>, CellWriter<'_, V, Charge>) {
+        let CellAllocationCharges { current, undo } = charges;
+        let revert = self
+            .revert_released
+            .with_acquisition_unwind_notification(|| {
+                self.revert
+                    .write_charged(|_, _| Ok::<_, std::convert::Infallible>(undo))
+                    .unwrap_or_else(|never| match never {})
+            });
+        let revert = self.revert_released.poisoning_guard(revert);
+        let blocks = self
+            .blocks_released
+            .with_acquisition_unwind_notification(|| {
+                self.blocks
+                    .write_charged(|_, _| Ok::<_, std::convert::Infallible>(current))
+                    .unwrap_or_else(|never| match never {})
+            });
+        let blocks = self.blocks_released.poisoning_guard(blocks);
+        (revert, blocks)
+    }
 }
+
+type CellWriter<'storage, V, Charge> =
+    ReleaseGuard<'storage, concread::ebrcell::EbrCellWriteTxn<'storage, V, Charge>>;
+
 impl<V: Value + Default> Default for Cell<V> {
     fn default() -> Self {
         Self::new(V::default())
@@ -124,6 +239,37 @@ mod view {
 }
 use concread::EbrCell;
 pub use view::View;
+
+/// Owned writers for a current-value replacement which preserves the exact undo.
+/// This is physical custody only, not authorization for a new block or State.
+#[must_use = "retain this owner until same-cut publication or abandonment"]
+pub struct CurrentReplacement<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
+    // Drop the current writer before the outer undo writer on abandonment.
+    blocks: CellWriter<'storage, V, Charge>,
+    _revert: CellWriter<'storage, Option<V>, Charge>,
+    publication: &'storage Publication,
+}
+
+impl<V: Value, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> {
+    /// Borrow the original current value while both writers remain held.
+    pub fn get(&self) -> &V {
+        &self.blocks
+    }
+
+    /// Publish the replacement once without changing or clearing retained undo.
+    /// The caller must already hold its complete cross-field visibility boundary.
+    pub fn publish(self, value: V) {
+        let Self {
+            _revert,
+            mut blocks,
+            publication,
+        } = self;
+        *blocks.get_mut() = value;
+        publication.publish(|| blocks.release_with(|guard| guard.commit()));
+        drop(_revert);
+    }
+}
+
 /// Borrowed before/after values for a cell touched by an overlay.
 ///
 /// Equal values remain explicit: a mutable borrow is not proof of a semantic
@@ -135,192 +281,223 @@ pub struct TouchedValue<'a, V: Value> {
     pub after: &'a V,
 }
 
-/// Owned cell delta detached from its original writer after resource admission.
+/// Original current/undo successor allocations without their execution writers.
 ///
-/// This move-only owner retains no EBR pin or storage lock. It identifies the
-/// original published current/undo pair even when the candidate did not touch
-/// the value. Replacement mode also retains the instruction to undo the tip;
-/// that step is not a candidate touch. This is neither a complete read view nor
-/// authority to publish. Installation reacquires the exact original writers;
-/// the aggregate caller must admit and prepare every component before publishing.
-pub struct Detached<V: Value, Admission> {
+/// This move-only owner retains the exact payloads, allocation charges, original
+/// predecessor identity and next publication identity. It holds no EBR pin or
+/// storage lock. Reacquisition never reconstructs or clones a successor; only the
+/// enclosing aggregate owner can supply cross-component publication authority.
+pub struct Detached<V: Value, Admission, Charge: Send + Sync + 'static = Untracked> {
+    revert: EbrCellOwned<Option<V>, Charge>,
+    blocks: EbrCellOwned<V, Charge>,
+    // Capacity outlives both original payload allocations on abandonment.
+    metadata: DetachedMetadata<Admission>,
+}
+
+struct DetachedMetadata<Admission> {
     predecessor: CapturedPublication,
     mode: BlockMode,
     dirty: bool,
-    change: Option<(V, V)>,
-    // Release the caller's reservation only after the retained values.
+    next: NextPublication,
     admission: Admission,
 }
 
-impl<V: Value, Admission> Detached<V, Admission> {
-    /// Return how the actual original block acquired its predecessor.
+impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, Charge> {
+    /// Return how the original block acquired its predecessor.
     pub fn mode(&self) -> BlockMode {
-        self.mode
+        self.metadata.mode
     }
 
     /// Return the original block's current-value publication requirement.
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.metadata.dirty
     }
 
-    /// Borrow the exact candidate touch; absence still requires clearing undo.
+    /// Borrow the exact retained preimage and successor; this never clones.
     pub fn touched_value(&self) -> Option<TouchedValue<'_, V>> {
-        self.change
-            .as_ref()
-            .map(|(before, after)| TouchedValue { before, after })
+        self.revert.as_ref().map(|before| TouchedValue {
+            before,
+            after: &self.blocks,
+        })
     }
 
-    /// Borrow the resource reservation returned by the admission callback.
+    /// Borrow the separate reservation returned before original-owner capture.
+    /// Actual current/undo allocation charges remain inside their own allocations.
     pub fn admission(&self) -> &Admission {
-        &self.admission
+        &self.metadata.admission
     }
 
-    /// Observe whether this owner's published current/undo identity still matches.
-    ///
-    /// This is a momentary observation, not an exclusive publication lease or
-    /// permission to reject a decided carrier. The aggregate State owner must
-    /// reacquire all component writers and validate their identities together.
-    pub fn matches_current(&self, cell: &Cell<V>) -> bool {
-        self.predecessor.matches(&cell.publication)
+    /// Observe whether this owner's original published pair still matches.
+    /// This momentary observation grants no publication authority.
+    pub fn matches_current(&self, cell: &Cell<V, Charge>) -> bool {
+        self.metadata.predecessor.matches(&cell.publication)
     }
 
-    /// Compare the captured predecessor and mode of an already acquired block.
-    ///
-    /// Candidate mutations in that block do not change its acquisition identity.
-    /// Matching grants no publication capability.
-    pub fn matches_block_predecessor(&self, block: &Block<'_, V>) -> bool {
-        self.mode == block.mode && self.predecessor.same_as(&block.predecessor)
+    /// Compare the original predecessor and mode of an already acquired block.
+    pub fn matches_block_predecessor(&self, block: &Block<'_, V, Charge>) -> bool {
+        self.metadata.mode == block.mode && self.metadata.predecessor.same_as(&block.predecessor)
     }
 
-    /// Prepare this exact delta for publication without making it visible.
+    /// Reacquire both original writers around the exact owned successors.
     ///
-    /// Admission runs before acquiring either writer, because acquiring an EBR
-    /// writer itself clones its value. It must cover both current/undo COW,
-    /// staging copies, the next identity and retained-reader installation peak.
-    /// Both original writers are then acquired without waiting and the exact
-    /// captured identity is checked again under those writers. Refusal returns
-    /// this unchanged journal; the caller can retain it for a reachable retry.
+    /// No successor clone or generation allocation occurs. The original charges
+    /// and prebuilt publication identity survive every refusal and abort. The
+    /// callback may retain separately prepaid temporary installation resources;
+    /// it must not refund or reacquire the actual generation charges.
     ///
-    /// The result holds physical writers only for the final synchronous
-    /// publication phase. An aggregate caller must prepare every component and
-    /// join its external authorization before invoking any component's publish.
+    /// Original predecessor identity is checked before admission and again under
+    /// both writers. Every refusal returns the same payload and allocation owners.
+    /// An aggregate caller must join all components and external authorization
+    /// before invoking any component's publish.
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
-        target: &'target Cell<V>,
-        admit: impl FnOnce(&Self, &Cell<V>) -> Result<Installation, E>,
+        target: &'target Cell<V, Charge>,
+        admit: impl FnOnce(&Self, &Cell<V, Charge>) -> Result<Installation, E>,
     ) -> PublicationPreparationResult<
-        PreparedPublication<'target, V, Admission, Installation>,
+        PreparedPublication<'target, V, Admission, Installation, Charge>,
         Self,
         E,
     > {
-        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
+        if let Err(error) = self
+            .metadata
+            .predecessor
+            .try_check_current(&target.publication)
+        {
             return Err((self, error));
         }
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
             Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
         };
+        let Self {
+            revert,
+            blocks,
+            metadata,
+        } = self;
         let wait = target.revert_released.observe();
-        let Some(revert) = target.revert.try_write() else {
-            return Err((
-                self,
-                PublicationPreparationError::after_failed_acquisition(wait),
-            ));
+        let revert = match target.revert.try_write_owned(revert) {
+            Ok(writer) => target.revert_released.poisoning_guard(writer),
+            Err(revert) => {
+                let error = if target.revert.is_poisoned() {
+                    PublicationPreparationError::Poisoned
+                } else {
+                    PublicationPreparationError::after_failed_acquisition(wait)
+                };
+                return Err((
+                    Self {
+                        revert,
+                        blocks,
+                        metadata,
+                    },
+                    error,
+                ));
+            }
         };
-        let mut revert = target.revert_released.poisoning_guard(revert);
         let wait = target.blocks_released.observe();
-        let Some(blocks) = target.blocks.try_write() else {
-            return Err((
-                self,
-                PublicationPreparationError::after_failed_acquisition(wait),
-            ));
+        let blocks = match target.blocks.try_write_owned(blocks) {
+            Ok(writer) => target.blocks_released.poisoning_guard(writer),
+            Err(blocks) => {
+                let error = if target.blocks.is_poisoned() {
+                    PublicationPreparationError::Poisoned
+                } else {
+                    PublicationPreparationError::after_failed_acquisition(wait)
+                };
+                let revert = revert.release_with(|writer| writer.detach());
+                return Err((
+                    Self {
+                        revert,
+                        blocks,
+                        metadata,
+                    },
+                    error,
+                ));
+            }
         };
-        let mut blocks = target.blocks_released.poisoning_guard(blocks);
-        if let Err(error) = self.predecessor.try_check_current(&target.publication) {
-            return Err((self, error));
-        }
-        let next = NextPublication::new();
-        let old_undo = revert.get_mut().take();
-        if self.mode == BlockMode::Replace
-            && let Some(value) = old_undo
-        {
-            *blocks.get_mut() = value;
-        }
-        if let Some((before, after)) = &self.change {
-            *revert.get_mut() = Some(before.clone());
-            *blocks.get_mut() = after.clone();
-        }
-        Ok(PreparedPublication {
+        let prepared = PreparedPublication {
             revert,
             blocks,
             publication: &target.publication,
-            next,
-            journal: self,
+            metadata,
             installation,
-        })
+        };
+        if let Err(error) = prepared
+            .metadata
+            .predecessor
+            .try_check_current(&target.publication)
+        {
+            return Err((prepared.abort(), error));
+        }
+        Ok(prepared)
     }
 }
 
-/// Exact staged current/undo publication with both original writers retained.
-/// Drop or [`Self::abort`] publishes nothing. There is no mutable block interface.
+/// Original successors held under both exact target writers.
+/// Drop abandons them without publication; abort returns the same allocations.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
-pub struct PreparedPublication<'target, V: Value, Admission, Installation> {
-    revert: ReleaseGuard<'target, concread::ebrcell::EbrCellWriteTxn<'target, Option<V>>>,
-    blocks: ReleaseGuard<'target, concread::ebrcell::EbrCellWriteTxn<'target, V>>,
+pub struct PreparedPublication<
+    'target,
+    V: Value,
+    Admission,
+    Installation,
+    Charge: Send + Sync + 'static = Untracked,
+> {
+    revert: CellWriter<'target, Option<V>, Charge>,
+    blocks: CellWriter<'target, V, Charge>,
     publication: &'target Publication,
-    next: NextPublication,
-    journal: Detached<V, Admission>,
-    // Release resources only after staged and original values and their writers.
+    metadata: DetachedMetadata<Admission>,
+    // Release temporary resources after the original writers and payloads.
     installation: Installation,
 }
 
-impl<V: Value, Admission, Installation> PreparedPublication<'_, V, Admission, Installation> {
-    /// Release the installation writers and return the exact original journal.
-    pub fn abort(self) -> Detached<V, Admission> {
+impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
+    PreparedPublication<'_, V, Admission, Installation, Charge>
+{
+    /// Release both writer locks and return the exact original allocation owners.
+    pub fn abort(self) -> Detached<V, Admission, Charge> {
         let Self {
             revert,
             blocks,
             publication: _,
-            next,
-            journal,
+            metadata,
             installation,
         } = self;
-        drop(blocks);
-        drop(revert);
-        drop(next);
+        let blocks = blocks.release_with(|writer| writer.detach());
+        let revert = revert.release_with(|writer| writer.detach());
         drop(installation);
-        journal
+        Detached {
+            revert,
+            blocks,
+            metadata,
+        }
     }
 
-    /// Publish once, returning both reservations to the aggregate owner.
+    /// Publish once, returning capture and temporary installation reservations.
     ///
-    /// All fallible semantic preparation has finished. Concread's internal
-    /// publication allocations and deferred EBR reclamation must already be
-    /// covered by admission; this is not an allocation-free commit guarantee.
-    /// The caller owns joint visibility and finality across distinct components.
+    /// Actual generation charges stay inside the published/retired allocations.
+    /// The original next identity was allocated before detachment. Collector and
+    /// other control bookkeeping still require their own admission; this method
+    /// makes no complete heap-budget or allocation-free commit guarantee.
     pub fn publish(self) -> (Admission, Installation) {
         let Self {
             revert,
             blocks,
             publication,
-            next,
-            journal,
+            metadata,
             installation,
         } = self;
-        let Detached {
+        let DetachedMetadata {
             predecessor: _,
             mode: _,
             dirty,
-            change,
+            next,
             admission,
-        } = journal;
+        } = metadata;
         publication.publish_prepared(next, || {
             if dirty {
                 blocks.release_with(|guard| guard.commit());
             }
             revert.release_with(|guard| guard.commit());
         });
-        drop(change);
         (admission, installation)
     }
 }
@@ -332,21 +509,20 @@ mod publication_tests;
 /// Module for [`Block`] and it's related impls
 mod block {
     use super::*;
-    use concread::ebrcell::EbrCellWriteTxn;
     use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
-    pub struct Block<'storage, V: Value> {
-        pub(crate) revert: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, Option<V>>>,
-        pub(crate) blocks: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, V>>,
+    pub struct Block<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
+        pub(crate) revert: CellWriter<'storage, Option<V>, Charge>,
+        pub(crate) blocks: CellWriter<'storage, V, Charge>,
         pub(super) dirty: bool,
         pub(super) publication: &'storage Publication,
         pub(super) predecessor: CapturedPublication,
         pub(super) mode: BlockMode,
     }
-    impl<'storage, V: Value> Block<'storage, V> {
+    impl<'storage, V: Value, Charge: Send + Sync + 'static> Block<'storage, V, Charge> {
         pub(super) fn new(
-            revert: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, Option<V>>>,
-            blocks: ReleaseGuard<'storage, EbrCellWriteTxn<'storage, V>>,
+            revert: CellWriter<'storage, Option<V>, Charge>,
+            blocks: CellWriter<'storage, V, Charge>,
             dirty: bool,
             publication: &'storage Publication,
             predecessor: CapturedPublication,
@@ -362,7 +538,7 @@ mod block {
             }
         }
         /// Create transaction for the block
-        pub fn transaction<'block>(&'block mut self) -> Transaction<'block, 'storage, V>
+        pub fn transaction<'block>(&'block mut self) -> Transaction<'block, 'storage, V, Charge>
         where
             'storage: 'block,
         {
@@ -393,27 +569,19 @@ mod block {
             });
         }
 
-        /// Admit retention, capture this exact delta, and release both writers.
+        /// Admit metadata retention, then release writers around their original allocations.
         ///
-        /// The callback inspects this immutable block before capture allocates
-        /// or clones final values. Its returned reservation lives as long as the
-        /// detached owner. Failure drops the original block without publishing.
-        /// The preimage is moved; only a touched final value is cloned. Untouched
-        /// cells retain identity and mode without copying the value.
-        ///
-        /// The caller must admit value memory, capture overlap and any future
-        /// installation peak. This API does not promise allocation-free capture
-        /// or installation and does not itself choose a byte-accounting policy.
+        /// Both successor payloads and charges move into the detached owner
+        /// without cloning. The next publication identity is allocated after
+        /// admission and retained across installation retries. Payload allocation
+        /// custody was already required before this block's original acquisition;
+        /// this callback cannot retroactively fund execution or nested values.
         pub fn try_detach<Admission, E>(
-            mut self,
+            self,
             admit: impl FnOnce(&Self) -> Result<Admission, E>,
-        ) -> Result<Detached<V, Admission>, E> {
+        ) -> Result<Detached<V, Admission, Charge>, E> {
             let admission = admit(&self)?;
-            let change = self
-                .revert
-                .get_mut()
-                .take()
-                .map(|before| (before, (*self.blocks).clone()));
+            let next = NextPublication::new();
             let Self {
                 revert,
                 blocks,
@@ -422,14 +590,18 @@ mod block {
                 mode,
                 publication: _,
             } = self;
-            drop(blocks);
-            drop(revert);
+            let blocks = blocks.release_with(|writer| writer.detach());
+            let revert = revert.release_with(|writer| writer.detach());
             Ok(Detached {
-                predecessor,
-                mode,
-                dirty,
-                change,
-                admission,
+                revert,
+                blocks,
+                metadata: DetachedMetadata {
+                    predecessor,
+                    mode,
+                    dirty,
+                    next,
+                    admission,
+                },
             })
         }
         /// Read the value before this block's first mutable access.
@@ -478,7 +650,7 @@ mod block {
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.blocks.get_mut();
-            self.revert.get_or_insert(value.clone());
+            self.revert.get_or_insert_with(|| value.clone());
             self.dirty = true;
             value
         }
@@ -487,25 +659,27 @@ mod block {
             &self.blocks
         }
     }
-    impl<V: Value> Deref for Block<'_, V> {
+    impl<V: Value, Charge: Send + Sync + 'static> Deref for Block<'_, V, Charge> {
         type Target = V;
         fn deref(&self) -> &Self::Target {
             self.get()
         }
     }
-    impl<V: Value> DerefMut for Block<'_, V> {
+    impl<V: Value, Charge: Send + Sync + 'static> DerefMut for Block<'_, V, Charge> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.get_mut()
         }
     }
     /// Part of block's aggregated changes which applied or aborted at the same time
-    pub struct Transaction<'block, 'storage, V: Value> {
+    pub struct Transaction<'block, 'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
         pub(crate) applied: bool,
         pub(crate) dirty_before: bool,
         pub(crate) revert: Option<V>,
-        pub(crate) block: &'block mut Block<'storage, V>,
+        pub(crate) block: &'block mut Block<'storage, V, Charge>,
     }
-    impl<'block, 'storage: 'block, V: Value> Transaction<'block, 'storage, V> {
+    impl<'block, 'storage: 'block, V: Value, Charge: Send + Sync + 'static>
+        Transaction<'block, 'storage, V, Charge>
+    {
         /// Read the value before the parent block's first mutable access.
         ///
         /// Both the block and open transaction journals participate, so a
@@ -547,7 +721,7 @@ mod block {
         /// Get mutable access to the value stored in cell
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.block.blocks.get_mut();
-            self.revert.get_or_insert(value.clone());
+            self.revert.get_or_insert_with(|| value.clone());
             self.block.dirty = true;
             value
         }
@@ -556,7 +730,9 @@ mod block {
             &self.block.blocks
         }
     }
-    impl<'block, 'store: 'block, V: Value> Drop for Transaction<'block, 'store, V> {
+    impl<'block, 'store: 'block, V: Value, Charge: Send + Sync + 'static> Drop
+        for Transaction<'block, 'store, V, Charge>
+    {
         fn drop(&mut self) {
             if self.applied {
                 return;
@@ -569,13 +745,13 @@ mod block {
             self.block.dirty = self.dirty_before;
         }
     }
-    impl<V: Value> Deref for Transaction<'_, '_, V> {
+    impl<V: Value, Charge: Send + Sync + 'static> Deref for Transaction<'_, '_, V, Charge> {
         type Target = V;
         fn deref(&self) -> &Self::Target {
             self.get()
         }
     }
-    impl<V: Value> DerefMut for Transaction<'_, '_, V> {
+    impl<V: Value, Charge: Send + Sync + 'static> DerefMut for Transaction<'_, '_, V, Charge> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.get_mut()
         }
@@ -739,3 +915,7 @@ mod predecessor_view_tests;
 #[cfg(test)]
 #[path = "cell/detached_tests.rs"]
 mod detached_tests;
+
+#[cfg(test)]
+#[path = "cell/charged_allocation_tests.rs"]
+mod charged_allocation_tests;

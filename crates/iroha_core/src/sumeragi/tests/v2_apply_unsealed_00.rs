@@ -153,7 +153,10 @@ fn native_amx_prevote_byte_failures_have_precommit_error_classification() {
     assert!(local.requires_restart_recovery());
     assert!(local.rejection_identity().is_none());
     assert!(
-        local.local_busy().is_none(),
+        matches!(
+            local.local_refusal(),
+            Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+        ),
         "fixed configuration has no release event"
     );
 }
@@ -2940,6 +2943,69 @@ fn retired_merge_carrier_startup_fixture() -> RetiredMergeCarrierStartupFixture 
         outcome_paths,
         queue_root,
     }
+}
+
+#[test]
+fn lane_lifecycle_local_storage_and_publication_busy_never_reject_proposals() {
+    use crate::state::LaneLifecycleError;
+    let release = mv::ReleaseNotification::default();
+    for error in [
+        LaneLifecycleError::Storage("tiered owner requires recovery".to_owned()),
+        LaneLifecycleError::GeometryStorage(crate::kura::Error::IO(
+            std::io::Error::other("retained journal failure"),
+            std::path::PathBuf::from("lane_geometry_journal.norito"),
+        )),
+        LaneLifecycleError::DrainObservation(crate::state::MergeLedgerCommitError::Persistence(
+            crate::kura::Error::IO(
+                std::io::Error::other("unreadable exact retirement marker"),
+                std::path::PathBuf::from(".lane-incarnation.norito"),
+            ),
+        )),
+        LaneLifecycleError::PublicationBusy {
+            field: "lane geometry guard",
+            wait: release.observe(),
+        },
+    ] {
+        let classified = V2ApplyService::classify_lane_lifecycle_validation_error(error);
+        assert!(matches!(
+            classified.local_refusal(),
+            Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert!(classified.requires_restart_recovery());
+    }
+}
+
+#[test]
+fn committed_state_geometry_refusal_retains_source_and_requires_recovery() {
+    use crate::state::{LaneLifecycleError, storage_transactions::TransactionsBlockError};
+    use std::error::Error as _;
+
+    let release = mv::ReleaseNotification::default();
+    let observation = release.observe();
+    let error = V2ApplyError::CommittedStatePublication(TransactionsBlockError::from(
+        LaneLifecycleError::PublicationBusy {
+            field: "State publication writer",
+            wait: observation.clone(),
+        },
+    ));
+    assert!(error.requires_restart_recovery());
+    assert!(matches!(
+        error.local_refusal(),
+        Some(super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_))
+    ));
+    let membership_error = error
+        .source()
+        .and_then(|source| source.downcast_ref::<TransactionsBlockError>())
+        .expect("post-Kura failure retains its exact State commit source");
+    let lifecycle_error = membership_error
+        .source()
+        .and_then(|source| source.downcast_ref::<LaneLifecycleError>())
+        .expect("State commit source retains its exact local geometry refusal");
+    assert!(matches!(
+        lifecycle_error,
+        LaneLifecycleError::PublicationBusy { field: "State publication writer", wait }
+            if wait == &observation
+    ));
 }
 
 /// Apply one ordinary lane carrier through the real service for terminal ingress tests.

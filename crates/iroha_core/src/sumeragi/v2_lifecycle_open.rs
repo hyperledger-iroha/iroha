@@ -1259,6 +1259,9 @@ pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
     /// The opaque installed recovered-WAL projection and repaired frame differ.
     #[error("recovered-WAL Sign storage recovery is incomplete: {0}")]
     RecoveredWalSign(&'static str),
+    /// Native interrupted-tip Apply could not join its exact retained lifecycle owner.
+    #[error("pending Kura Apply storage recovery is incomplete: {0}")]
+    PendingKuraApply(&'static str),
     /// The complete recovered body-pipeline census differs from the ledger.
     #[error("durable body-pipeline startup census is inconsistent: {0}")]
     DurableCertifiedBodyPipeline(&'static str),
@@ -3675,7 +3678,11 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         .as_mut()
         .and_then(|pipeline| pipeline.take_pending_kura_apply())
     {
-        lifecycle_outputs.attach_pending_apply(ledger, comparison)?;
+        let verified = body_pipeline
+            .as_ref()
+            .expect("pending Apply retains its body pipeline")
+            .verified();
+        lifecycle_outputs.attach_pending_apply(ledger, verified, comparison)?;
     }
     let mut claims = BTreeMap::new();
     for record in ledger.records() {

@@ -7,8 +7,31 @@
 use super::{super::*, PreparedCarrier};
 use crate::{
     block::{ValidBlock, valid::ValidatedCarrierPreparationInput},
+    kura::KuraPublicationLease,
     sumeragi::exec,
 };
+use iroha_data_model::block::consensus_v2::{ExecutionCommitment, HeightContext};
+
+/// A local durable-source refusal, never a deterministic proposal rejection.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CarrierSourceAuthenticationError {
+    /// Original execution, retained source, or exact durable carrier differ.
+    #[error("retained carrier source differs from durable evidence: {0}")]
+    Identity(String),
+    /// Authenticated local absence requires recovery of this exact executed body.
+    #[error(
+        "result-bearing carrier body at height {height} ({block_hash}) is unavailable; exact body recovery is required"
+    )]
+    CarrierBodyUnavailable {
+        /// Exact decided carrier height whose complete result image is required.
+        height: u64,
+        /// Original decided block identity; a different body cannot satisfy it.
+        block_hash: HashOf<BlockHeader>,
+    },
+    /// Required evidence is missing or failed its exact guarded storage read.
+    #[error("retained carrier source requires storage recovery: {0}")]
+    Storage(#[from] crate::kura::Error),
+}
 
 /// Complete actual prefix owners, moved once after their exact attachment checks.
 /// This is execution custody only; decision, durability and publication remain
@@ -32,6 +55,135 @@ enum PrefixSourceAuthority {
 }
 
 impl ValidatedExecutionPrefix {
+    /// Authenticate original execution and immutable sources under the held Kura
+    /// boundary. The caller retains this prefix and lease together; no capability
+    /// escapes, no World delta is resealed and no source is released. Installation
+    /// admission must cover the guarded reads, encoding and witness verification.
+    pub(in crate::state) fn authenticate_durable_carrier(
+        &self,
+        block: &SignedBlock,
+        context: &HeightContext,
+        commitment: &ExecutionCommitment,
+        lease: &KuraPublicationLease<'_>,
+    ) -> Result<(), CarrierSourceAuthenticationError> {
+        use CarrierSourceAuthenticationError::Identity;
+
+        self.sealed.verify_wire_binding(block).map_err(Identity)?;
+        let source_context = self.sources().source_context();
+        if source_context.network_id != context.network_id
+            || source_context.height != context.height
+            || context.height != block.header().height().get()
+            || self.sources().proposal() != block.hash()
+            || self.sources().is_native()
+                != matches!(&self.authority, PrefixSourceAuthority::Native(_))
+        {
+            return Err(Identity(
+                "execution source lost its retained context".into(),
+            ));
+        }
+        let manifest =
+            exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+                block, None,
+            )
+            .map_err(Identity)?;
+        let lanes =
+            exec::LaneFinalityManifestV1::from_result_bearing_block(block).map_err(Identity)?;
+        let actual = exec::execution_commitment_from_validated_block(
+            &self.witness,
+            &manifest,
+            &lanes,
+            block,
+        )
+        .map_err(|error| Identity(error.into()))?;
+        if actual != *commitment {
+            return Err(Identity(
+                "execution commitment differs from its original witness".into(),
+            ));
+        }
+        let height = usize::try_from(context.height)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or_else(|| Identity("carrier height is not representable".into()))?;
+        let durable = lease.read_first_admission_carrier(height, block.hash())?;
+        if durable.finality.commit_qc.round.context_id != context.id()
+            || durable.finality.commit_qc.execution_commitment != *commitment
+        {
+            return Err(Identity(
+                "durable finality differs from the retained execution or context".into(),
+            ));
+        }
+        let durable_body =
+            durable
+                .body
+                .ok_or(CarrierSourceAuthenticationError::CarrierBodyUnavailable {
+                    height: context.height,
+                    block_hash: block.hash(),
+                })?;
+        self.sealed
+            .verify_wire_binding(&durable_body)
+            .map_err(Identity)?;
+        match &self.authority {
+            PrefixSourceAuthority::Ordinary => {
+                if block.execution_context().is_some_and(|bundle| {
+                    bundle.native_lane_decisions.is_some() || bundle.merge_entry.is_some()
+                }) {
+                    return Err(Identity(
+                        "ordinary execution cannot substitute another source family".into(),
+                    ));
+                }
+            }
+            PrefixSourceAuthority::Native(native) => {
+                if !native.retains_carrier(block, context) {
+                    return Err(Identity(
+                        "Native execution lost its original stage or complete sources".into(),
+                    ));
+                }
+                for group in native.sources() {
+                    let original = group.body().source();
+                    let rank = original.priority();
+                    let height = usize::try_from(rank.carrier_height)
+                        .ok()
+                        .and_then(std::num::NonZeroUsize::new)
+                        .ok_or_else(|| {
+                            Identity("Native first-carrier height is not representable".into())
+                        })?;
+                    if rank.carrier_height >= context.height {
+                        return Err(Identity(
+                            "Native first admission is not an applying predecessor".into(),
+                        ));
+                    }
+                    let read =
+                        lease.read_first_admission_carrier(height, original.carrier_hash())?;
+                    if &read.finality != original.source().finality()
+                        || read.finality.height_context.network_id != context.network_id
+                    {
+                        return Err(Identity(
+                            "Native first-carrier finality differs from its original source".into(),
+                        ));
+                    }
+                    if let Some(body) = read.body {
+                        let index = usize::try_from(rank.admission_index).map_err(|_| {
+                            Identity("Native first-admission index is not representable".into())
+                        })?;
+                        let control = body
+                            .execution_context()
+                            .and_then(|bundle| bundle.queue_plan_admissions.get(index));
+                        if control.map(Vec::as_slice) != Some(original.canonical_control_bytes()) {
+                            return Err(Identity(
+                                "Native first-admission bytes differ from their retained position"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    // Authenticated local absence (eviction or imported prefix)
+                    // may use these same privately verified source bytes. Missing
+                    // or corrupt finality/occupied body already failed above.
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Match the exact immutable source owner at the sole publication boundary.
     pub(in crate::state::carrier_preparation) fn retains_carrier(
         &self,
@@ -276,6 +428,12 @@ pub(super) fn prepare<'state>(
     let result = (|| {
         let (mut preparation, native_amx_manifest, execution_prefix) =
             PrefixPreparation::capture(state, &valid, native)?;
+        // Both authenticated input constructors finish the common typed tail
+        // before moving this owner. Metadata capture must not become another
+        // fallible local autoscale evaluation hidden behind a String result.
+        if !preparation.state.autoscale_lifecycle_evaluated {
+            return Err("carrier prefix lost its completed autoscale evaluation".to_owned());
+        }
         let block = valid.as_ref();
         preparation
             .state
@@ -294,17 +452,12 @@ pub(super) fn prepare<'state>(
             .state
             .prepare_carrier_publication_events(block.header())
             .map_err(|error| error.to_string())?;
-        let tiered_snapshot = tiered_publication::PreparedTieredSnapshot::prepare(
-            &preparation.state.world,
-            &preparation.state.state_ref.tiered_snapshot_worker,
-        );
         Ok((
             preparation,
             native_amx_manifest,
             execution_prefix,
             world_effects,
             publication_events,
-            tiered_snapshot,
         ))
     })();
     match result {
@@ -314,7 +467,6 @@ pub(super) fn prepare<'state>(
             execution_prefix,
             world_effects,
             publication_events,
-            tiered_snapshot,
         )) => {
             let PrefixPreparation {
                 state,
@@ -329,7 +481,6 @@ pub(super) fn prepare<'state>(
                 native_amx_manifest,
                 _world_effects: world_effects,
                 _publication_events: publication_events,
-                _tiered_snapshot: tiered_snapshot,
             })
         }
         Err(error) => Err((Box::new(valid.into()), error)),

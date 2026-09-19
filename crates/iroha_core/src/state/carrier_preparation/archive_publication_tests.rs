@@ -4,7 +4,8 @@ use super::*;
 use crate::{
     query::{
         provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveV1,
+            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveKeyV1,
+            ProviderIngestFinalizedArchiveV1,
         },
         reputation_finalized::{
             ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
@@ -102,9 +103,33 @@ fn fixture() -> Box<Fixture> {
         provider: Arc::downgrade(&provider),
         reputation: Arc::downgrade(&reputation),
     };
+    let provider_candidate = provider
+        .try_reserve_candidate(
+            ProviderIngestFinalizedArchiveKeyV1::try_new(
+                context.network_id,
+                proposal.header().height().get(),
+                *proposal.hash().as_ref(),
+                proposal.header().creation_time_ms,
+            )
+            .unwrap(),
+            &state.kura,
+        )
+        .unwrap();
+    let reputation_candidate = reputation
+        .try_reserve_candidate(
+            ReputationFinalizedArchiveKeyV1::try_new(
+                context.network_id,
+                proposal.header().height().get(),
+                *proposal.hash().as_ref(),
+            )
+            .unwrap(),
+            proposal.header().creation_time_ms,
+            &state.kura,
+        )
+        .unwrap();
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real signed policy execution: {error}"))
-        .prepare_journals(Some(&provider), Some(&reputation), |_| {
+        .prepare_journals(Some(provider_candidate), Some(reputation_candidate), |_| {
             Ok::<_, Infallible>(reservation(&capture_released))
         })
         .unwrap();

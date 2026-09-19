@@ -6,6 +6,20 @@
 
 use super::*;
 
+#[cfg(test)]
+std::thread_local! {
+    static RUNTIME_REPLACEMENT_ACQUISITION: std::cell::RefCell<Option<std::sync::mpsc::Sender<()>>>
+        = const { std::cell::RefCell::new(None) };
+}
+
+/// Observe the actual next acquisition boundary without substituting a writer.
+#[cfg(test)]
+pub(super) fn observe_next_runtime_replacement_for_test(observer: std::sync::mpsc::Sender<()>) {
+    RUNTIME_REPLACEMENT_ACQUISITION.with(|slot| {
+        assert!(slot.borrow_mut().replace(observer).is_none());
+    });
+}
+
 pub(super) struct CanonicalRuntimeProjection {
     pub(super) nexus: iroha_config::parameters::actual::Nexus,
     pub(super) incarnations: BTreeMap<LaneId, Hash>,
@@ -187,11 +201,41 @@ impl SnapshotNexusRuntime {
 }
 
 impl State {
+    /// Acquire the original same-cut runtime writers before State publication fences.
+    pub(super) fn acquire_canonical_runtime_replacement(
+        &self,
+    ) -> mv::cell::CurrentReplacement<'_, SnapshotNexusRuntime> {
+        #[cfg(test)]
+        RUNTIME_REPLACEMENT_ACQUISITION.with(|observer| {
+            if let Some(observer) = observer.borrow_mut().take() {
+                let _ = observer.send(());
+            }
+        });
+        self.canonical_runtime.current_replacement()
+    }
+
     // Same-cut bootstrap/validated configuration installation only. Signed lifecycle
     // and autoscale carrier transitions use refresh_canonical_runtime on MV overlays.
     // The direct lifecycle caller is cfg(test), retaining its explicit fixture scope.
     pub(super) fn install_canonical_runtime_projection(
         &self,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
+        samples: &VecDeque<AutoscaleSampleRecord>,
+    ) -> Result<(), LaneLifecycleError> {
+        Self::install_canonical_runtime_projection_with_owner(
+            self.acquire_canonical_runtime_replacement(),
+            nexus,
+            lineage,
+            samples,
+        )
+    }
+
+    /// Install through writers acquired before any enclosing State fences.
+    /// The owner preserves the original undo and is consumed before later World
+    /// cleanup, whose constructors acquire World before the runtime writers.
+    pub(super) fn install_canonical_runtime_projection_with_owner(
+        runtime: mv::cell::CurrentReplacement<'_, SnapshotNexusRuntime>,
         nexus: &iroha_config::parameters::actual::Nexus,
         lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         samples: &VecDeque<AutoscaleSampleRecord>,
@@ -248,9 +292,8 @@ impl State {
         );
         // Startup revalidation is not a new carrier: an unchanged installation
         // must preserve the retained tip undo instead of committing a no-op block.
-        if self.canonical_runtime.view().get() != &record {
-            self.canonical_runtime
-                .replace_current_preserving_predecessor(record);
+        if runtime.get() != &record {
+            runtime.publish(record);
         }
         Ok(())
     }

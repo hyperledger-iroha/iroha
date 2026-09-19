@@ -185,9 +185,11 @@ BINDINGS = (
  '                &admission_binding,\n'
  '                ingress_plan.coordinator_route(),\n'
  '                proxy_memory.as_ref(),\n'
+ '                execution_deadline,\n'
  '            ) {\n'
  '                return response;\n'
- '            }')),
+ '            }',
+ 'execution_deadline: tokio::time::Instant')),
 )
 # Existing registry bindings retain this owner's full persistence obligations.
 EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))

@@ -2,15 +2,17 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **852 native regressions on macOS**: startup
+`--native-check-scope basic` selects native regressions for startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **1030-case** native census,
+Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux adds one OpenSSH descriptor-custody case to each scope.
+production. Linux additionally selects OpenSSH descriptor custody, native worker
+identity, and generation controls. The runner's selected regression census is
+authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
@@ -68,6 +70,27 @@ Both Core startup selections check the fixed-domain IPA parameter cache with
 concurrent cold initialization, canonical bytes/fingerprints, owned clone
 isolation, rejected domains, warm-cache malformed metadata and relabelled-key
 rejection. Caching public parameters never substitutes for key authentication.
+
+Both Core startup selections require interrupted Kura Apply recovery after a
+real persisted-block crash. Standalone and linked owners retain their original
+ledger rows until verified application completes. The checks reject changed
+owner, signed predecessor, and Decision-WAL identities without mutating the
+retained ledger. PendingKura recovery remains the sole executable Apply owner.
+This group runs immediately after configuration and MV ownership checks in both
+scopes. Any failure stops qualification before other startup groups, shipping binary builds
+or network execution; it reuses the same compiled harness and runs each case once.
+
+Both scopes first run 56 selected MV ownership checks after configuration and
+before PendingKura: finite allocation credits, exact release/poison wakes, charged
+Cell generations, original map/undo retention, actual epoch reclamation and
+strict allocation-free map handoff/publication. These run once from the same
+immutable copied artifacts and enter the exact independent-pass census. A failure
+stops later Core runtime checks, shipping builds and network qualification; a
+changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
+still compiles its complete native feature graph first. For a cheaper development
+check before that full compilation, existing `--focus-regression` selections can
+target `mv`, `mv-ebr` and `mv-map` plus mandatory configuration. That result remains
+a diagnostic, with no release qualification or independent-checkpoint credit.
 
 Both scopes also require the signed stopped-predecessor controls: strict state
 decoding, retained directory identity across archive/restore, complete process
@@ -151,7 +174,8 @@ Query failures decode the node's bounded error envelope; a missing asset, unknow
 route or malformed response cannot be reported as an expired or missing cursor
 solely from its HTTP status. Both scopes include these focused regressions.
 
-Both scopes compile the identical configuration, data-model, crypto, P2P, CLI, daemon, Core,
+Both scopes compile the identical MV library and explicit allocation integrations,
+configuration, data-model, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.
@@ -216,15 +240,15 @@ and proof-bound checks retain their selected cases in both scopes. Adding the CL
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
-After configuration and CLI checks, both scopes execute empty-journal Queue
-admission, HTTP readiness and daemon startup-policy regressions before other
+After configuration, MV ownership and the pending-Kura recovery group, both scopes execute empty-journal Queue
+admission, HTTP readiness and daemon startup-policy regressions before CLI and other
 runtime checks. The full scope also executes Core snapshot-owner and cold
 certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
 reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
-certificate history cannot be resurrected after replica application advances. All startup
-groups report their failures before stopping expensive work. On
+certificate history cannot be resurrected after replica application advances. The remaining startup
+groups collect their failures before stopping expensive work. On
 success, the remaining groups execute each selected test once. The checkpoint
 binds the explicit scope, exact selected census and artifact identity. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
@@ -485,7 +509,8 @@ descriptor cleanup and replacement of the original paths. Every test selected by
 Missing, ignored or failed selected tests fail the command; deferred cases are
 omitted from the success census and independent-check evidence. After the mandatory startup
 preflight passes, remaining independent cases report their combined failures.
-The short startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
+The pending-Kura group stops before other startup groups on failure; the remaining
+startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 

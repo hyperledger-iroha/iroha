@@ -3246,8 +3246,8 @@ def test_native_exact_object_prune_contract_rejects_removed_planner_ledger_owner
         ("apply_autoscale_lane_lifecycle", "self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();", "self.lane_incarnations.clear();"),
         ("apply_autoscale_lane_lifecycle", "self.lane_incarnation_lineage = lifecycle_update.updated_lane_incarnation_lineage.clone();", "self.lane_incarnation_lineage.clear();"),
         ("apply_autoscale_lane_lifecycle", "self.refresh_canonical_runtime();", "self.skip_refresh();"),
-        ("apply_committed_autoscale_lane_lifecycle", "self.reset_lane_scoped_runtime_state(", "self.skip_reset("),
-        ("apply_committed_autoscale_lane_lifecycle", "self.record_da_lane_reset_watermarks(", "self.skip_watermarks("),
+        ("PreparedLaneLifecycleEffects::publish", "state.reset_lane_scoped_runtime_indexes(", "state.skip_reset("),
+        ("PreparedLaneLifecycleEffects::publish", ".mark_lanes_canonically_reset(", ".skip_watermarks("),
     ],
 )
 def test_autoscale_current_publication_and_drain_owners(
@@ -3255,12 +3255,16 @@ def test_autoscale_current_publication_and_drain_owners(
 ) -> None:
     """Follow delegated validation and bind the sole staged identity publisher."""
     module = load_checker()
-    relative = "crates/iroha_core/src/state.rs"
-    path = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, {
+        Path("crates/iroha_core/src/state.rs"),
+        Path("crates/iroha_core/src/state/carrier_lifecycle_effects.rs"),
+    })
     model = next(m for m in canonical_models() if m["module"] == "SumeragiV2AutoscaleLifecycle")
     owners = {
         "apply_autoscale_lane_lifecycle",
-        "apply_committed_autoscale_lane_lifecycle",
+        "PreparedLaneLifecycleEffects::prepare",
+        "PreparedLaneLifecycleEffects::publish",
+        "LaneLifecyclePostPublication::publish",
         "pending_autoscale_lane_drain_body",
         "pending_autoscale_lane_drain_body_with_frontier",
     }
@@ -3268,7 +3272,12 @@ def test_autoscale_current_publication_and_drain_owners(
     assert len(model["production_symbols"]) == len(owners)
     if symbol is not None:
         assert old is not None and new is not None
-        replace_once_after(path, f"fn {symbol}(", old, new)
+        binding = next(row for row in model["production_symbols"] if row["symbol"] == symbol)
+        path = tmp_path / binding["path"]
+        source = path.read_text()
+        (item,) = module._extract_rust_binding_items(source, binding["kind"], symbol)
+        assert item.count(old) == 1
+        replace_once(path, item, item.replace(old, new, 1))
     errors: list[str] = []
     module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors)
     if symbol is None:

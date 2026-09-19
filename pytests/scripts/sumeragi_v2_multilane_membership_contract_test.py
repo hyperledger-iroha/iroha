@@ -73,6 +73,9 @@ def test_membership_is_connected_to_release_gate():
     "impl<'a, T> Owner<'a, T> { fn publish(self) {} }",
     "impl Clone for Owner { fn publish(self) {} }",
     "impl<'a> Clone for Owner<'a> { fn publish(self) {} }",
+    "impl<'a, T>\n    Owner<'a, T>\n{ fn publish(self) {} }",
+    "impl<\n    'a,\n    T,\n>\n    Owner<\n        'a,\n        T,\n    >\n{ fn publish(self) {} }",
+    "impl<'a>\n    Clone\n    for Owner<'a>\n{ fn publish(self) {} }",
 ])
 def test_membership_parser_keeps_exact_generic_owner(declaration):
     checker = support().load_checker()
@@ -86,12 +89,36 @@ def test_membership_parser_keeps_exact_generic_owner(declaration):
     "impl<'a> OtherOwner<'a> { fn publish(self) {} }",
     "impl<'a> Trait<Owner<'a>> for Other { fn publish(self) {} }",
     "impl<'a> Trait for Other<Owner<'a>> { fn publish(self) {} }",
+    "impl<'a, T>\n    OwnerImposter<'a, T>\n{ fn publish(self) {} }",
+    "impl<'a>\n    Trait<Owner<'a>>\n    for Other\n{ fn publish(self) {} }",
+    "impl<'a>\n    Trait\n    for Other<Owner<'a>>\n{ fn publish(self) {} }",
 ])
 def test_membership_parser_rejects_different_generic_owner(declaration):
     checker = support().load_checker()
     assert checker._extract_rust_binding_items(
         declaration.replace("{ fn", "{\n fn"), "method", "Owner::publish",
     ) == ()
+
+
+def test_membership_parser_keeps_multiline_method_in_its_original_impl():
+    checker = support().load_checker()
+    source = """impl<'a> Other<'a> {
+    fn publish(self) { unrelated(); }
+}
+impl<'a, Admission, BindingAdmission>
+    Owner<'a, Admission, BindingAdmission>
+{
+    fn publish(self) { original(); }
+}
+impl<'a> OwnerImposter<'a> {
+    fn publish(self) { substitute(); }
+}
+"""
+    items = checker._extract_rust_binding_items(source, "method", "Owner::publish")
+    assert len(items) == 1
+    assert "original();" in items[0]
+    assert "unrelated();" not in items[0]
+    assert "substitute();" not in items[0]
 
 
 @pytest.mark.parametrize("model_index", [0, 1])

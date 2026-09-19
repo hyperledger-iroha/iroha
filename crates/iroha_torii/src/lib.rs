@@ -17874,6 +17874,7 @@ fn canonical_queue_plan_synced_response(
     binding: &QueuePlanAdmissionBindingV1,
     routing_decision: RoutingDecision,
     proxy_memory: Option<&ToriiProxyMemoryReservation>,
+    read_deadline: tokio::time::Instant,
 ) -> Option<Response> {
     match app
         .state
@@ -17939,6 +17940,16 @@ fn canonical_queue_plan_synced_response(
             ));
         }
     };
+    // Blocking physical work cannot be preempted by timeout_at. Preserve its
+    // original monotonic deadline (including reserved response-egress time)
+    // after the read; late completion grants no new delivery budget.
+    if tokio::time::Instant::now() >= read_deadline {
+        return Some(queue_plan_outcome_unknown_response(
+            binding.entrypoint_hash,
+            binding.signed_transaction_hash,
+            "canonical QueuePlan certificate read exhausted its original execution deadline",
+        ));
+    }
     let mut response = (
         StatusCode::ACCEPTED,
         utils::NoritoBody(input.into_input().certificate),
@@ -27622,6 +27633,7 @@ async fn execute_incoming_torii_proxy_request_with_admission(
             immediate_sender_peer_id,
             pre_admitted_fanout,
             proxy_memory,
+            deadline,
         ),
     )
     .await
@@ -27643,6 +27655,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
     immediate_sender_peer_id: Option<PeerId>,
     pre_admitted_fanout: Option<QueryFanoutMemoryReservation>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
+    execution_deadline: tokio::time::Instant,
 ) -> Response {
     if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V1 {
         return torii_proxy_error_response(
@@ -27866,6 +27879,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 &admission_binding,
                 ingress_plan.coordinator_route(),
                 proxy_memory.as_ref(),
+                execution_deadline,
             ) {
                 return response;
             }

@@ -1614,7 +1614,7 @@ fn local_full_wsv_observation_requires_complete_exact_manifest_and_finality_bind
 
 // Actual four-validator Kura durability controls. These fixture blocks test
 // storage receipt ownership; they do not claim execution or State authority.
-fn carrier_checkpoint_receipt_fixture() -> (
+pub(crate) fn carrier_checkpoint_receipt_fixture() -> (
     Arc<Kura>,
     Arc<SignedBlock>,
     V2FinalityArtifact,

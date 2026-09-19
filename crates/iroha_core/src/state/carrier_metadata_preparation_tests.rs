@@ -155,10 +155,10 @@ fn deterministic_metadata_preparation_cannot_resolve_output_publication_guard() 
         prepared.execution_output_plan.as_ref(),
         Some(output_capacity::ExecutionOutputPlanState::Reserved(_))
     ));
-    assert_eq!(
+    assert!(matches!(
         prepared.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.kura.blocks_count(), 0);
 }

@@ -113,12 +113,25 @@ fn prepared_geometry_journal_rejects_identity_and_capacity_before_writes() {
     let prepared = PreparedGeometryJournalTransition::prepare(&kura, journal.clone(), 0).unwrap();
     let aggregate = prepared.retained_allocation_bytes().unwrap();
     assert!(aggregate > u64::try_from(journal.encode().len()).unwrap());
+    let phase_only = PreparedGeometryJournalTransition::prepare_phases(
+        &root,
+        journal.clone(),
+        0,
+        MAX_GEOMETRY_JOURNAL_BYTES,
+    )
+    .unwrap()
+    .retained_allocation_bytes()
+    .unwrap();
+    assert!(
+        aggregate > phase_only,
+        "the original predecessor has retained storage too"
+    );
     assert!(
         PreparedGeometryJournalTransition::prepare_phases(
             &root,
             journal.clone(),
             0,
-            aggregate - 1,
+            phase_only - 1,
         )
         .is_err(),
         "the journal alone fitting cannot omit retained operations and phase changes"
@@ -130,27 +143,272 @@ fn prepared_geometry_journal_rejects_identity_and_capacity_before_writes() {
 }
 
 #[test]
-fn prepared_geometry_journal_retry_uses_retained_bytes() {
+fn prepared_geometry_journal_finishes_renamed_phase_without_replacing_it() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
     let journal = unpersisted_create_journal(&kura);
     let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    assert!(prepared.persist(&kura, LaneGeometryPhase::Intent).is_err());
+    let path = kura.lane_geometry_journal_path();
+    let renamed = secure_file_metadata::from_path(&path).unwrap();
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+    assert!(
+        prepared
+            .persist(&kura, LaneGeometryPhase::FilesApplied)
+            .is_err()
+    );
+    // A retry must use the original promoted descriptor even if the temporary
+    // name is now occupied. The occupant is not this attempt's object.
+    let temporary = root.join(JOURNAL_TEMP_FILE_NAME);
+    fs::write(&temporary, b"unrelated occupant").unwrap();
+    prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
+    assert!(Kura::sidecar_metadata_same_object(
+        &renamed,
+        &secure_file_metadata::from_path(&path).unwrap()
+    ));
+    assert_eq!(fs::read(&temporary).unwrap(), b"unrelated occupant");
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        prepared.bytes(LaneGeometryPhase::Intent)
+    );
+    prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
+    assert!(Kura::sidecar_metadata_same_object(
+        &renamed,
+        &secure_file_metadata::from_path(&path).unwrap()
+    ));
+}
+
+#[test]
+fn prepared_geometry_journal_reattests_already_current_phase_without_replacement() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    let journal = unpersisted_create_journal(&kura);
+    let mut first = PreparedGeometryJournalTransition::prepare(&kura, journal.clone(), 0).unwrap();
+    first.persist(&kura, LaneGeometryPhase::Intent).unwrap();
+    drop(first);
+
+    let path = kura.lane_geometry_journal_path();
+    let original = secure_file_metadata::from_path(&path).unwrap();
+    let before = native_observation_tree(&root);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
+    let error = prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("an already-current phase must complete its directory durability barrier");
+    assert!(
+        error
+            .to_string()
+            .contains("injected bound progress append-intent directory sync failure"),
+        "unexpected publication failure: {error:?}",
+    );
+    assert_eq!(native_observation_tree(&root), before);
+    assert!(Kura::sidecar_metadata_same_object(
+        &original,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+
+    prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
+    drop(prepared);
+    assert_eq!(native_observation_tree(&root), before);
+    assert!(Kura::sidecar_metadata_same_object(
+        &original,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+}
+
+#[test]
+fn prepared_geometry_journal_rejects_same_bytes_pending_temp_replacement() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    let path = kura.lane_geometry_journal_path();
+    let prior = fs::read(&path).unwrap();
+    let original_target = secure_file_metadata::from_path(&path).unwrap();
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
+    crate::kura::fail_next_bound_progress_intent_file_sync_for_tests();
+    let error = prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("file synchronization fails before publishing the pending temporary");
+    assert!(
+        error
+            .to_string()
+            .contains("injected retained geometry journal file sync failure"),
+        "unexpected publication failure: {error:?}",
+    );
+    let temporary = root.join(JOURNAL_TEMP_FILE_NAME);
+    assert_eq!(fs::read(&temporary).unwrap(), intended);
+    assert_eq!(fs::read(&path).unwrap(), prior);
+    assert!(Kura::sidecar_metadata_same_object(
+        &original_target,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+
+    let original_temp = secure_file_metadata::from_path(&temporary).unwrap();
+    let displaced = temp.path().join("retained-pending-temporary");
+    fs::rename(&temporary, &displaced).unwrap();
+    fs::write(&temporary, &intended).unwrap();
+    let occupant = secure_file_metadata::from_path(&temporary).unwrap();
+    assert!(!Kura::sidecar_metadata_same_object(
+        &original_temp,
+        &occupant
+    ));
+    let before = native_observation_tree(&root);
+    prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("retry cannot adopt a new temporary with the same bytes");
+    drop(prepared);
+    assert_eq!(native_observation_tree(&root), before);
+    assert_eq!(fs::read(&displaced).unwrap(), intended);
+    assert_eq!(fs::read(&path).unwrap(), prior);
+    assert!(Kura::sidecar_file_metadata_unchanged(
+        &original_target,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+    assert!(Kura::sidecar_file_metadata_unchanged(
+        &occupant,
+        &secure_file_metadata::from_path(&temporary).unwrap(),
+    ));
+}
+
+#[test]
+fn prepared_geometry_journal_rejects_same_bytes_predecessor_replacement() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let path = kura.lane_geometry_journal_path();
+    let prior = fs::read(&path).unwrap();
+    let original_metadata = secure_file_metadata::from_path(&path).unwrap();
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+
+    let displaced = temp.path().join("original-journal");
+    fs::rename(&path, &displaced).unwrap();
+    fs::write(&path, &prior).unwrap();
+    let replacement_metadata = secure_file_metadata::from_path(&path).unwrap();
+    assert!(!Kura::sidecar_metadata_same_object(
+        &original_metadata,
+        &replacement_metadata,
+    ));
+    let before = native_observation_tree(&root);
+    prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("identical bytes in another file cannot replace the retained predecessor");
+    drop(prepared);
+    assert_eq!(native_observation_tree(&root), before);
+    assert_eq!(fs::read(&displaced).unwrap(), prior);
+    assert!(Kura::sidecar_file_metadata_unchanged(
+        &replacement_metadata,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+}
+
+#[test]
+fn prepared_geometry_journal_rejects_parent_directory_replacement() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let prior = fs::read(kura.lane_geometry_journal_path()).unwrap();
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+
+    let displaced = temp.path().join("original-kura-root");
+    fs::rename(&root, &displaced).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join(JOURNAL_FILE_NAME), &prior).unwrap();
+    fs::write(root.join("replacement-owner"), b"unrelated directory").unwrap();
+    let original_before = native_observation_tree(&displaced);
+    let replacement_before = native_observation_tree(&root);
+    prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("publication must retain the captured parent directory");
+    drop(prepared);
+    assert_eq!(native_observation_tree(&displaced), original_before);
+    assert_eq!(native_observation_tree(&root), replacement_before);
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+    assert!(!displaced.join(JOURNAL_TEMP_FILE_NAME).exists());
+}
+
+#[test]
+fn prepared_geometry_journal_rejects_occupied_captured_absence() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    let path = kura.lane_geometry_journal_path();
+    // Opening Kura establishes its bootstrap journal. Remove only that file to
+    // exercise captured absence while retaining the fixture's other storage.
+    fs::remove_file(&path).expect("remove bootstrap journal for explicit absent-target fixture");
+    assert!(
+        !path.exists(),
+        "fixture starts without an authenticated journal"
+    );
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
+
+    fs::write(&path, &intended).unwrap();
+    let occupant_metadata = secure_file_metadata::from_path(&path).unwrap();
+    let before = native_observation_tree(&root);
+    prepared
+        .persist(&kura, LaneGeometryPhase::Intent)
+        .expect_err("an occupied absent slot cannot become this owner's prior publication");
+    drop(prepared);
+    assert_eq!(native_observation_tree(&root), before);
+    assert_eq!(fs::read(&path).unwrap(), intended);
+    assert!(Kura::sidecar_file_metadata_unchanged(
+        &occupant_metadata,
+        &secure_file_metadata::from_path(&path).unwrap(),
+    ));
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+}
+
+#[test]
+fn prepared_geometry_journal_retry_uses_retained_bytes() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared =
+        PreparedGeometryJournalTransition::prepare(&kura, journal.clone(), 0).unwrap();
     let temporary = root.join(JOURNAL_TEMP_FILE_NAME);
     fs::create_dir(&temporary).unwrap();
     assert!(prepared.persist(&kura, LaneGeometryPhase::Intent).is_err());
     fs::remove_dir(&temporary).unwrap();
-    prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
-    assert_eq!(
-        fs::read(kura.lane_geometry_journal_path()).unwrap(),
-        prepared.bytes(LaneGeometryPhase::Intent)
-    );
-    prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
-    assert_eq!(
-        fs::read(kura.lane_geometry_journal_path()).unwrap(),
-        prepared.bytes(LaneGeometryPhase::Intent)
-    );
+    for phase in [
+        LaneGeometryPhase::Intent,
+        LaneGeometryPhase::FilesApplied,
+        LaneGeometryPhase::CatalogPublished,
+    ] {
+        let mut expected = journal.clone();
+        expected.records[0].phase = phase;
+        for _ in 0..2 {
+            prepared.persist(&kura, phase).unwrap();
+            let persisted = fs::read(kura.lane_geometry_journal_path()).unwrap();
+            assert_eq!(persisted, expected.encode());
+            assert_eq!(persisted, prepared.bytes(phase));
+            assert_eq!(
+                decode_exact::<LaneGeometryJournal>(&persisted).unwrap(),
+                expected
+            );
+            assert!(!temporary.exists());
+        }
+    }
 }
 
 #[test]

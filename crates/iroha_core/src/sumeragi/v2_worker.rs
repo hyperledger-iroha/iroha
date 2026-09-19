@@ -3226,17 +3226,32 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
+    #[cfg(test)]
+    fn complete_lifecycle_validate(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        result: &ExecutedDurableValidateDispatch,
+    ) -> Result<(), String> {
+        self.complete_lifecycle_validate_exact(key, result.matches_dispatch_key(key))
+    }
     fn complete_lifecycle_validate_result(
         &self,
         key: LifecycleValidateDispatchKeyV1,
         result: &LifecycleValidateWorkerResultV1,
+    ) -> Result<(), String> {
+        self.complete_lifecycle_validate_exact(key, result.matches_dispatch_key(key))
+    }
+    fn complete_lifecycle_validate_exact(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        matches_dispatch: bool,
     ) -> Result<(), String> {
         let mut state = self.lock();
         let tracked = state
             .lifecycle_validates
             .get_mut(&key)
             .ok_or_else(|| "completed lifecycle Validate lost its exact queue owner".to_owned())?;
-        if tracked.state != V2IoWorkState::Active || !result.matches_dispatch_key(key) {
+        if tracked.state != V2IoWorkState::Active || !matches_dispatch {
             return Err(
                 "completed lifecycle Validate changed its exact dispatch material".to_owned(),
             );
@@ -3667,6 +3682,14 @@ impl V2IoCommandReceiver {
     ) -> Result<(), String> {
         self.queue
             .complete_recovered_decision_fetch_body(key, completion)
+    }
+    #[cfg(test)]
+    fn complete_lifecycle_validate(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        result: &ExecutedDurableValidateDispatch,
+    ) -> Result<(), String> {
+        self.queue.complete_lifecycle_validate(key, result)
     }
     fn complete_lifecycle_validate_result(
         &self,

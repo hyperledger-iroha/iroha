@@ -238,10 +238,10 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
     }
     assert!(block.gas_used_in_block > 0);
     assert!(execute(&mut block, &source).is_err());
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -535,10 +535,10 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         "only the independently applied fee fragment survives"
     );
     assert!(block.gas_used_in_block > 0);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -599,10 +599,10 @@ fn ordinary_owner_refuses_merge_control_before_any_execution_continuation() {
             .is_err()
     );
     assert_eq!(block.committed_fragment_count(), fragments);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[path = "output_network_penalty_tests.rs"]

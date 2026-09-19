@@ -221,10 +221,10 @@ fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_ord
             .inspect_owned_execution_sources_for_test(&source, |_, _| Ok(()))
             .is_err()
     );
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -273,10 +273,10 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -453,8 +453,8 @@ fn owned_seal_still_rejects_late_applied_capture_after_transcript_drain() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }

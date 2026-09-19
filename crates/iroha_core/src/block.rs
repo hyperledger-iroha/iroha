@@ -2730,6 +2730,11 @@ pub enum BlockValidationError {
     MerkleRootMismatch,
     /// Execution context invalid: {0}
     ExecutionContextInvalid(String),
+    /// Local storage observation requires recovery before candidate validation: {reason}
+    LocalStorageRecoveryRequired {
+        /// Diagnostic from the failed local observation, never rejection authority.
+        reason: String,
+    },
     /// Certified merge sidecar `{entry_hash}` is not available locally yet
     MissingCertifiedMergeSidecar {
         /// Canonical hash of the full merge entry required by this block.
@@ -2829,6 +2834,43 @@ pub enum BlockValidationError {
     AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails),
     /// NPoS consensus effects are invalid: {0}
     NposEffectsInvalid(String),
+}
+impl BlockValidationError {
+    /// Keep local autoscale observations out of deterministic block rejection.
+    pub(crate) fn from_autoscale_lifecycle_error(error: crate::state::LaneLifecycleError) -> Self {
+        use crate::state::LaneLifecycleError;
+        let reason = format!("failed to evaluate Nexus autoscale: {error}");
+        match error {
+            LaneLifecycleError::DrainObservation(_)
+            | LaneLifecycleError::Storage(_)
+            | LaneLifecycleError::GeometryStorage(_)
+            | LaneLifecycleError::PublicationBusy { .. } => {
+                Self::LocalStorageRecoveryRequired { reason }
+            }
+            _ => Self::ExecutionContextInvalid(reason),
+        }
+    }
+
+    /// Preserve local observation provenance at the certified merge staging boundary.
+    pub(crate) fn from_certified_merge_stage_error(
+        error: crate::state::MergeLedgerCommitError,
+    ) -> Self {
+        use crate::state::MergeLedgerCommitError;
+        match error {
+            MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
+                Self::MissingCertifiedMergeSidecar { entry_hash }
+            }
+            local @ (MergeLedgerCommitError::Persistence(_)
+            | MergeLedgerCommitError::LocalDrainObservation(_)) => {
+                Self::LocalStorageRecoveryRequired {
+                    reason: format!("certified merge entry could not be staged: {local}"),
+                }
+            }
+            other => Self::ExecutionContextInvalid(format!(
+                "certified merge entry could not be staged: {other}"
+            )),
+        }
+    }
 }
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
@@ -3785,8 +3827,8 @@ pub(crate) mod valid {
     #[path = "admission_batching.rs"]
     mod admission_batching_tests;
     #[cfg(test)]
-    use super::event::map_sig_err_to_reason;
-    use super::{event::map_block_err_to_reason, *};
+    use super::event::{map_block_err_to_reason, map_sig_err_to_reason};
+    use super::{event::emit_block_rejection, *};
     use crate::state::{StateBlock, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
@@ -6549,7 +6591,7 @@ pub(crate) mod valid {
             }
             WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
         }
-        /// Execute a Sumeragi-v2 unit fixture and emit a rejection event on failure.
+        /// Execute a Sumeragi-v2 unit fixture and emit only deterministic rejection events.
         #[cfg(test)]
         #[doc(hidden)]
         fn validate_sumeragi_v2_fixture_with_events<F: Fn(PipelineEventBox)>(
@@ -6569,19 +6611,11 @@ pub(crate) mod valid {
                 time_source,
             ) {
                 // Emit rejection with the offending header
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let genesis = if block.header().is_genesis() {
@@ -6601,29 +6635,17 @@ pub(crate) mod valid {
                 SccpRootValidation::Enforce,
                 genesis.as_ref(),
             ) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) =
                 Self::validate_staged_merge_execution_authorization(&block, state_block)
             {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = state_block
@@ -6631,29 +6653,17 @@ pub(crate) mod valid {
                 .and_then(|()| state_block.capture_exec_witness())
                 .map_err(Self::execution_context_error)
             {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = Self::ensure_genesis_transactions_clean(&block, genesis_account) {
-                let ev = PipelineEventBox::from(BlockEvent {
-                    header: block.header(),
-                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
-                });
-                send_events(ev);
+                emit_block_rejection(block.header(), &error, &send_events);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
@@ -7161,18 +7171,7 @@ pub(crate) mod valid {
                                 state_block.stage_certified_merge_reference(reference, frozen_mode)
                             }
                         };
-                        stage.map_err(|error| {
-                            match error {
-                                crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
-                                    entry_hash,
-                                } => BlockValidationError::MissingCertifiedMergeSidecar {
-                                    entry_hash,
-                                },
-                                other => Self::execution_context_error(format!(
-                                    "certified merge entry could not be staged: {other}"
-                                )),
-                            }
-                        })?;
+                        stage.map_err(BlockValidationError::from_certified_merge_stage_error)?;
                         if let Some(capability) = merge_beacon {
                             state_block
                                 .apply_verified_merge_beacon_pulse(capability)
@@ -7331,11 +7330,7 @@ pub(crate) mod valid {
             let mut timings = timings;
             let mut emit_rejection = |block: &SignedBlock, error: &BlockValidationError| {
                 if let Some(send_events) = send_events.as_deref_mut() {
-                    let ev = PipelineEventBox::from(BlockEvent {
-                        header: block.header(),
-                        status: BlockStatus::Rejected(map_block_err_to_reason(error)),
-                    });
-                    send_events(ev);
+                    emit_block_rejection(block.header(), error, send_events);
                 }
             };
             let record_timings =
@@ -19027,28 +19022,28 @@ pub(crate) mod valid {
         fn maps_block_validation_errors() {
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::MerkleRootMismatch),
-                Reason::MerkleRootMismatch
+                Some(Reason::MerkleRootMismatch)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::EmptyBlock),
-                Reason::EmptyBlock
+                Some(Reason::EmptyBlock)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::DuplicateTransactions),
-                Reason::TransactionValidationFailed
+                Some(Reason::TransactionValidationFailed)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::TooManyTransactions {
                     actual: 2,
                     max: 1,
                 }),
-                Reason::TransactionValidationFailed
+                Some(Reason::TransactionValidationFailed)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::SignatureVerification(
                     SignatureVerificationError::LeaderMissing
                 )),
-                Reason::LeaderSignatureMissing
+                Some(Reason::LeaderSignatureMissing)
             );
             let network_id = |seed| {
                 NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -19067,7 +19062,7 @@ pub(crate) mod valid {
             );
             assert_eq!(
                 map_block_err_to_reason(&chain_mismatch),
-                Reason::TransactionValidationFailed
+                Some(Reason::TransactionValidationFailed)
             );
             let tx_limit = BlockValidationError::TransactionAccept(
                 AcceptTransactionFail::TransactionLimit(TransactionLimitError {
@@ -19076,20 +19071,20 @@ pub(crate) mod valid {
             );
             assert_eq!(
                 map_block_err_to_reason(&tx_limit),
-                Reason::TransactionValidationFailed
+                Some(Reason::TransactionValidationFailed)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::InvalidGenesis(
                     InvalidGenesisError::ContainsErrors
                 )),
-                Reason::InvalidGenesis
+                Some(Reason::InvalidGenesis)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::ConfidentialFeaturesMismatch {
                     expected: None,
                     actual: None
                 }),
-                Reason::ConfidentialFeatureDigestMismatch
+                Some(Reason::ConfidentialFeatureDigestMismatch)
             );
             let policy_err = BlockValidationError::ProofPolicyHashMismatch {
                 expected: HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH])),
@@ -19097,19 +19092,19 @@ pub(crate) mod valid {
             };
             assert_eq!(
                 map_block_err_to_reason(&policy_err),
-                Reason::DaProofPolicyMismatch
+                Some(Reason::DaProofPolicyMismatch)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::V2FinalityAuthorityInvalid(
                     "certificate does not bind the canonical execution".to_owned(),
                 )),
-                Reason::ConsensusBlockRejection
+                Some(Reason::ConsensusBlockRejection)
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::SnapshotBootstrapParentInvalid(
                     "snapshot parent body is unexpectedly available".to_owned(),
                 )),
-                Reason::ConsensusBlockRejection
+                Some(Reason::ConsensusBlockRejection)
             );
         }
         #[test]
@@ -19117,7 +19112,7 @@ pub(crate) mod valid {
             let err = BlockValidationError::TransactionInTheFuture;
             assert_eq!(
                 map_block_err_to_reason(&err),
-                Reason::TransactionInTheFuture
+                Some(Reason::TransactionInTheFuture)
             );
         }
         #[test]
@@ -24070,9 +24065,10 @@ mod event {
     }
     pub(super) fn map_block_err_to_reason(
         err: &BlockValidationError,
-    ) -> iroha_data_model::block::error::BlockRejectionReason {
+    ) -> Option<iroha_data_model::block::error::BlockRejectionReason> {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
-        match err {
+        Some(match err {
+            BlockValidationError::LocalStorageRecoveryRequired { .. } => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions
@@ -24149,6 +24145,19 @@ mod event {
                 Reason::TransactionValidationFailed
             }
             BlockValidationError::NposEffectsInvalid(_) => Reason::NposEffectsMismatch,
+        })
+    }
+    /// Emit a rejection only when validation produced a deterministic reason.
+    pub(super) fn emit_block_rejection(
+        header: BlockHeader,
+        error: &BlockValidationError,
+        mut send_events: impl FnMut(PipelineEventBox),
+    ) {
+        if let Some(reason) = map_block_err_to_reason(error) {
+            send_events(PipelineEventBox::from(BlockEvent {
+                header,
+                status: BlockStatus::Rejected(reason),
+            }));
         }
     }
     impl EventProducer for BlockValidationError {

@@ -92,7 +92,10 @@ state_test! { sync lane_consensus_full_set_witness_rejects_mutation_removal_and_
     *overlay.lane_consensus_contexts.get_mut() = LaneConsensusContextsV1::new(vec![context]).unwrap();
     assert!(overlay.verify_lane_consensus_contexts_seal().is_err());
     assert!(overlay.capture_lane_consensus_contexts(&mut ExecWitness::default()).is_err());
-    assert!(matches!(overlay.commit(), Err(TransactionsBlockError::LaneConsensusContexts)));
+    assert!(matches!(
+        overlay.commit(),
+        Err(TransactionsBlockError::LaneConsensusContexts)
+    ));
     assert!(state.view().lane_consensus_contexts.contexts.is_empty(),
         "failed publication must leave committed consensus metadata unchanged");
 }

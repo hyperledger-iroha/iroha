@@ -65,14 +65,16 @@ v2_apply_test!(
             .expect_err("the original service must retain exact pending work as a local outcome");
         assert!(matches!(
             error,
-            V2ApplyError::LocalRetirementPending { lane_id, dataspace_id, lane_incarnation }
-                if lane_id == reservation.lane_id
-                    && dataspace_id == reservation.dataspace_id
-                    && lane_incarnation == reservation.lane_incarnation
+            V2ApplyError::LocalValidation(
+                super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. }
+            )
         ));
         assert_eq!(error.rejection_identity(), None);
         assert!(
-            error.local_busy().is_none(),
+            matches!(
+                error.local_refusal(),
+                Some(super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. })
+            ),
             "a completed scan has no physical wake dependency"
         );
         assert_eq!(fixture.state.state_view_generation(), generation);
@@ -93,17 +95,18 @@ v2_apply_test!(
             reservation.lane_id,
             reservation.dataspace_id,
             reservation.lane_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect_err("the exact reserved route must veto prospective retirement");
-        assert!(matches!(
-            error,
-            V2ApplyError::LocalRetirementPending { lane_id, dataspace_id, lane_incarnation }
-                if lane_id == reservation.lane_id
-                    && dataspace_id == reservation.dataspace_id
-                    && lane_incarnation == reservation.lane_incarnation
-        ));
-        assert_eq!(error.rejection_identity(), None);
-        assert!(error.local_busy().is_none());
+        assert!(
+            matches!(
+                error,
+                V2ApplyError::LocalValidation(
+                    super::super::v2_body_store::LocalValidationRefusal::QueueRelease { .. }
+                )
+            ),
+            "local Queue ownership must never reject the candidate"
+        );
         let unrelated_incarnation = Hash::new(b"unrelated retirement incarnation");
         assert_ne!(unrelated_incarnation, reservation.lane_incarnation);
         V2ApplyService::validate_autoscale_retirement_queue_binding(
@@ -111,6 +114,7 @@ v2_apply_test!(
             reservation.lane_id,
             reservation.dataspace_id,
             unrelated_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect("a reservation from another incarnation must not veto retirement");
         assert_eq!(
@@ -186,7 +190,9 @@ v2_apply_test!(
             assert_eq!(error.rejection_identity(), None);
             assert!(!error.requires_restart_recovery());
             match error {
-                V2ApplyError::LocalValidationBusy(busy) => busy,
+                V2ApplyError::LocalValidation(
+                    super::super::v2_body_store::LocalValidationRefusal::PhysicalBusy(busy),
+                ) => busy,
                 unexpected => panic!("expected an original physical dependency, got {unexpected}"),
             }
         };
@@ -259,7 +265,7 @@ v2_apply_test!(
             .expect_err("zero agreed identity is invalid even when local owners are held");
         assert!(matches!(error, V2ApplyError::Validation(_)));
         assert!(error.rejection_identity().is_some());
-        assert!(error.local_busy().is_none());
+        assert!(error.local_refusal().is_none());
         drop(lifecycle);
         drop(observer);
     }
@@ -1626,6 +1632,7 @@ v2_apply_test!(
             reservation.lane_id,
             reservation.dataspace_id,
             reservation.lane_incarnation,
+            first_queue.sumeragi_waker(),
         )
         .expect_err("unresolved retired-source Queue custody still blocks retirement");
         assert_eq!(
@@ -2314,6 +2321,7 @@ fn assert_retired_merge_replay_preserves_queue_cut(crash_cut: RetiredMergeQueueC
             keys[0].lane_id,
             keys[0].dataspace_id,
             keys[0].lane_incarnation,
+            queue.sumeragi_waker(),
         )
         .expect_err("production retirement must retain genuine Commit barriers");
     }

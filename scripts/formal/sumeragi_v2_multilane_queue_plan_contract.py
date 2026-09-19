@@ -2131,7 +2131,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '.proposal_height\n                        > record.priority.carrier_height',
    'if observe()?.as_ref() != Some(&(record, carrier_hash)) {\n                return Err(',
    'result.map(Some)',
-   'let limits = crate::kura::canonical_admission_read_decode_limits()',
+   'let limits = Self::canonical_queue_plan_input_decode_limits()',
    'norito::with_decode_limits_scope(limits, || {')),
  ('crates/iroha_core/src/kura/lane_admission_source.rs',
   'method',
@@ -2139,6 +2139,11 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
   ('let _prune = self.prune_lock.lock();',
    'self.ensure_prune_recovery_not_required()?;',
    'let _canonical = self.canonical_chain_lock.lock();',
+   'self.read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)')),
+ ('crates/iroha_core/src/kura/lane_admission_source.rs',
+  'method',
+  'Kura::read_first_admission_carrier_under_prune_and_canonical_guards',
+  ('self.ensure_prune_recovery_not_required()?;',
    'self.ensure_canonical_storage_not_poisoned()?;',
    '.ok_or(Error::MissingV2FinalityArtifact { height: height_u64 })?',
    'if header.hash() != expected_hash || finality.block_hash != expected_hash {',
@@ -2185,7 +2190,10 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'Some(hold_torii_proxy_memory_in_response_body(\n'
    '        response,\n'
    '        reservation,\n'
-   '    ))')),
+   '    ))',
+   'read_deadline: tokio::time::Instant',
+   'if tokio::time::Instant::now() >= read_deadline {\n'
+   '        return Some(queue_plan_outcome_unknown_response(')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'submit_signed_transaction_for_ingress_queue_plan_certified',
@@ -2242,9 +2250,11 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '                &admission_binding,\n'
    '                ingress_plan.coordinator_route(),\n'
    '                proxy_memory.as_ref(),\n'
+   '                execution_deadline,\n'
    '            ) {\n'
    '                return response;\n'
-   '            }')),
+   '            }',
+   'execution_deadline: tokio::time::Instant')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'transaction_submission_receipt_response',
@@ -2255,11 +2265,40 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
  ('crates/iroha_core/src/state.rs',
   'method',
   'State::canonical_queue_plan_input_read_working_set_bytes',
-  ('crate::kura::canonical_admission_read_working_set_bytes()',)),
+  ('let kura = crate::kura::canonical_admission_read_decode_limits()?;',
+   'let complete = Self::canonical_queue_plan_input_decode_limits()?;',
+   'let state_graph = complete\n'
+   '            .max_total_allocated_bytes()\n'
+   '            .checked_sub(kura.max_total_allocated_bytes())?;',
+   'crate::kura::canonical_admission_read_working_set_bytes()?.checked_add(state_graph)')),
  ('crates/iroha_core/src/kura/lane_admission_source.rs',
   'fn',
   'canonical_admission_read_decode_limits',
-  ('norito::canonical_decode_limits(', 'usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?')),
+  ('norito::canonical_decode_limits(',
+   'usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?',
+   'norito::canonical_decode_limits(MAX_KURA_V2_FINALITY_RECORD_BYTES)',
+   'norito::canonical_decode_limits(MAX_RETAINED_BLOCK_RECORD_BYTES)',
+   'iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1',
+   'iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES',
+   'usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)\n'
+   '            .ok()?\n'
+   '            .checked_mul(2)?',
+   'let operations = [\n'
+   '        (body, 1usize),\n'
+   '        (finality, 2),\n'
+   '        (retained, 2),\n'
+   '        (sccp, sccp_reads),\n'
+   '        (input, 1),\n'
+   '    ];',
+   'elements.checked_add(limits.max_total_elements().checked_mul(count)?)?',
+   'allocated.checked_add(limits.max_total_allocated_bytes().checked_mul(count)?)?',
+   'Some(norito::DecodeLimits::new(\n'
+   '        body.max_sequence_elements(),\n'
+   '        body.max_field_bytes(),\n'
+   '        elements,\n'
+   '        allocated,\n'
+   '        body.max_nesting_depth(),\n'
+   '    ))')),
  ('crates/iroha_core/src/kura/lane_admission_source.rs',
   'fn',
   'canonical_admission_read_working_set_bytes',
@@ -2269,7 +2308,10 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'MAX_KURA_V2_FINALITY_RECORD_BYTES\n        .checked_next_power_of_two()?',
    '.checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES.checked_next_power_of_two()?)?',
    'norito::canonical_decode_limits(input).max_total_allocated_bytes()',
-   '.try_fold(0usize, usize::checked_add)')),
+   '.try_fold(0usize, usize::checked_add)',
+   'let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();',
+   'proposal_clone,',
+   'decoded,')),
  ('crates/iroha_data_model/src/block/mod.rs',
   'fn',
   'decode_framed_versioned_signed_block_inner',
@@ -2299,7 +2341,42 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
   ('.checked_add(\n'
    '                '
    'iroha_core::state::State::canonical_queue_plan_input_read_working_set_bytes()?,\n'
-   '            )',)))
+   '            )',)),
+ ('crates/iroha_core/src/state.rs',
+  'method',
+  'State::canonical_queue_plan_input_decode_limits',
+  ('let kura = crate::kura::canonical_admission_read_decode_limits()?;',
+   'let compact = norito::canonical_decode_limits(MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES);',
+   'let compact_reads = crate::native_amx::MAX_NATIVE_AMX_PLAN_LEGS.checked_add(2)?;',
+   'let one_elements = compact\n'
+   '            .max_total_elements()\n'
+   '            .checked_mul(compact_reads)?\n'
+   '            .checked_add(MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES)?;',
+   'let one_allocated = compact\n'
+   '            .max_total_allocated_bytes()\n'
+   '            .checked_mul(compact_reads)?\n'
+   '            .checked_add(MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES.checked_mul(4)?)?;',
+   'kura.max_total_elements()\n                .checked_add(one_elements.checked_mul(2)?)?',
+   'kura.max_total_allocated_bytes()\n'
+   '                .checked_add(one_allocated.checked_mul(2)?)?')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'execute_incoming_torii_proxy_request_with_admission',
+  ('validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)',
+   '.checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)',
+   'let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);',
+   'let deadline = tokio::time::Instant::now() + remaining_budget;',
+   'match tokio::time::timeout_at(\n'
+   '        deadline,\n'
+   '        execute_incoming_torii_proxy_request_with_admission_inner(\n'
+   '            app,\n'
+   '            proxy_request,\n'
+   '            immediate_sender_peer_id,\n'
+   '            pre_admitted_fanout,\n'
+   '            proxy_memory,\n'
+   '            deadline,\n'
+   '        ),\n'
+   '    )')))
 
 QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = _merge_retained_queue_plan_bindings(
     QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS, QUEUE_PLAN_CANONICAL_RETRY_BINDINGS
@@ -2355,7 +2432,7 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(")
     ordered("canonical_queue_plan_synced_response", "queue_plan_admission_binding_registry_match(binding)",
             "canonical_queue_plan_admitted_input(binding.entrypoint_hash)",
-            "if &input.input().certificate.binding == binding", "NoritoBody(input.into_input().certificate)")
+            "if &input.input().certificate.binding == binding", "if tokio::time::Instant::now() >= read_deadline", "NoritoBody(input.into_input().certificate)")
     for symbol in ("canonical_queue_plan_submission_response", "canonical_queue_plan_synced_response"):
         for forbidden in ("route_plan_with_state(", "push_accepted_transaction", "queue_plan_synced_admission_response("):
             if forbidden in code_items.get(symbol, ""):
@@ -2373,5 +2450,21 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
     for forbidden in ("spawn_blocking(", "tokio::spawn(", "std::thread::spawn("):
         if forbidden in code_items.get("canonical_queue_plan_synced_response", ""):
             errors.append("canonical_queue_plan_synced_response: detached canonical read loses physical W custody")
-    if ".get_block(" in code_items.get("Kura::read_first_admission_carrier", ""):
+    if ".get_block(" in code_items.get("Kura::read_first_admission_carrier_under_prune_and_canonical_guards", ""):
         errors.append("Kura::read_first_admission_carrier: canonical read materializes an unowned cache body")
+
+    ordered("Kura::read_first_admission_carrier", "let _prune = self.prune_lock.lock();",
+            "ensure_prune_recovery_not_required()", "let _canonical = self.canonical_chain_lock.lock();",
+            "read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)")
+    guarded = code_items.get("Kura::read_first_admission_carrier_under_prune_and_canonical_guards", "")
+    for forbidden in ("self.prune_lock.lock(", "self.canonical_chain_lock.lock("):
+        if forbidden in guarded:
+            errors.append("Kura::read_first_admission_carrier_under_prune_and_canonical_guards: guarded delegate reacquires an original fence")
+    ordered("Kura::read_first_admission_carrier_under_prune_and_canonical_guards",
+            "validate_v2_finality_record_at(", "retained_block_record_at_without_live_body(",
+            "validate_v2_finality_wire_bindings(", "verify_v2_finality_artifact_at(",
+            "drop(read_identity);", "read_block_body_under_prune_and_canonical_guards(height)")
+    ordered("execute_incoming_torii_proxy_request_with_admission",
+            "validate_torii_proxy_deadline(", "checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
+            "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
+            "let deadline = tokio::time::Instant::now() + remaining_budget;", "timeout_at(")

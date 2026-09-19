@@ -1091,6 +1091,7 @@ impl LaunchedProductionLifecycleV1 {
                 | PendingLifecycleCompletionV1::RecoveredDecisionFetch(_)
                 | PendingLifecycleCompletionV1::RecoveredSign(_)
                 | PendingLifecycleCompletionV1::Validate(_)
+                | PendingLifecycleCompletionV1::LocalValidate(_)
                 | PendingLifecycleCompletionV1::DeferredValidate(_) => Claim::AwaitingCompletion,
             });
         }
@@ -1226,6 +1227,27 @@ impl LaunchedProductionLifecycleV1 {
         self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
     }
 
+    fn retry_local_lifecycle_validate(
+        &mut self,
+        retained: RetainedLocalLifecycleValidateV1,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        match retained.retry() {
+            LocalLifecycleValidateRetryV1::Waiting(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+            }
+            LocalLifecycleValidateRetryV1::Requeued => {
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued
+            }
+            LocalLifecycleValidateRetryV1::RecoveryRequired(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
     fn settle_parked_lifecycle_validate_completion(
         &mut self,
     ) -> ProductionLifecycleCompletionSelectionV1 {
@@ -1243,24 +1265,9 @@ impl LaunchedProductionLifecycleV1 {
                 .close_admission_for_restart();
             return ProductionLifecycleCompletionSelectionV1::RestartRequired;
         };
-        let completion = match completion.retry_local() {
-            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Executed(completion) => {
-                completion
-            }
-            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Waiting(completion) => {
-                *pending_lifecycle_completion =
-                    Some(PendingLifecycleCompletionV1::Validate(completion));
-                return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting;
-            }
-            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Requeued => {
-                return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued;
-            }
-            crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::RestartRequired => {
-                services
-                    .lifecycle_output_guard()
-                    .close_admission_for_restart();
-                return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-            }
+        let completion = match completion.into_local_or_publication() {
+            Ok(completion) => completion,
+            Err(retained) => return self.retry_local_lifecycle_validate(retained),
         };
         let (dispatch, ack) = completion.into_publication_parts();
         let physical_completion = ack.physical_completion();
@@ -1586,25 +1593,16 @@ impl LaunchedProductionLifecycleV1 {
                 PendingLifecycleCompletionV1::Validate(completion) => {
                     self.pending_lifecycle_completion =
                         Some(PendingLifecycleCompletionV1::Validate(completion));
-                    let selected = self.settle_parked_lifecycle_validate_completion();
-                    if matches!(
-                        selected,
-                        ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
-                    ) {
-                        // Keep the original Validate parked, but let the normal
-                        // one-item ordinary drain release a full completion
-                        // channel. Otherwise the worker cannot receive/free a
-                        // command slot needed by this same physical retry.
+                    self.settle_parked_lifecycle_validate_completion()
+                }
+                PendingLifecycleCompletionV1::LocalValidate(retained) => {
+                    let selected = self.retry_local_lifecycle_validate(retained);
+                    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
                         match self.services.prepare_ordinary_completion_behind_validate_fence() {
-                            Ok(true) => {
-                                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
-                            }
-                            Ok(false) => {}
+                            Ok(true) => return ProductionLifecycleCompletionPreGateV1::Ordinary(runner),
+                            Ok(false) => {},
                             Err(reason) => {
-                                iroha_logger::error!(
-                                    %reason,
-                                    "ordinary Completion physical-wait classification failed closed"
-                                );
+                                self.services.lifecycle_output_guard().retain_effect_failure(reason);
                                 self.close_output_for_restart();
                                 return ProductionLifecycleCompletionPreGateV1::Selected(
                                     ProductionLifecycleCompletionSelectionV1::RestartRequired,
@@ -1613,7 +1611,7 @@ impl LaunchedProductionLifecycleV1 {
                         }
                     }
                     selected
-                }
+                },
                 PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
                     .settle_ready_validate_successor(published, runner.debt()),
                 PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
@@ -3094,6 +3092,7 @@ impl ActivatedProductionLifecycleV1 {
                     }
                     PendingLifecycleCompletionV1::RecoveredSign(_) => "RecoveredSign",
                     PendingLifecycleCompletionV1::Validate(_) => "Validate",
+                    PendingLifecycleCompletionV1::LocalValidate(_) => "LocalValidate",
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
                         "ReadyValidateSuccessor"
                     }

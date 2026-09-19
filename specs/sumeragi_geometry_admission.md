@@ -196,9 +196,14 @@ Adding a reservation field to that discarded object does not fix publication.
 The worker/result handoff, cached validation, recovered markers and finality
 consumer must all retain or rejoin the same admitted resources before votes are
 authorized. Preserve the exact manifest, candidate and predecessor identity.
-The current local Queue veto becomes `Validation` and then a durable `Rejected`
-marker; replace that classification only with a complete typed deferral and
-reachable retry owner, not by bypassing the veto or mapping it to fatal storage.
+The local Queue veto now retains its original Validate dispatch, acknowledgement
+and exact route-release observation without writing a `Rejected` marker. Storage
+and drain-observation failures retain typed local recovery provenance through
+block validation and emit no rejection event. The exact sample survives an
+autoscale retry; evaluation is complete only after the fallible lifecycle step
+succeeds. These paths pass the 76-test DPN development build19 selection. They do
+not yet retain the complete executed carrier through Validate and Apply; that
+ownership, aggregate admission and consuming publication remain required.
 
 ## Ordered implementation and acceptance gates
 

@@ -8995,7 +8995,7 @@ fn build_state(
     };
     let stateless_cache_cap = pipeline.stateless_cache_cap;
     let pipeline_cache_size = pipeline.cache_size;
-    let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
+    let tiered_backend = Arc::new(PublicationMutex::new(TieredStateBackend::default()));
     let tiered_snapshot_worker = if active_runtime {
         TieredSnapshotWorker::new(
             Arc::clone(&tiered_backend),
@@ -9091,6 +9091,9 @@ fn build_state(
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: PublicationMutex::default(),
+        geometry_publication: parking_lot::Mutex::new(None),
+        pending_replay_publication: None,
+        tiered_startup_geometry: None,
         queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
         state_commit_lock: Arc::new(PublicationMutex::default()),
         state_write_lock: PublicationMutex::default(),

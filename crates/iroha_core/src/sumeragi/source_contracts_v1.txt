@@ -2637,11 +2637,11 @@ required|worker_path|V2IoCommand::LifecycleValidate(task)|worker omitted typed V
 required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|worker omitted typed Validate completion publication
 required|worker_path|.complete_lifecycle_validate_result(|worker omitted exact completion-key retention
 required|worker_path|lifecycle_validate_worker_completion(key, result, Arc::clone(&output_guard))|worker must preserve typed local contention under the original output guard
-required|worker_path|Err((super::v2_body_store::V2BodyStoreError::LocalBusy(dependency), dispatch))|local contention must retain its move-only original dispatch
+required|worker_path|GuardedLifecycleValidateWorkerResultV1::deferred(key, dispatch, refusal, output_guard)|local refusals must retain their move-only original dispatch
 required|worker_path|self.admission.lifecycle_capacity_release.observe()|Validate retry must observe original capacity before probing it
 required|worker_path|let _released_command = self.lifecycle_capacity_release.guard(());|actual command release must notify registered physical retry owners
-required|worker_path|dependency.waker().wake_by_ref()|capacity release before registration must schedule a bounded retry
-required|turn_driver|completion.retry_local()|physical waits must resolve before semantic publication
+required|worker_path|wake.wake_by_ref()|capacity release before registration must schedule a bounded retry
+required|turn_driver|completion.into_local_or_publication()|local waits must resolve before semantic publication
 required|turn_driver|PendingLifecycleCompletionV1::take_validate(|turn driver omitted guarded Validate completion ownership
 required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted atomic Waiting-to-Ready publication
 end
@@ -3623,9 +3623,9 @@ required|surface|enum BodyValidationRejectionIdentity|body validation rejection 
 required|surface|identity: BodyValidationRejectionIdentity|durable rejection must retain its identity
 required|surface|pub(crate) const fn rejection_identity|durable rejection identity accessor is missing
 required|api|.rejection_identity()|validation API lost explicit rejection classification
-order|api|3|error.local_busy()|V2BodyStoreError::LocalBusy(busy.clone())|let identity_code = error|actual physical contention must retain its release dependency before rejection classification
-order|api|3|let identity_code = error|V2BodyStoreError::LocalValidation(error.to_string())|self.persist_rejected_outcome(|local validation failure must return before rejection persistence
-order|replay|3|.rejection_identity()|V2BodyStoreError::LocalValidation(error.to_string())|self.validated.extend(promoted_validated)|local replay failure must return before any marker promotion
+order|api|3|error.local_refusal()|V2BodyStoreError::LocalValidation(refusal)|let identity_code = error|local dependencies must retain their release or recovery owner before rejection classification
+order|api|4|let identity_code = error|LocalValidationRefusal::RecoveryRequired(|error.to_string()|self.persist_rejected_outcome(|local validation failure must return before rejection persistence
+order|replay|4|.rejection_identity()|LocalValidationRefusal::RecoveryRequired(|error.to_string()|self.validated.extend(promoted_validated)|local replay failure must return before any marker promotion
 required|api|persist_rejected_outcome|validation API lost durable rejected-outcome persistence
 required|api|self.reusable_validated_commitment_for_exact_body(&durable, &envelope)?|live locked-body validation lost its exact authenticated reuse seam
 required|api|round.view < durable.round().view|live validation reuse stopped requiring a strictly earlier proposal view

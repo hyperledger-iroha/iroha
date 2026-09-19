@@ -5,6 +5,7 @@
 //! canonical block durability: retirement admission and the journal predecessor
 //! still need their own retained authority before that handoff is safe.
 
+use super::retained_journal::RetainedGeometryJournal;
 use super::*;
 
 // Compare complete canonical encodings to establish these differences. This
@@ -30,6 +31,7 @@ pub(super) struct PreparedGeometryJournalTransition {
     encoded: Box<[u8]>,
     encoded_phase: LaneGeometryPhase,
     changes: [Box<[PhaseByteChange]>; 4],
+    writer: Option<Box<RetainedGeometryJournal>>,
 }
 
 impl PreparedGeometryJournalTransition {
@@ -41,12 +43,63 @@ impl PreparedGeometryJournalTransition {
         // Authenticate retained checkpoint/evidence before any transition write.
         // Changing the selected phase below cannot introduce different evidence.
         kura.validate_lane_geometry_journal(&journal)?;
-        Self::prepare_phases(
+        let mut writer = Some(RetainedGeometryJournal::capture(
+            kura,
+            journal.encode().len(),
+        )?);
+        Self::prepare_with_retained_writer(kura, journal, record_index, &mut writer)
+    }
+
+    pub(super) fn prepare_with_retained_writer(
+        kura: &Kura,
+        journal: LaneGeometryJournal,
+        record_index: usize,
+        retained: &mut Option<RetainedGeometryJournal>,
+    ) -> Result<Self> {
+        kura.validate_lane_geometry_journal(&journal)?;
+        let writer = retained.as_mut().ok_or_else(|| {
+            kura.geometry_error(
+                ErrorKind::InvalidData,
+                "prepared geometry transition lost its retained descriptor",
+            )
+        })?;
+        writer.prepare_next_write(journal.encode().len())?;
+        let predecessor = match writer.predecessor() {
+            Some(bytes) => {
+                decode_exact::<LaneGeometryJournal>(bytes).map_err(Error::NoritoFrame)?
+            }
+            None => LaneGeometryJournal::default(),
+        };
+        // The observed file must be exactly this retry or this new record's
+        // complete predecessor. Do not bless a different journal merely because
+        // the requested transition remains individually well formed.
+        if predecessor != journal {
+            let mut prior = journal.clone();
+            if record_index + 1 != prior.records.len() {
+                return Err(kura.geometry_error(
+                    ErrorKind::InvalidData,
+                    "prepared geometry journal differs from its retained predecessor",
+                ));
+            }
+            prior.records.pop();
+            if prior != predecessor {
+                return Err(kura.geometry_error(
+                    ErrorKind::InvalidData,
+                    "prepared geometry journal differs from its retained predecessor",
+                ));
+            }
+        }
+        let mut prepared = Self::prepare_phases(
             &kura.store_root,
             journal,
             record_index,
             MAX_GEOMETRY_JOURNAL_BYTES,
-        )
+        )?;
+        prepared.writer = retained.take().map(Box::new);
+        // TODO: admit the complete retained memory/descriptor owner before
+        // voting. Report both buffers without shrinking the existing encoding
+        // limit into a new route-dependent local acceptance rule.
+        Ok(prepared)
     }
 
     pub(super) fn prepare_phases(
@@ -117,6 +170,7 @@ impl PreparedGeometryJournalTransition {
             encoded,
             encoded_phase: LaneGeometryPhase::Intent,
             changes,
+            writer: None,
         };
         if prepared
             .retained_allocation_bytes()
@@ -141,6 +195,9 @@ impl PreparedGeometryJournalTransition {
                     .len()
                     .checked_mul(std::mem::size_of::<PhaseByteChange>())?,
             )?;
+        }
+        if let Some(writer) = &self.writer {
+            bytes = bytes.checked_add(writer.retained_allocation_bytes()?)?;
         }
         for operation in &self.operations {
             for path in [
@@ -186,13 +243,36 @@ impl PreparedGeometryJournalTransition {
     }
 
     pub(super) fn persist(&mut self, kura: &Kura, phase: LaneGeometryPhase) -> Result<()> {
-        // No catalog derivation, retirement admission, journal reconstruction or
-        // semantic validation follows file effects. The atomic writer retains
-        // path/temporary authentication and retryable storage failure handling.
-        kura.atomic_write_geometry_file(
-            &kura.lane_geometry_journal_path(),
-            &kura.store_root.join(JOURNAL_TEMP_FILE_NAME),
-            self.bytes(phase),
-        )
+        self.bytes(phase);
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            kura.geometry_error(
+                ErrorKind::InvalidInput,
+                "geometry phase bytes have no retained physical journal owner",
+            )
+        })?;
+        writer.persist(kura, phase, &self.encoded)
+    }
+
+    /// Recheck completed original phase custody without encoding or writing again.
+    pub(super) fn reauthenticate_completed(
+        &self,
+        kura: &Kura,
+        phase: LaneGeometryPhase,
+    ) -> Result<()> {
+        if self.encoded_phase != phase {
+            return Err(kura.geometry_error(
+                ErrorKind::InvalidInput,
+                "prepared geometry completion differs from its retained phase",
+            ));
+        }
+        self.writer
+            .as_ref()
+            .ok_or_else(|| {
+                kura.geometry_error(
+                    ErrorKind::InvalidInput,
+                    "prepared geometry completion lost its original journal writer",
+                )
+            })?
+            .reauthenticate_completed(kura, phase, &self.encoded)
     }
 }

@@ -28,7 +28,8 @@ pub(crate) struct KuraWsvCheckpointReceipt {
 
 impl KuraWsvCheckpointReceipt {
     /// Borrow the original durable finality receipt for retained archive work.
-    /// This does not replace checkpoint reauthentication under the final lease.
+    /// This grants no checkpoint or State permission and does not replace
+    /// checkpoint reauthentication under the final publication lease.
     pub(crate) fn finality_receipt(&self) -> &KuraV2CommitReceipt {
         &self.finality
     }

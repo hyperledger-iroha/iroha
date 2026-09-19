@@ -10,10 +10,23 @@ use super::*;
 impl Kura {
     /// Caller owns prune -> canonical-chain -> geometry; release checks take
     /// sidecar last. No lock or descriptor is retained across a Kura write.
+    #[cfg(test)]
     pub(super) fn collect_released_lane_instances_locked(
         &self,
         journal: &mut LaneGeometryJournal,
     ) -> Result<(LaneGeometryGcSummary, Option<usize>)> {
+        self.raw_geometry_claim.ensure_unclaimed()?;
+        self.collect_released_lane_instances_with_custody(journal, None)
+    }
+
+    pub(super) fn collect_released_lane_instances_with_custody(
+        &self,
+        journal: &mut LaneGeometryJournal,
+        mut custody: Option<&mut RawGeometryMutation<'_, '_>>,
+    ) -> Result<(LaneGeometryGcSummary, Option<usize>)> {
+        if let Some(custody) = custody.as_deref() {
+            custody.authenticate(self)?;
+        }
         let checkpoint = journal
             .checkpoint
             .as_ref()
@@ -115,7 +128,12 @@ impl Kura {
                         ));
                     }
                     self.require_complete_geometry_binding_at(binding, &blocks, &merge)?;
-                    self.ensure_archived_lane_work_released(&blocks, binding, &merge_releases)?;
+                    self.ensure_archived_lane_work_released_with_custody(
+                        &blocks,
+                        binding,
+                        &merge_releases,
+                        custody.as_deref(),
+                    )?;
                     journal.pending_archive_gc[index]
                         .collecting
                         .push(binding.clone());
@@ -129,7 +147,7 @@ impl Kura {
                         .expect("validated GC checkpoint");
                     checkpoint.pending_archive_gc_root = Some(root);
                     checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
-                    self.write_lane_geometry_journal(journal)?;
+                    self.write_lane_geometry_journal_with_custody(journal, custody.as_deref_mut())?;
                 }
                 // Absence is a retry of this admitted deletion, never permission
                 // to adopt a substitute object or manufacture an empty pair.
@@ -143,8 +161,11 @@ impl Kura {
                 }
             }
             archive.collecting = journal.pending_archive_gc[index].collecting.clone();
-            let (bytes, existed) =
-                self.remove_authenticated_geometry_archive(&archive, &merge_releases)?;
+            let (bytes, existed) = self.remove_authenticated_geometry_archive_with_custody(
+                &archive,
+                &merge_releases,
+                custody.as_deref(),
+            )?;
             summary.reclaimed_bytes = summary.reclaimed_bytes.saturating_add(bytes);
             summary.removed_archive_roots = summary
                 .removed_archive_roots
