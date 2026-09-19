@@ -1,6 +1,6 @@
 //! Real State fence releases wake retries without a new block or publication.
 
-use super::*;
+use crate::publication_lock::*;
 use crate::state::{State, World};
 use std::{
     future::Future,
@@ -20,7 +20,7 @@ fn state() -> State {
     )
 }
 
-fn locks(state: &State) -> [&StatePublicationMutex; 3] {
+fn locks(state: &State) -> [&PublicationMutex; 3] {
     [
         &state.state_commit_lock,
         &state.state_write_lock,
@@ -39,7 +39,7 @@ fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
-fn waiting(lock: &StatePublicationMutex) -> mv::ReleaseFuture {
+fn waiting(lock: &PublicationMutex) -> mv::ReleaseFuture {
     lock.try_lock_or_wait()
         .err()
         .expect("actual mutex is held")
@@ -86,6 +86,7 @@ fn every_state_fence_wakes_on_normal_and_aborted_release_without_publication() {
 #[test]
 fn state_fence_release_before_registration_survives_a_successor_guard() {
     let state = state();
+    let generation = state.state_view_generation();
     for lock in locks(&state) {
         let original = lock.lock();
         let mut original_wait = waiting(lock);
@@ -99,7 +100,7 @@ fn state_fence_release_before_registration_survives_a_successor_guard() {
         assert!(poll(&mut successor_wait, &count).is_ready());
     }
     assert_eq!(state.committed_height(), 0);
-    assert_eq!(state.state_view_generation(), 0);
+    assert_eq!(state.state_view_generation(), generation);
 }
 
 #[test]
@@ -130,6 +131,7 @@ fn state_fence_waits_are_independent_of_other_fences_and_other_states() {
 #[test]
 fn real_consensus_and_lifecycle_leases_signal_the_same_original_fences() {
     let state = state();
+    let generation = state.state_view_generation();
     let count = Arc::new(WakeCount::default());
     let consensus = state.consensus_publication_lease();
     let mut commit_wait = waiting(&state.state_commit_lock);
@@ -143,7 +145,7 @@ fn real_consensus_and_lifecycle_leases_signal_the_same_original_fences() {
     drop(lifecycle);
     assert!(poll(&mut lifecycle_wait, &count).is_ready());
     assert_eq!(count.0.load(Ordering::SeqCst), 2);
-    assert_eq!(state.state_view_generation(), 0);
+    assert_eq!(state.state_view_generation(), generation);
 }
 
 #[test]
@@ -207,4 +209,26 @@ fn cancelling_one_state_fence_waiter_preserves_other_waiters() {
         assert_eq!(retained_count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut retained, &retained_count).is_ready());
     }
+}
+
+#[test]
+fn fair_unlock_releases_actual_state_fence_before_notification() {
+    let state = state();
+    let generation = state.state_view_generation();
+    for lock in locks(&state) {
+        let guard = lock.lock();
+        let mut wait = waiting(lock);
+        let count = Arc::new(WakeCount::default());
+        assert!(poll(&mut wait, &count).is_pending());
+        guard.unlock_fair();
+        assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut wait, &count).is_ready());
+        let successor = lock.try_lock_or_wait().expect("physical guard released");
+        let mut successor_wait = waiting(lock);
+        assert!(poll(&mut successor_wait, &count).is_pending());
+        drop(successor);
+        assert!(poll(&mut successor_wait, &count).is_ready());
+    }
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(state.state_view_generation(), generation);
 }

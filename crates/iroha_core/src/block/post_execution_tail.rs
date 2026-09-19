@@ -11,45 +11,12 @@ impl ValidBlock {
         advertised_policy: Option<&AxtPolicySnapshot>,
         advertised_transitions: Option<&BTreeSet<DataSpaceId>>,
     ) -> Result<crate::state::ExecutionOutputSealMetadata, BlockValidationError> {
-        if routes.len() != block.network_entrypoint_count() {
-            return Err(Self::execution_context_error(
-                "settlement lost its complete frozen Network routes",
-            ));
-        }
-        let pruned = crate::tx::prune_expired_sealed_commitments(state);
-        if pruned != 0 {
-            iroha_logger::debug!(
-                count = pruned,
-                "pruned expired sealed transaction commitments"
-            );
-        }
-        let fragments = u64::try_from(state.committed_fragment_count())
-            .map_err(|_| Self::execution_context_error("committed fragments exceed u64"))?;
-        state.finalize_axt_asset_incarnations().map_err(|error| {
-            Self::execution_context_error(format!(
-                "failed to finalize AXT asset incarnations: {error}"
-            ))
-        })?;
-        state
-            .evaluate_nexus_autoscale(block, fragments)
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to evaluate Nexus autoscale: {error}"
-                ))
-            })?;
-        state
-            .finalize_axt_policy_transition_ratchets()
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to finalize the AXT policy counter ratchet: {error}"
-                ))
-            })?;
-        let policy = state.axt_policy_snapshot();
-        Self::validate_advertised_axt_post_state(advertised_policy, &policy)?;
-        Self::validate_advertised_axt_transitions(
+        Self::finalize_common_execution_metadata(
+            block,
+            state,
+            routes,
+            advertised_policy,
             advertised_transitions,
-            state.axt_authorization_transitioned(),
-            policy.version,
         )?;
         let mut summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
         let mut routed = Vec::new();
@@ -110,6 +77,58 @@ impl ValidBlock {
         })
     }
 
+    /// Shared deterministic metadata runs after actual Network/Pipeline/Time
+    /// execution and before the one output seal captures its final World delta.
+    fn finalize_common_execution_metadata(
+        block: &SignedBlock,
+        state: &mut StateBlock<'_>,
+        routes: &[crate::queue::RoutingDecision],
+        advertised_policy: Option<&AxtPolicySnapshot>,
+        advertised_transitions: Option<&BTreeSet<DataSpaceId>>,
+    ) -> Result<(), BlockValidationError> {
+        if routes.len() != block.network_entrypoint_count() {
+            return Err(Self::execution_context_error(
+                "settlement lost its complete frozen Network routes",
+            ));
+        }
+        let pruned = crate::tx::prune_expired_sealed_commitments(state);
+        if pruned != 0 {
+            iroha_logger::debug!(
+                count = pruned,
+                "pruned expired sealed transaction commitments"
+            );
+        }
+        let fragments = u64::try_from(state.committed_fragment_count())
+            .map_err(|_| Self::execution_context_error("committed fragments exceed u64"))?;
+        state.finalize_axt_asset_incarnations().map_err(|error| {
+            Self::execution_context_error(format!(
+                "failed to finalize AXT asset incarnations: {error}"
+            ))
+        })?;
+        state
+            .evaluate_nexus_autoscale(block, fragments)
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "failed to evaluate Nexus autoscale: {error}"
+                ))
+            })?;
+        state
+            .finalize_axt_policy_transition_ratchets()
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "failed to finalize the AXT policy counter ratchet: {error}"
+                ))
+            })?;
+        let policy = state.axt_policy_snapshot();
+        Self::validate_advertised_axt_post_state(advertised_policy, &policy)?;
+        Self::validate_advertised_axt_transitions(
+            advertised_transitions,
+            state.axt_authorization_transitioned(),
+            policy.version,
+        )?;
+        Ok(())
+    }
+
     /// Reexecute a fixture through the actual whole producer and metadata finalizer.
     /// The explicit genesis key is fixture trust input; ordinary source/finality
     /// admission remains the caller's responsibility. No supplied rows enter here.
@@ -133,3 +152,5 @@ impl ValidBlock {
         )
     }
 }
+
+include!("native_execution_metadata.rs");

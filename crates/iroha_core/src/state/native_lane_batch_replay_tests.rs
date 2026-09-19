@@ -123,7 +123,7 @@ fn retained_native_batch_fixture_with_cases(
             .with_native_lane_decisions(batch.clone()),
     ));
     let prepared = state
-        .prepare_native_batch_on_carrier(carrier.header(), &groups)
+        .prepare_native_batch_on_carrier(carrier.header(), groups.clone())
         .unwrap();
     attach_actual_native_prefix_results_for_test(&mut carrier, &prepared);
     drop(prepared); // release the prefix before unrelated Kura/finality fixture work
@@ -544,7 +544,7 @@ fn assert_actual_native_prefix_wire_for_test(
         BlockExecutionContextBundle::default().with_native_lane_decisions(batch),
     ));
     let prepared = state
-        .prepare_native_batch_on_carrier(carrier.header(), &groups)
+        .prepare_native_batch_on_carrier(carrier.header(), groups.clone())
         .unwrap();
     assert_eq!(
         prepared

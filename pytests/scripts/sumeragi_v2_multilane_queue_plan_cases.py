@@ -1068,6 +1068,13 @@ def test_queue_plan_pending_membership_contract_preserves_historical_applied(
 def queue_plan_publication_source_contract_errors(module, sources: dict[str, str]) -> tuple[str, ...]:
     """Evaluate only the changed publication owners using the real checker contracts/parser."""
     symbols = {
+        "PublicationMutex",
+        "PublicationGuard",
+        "PhysicalPublicationGuard",
+        "PublicationMutex::wrap",
+        "PublicationMutex::lock",
+        "PublicationGuard<'_>::unlock_fair",
+        "PhysicalPublicationGuard<'_>::drop",
         "persist_classified_queue_plan_admission",
         "try_queue_plan_publication_at_height",
         "wait_for_queue_plan_publication",
@@ -1109,6 +1116,7 @@ def test_queue_plan_publication_scoped_contract_accepts_current_owners() -> None
     module = load_checker()
     sources = {relative: (ROOT_DIR / relative).read_text(encoding="utf-8") for relative in (
         "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/publication_lock.rs",
     )}
     errors = queue_plan_publication_source_contract_errors(module, sources)
     assert errors == (), errors
@@ -1117,7 +1125,7 @@ def test_queue_plan_publication_scoped_contract_accepts_current_owners() -> None
 @pytest.mark.parametrize(("relative", "old", "new"), [
     ("crates/iroha_core/src/state.rs", "drop(state_view);", "// retained StateView"),
     ("crates/iroha_core/src/state.rs", "self.kura.wait_for_queue_plan_publication();", "// skip the outside-State wait"),
-    ("crates/iroha_core/src/state.rs", "parking_lot::MutexGuard::unlock_fair(state_commit);", "drop(state_commit);"),
+    ("crates/iroha_core/src/state.rs", "state_commit.unlock_fair();", "drop(state_commit);"),
     ("crates/iroha_core/src/state.rs", "self.authenticate_pending_queue_plan_admission(bytes)?", "self.authenticate_pending_queue_plan_admission(bytes).unwrap()"),
     ("crates/iroha_core/src/kura.rs", "self.canonical_chain_lock.try_lock()", "Some(self.canonical_chain_lock.lock())"),
     ("crates/iroha_core/src/kura.rs", "actual_durable_height != expected_durable_height", "actual_durable_height < expected_durable_height"),
@@ -1129,6 +1137,7 @@ def test_queue_plan_publication_scoped_contract_rejects_lock_and_height_drift(
     module = load_checker()
     sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
         "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/publication_lock.rs",
     )}
     symbol = "persist_classified_queue_plan_admission" if relative.endswith("state.rs") else "try_queue_plan_publication_at_height"
     owner = module._extract_rust_binding_items(sources[relative], "fn", symbol)[0]
@@ -1144,6 +1153,7 @@ def test_queue_plan_publication_scoped_contract_rejects_recursive_canonical_lock
     module = load_checker()
     sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
         "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/publication_lock.rs",
     )}
     relative = "crates/iroha_core/src/kura.rs"
     owner = module._extract_rust_binding_items(sources[relative], "method", symbol)[0]
@@ -1156,7 +1166,7 @@ def test_queue_plan_publication_scoped_contract_rejects_recursive_canonical_lock
 @pytest.mark.parametrize(("symbol", "earlier", "later"), [
     ("persist_classified_queue_plan_admission", "drop(state_view);", ".try_queue_plan_publication_at_height(committed_height)"),
     ("persist_classified_queue_plan_admission", ".try_queue_plan_publication_at_height(committed_height)", "publication.retire(hash)?;"),
-    ("persist_classified_queue_plan_admission", "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    #[cfg(test)]", "self.kura.wait_for_queue_plan_publication();\n                    continue;"),
+    ("persist_classified_queue_plan_admission", "state_commit.unlock_fair();\n                    #[cfg(test)]", "self.kura.wait_for_queue_plan_publication();\n                    continue;"),
     ("try_queue_plan_publication_at_height", "if actual_durable_height != expected_durable_height", "Ok(Some(KuraQueuePlanPublicationGuard {"),
 ])
 def test_queue_plan_publication_scoped_contract_rejects_reordered_authority(
@@ -1165,6 +1175,7 @@ def test_queue_plan_publication_scoped_contract_rejects_reordered_authority(
     module = load_checker()
     sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
         "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/publication_lock.rs",
     )}
     relative = "crates/iroha_core/src/" + (
         "state.rs" if symbol == "persist_classified_queue_plan_admission" else "kura.rs"
@@ -1180,6 +1191,7 @@ def test_queue_plan_publication_scoped_contract_rejects_wait_returning_authority
     module = load_checker()
     sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
         "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/publication_lock.rs",
     )}
     relative = "crates/iroha_core/src/kura.rs"
     symbol = "wait_for_queue_plan_publication"
@@ -1314,3 +1326,28 @@ def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path:
     binding["path"] = "crates/iroha_core/src/torii_proxy.rs"
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any("QueuePlanAdmissionBindingV1" in error and "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(("kind", "symbol", "old", "new"), [
+    ("method", "PublicationMutex::lock", "self.wrap(self.inner.lock())", "self.inner.lock()"),
+    ("method", "PublicationMutex::wrap", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
+    ("method", "PublicationMutex::wrap", "guard: Some(guard),", "guard: None,"),
+    ("method", "PublicationGuard<'_>::unlock_fair", "self.inner.fair = true;", "self.inner.fair = false;"),
+    ("method", "PhysicalPublicationGuard<'_>::drop", "if self.fair {", "if !self.fair {"),
+    ("method", "PhysicalPublicationGuard<'_>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),
+    ("method", "PhysicalPublicationGuard<'_>::drop", "self.guard.take()", "None"),
+    ("struct", "PublicationGuard", "mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>", "PhysicalPublicationGuard<'state>"),
+])
+def test_queue_plan_publication_scoped_contract_rejects_release_owner_drift(
+    kind: str, symbol: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    relative = "crates/iroha_core/src/publication_lock.rs"
+    sources = {path: (ROOT_DIR / path).read_text(encoding="utf-8") for path in (
+        "crates/iroha_core/src/state.rs", "crates/iroha_core/src/kura.rs", relative,
+    )}
+    owner, = module._extract_rust_binding_items(sources[relative], kind, symbol)
+    assert owner.count(old) == 1
+    sources[relative] = sources[relative].replace(owner, owner.replace(old, new), 1)
+    errors = queue_plan_publication_source_contract_errors(module, sources)
+    assert any(symbol in error for error in errors), errors

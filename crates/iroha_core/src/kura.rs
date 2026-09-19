@@ -614,6 +614,12 @@ mod physical_resource_initialization_tests;
 #[path = "kura/resource_inventory_snapshot_tests.rs"]
 mod resource_inventory_snapshot_tests;
 
+use crate::publication_lock::{PublicationGuard, PublicationMutex};
+mod carrier_checkpoint;
+mod publication_lease;
+pub(crate) use carrier_checkpoint::KuraWsvCheckpointReceipt;
+pub(crate) use publication_lease::{KuraPublicationLease, KuraPublicationPreparationError};
+
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -637,13 +643,13 @@ pub struct Kura {
     ///
     /// Operations that also hold `prune_lock` acquire that gate first. Inner locks retain their
     /// existing order: identity/path snapshots, then `block_store_write_lock`, then `block_store`.
-    canonical_chain_lock: Mutex<()>,
+    canonical_chain_lock: PublicationMutex,
     /// Serializes block-store writes while allowing reads during long eviction compaction.
     block_store_write_lock: Mutex<()>,
     /// Serializes canonical prune transactions from preflight through intent clearance.
     /// When combined with canonical-chain or lane locks, acquire this before
     /// `canonical_chain_lock`, `lane_geometry_lock`, and `sidecar_lock`.
-    prune_lock: Mutex<()>,
+    prune_lock: PublicationMutex,
     /// Rejects consensus-path sidecar enqueues while a canonical prune is active.
     ///
     /// Unlike `prune_lock`, this gate does not make enqueuers wait behind unrelated writer work
@@ -669,7 +675,7 @@ pub struct Kura {
     /// Path to newline-delimited JSON (JSONL) block dump.
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
-    sidecar_lock: Mutex<()>,
+    sidecar_lock: PublicationMutex,
     /// Serializes the one durable process-generation claim for this Kura instance.
     autonomous_lifecycle_process_generation_lock: Mutex<()>,
     /// Process-local cache of the exact durable generation claimed after peer binding.
@@ -733,7 +739,7 @@ pub struct Kura {
         ResidentMutex<BTreeMap<LaneId, CertifiedFrontierArtifactValidationAttestation>>,
     /// Serializes lifecycle geometry moves, snapshot checkpoints, and archive garbage collection.
     /// Acquire it after `prune_lock` and before `sidecar_lock` when locks are combined.
-    lane_geometry_lock: Mutex<()>,
+    lane_geometry_lock: PublicationMutex,
     /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
     max_disk_usage_bytes: u64,
     /// Distinct remote peers required before Kura may evict a local canonical block body.
@@ -976,7 +982,7 @@ pub struct Kura {
 /// separate and never authorizes mutations.
 pub(crate) struct KuraQueuePlanPublicationGuard<'a> {
     kura: &'a Kura,
-    _guard: parking_lot::MutexGuard<'a, ()>,
+    _guard: PublicationGuard<'a>,
 }
 impl KuraQueuePlanPublicationGuard<'_> {
     /// Retire an admission classified at this guard's checked State frontier.
@@ -3002,9 +3008,9 @@ impl Kura {
             store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
-            canonical_chain_lock: Mutex::new(()),
+            canonical_chain_lock: PublicationMutex::default(),
             block_store_write_lock: Mutex::new(()),
-            prune_lock: Mutex::new(()),
+            prune_lock: PublicationMutex::default(),
             prune_in_progress: AtomicBool::new(false),
             prune_recovery_required: AtomicBool::new(false),
             block_data: ResidentMutex::new(block_data, &resource_inventory),
@@ -3018,7 +3024,7 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
-            sidecar_lock: Mutex::new(()),
+            sidecar_lock: PublicationMutex::default(),
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3066,7 +3072,7 @@ impl Kura {
                 BTreeMap::new(),
                 &resource_inventory,
             ),
-            lane_geometry_lock: Mutex::new(()),
+            lane_geometry_lock: PublicationMutex::default(),
             max_disk_usage_bytes: if config.init_mode == InitMode::Fast {
                 0
             } else {
@@ -3398,9 +3404,9 @@ impl Kura {
             store_root_directory,
             _store_root_lock_file: None,
             block_store: Mutex::new(block_store),
-            canonical_chain_lock: Mutex::new(()),
+            canonical_chain_lock: PublicationMutex::default(),
             block_store_write_lock: Mutex::new(()),
-            prune_lock: Mutex::new(()),
+            prune_lock: PublicationMutex::default(),
             prune_in_progress: AtomicBool::new(false),
             prune_recovery_required: AtomicBool::new(false),
             block_data: ResidentMutex::new(BlockData::default(), &resource_inventory),
@@ -3414,7 +3420,7 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
-            sidecar_lock: Mutex::new(()),
+            sidecar_lock: PublicationMutex::default(),
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3457,7 +3463,7 @@ impl Kura {
                 BTreeMap::new(),
                 &resource_inventory,
             ),
-            lane_geometry_lock: Mutex::new(()),
+            lane_geometry_lock: PublicationMutex::default(),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
             local_peer_id: OnceLock::new(),
@@ -11194,7 +11200,7 @@ impl Kura {
     /// authority that could be carried into a later State acquisition. Callers
     /// must reclassify and try a fresh exact-height publication guard afterward.
     pub(crate) fn wait_for_queue_plan_publication(&self) {
-        parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());
+        self.canonical_chain_lock.lock().unlock_fair();
     }
     fn persist_pending_queue_plan_admission_certificate_inner(
         &self,
@@ -16986,6 +16992,18 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         self.ensure_durable_block_at_height(height, block_hash)?;
+        let _guard = self.sidecar_lock.lock();
+        self.write_wsv_checkpoint_under_sidecar_guard(height, block_hash, state_hash)?;
+        Ok(())
+    }
+    // Caller owns prune and sidecar; the receipt path also owns canonical-chain.
+    // This shared writer grants storage durability only, never State authority.
+    fn write_wsv_checkpoint_under_sidecar_guard(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        state_hash: Hash,
+    ) -> Result<carrier_checkpoint::DurableWsvCheckpoint> {
         #[cfg(test)]
         if self
             .fail_next_wsv_checkpoint_write
@@ -16996,18 +17014,22 @@ impl Kura {
                 PathBuf::from("wsv_checkpoint_test_fail"),
             ));
         }
-        let _guard = self.sidecar_lock.lock();
         // Close the preflight-to-publication race with top-block replacement. A writer can pass
         // the first durable-hash check and then wait behind replacement's metadata fence.
         self.ensure_durable_block_at_height(height, block_hash)?;
         let dir = self.wsv_checkpoint_dir();
         create_dir_all_with_context(&dir)?;
         let path = dir.join(format!("{height:020}.norito"));
+        let tmp_path = path.with_extension("norito.tmp");
+        // One held namespace covers either a new publication or an exact retry.
+        let namespace = self.open_bound_progress_namespace(&path, &tmp_path)?;
+        let existing = self.read_regular_sidecar_snapshot(&path, &dir, MAX_WSV_CHECKPOINT_BYTES)?;
         let mut checkpoint = WsvCheckpoint::new(height, block_hash, state_hash);
-        if let Some(existing) = Self::decode_wsv_checkpoint_at(&path)? {
-            if existing.height != height
-                || existing.block_hash != block_hash
-                || existing.state_hash != state_hash
+        if let Some(readback) = &existing {
+            let existing_checkpoint = Self::decode_checkpoint_receipt_readback(readback)?;
+            if existing_checkpoint.height != height
+                || existing_checkpoint.block_hash != block_hash
+                || existing_checkpoint.state_hash != state_hash
             {
                 return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
                     "refusing to replace immutable WSV checkpoint #{height}"
@@ -17015,9 +17037,8 @@ impl Kura {
             }
             // Re-persisting an identical checkpoint must never erase the
             // durable proof that a complete manifest was already published.
-            checkpoint.commit_manifest_hash = existing.commit_manifest_hash;
+            checkpoint.commit_manifest_hash = existing_checkpoint.commit_manifest_hash;
         }
-        let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
         Self::ensure_sidecar_encoding_within_limit(
             &path,
@@ -17028,18 +17049,77 @@ impl Kura {
         let resource_mutation = self
             .begin_total_disk_usage_mutation()
             .with_resource_paths(vec![path.clone(), tmp_path.clone()]);
-        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-            opts.write(true).create(true).truncate(true);
-        })?;
-        tmp_file.try_io(|file| {
-            file.write_all(&bytes)?;
-            file.flush()?;
-            file.sync_data()
-        })?;
-        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
+        // Even an exact stable-file retry must reject malformed temporary
+        // entries. They belong to the same physical accounting inventory; a
+        // directory, link or foreign path cannot be hidden by idempotence.
+        // Start the mutation first so a refused physical owner remains unknown
+        // until actual re-audit, rather than restoring a stale resource count.
+        let _ = self.regular_sidecar_metadata(&tmp_path, &dir)?;
+        let written = if let Some(existing) = &existing {
+            // Retain the existing exact object on an identical retry. Replacing
+            // it would invalidate receipts for the same successful publication.
+            let file = Self::open_bound_progress_file(&namespace, &path, &existing.metadata)?;
+            file.sync_all()
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            file
+        } else {
+            let mut temporary = Self::open_direct_sidecar_file_in_namespace(
+                &tmp_path,
+                true,
+                false,
+                Some(&namespace),
+            )
+            .map_err(|error| Error::IO(error, tmp_path.clone()))?;
+            temporary
+                .set_len(0)
+                .and_then(|()| temporary.write_all(&bytes))
+                .and_then(|()| temporary.flush())
+                .and_then(|()| temporary.sync_all())
+                .map_err(|error| Error::IO(error, tmp_path.clone()))?;
+            Self::promote_bound_progress_temp(&namespace, &tmp_path, &path, &temporary)
+                .map_err(|error| Error::IO(error.source, path.clone()))?;
+            temporary
+        };
+        // Sync the actual held checkpoint directory and every ancestor through
+        // Kura root, including a newly created checkpoint-directory entry.
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, dir.clone()))?;
+        // The same writer FD survives rename. Observe its post-rename ctime;
+        // comparing pre-rename ctime would reject a legitimate publication.
+        let written_metadata = secure_file_metadata::from_file(&written)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        #[cfg(test)]
+        carrier_checkpoint::inject_checkpoint_readback_corruption_for_test(&path)?;
+        let readback = self
+            .read_regular_sidecar_snapshot(&path, &dir, MAX_WSV_CHECKPOINT_BYTES)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "WSV checkpoint disappeared after publication",
+                    ),
+                    path.clone(),
+                )
+            })?;
+        if readback.bytes != bytes
+            || readback.bytes_hash != Hash::new(&bytes)
+            || !Self::sidecar_file_metadata_unchanged(&written_metadata, &readback.metadata.file)
+            || !self.bound_progress_namespace_unchanged(&namespace)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "WSV checkpoint differs from durable writer bytes",
+                ),
+                path,
+            ));
+        }
         resource_mutation.finish_resources_before_disk_rescan();
-        Ok(())
+        Ok(carrier_checkpoint::DurableWsvCheckpoint {
+            readback,
+            written,
+            namespace,
+        })
     }
     fn bind_wsv_checkpoint_to_manifest(&self, manifest: &CommitManifest) -> Result<()> {
         let path = self.wsv_checkpoint_path(manifest.height);
@@ -22388,7 +22468,7 @@ impl Kura {
     /// Exclude canonical Kura writers while a validated State result is
     /// consumed. The caller must not invoke a Kura mutation while holding this
     /// lease because canonical mutations acquire the same lock.
-    pub(crate) fn canonical_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+    pub(crate) fn canonical_publication_lease(&self) -> PublicationGuard<'_> {
         self.canonical_chain_lock.lock()
     }
     /// Return a best-effort durable count for diagnostics and telemetry only.

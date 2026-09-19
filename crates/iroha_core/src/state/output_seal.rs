@@ -189,6 +189,7 @@ impl StateBlock<'_> {
                 .map_err(|error| error.to_string())?;
             let wire = block.encode_wire().map_err(|error| error.to_string())?;
             Ok(SealedExecutionOutputs {
+                sources,
                 world_delta,
                 proposal: block.hash(),
                 wire_hash: Hash::new(&wire),

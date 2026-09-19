@@ -57,7 +57,7 @@ fn canonical_abi_hex() -> String {
 fn propose_rejects_non_canonical_abi_hash_for_v1() {
     let (state, authority) = mk_state_and_authority();
     let contract_address = proposal_contract_address(&authority);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm: Permission = CanProposeContractDeployment {
@@ -84,7 +84,7 @@ fn propose_rejects_non_canonical_abi_hash_for_v1() {
 fn propose_rejects_non_v1_abi_version() {
     let (state, authority) = mk_state_and_authority();
     let contract_address = proposal_contract_address(&authority);
-    let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm: Permission = CanProposeContractDeployment {
@@ -135,7 +135,7 @@ fn zk_ballot_rejects_oversized_proof() {
     state
         .set_zk(zk_cfg)
         .expect("empty SCCP outbox accepts governance test configuration");
-    let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm: Permission = CanSubmitGovernanceBallot {

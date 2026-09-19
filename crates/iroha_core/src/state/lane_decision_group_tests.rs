@@ -42,15 +42,12 @@ fn prepared_native_decision_group_for_test(
 }
 
 fn resign_changed_native_group_payload_for_test(
-    fixture: &LaneContextVerifiedFixture,
+    fixture: &LaneContextVerifiedFixture<impl std::borrow::Borrow<State>>,
     source: &mut iroha_data_model::block::lane_input::LaneDecisionGroupV1,
 ) {
     use iroha_data_model::block::{consensus_v2 as wire, lane_consensus::lane_availability_hash};
-    let observed = fixture
-        .state
-        .verified_lane_consensus_contexts()
-        .unwrap()
-        .unwrap();
+    let state: &State = std::borrow::Borrow::borrow(&fixture.state);
+    let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
     let bytes = norito::encode_canonical(&source.payload).unwrap();
     for (decision, lane) in source.decisions.iter_mut().zip(observed.contexts()) {
         let manifest = &mut decision.manifest;

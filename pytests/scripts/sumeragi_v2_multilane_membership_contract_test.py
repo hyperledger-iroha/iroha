@@ -96,7 +96,9 @@ def test_membership_parser_rejects_different_generic_owner(declaration):
 
 @pytest.mark.parametrize("model_index", [0, 1])
 @pytest.mark.parametrize("symbol", [
+    "TransactionsStorage", "TransactionsStorage::block_impl",
     "PreparedTransactionsBlock", "TransactionsBlock::prepare_commit",
+    "DetachedTransactionsBlock::try_prepare_publication",
     "TransactionsBlock::admit_publication", "PreparedTransactionsBlock::publish",
     "DetachedTransactionsBlock", "PreparedTransactionsBlock::detach",
     "DetachedTransactionsBlock::observe_predecessor",
@@ -137,7 +139,7 @@ def test_membership_rejects_weakened_ledger(fixture):
     ("STORAGE", "predecessor_identity: Arc::clone(&block._guard)", "predecessor_identity: Arc::new(())", "executable relation"),
     ("STORAGE", "Arc::ptr_eq(&guard, &self.predecessor_identity)", "true", "executable relation"),
     ("STORAGE", "storage.write_lock.try_lock()", "storage.write_lock.lock()", "executable relation"),
-    ("STORAGE", "*block._guard = next_identity;", "// *block._guard = next_identity;", "executable relation"),
+    ("STORAGE", "**block._guard = next_identity;", "// **block._guard = next_identity;", "executable relation"),
     ("STATE", "let tx_validate_result = transactions.prepare_commit();", "let tx_validate_result = transactions.validate_commit();", "misses or reorders"),
     ("STATE", "            transactions.publish();", "            // transactions.publish();", "misses or reorders"),
 ])
@@ -159,3 +161,23 @@ def test_membership_rejects_publication_order_drift(fixture, earlier, later):
     helper.swap_ordered_once_after(root / checker.membership_contract.STATE,
                                    "fn commit_inner(", earlier, later)
     assert any("misses or reorders" in e for e in validate(fixture))
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("fn block_impl(", "self.released.guard(self.write_lock.lock())", "self.write_lock.lock()"),
+    ("fn block_impl(", "_guard: guard", "_guard: replacement"),
+    ("pub(crate) fn observe_predecessor(", "storage.released.guard(guard)", "guard"),
+    ("pub(crate) fn observe_predecessor(", "storage.released.guard(guard)", "storage.released.poisoning_guard(guard)"),
+    ("pub(crate) fn try_prepare_publication<", "let wait = storage.released.observe();", "let wait = other.released.observe();"),
+    ("let installation = match admit(&self, storage)", "let wait = storage.released.observe();", "let wait = other.released.observe();"),
+    ("pub(crate) fn try_prepare_publication<", "storage.released.guard(guard)", "guard"),
+    ("pub(crate) fn try_prepare_publication<", "storage.released.guard(guard)", "storage.released.poisoning_guard(guard)"),
+    ("pub(crate) fn try_prepare_publication<", "_guard: guard", "_guard: replacement"),
+])
+def test_membership_rejects_detached_or_misdirected_release(fixture, anchor, old, new):
+    """Both advisory probes and retained writers must use their actual source."""
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.membership_contract.STORAGE, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors

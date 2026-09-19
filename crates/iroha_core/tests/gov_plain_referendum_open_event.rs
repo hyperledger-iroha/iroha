@@ -33,7 +33,7 @@ fn plain_ballot_emits_open_event_with_window() {
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
     let rid = "plain-open-event".to_string();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     {
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
@@ -59,7 +59,7 @@ fn plain_ballot_emits_open_event_with_window() {
             .expect("commit proposed referendum setup at H=1");
     }
 
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     CastPlainBallot {

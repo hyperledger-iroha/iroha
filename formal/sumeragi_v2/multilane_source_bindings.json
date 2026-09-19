@@ -9845,10 +9845,30 @@
         {
           "path": "crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs",
           "kind": "fn",
+          "symbol": "certified_history_has_committed_rewrite_locked",
+          "required_tokens": [
+            "certified_lane_block_paths_for_entry",
+            "autonomous_lane_merge_bundle_paths_for_entry",
+            "bound_progress_sidecar_directory_is_absent",
+            "open_bound_progress_namespace",
+            "open_optional_bound_progress_file",
+            "index.with_extension(\"index.tmp\")",
+            "return Ok(true)",
+            "Ok(false)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs",
+          "kind": "fn",
           "symbol": "maintain_lane_retirement_route_locked",
           "required_tokens": [
             "fixed_progress_pairs: &[(&Path, &Path, &str); 7]",
             "read_latest_certified_lane_block_frontier_locked",
+            "certified_history_has_committed_rewrite_locked",
+            "AuthenticatedLaneHistoryRetention",
+            "first_retained_height",
+            "retention.as_ref()",
+            "recover_certified_bundle_history_rewrites_locked",
             "recover_certified_lane_block_pair_from_frontier_locked",
             "confirm_latest_certified_lane_block_frontier_read_locked",
             "note_certified_frontier_artifact_validation",
@@ -10673,7 +10693,7 @@
           "kind": "struct",
           "symbol": "TransactionsBlock",
           "required_tokens": [
-            "_guard: MutexGuard<'storage, RawMutex, Arc<()>>",
+            "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
             "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
             "blocks_ref: &'storage DashMap<Key, Value>"
           ]
@@ -10750,7 +10770,7 @@
             "next_identity",
             "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
             "if changes_identity",
-            "*block._guard = next_identity;",
+            "**block._guard = next_identity;",
             "MembershipPublication::Repeated",
             "MembershipPublication::Replace",
             ".retain(|_, height| *height < current.height)",
@@ -10781,18 +10801,7 @@
           "kind": "method",
           "symbol": "PreparedCarrier::prepare",
           "required_tokens": [
-            "input.into_parts()",
-            "valid.as_ref()",
-            "state.verify_execution_output_seal(block)?",
-            "state.verified_fastpq_source_inventory_for_capture()?",
-            "state.verify_cached_ordinary_witness_content(&inventory)?",
-            ".exec_witness",
-            "from_result_bearing_block_and_merge_entry",
-            "state.staged_merge_entry()",
-            "LaneFinalityManifestV1::from_result_bearing_block(block)?",
-            "execution_commitment_from_validated_block",
-            "prepare_deterministic_carrier_metadata",
-            "drop(state)"
+            "execution_prefix::prepare(input)"
           ]
         },
         {
@@ -11178,9 +11187,287 @@
           "required_tokens": [
             "storage.write_lock.try_lock()",
             "MembershipPredecessorStatus::Busy",
+            "let guard = storage.released.guard(guard);",
             "Arc::ptr_eq(&guard, &self.predecessor_identity)",
             "MembershipPredecessorStatus::Current",
             "MembershipPredecessorStatus::Changed"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "TransactionsStorage",
+          "required_tokens": [
+            "write_lock: Mutex<Arc<()>>",
+            "released: mv::ReleaseNotification"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "TransactionsStorage::block_impl",
+          "required_tokens": [
+            "let guard = self.released.guard(self.write_lock.lock());",
+            "_guard: guard"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "DetachedTransactionsBlock::try_prepare_publication",
+          "required_tokens": [
+            "let wait = storage.released.observe();",
+            "self.observe_predecessor(storage)",
+            "mv::PublicationPreparationError::after_failed_acquisition(wait)",
+            "let installation = match admit(&self, storage)",
+            "storage.write_lock.try_lock()",
+            "let guard = storage.released.guard(guard);",
+            "Arc::ptr_eq(&guard, &self.predecessor_identity)",
+            "_guard: guard",
+            "PreparedDetachedTransactionsBlock",
+            "installation,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "struct",
+          "symbol": "ValidatedExecutionPrefix",
+          "required_tokens": [
+            "sealed: output_capacity::SealedExecutionOutputs",
+            "inventory: Arc<FastpqSourceInventoryV1>",
+            "witness: ExecWitness",
+            "fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
+            "parliament_timed_ovn_casting_bindings:"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "struct",
+          "symbol": "PrefixPreparation",
+          "required_tokens": [
+            "state: Box<StateBlock<'state>>",
+            "prefix: ValidatedExecutionPrefix"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "method",
+          "symbol": "PrefixPreparation::capture",
+          "required_tokens": [
+            "state.native_lane_stage.is_some()",
+            "context.native_lane_decisions.is_some()",
+            "state.staged_merge_entry.is_some()",
+            "!state.merge_carrier_entrypoints.is_empty()",
+            "state.canonical_wsv_merge_commit_authorization.is_some()",
+            "state.verify_execution_output_seal(block)?",
+            "state.verified_fastpq_source_inventory_for_capture()?",
+            "state.verify_cached_ordinary_witness_content(&verified_inventory)?",
+            ".exec_witness",
+            "from_result_bearing_block_and_merge_entry",
+            "LaneFinalityManifestV1::from_result_bearing_block(block)?",
+            "execution_commitment_from_validated_block(witness, &manifest, &lanes, block)",
+            ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
+            "sealed.sources().is_native()",
+            "sealed.sources().proposal() != block.hash()",
+            "Arc::ptr_eq(&inventory, &verified_inventory)",
+            "let prefix = ValidatedExecutionPrefix {",
+            "Ok((Self { state, prefix }, manifest, commitment))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "method",
+          "symbol": "ValidatedExecutionPrefix::retains_closed_state",
+          "required_tokens": [
+            "self.sealed.proposal() == state._curr_block.hash()",
+            "Some(output_capacity::ExecutionOutputPlanState::Captured)",
+            "state.exec_witness.is_none()",
+            "state.fastpq_source_inventory.is_none()",
+            "state.fastpq_witness_context.is_none()",
+            "state.parliament_timed_ovn_casting_bindings.is_none()",
+            "state.native_lane_stage.is_none()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "method",
+          "symbol": "PrefixPreparation::prepare_world_effects",
+          "required_tokens": [
+            "let state = &mut *self.state",
+            "!self.prefix.retains_closed_state(state)",
+            "state.block_hashes.pending.as_slice() != [state._curr_block.hash()]",
+            "state.validate_canonical_runtime_projection()?",
+            "state.verify_lane_consensus_contexts_publication()?",
+            "validate_merge_carrier_entrypoint_binding()",
+            "finalize_axt_asset_incarnations()",
+            "finalize_axt_policy_transition_ratchets()",
+            "state.prune_axt_replay_ledger(",
+            "validate_owned_runtime_catalog_overlay()",
+            "ensure_pending_autoscale_lifecycle_staking_is_safe(",
+            "world_commit::PreparedWorldCommit::prepare_overlay("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+          "kind": "fn",
+          "symbol": "prepare",
+          "required_tokens": [
+            "input.into_parts()",
+            "PrefixPreparation::capture(state, &valid)?",
+            "prepare_deterministic_carrier_metadata",
+            "preparation.prepare_world_effects()?",
+            "prepare_carrier_publication_events(block.header())",
+            "PreparedTieredSnapshot::prepare(",
+            "prefix: source_prefix",
+            "Ok(PreparedCarrier {",
+            "Err(error) => Err((Box::new(valid.into()), error))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrier::prepare_journals",
+          "required_tokens": [
+            "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
+            "let admission;",
+            "source_prefix,",
+            "admit_journals(CarrierJournalInputs {",
+            "state: &state",
+            "prefix: &source_prefix",
+            "state.prepare_carrier_geometry()?",
+            "world.try_detach_journals",
+            "transactions.prepare_commit()?.detach()",
+            "admission, })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/output_producer.rs",
+          "kind": "struct",
+          "symbol": "SealedExecutionOutputs",
+          "required_tokens": [
+            "proposal:",
+            "wire_hash: Hash",
+            "wire_bytes: u64",
+            "world_delta:",
+            "sources: OwnedExecutionSources"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/output_seal.rs",
+          "kind": "method",
+          "symbol": "StateBlock::seal_execution_outputs",
+          "required_tokens": [
+            "let sources = retained",
+            "state.finalize_owned_fastpq_source_inventory_with_pending(&sources, pending)?",
+            "sources.network_routes()",
+            "Ok(SealedExecutionOutputs {",
+            "sources,",
+            "world_delta,",
+            "proposal: block.hash()",
+            "wire_hash: Hash::new(&wire)",
+            "wire_bytes: u64::try_from(wire.len())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/post_execution_tail.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::finalize_owned_execution_metadata",
+          "required_tokens": [
+            "Self::finalize_common_execution_metadata(",
+            "Self::finalize_lane_settlement_evidence(block, state, &routed, &summaries)?",
+            "stage_ordinary_lane_frontiers(block)",
+            "canonical_carrier_membership_hashes(",
+            "stage_canonical_carrier_membership(membership, height)",
+            "resolve_queue_plan_pending_obligations_from_block(block)",
+            "Self::validated_committed_fragment_count(state, advertised_fragments)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/post_execution_tail.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::finalize_common_execution_metadata",
+          "required_tokens": [
+            "if routes.len() != block.network_entrypoint_count()",
+            "return Err(",
+            "crate::tx::prune_expired_sealed_commitments(state)",
+            "u64::try_from(state.committed_fragment_count())",
+            "state.finalize_axt_asset_incarnations()",
+            "evaluate_nexus_autoscale(block, fragments)",
+            "finalize_axt_policy_transition_ratchets()",
+            "let policy = state.axt_policy_snapshot()",
+            "Self::validate_advertised_axt_post_state(advertised_policy, &policy)?",
+            "Self::validate_advertised_axt_transitions(",
+            "state.axt_authorization_transitioned()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_execution_metadata.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::seal_native_execution_outputs",
+          "required_tokens": [
+            "verify_native_execution_metadata(block, executions)",
+            "block.validate_output_merkle_cache()",
+            "advertised_policy.as_ref().ok_or_else(",
+            ".validate()",
+            "seal_execution_outputs(block, |state, source, routes|",
+            "verify_native_execution_metadata(source, executions)",
+            "Self::finalize_common_execution_metadata(",
+            "Self::native_execution_finality_statements(source, state, executions, routes)?",
+            "source.header().height().get()",
+            "std::iter::empty::<HashOf<TransactionEntrypoint>>()",
+            "Self::validated_committed_fragment_count(state, advertised_fragments)?",
+            "Ok(crate::state::ExecutionOutputSealMetadata {",
+            "verify_execution_output_seal(block)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block/native_execution_metadata.rs",
+          "kind": "method",
+          "symbol": "ValidBlock::native_execution_finality_statements",
+          "required_tokens": [
+            "executions.len() != routes.len() || executions.len() != block.network_entrypoint_count()",
+            "executions.iter().zip(routes)",
+            "source.payload.input.routing_plan()",
+            "plan.coordinator_route() != *route",
+            ".find(|(_, slot)| slot.route == *route)",
+            "source.decisions.get(slot_index)",
+            "let commitment = &execution.settlement_commitment",
+            "iroha_data_model::nexus::compute_settlement_hash(commitment)",
+            "!= execution.settlement_hash",
+            "commitment.receipts.is_empty() && commitment.nexus_fee_receipts.is_empty() && commitment.native_amx_receipts.is_empty()",
+            "commitment.total_local_amount.is_zero()",
+            "commitment.total_xor_due.is_zero()",
+            "commitment.total_xor_after_haircut.is_zero()",
+            "commitment.total_xor_variance.is_zero()",
+            "commitment.swap_metadata.is_some()",
+            "source.payload.descriptor.canonical_hash()",
+            "LaneRelayEnvelope::new(",
+            "commitment.clone()",
+            "decision.manifest.byte_len",
+            "with_lane_block_descriptor_hash(Some(descriptor_hash))",
+            "entry.dsid == commitment.dataspace_id",
+            "entry.policy.manifest_root",
+            "envelope.lane_finality_statement()",
+            "statements.sort_unstable_by_key("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/lane_decision_batch.rs",
+          "kind": "method",
+          "symbol": "StateBlock::verify_native_execution_metadata",
+          "required_tokens": [
+            "self.validate_native_output_carrier(block)?",
+            "!self.settlement_accumulator.is_empty()",
+            "executions.len() != seal.batch.groups.len()",
+            "executions.len() != seal.settlement_hashes.len()",
+            ".zip(&seal.batch.groups)",
+            ".zip(&seal.authenticated_aliases)",
+            ".zip(&seal.settlement_hashes)",
+            "execution.source != *source",
+            "execution.authenticated_signed_replay_alias != *alias",
+            "execution.settlement_hash != *settlement",
+            "super::canonical_merge_settlement_hash(&execution.settlement_commitment)",
+            "!= *settlement"
           ]
         }
       ]
@@ -13822,7 +14109,7 @@
           "kind": "struct",
           "symbol": "TransactionsBlock",
           "required_tokens": [
-            "_guard: MutexGuard<'storage, RawMutex, Arc<()>>",
+            "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
             "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
             "blocks_ref: &'storage DashMap<Key, Value>"
           ]
@@ -13899,7 +14186,7 @@
             "next_identity",
             "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
             "if changes_identity",
-            "*block._guard = next_identity;",
+            "**block._guard = next_identity;",
             "MembershipPublication::Repeated",
             "MembershipPublication::Replace",
             ".retain(|_, height| *height < current.height)",
@@ -14155,9 +14442,45 @@
           "required_tokens": [
             "storage.write_lock.try_lock()",
             "MembershipPredecessorStatus::Busy",
+            "let guard = storage.released.guard(guard);",
             "Arc::ptr_eq(&guard, &self.predecessor_identity)",
             "MembershipPredecessorStatus::Current",
             "MembershipPredecessorStatus::Changed"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "TransactionsStorage",
+          "required_tokens": [
+            "write_lock: Mutex<Arc<()>>",
+            "released: mv::ReleaseNotification"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "TransactionsStorage::block_impl",
+          "required_tokens": [
+            "let guard = self.released.guard(self.write_lock.lock());",
+            "_guard: guard"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "DetachedTransactionsBlock::try_prepare_publication",
+          "required_tokens": [
+            "let wait = storage.released.observe();",
+            "self.observe_predecessor(storage)",
+            "mv::PublicationPreparationError::after_failed_acquisition(wait)",
+            "let installation = match admit(&self, storage)",
+            "storage.write_lock.try_lock()",
+            "let guard = storage.released.guard(guard);",
+            "Arc::ptr_eq(&guard, &self.predecessor_identity)",
+            "_guard: guard",
+            "PreparedDetachedTransactionsBlock",
+            "installation,"
           ]
         }
       ]
@@ -15203,6 +15526,72 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationMutex",
+          "required_tokens": [
+            "inner: parking_lot::Mutex<()>,",
+            "released: mv::ReleaseNotification,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PublicationGuard",
+          "required_tokens": [
+            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state>>,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "struct",
+          "symbol": "PhysicalPublicationGuard",
+          "required_tokens": [
+            "guard: Option<parking_lot::MutexGuard<'state, ()>>,",
+            "fair: bool,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::wrap",
+          "required_tokens": [
+            "guard: parking_lot::MutexGuard<'state, ()>",
+            "inner: self.released.guard(PhysicalPublicationGuard {",
+            "guard: Some(guard),",
+            "fair: false,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::lock",
+          "required_tokens": [
+            "self.wrap(self.inner.lock())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationGuard<'_>::unlock_fair",
+          "required_tokens": [
+            "self.inner.fair = true;",
+            "drop(self);"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PhysicalPublicationGuard<'_>::drop",
+          "required_tokens": [
+            "if let Some(guard) = self.guard.take() {",
+            "if self.fair {",
+            "parking_lot::MutexGuard::unlock_fair(guard);",
+            "} else {",
+            "drop(guard);"
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
           "symbol": "persist_classified_queue_plan_admission",
@@ -15225,7 +15614,7 @@
             "drop(state_view);",
             "try_queue_plan_publication_at_height(committed_height)",
             "Ok(None) => {",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "state_commit.unlock_fair();",
             "self.kura.wait_for_queue_plan_publication();",
             "Ok(Some(publication)) =>",
             "publication.retire(hash)?;",
@@ -15259,7 +15648,7 @@
           "kind": "fn",
           "symbol": "wait_for_queue_plan_publication",
           "required_tokens": [
-            "parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());"
+            "self.canonical_chain_lock.lock().unlock_fair();"
           ]
         },
         {
@@ -15984,7 +16373,7 @@
           "symbol": "KuraQueuePlanPublicationGuard",
           "required_tokens": [
             "kura: &'a Kura,",
-            "_guard: parking_lot::MutexGuard<'a, ()>,"
+            "_guard: PublicationGuard<'a>,"
           ]
         },
         {

@@ -123,6 +123,10 @@ impl StateBlock<'_> {
                         .as_ref()
                         .expect("filtered execution batch");
                     if !crate::merge::merge_execution_batch_commitments_match(batch)
+                        || batch.application_block_header
+                            != crate::merge::merge_application_header_from_carrier(
+                                &self._curr_block,
+                            )
                         || batch.application_block_header.height() != self._curr_block.height()
                         || entry.merge_qc.carrier_height != self._curr_block.height().get()
                         || batch.application_block_header.prev_block_hash()

@@ -34,7 +34,7 @@ fn plain_ballot_rejected_outside_window() {
     state.set_gov(gov_cfg);
     {
         // Block height below start
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
         stx.world.governance_referenda_mut().insert(
@@ -71,7 +71,7 @@ fn plain_ballot_rejected_outside_window() {
     }
     {
         // Advance to block after end, ensure still rejected
-        let header_late = BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0);
+        let header_late = BlockHeader::new(nonzero!(7_u64), None, None, 0, 0);
         let mut sblock_late = state.block(header_late);
         let mut stx_late = sblock_late.transaction();
         // Reinsert referendum (state.block() took a snapshot)

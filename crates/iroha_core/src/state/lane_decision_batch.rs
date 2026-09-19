@@ -42,6 +42,7 @@ pub(super) struct NativeLaneStageSealV1 {
     batch: Arc<LaneDecisionBatchV1>,
     batch_hash: Hash,
     authenticated_aliases: Vec<Option<Hash>>,
+    settlement_hashes: Vec<HashOf<super::LaneBlockCommitment>>,
     membership: HashSet<HashOf<TransactionEntrypoint>>,
     application_write_set_root: Hash,
     write_set_root: Hash,
@@ -49,15 +50,43 @@ pub(super) struct NativeLaneStageSealV1 {
     fastpq: super::native_lane_fastpq::NativeLaneFastpqSeal,
 }
 
-/// One disposable start/native overlay and its actual outputs.
+/// One disposable start/native overlay, actual outputs and original verified sources.
+/// The exact first-carrier/body/context owners survive execution without reconstruction.
 /// Production has no mutable/consuming overlay publication accessor.
 pub(crate) struct PreparedLaneDecisionBatchV1<'state> {
     overlay: Box<StateBlock<'state>>,
     batch: Arc<LaneDecisionBatchV1>,
     executions: Vec<Execution>,
+    sources: Vec<VerifiedLaneDecisionGroupV1>,
+}
+
+/// Actual source-owned Native outputs and complete local execution witness.
+/// Global proposal validation, resource admission and State publication remain
+/// separate requirements; this owner has no mutable or committing escape.
+pub(crate) struct RecordedNativeLaneBatchV1<'state> {
+    prepared: PreparedLaneDecisionBatchV1<'state>,
+    carrier: iroha_data_model::block::SignedBlock,
+}
+
+impl RecordedNativeLaneBatchV1<'_> {
+    /// The result-bearing carrier produced by the retained execution owner.
+    pub(crate) fn carrier(&self) -> &iroha_data_model::block::SignedBlock {
+        &self.carrier
+    }
+
+    /// Qualification may inspect actual sources and the captured witness without
+    /// reconstructing an overlay or granting publication authority.
+    #[cfg(test)]
+    pub(super) fn prepared_for_test(&self) -> &PreparedLaneDecisionBatchV1<'_> {
+        &self.prepared
+    }
 }
 impl<'state> PreparedLaneDecisionBatchV1<'state> {
-    fn from_stage(overlay: Box<StateBlock<'state>>, executions: Vec<Execution>) -> Result<Self> {
+    pub(super) fn from_stage(
+        overlay: Box<StateBlock<'state>>,
+        executions: Vec<Execution>,
+        sources: Vec<VerifiedLaneDecisionGroupV1>,
+    ) -> Result<Self> {
         overlay.validate_native_lane_stage_membership()?;
         let batch = Arc::clone(
             &overlay
@@ -70,11 +99,30 @@ impl<'state> PreparedLaneDecisionBatchV1<'state> {
                 })?
                 .batch,
         );
-        Ok(Self {
+        let prepared = Self {
             overlay,
             batch,
             executions,
-        })
+            sources,
+        };
+        prepared.verify_source_binding()?;
+        Ok(prepared)
+    }
+    fn verify_source_binding(&self) -> Result<()> {
+        if self.sources.len() != self.batch.groups.len()
+            || self
+                .sources
+                .iter()
+                .zip(&self.batch.groups)
+                .any(|(source, wire)| {
+                    source.body().payload() != &wire.payload || source.decisions() != wire.decisions
+                })
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "native stage lost its original verified source groups".into(),
+            ));
+        }
+        Ok(())
     }
     /// Exact input-only proposal source, independent of the outputs below.
     pub(crate) fn batch(&self) -> &LaneDecisionBatchV1 {
@@ -83,6 +131,12 @@ impl<'state> PreparedLaneDecisionBatchV1<'state> {
     /// Actual outputs for the eventual sole standard result projection.
     pub(crate) fn executions(&self) -> &[Execution] {
         &self.executions
+    }
+    /// Borrow the original all-route source evidence retained by this actual stage.
+    /// These checked observations grant neither current signing nor State publication.
+    #[cfg(test)]
+    pub(super) fn sources_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
+        &self.sources
     }
     /// Adversarial qualification only; production has no mutable overlay escape.
     #[cfg(test)]
@@ -122,6 +176,62 @@ pub(super) fn native_application_identity(carrier: &BlockHeader, batch_hash: Has
 }
 
 impl State {
+    /// Record one authenticated Native source on its exact applying pre-State.
+    /// This consumes the actual source groups and executes each phase once under
+    /// one recorder. It does not construct a ValidBlock or authorize publication.
+    pub(super) fn record_native_lane_decision_batch(
+        &self,
+        mut carrier: iroha_data_model::block::SignedBlock,
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
+    ) -> Result<RecordedNativeLaneBatchV1<'_>> {
+        crate::sumeragi::witness::ensure_exec_witness_capture_available()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
+        with_stable_observation(self, || {
+            let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
+            if !carrier.is_resultless_proposal() {
+                return Err(invalid(
+                    "recorded Native execution requires a resultless proposal".into(),
+                ));
+            }
+            let expected =
+                crate::block::native_lane_batch_for_scratch(&carrier).map_err(invalid)?;
+            let batch = self.prepare_lane_decision_batch(&groups)?;
+            if &batch != expected {
+                return Err(invalid(
+                    "recorded Native execution lost its exact source or pre-State".into(),
+                ));
+            }
+            let (overlay, executions) = self.with_native_lane_execution_scope(
+                carrier.header(),
+                &groups,
+                || {
+                    crate::sumeragi::witness::begin_exec_witness_capture()
+                        .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)
+                },
+                |overlay, results| overlay.seal_native_lane_decision_batch(results, batch),
+                |overlay, executions, recorder| {
+                    crate::block::ValidBlock::seal_native_execution_outputs(
+                        &mut carrier,
+                        overlay,
+                        &executions,
+                    )
+                    .map_err(|error| invalid(error.to_string()))?;
+                    overlay
+                        .finalize_lane_consensus_contexts(&carrier, None)
+                        .map_err(invalid)?;
+                    overlay.capture_exec_witness().map_err(invalid)?;
+                    overlay
+                        .verify_execution_output_seal(&carrier)
+                        .map_err(invalid)?;
+                    drop(recorder);
+                    Ok(executions)
+                },
+            )?;
+            let prepared = PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?;
+            Ok(RecordedNativeLaneBatchV1 { prepared, carrier })
+        })
+    }
+
     /// Construct bounded input-only proposal data without running any instruction.
     /// Source authority still requires exact first-carrier and Decision validation
     /// in the consumer; this portable value grants no execution/publication token.
@@ -129,6 +239,8 @@ impl State {
         &self,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<LaneDecisionBatchV1> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
             let captured = crate::snapshot::CapturedStateSnapshot::capture(self)?;
@@ -148,16 +260,19 @@ impl State {
 
     /// Execute verified sources under their actual carrier, after shared start hooks.
     /// Full economic outputs are authenticated by global execution, never proposal claims.
+    /// Move the authenticated groups into the result; no cloned wire projection replaces them.
     pub(crate) fn replay_lane_decision_batch(
         &self,
         carrier: &BlockHeader,
         batch: &LaneDecisionBatchV1,
-        groups: &[VerifiedLaneDecisionGroupV1],
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
             batch.canonical_hash().map_err(invalid)?;
-            if self.prepare_lane_decision_batch(groups)? != *batch {
+            if self.prepare_lane_decision_batch(&groups)? != *batch {
                 return Err(invalid(
                     "native source differs from its exact verified inputs or applying pre-State"
                         .into(),
@@ -176,20 +291,22 @@ impl State {
     /// Standalone actual-header scratch constructor; callers authenticate the
     /// containing proposal/source before invoking this private stage transition.
     /// Scratch isolation covers start hooks, native economics and private markers,
-    /// without taking/resetting an unrelated caller's execution-witness recorder.
+    /// and rejects recorder-owning callers before any State read or acquisition.
     pub(super) fn prepare_native_batch_on_carrier(
         &self,
         header: BlockHeader,
-        groups: &[VerifiedLaneDecisionGroupV1],
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
-            let batch = self.prepare_lane_decision_batch(groups)?;
+            let batch = self.prepare_lane_decision_batch(&groups)?;
             let (overlay, executions) =
-                self.with_native_lane_execution(header, groups, |overlay, results| {
+                self.with_native_lane_execution(header, &groups, |overlay, results| {
                     overlay.seal_native_lane_decision_batch(results, batch)
                 })?;
-            PreparedLaneDecisionBatchV1::from_stage(overlay, executions)
+            PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)
         })
     }
 }
@@ -225,6 +342,10 @@ impl StateBlock<'_> {
             .iter()
             .map(|result| result.authenticated_signed_replay_alias)
             .collect::<Vec<_>>();
+        let settlement_hashes = results
+            .iter()
+            .map(|result| result.settlement_hash)
+            .collect();
         let membership = Self::native_batch_membership(&batch, &authenticated_aliases)?;
         if membership != self.merge_carrier_entrypoints {
             return Err(invalid(
@@ -244,6 +365,7 @@ impl StateBlock<'_> {
             batch: Arc::new(batch),
             batch_hash,
             authenticated_aliases,
+            settlement_hashes,
             membership,
             application_write_set_root,
             write_set_root,
@@ -381,6 +503,45 @@ impl StateBlock<'_> {
             return Err("native tail was completed twice".into());
         }
         seal.completed_write_set_root = Some(completed);
+        Ok(())
+    }
+
+    /// Rejoin the complete actual native owner with the source-only proposal.
+    /// Equal Network hashes alone cannot substitute different route Decisions.
+    pub(crate) fn verify_native_execution_metadata(
+        &self,
+        block: &iroha_data_model::block::SignedBlock,
+        executions: &[Execution],
+    ) -> std::result::Result<(), String> {
+        self.validate_native_output_carrier(block)?;
+        if !self.settlement_accumulator.is_empty() {
+            return Err("native metadata retains unbound start or tail settlement evidence".into());
+        }
+        let seal = self
+            .native_lane_stage
+            .as_ref()
+            .ok_or("native metadata lost its stage")?;
+        if executions.len() != seal.batch.groups.len()
+            || executions.len() != seal.settlement_hashes.len()
+        {
+            return Err("native metadata lost its exact execution positions".into());
+        }
+        for (((execution, source), alias), settlement) in executions
+            .iter()
+            .zip(&seal.batch.groups)
+            .zip(&seal.authenticated_aliases)
+            .zip(&seal.settlement_hashes)
+        {
+            if execution.source != *source
+                || execution.authenticated_signed_replay_alias != *alias
+                || execution.settlement_hash != *settlement
+                || super::canonical_merge_settlement_hash(&execution.settlement_commitment)
+                    .map_err(|error| error.to_string())?
+                    != *settlement
+            {
+                return Err("native metadata differs from its actual source or settlement".into());
+            }
+        }
         Ok(())
     }
 

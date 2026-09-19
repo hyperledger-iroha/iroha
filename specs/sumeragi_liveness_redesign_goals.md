@@ -1380,3 +1380,268 @@ Acquire all State/component locks without waiting, return the full owner on loca
 deferral, and await its exact release outside the synchronous worker. Only the
 complete publisher may expose State and return its post-WSV continuation. Existing
 raw publication guards remain enforced until that path replaces its callers.
+
+
+### Current exact-decision and geometry handoff, September 19, 2026
+
+The retained-journal owner now consumes its actual `ValidBlock` through the existing
+verified-finality transition. It retains the original World/runtime/membership/hash
+journals, witness, output/source seals, archive plans, deferred events and reservations.
+Decision binding checks the execution-prefix commitment, exact proposal bytes/header
+and semantic frozen context identity. Equivalent valid parent CommitQC witnesses do
+not create different context identities. Refusal returns the original journals and
+verified artifact. Binding does not publish State or deliver its committed event;
+source/economic, retirement, Kura/Native and installation authority are still required.
+
+Certified merge execution now retains the actual application header through pristine
+geometry and writes-root checks, restoring the outer carrier header on success and
+error before carrier staging. Late geometry capture checks the complete application
+header, including time. Final journal admission precedes allocating geometry capture,
+and its reservation outlives originals on every failure path. Build14 passes all
+96 focused composition controls; the full historical recovery test still reaches the
+competing-Native output refusal. Keep that guard until the complete consumer exists.
+
+The next production change must connect the complete consuming publisher to retained
+Validate ownership, cached/recovered authority and Apply together. A cloneable execution
+hash or a discarded preparation object is insufficient. Test harness migrations retain
+all assertions and use only existing nonshipping fixture authority; they do not establish
+production source/finality or release readiness. All six goals remain open.
+
+The current default governance integration target now compiles. Its 18 migrated
+instruction controls and seven of eight relocated structural library controls pass;
+the retained signed-ballot test still fails at its synthetic genesis's missing
+authenticated Network source. A correct genesis alone is insufficient: its sealed
+outputs require the aggregate publisher before the H2 commitment can become the H3
+reveal prerequisite. Preserve rejection-side slash effects, both exact replay keys
+and economic assertions when completing that path. Build14 also passes all 17
+original-review controls and 47 current formal/source-ledger checks on unchanged
+inputs. No ignored test, compatibility method or shipping fixture authority was added.
+
+
+### Joint physical acquisition, September 19, 2026
+
+The complete decided carrier now owns one nonblocking acquisition attempt across
+its original Kura and State. Installation admission runs first; exact Kura instance
+identity is joined before physical probes. Acquire Kura prune, canonical, geometry
+and sidecar fences, then State commit, lifecycle and write fences, then the original
+hash, membership, runtime and complete World writers. Hash acquisition precedes
+World acquisition to avoid a cycle with an existing validation overlay. Refusal
+returns the same decided block, verified artifact, journal allocations and source
+seals; no StateBlock is reconstructed and no execution is repeated.
+
+One shared physical mutex owner serves State and Kura. Each Busy result observes
+only its actual failed lock before probing it. Component cleanup, unrelated locks
+and other Kura/State instances cannot wake that retry. Normal release, unwind and
+fair unlock notify after the physical guard releases. The fence group releases
+all component writers before State fences, State before Kura, and all physical
+ownership before the installation reservation. Capture and decision-binding
+reservations continue to outlive their original values.
+
+Canonical poisoning is permanent and refuses before any probe. The prune recovery
+flag is different: healthy active pruning sets it while holding its prune fence.
+Check it only after acquiring that fence; a live prune remains a reachable Busy,
+while an abandoned intent requires storage recovery. Recheck both conditions under
+the complete storage lease. Neither Busy nor storage repair invalidates finality.
+
+Build18 passes combined compilation, all 158 selected runtime controls and 131
+formal/source-contract checks on 7,215 unchanged inputs and unchanged executables.
+The runtime selection contains 111 composition controls (including nine joint
+Kura/State and six Kura-fence controls), all 17 original-review regressions and 30
+existing storage/restart controls. All 37 changed Rust files pass formatting.
+These stages grant no source/economic, checkpoint, retirement or publication
+authority. All six liveness goals remain open.
+
+The checkpoint receipt draft is unregistered. Its descriptor-relative promotion
+would make the shared writer fail outside Unix; the current dependencies lack a
+qualified Windows namespace-durability owner. The final storage reauthentication
+must also run through methods owned by the retained Kura lease without reacquiring
+its fences, and before State component acquisition. Exact writer/readback evidence
+and physical exclusion do not replace source, geometry or retirement authority.
+
+
+### Retained execution and durable checkpoint custody, September 19, 2026
+
+Ordinary execution now keeps its original invocation owner inside the sealed
+output, rather than dropping it after inventory derivation. A private consuming
+prefix owner verifies the exact attachment, original inventory and witness before
+it alone stages metadata and the World tail. Raw State receives only a closed
+transfer marker; both transaction-apply paths reject it. The complete source,
+proving context and casting bindings move into detached journals under the same
+whole-candidate admission. This does not mint Native or old-merge authority.
+
+The shared checkpoint writer synchronizes the exact file and every held parent
+through Kura root, then authenticates canonical stable readback. An identical
+retry synchronizes the original file instead of replacing it. Malformed temporary
+entries are rejected inside physical resource accounting; failure keeps that
+inventory unavailable until actual re-audit. Its move-only receipt retains the
+actual file and ancestor handles, exact finality and State hash, and original
+Kura. Only a receipt-bearing decision can attempt physical acquisition. It must
+reauthenticate this storage join under the original Kura lease before acquiring
+any State fence. Refusal and abort return the same complete decision and receipt.
+No State publication authority is supplied by attachment or physical exclusion.
+
+Combined build21 passes with 7,218 unchanged recorded inputs. Its unchanged
+executables pass 287 distinct runtime controls: 240 composition/output, all 17
+original-review and 30 existing storage/restart controls. All 201 selected
+formal/source controls and 50 changed Rust formatting checks pass. Four failed
+build20 controls were rerun after restoring temporary-path validation and moving
+large test fixture States to the heap; no assertions or default-stack limits were
+weakened. Build19's test-path/type migration failures remain recorded separately.
+
+Complete consuming publication remains open: Native/source/economic ownership,
+geometry and retirement, bounded resources, archive/cache/events and the actual
+Validate-to-Apply worker handoff still must join. Native Windows namespace
+persistence is unqualified; there is one strict writer and no fallback protocol.
+Production native/beacon cutover and unchanged four/seven-validator qualification
+are still required. All L1–L6 goals remain open.
+
+
+### Native source custody and retirement branch bindings, September 19, 2026
+
+The actual Native source consumer now moves its original verified group vector
+through execution into the private prepared stage. First-carrier bytes/finality,
+RS16 body buffers, all affected-route contexts and Decisions remain owned beside
+the actual overlay/results; no wire reconstruction replaces their provenance.
+Construction checks the ordered payload/Decision join, and dropping the stage
+releases overlay writers before the retained evidence. The live Native gate and
+raw commit refusal remain closed pending complete publication authority.
+
+The retirement proof-ledger gate now binds the real seven-pair maintenance
+owner and its returned directory, including module presence, inherited-lock
+order and failure propagation. Separate branch-specific relations bind committed
+history-rewrite authentication and subsequent compaction authentication. The
+ledger and expected tokens change together; mutation tests cover both branches,
+retention bounds, original frontier input and recovery order. The current runtime
+maintenance/scan remains route-local under its original fences. Moving it to a
+pre-vote phase still requires bounded retained observation and actual competing
+artifact-writer exclusion; reopening routes or retaining unbounded handles does
+not supply that authority.
+
+Build23 passes compilation and 331 distinct runtime controls on 7,218 unchanged
+recorded inputs, with 218 selected formal/source checks and 45 mutation subtests.
+All 44 Native source/economic/replay controls pass on the default stack. Build22
+had passed compilation and 289 of these 331 controls: 42 failed during the shared
+fixture's genesis metadata setup, as confirmed by LLDB. The fixture now returns
+from World/State construction before acquiring nested block writers and retains
+the original heap State. The frame active during genesis falls from 919 KiB to
+527 KiB; all assertions and protocol setup remain. Build22's accepted malformed
+rewrite mutation is also retained as a failure, and now rejects in build23.
+The prior full 70-case Native-preparation source suite remains build22 evidence;
+build23 reruns its current-owner and release-connection checks on the new ledger.
+
+The next complete production boundary must acquire the witness recorder after
+actual State writers, retain that one scope across shared start effects, Native
+and internal output phases, mandatory controls and metadata, and capture it once.
+Scratch recording suppression and ordinary witness reset cannot be reused as a
+Native validation path. Distinct native-output and later metadata roots must keep
+their original meanings. Source/economic, geometry, resource and checkpoint owners
+must then join the consuming publisher and the original Validate-to-Apply handoff.
+Four/seven-validator qualification and all L1–L6 completion criteria remain open.
+
+### Native recorded execution and metadata, September 19, 2026
+
+The private prepared source can now move its original verified groups through
+actual output sealing and checked witness capture. Thread-local recorder
+eligibility is checked before State access, then one recorder is acquired after
+the original State writers and source preflight. It remains owned across shared
+start hooks, Native Network economics, prefix/application markers, Pipeline,
+Time, real metadata, lane-context finalization and capture. Failure drops the
+unpublished overlay and its recorder. Scratch retains its existing isolated
+semantics. Native pin expiry now uses the same after-hook, before-Network order.
+
+The stage seals actual per-group settlement hashes. Metadata rechecks exact
+sources, aliases, coordinates and those commitments before any finalizer writes.
+The ordinary common prelude and remaining tail are byte-equivalent to their
+previous bodies. Receipt-free Native groups emit no old AMX relay statement;
+actual receipt effects still require the unchanged complete relay integrity and
+real policy-root contract. No receipt or root is fabricated. The completed
+output cut and later metadata net-delta cut retain their distinct meanings.
+
+Build25 passes combined compilation and 340 distinct runtime controls on 7,220
+unchanged recorded inputs: 240 composition/output/publication, 53 Native and
+recorder, 17 original-review and 30 storage. Nine new controls cover actual
+source custody, transfer/rejection/reveal and aliases, due-hook capture,
+Pipeline/Time once, settlement substitution, late rollback, recorder nesting,
+and refusal while another thread holds State. Formatting covers 68 changed Rust
+files; the codec guard passes. The preliminary compiler check caught one new
+settlement-type module typo. Build24 then compiled and passed 52/53 Native
+controls; its only failure was a three-case fixture exceeding the two-case
+builder bound. Build25 uses independent single/atomic fixtures, preserving the
+assertions and default stack. The build24-to25 input comparison proves only
+that new test file changed; production and formal source stayed identical.
+
+Scoped source/inventory/mutation qualification passes 118 unique controls. The
+three live-index pytest cases remain deliberately deselected: the unchanged
+release rule rejects an untracked Native metadata provider. Equivalent exact
+Block/host/Kura closure checks pass using an isolated reviewed index, with the
+main index unchanged. Final25 repeats the actual-owner and release-connection
+joins. These are scoped binding checks, not a full formal release result.
+
+The recorded owner is disposable and cannot mint ValidBlock or publication
+permission. The live gate remains closed. Mandatory control composition,
+authenticated opening of a pending suffix context, genuine receipt-bearing
+relay runtime coverage, aggregate resources, the sole consuming publisher and
+original Validate-to-Apply custody remain required. Existing scratch permits a
+recorder-owning caller to acquire State; that concurrent inversion must be
+resolved before activation rather than inferred away from the new recorded
+entry check. The concrete PipelineGas/SpaceDirectory economic fixture plan is
+retained in the build evidence for the next qualification step. Four/seven-peer
+fault/restart/final-transaction qualification and every L1–L6 goal remain open.
+
+### Native recorder order and genuine economic relays, September 19, 2026
+
+Every Native source-preparation, source-stage, batch snapshot/replay and shared
+execution entry now checks thread-local recorder ownership before accessing
+State. Suppression does not waive this check: it prevents witness writes but
+cannot break the State/recorder wait cycle. Recorder-owning calls return a local
+`ExecutionRecorderConflict`, not an invalid-input decision. Recorded execution
+still takes its recorder after the original State writers and source preflight.
+Source-only preparation retains its existing string error API and refuses before
+State observation. This establishes the scoped Native boundary; it does not
+claim an audit of every State API or open the production admission gate.
+
+Scratch regressions retain actual due-hook/transfer effects, constructor refusal,
+late-marker failure and rollback outside capture. Calls attempted during an
+unrelated real capture now prove early refusal and unchanged witness bytes and
+generation, including a pending real-transfer overlay. Their recording fixture
+also acquires State before capture. A bounded contention regression exercises
+nine Native source/replay entries, with suppression active, while another thread
+retains the physical State writers. It proves refusal before writer release.
+
+Four genuine PipelineGas controls cover single and atomic Native inputs. Signed
+Nexus/PipelineGas maxima and gas policy exist before first admission; execution
+uses the original funded State, four-validator authenticated source and signed
+RS16 Decisions. Success binds the actual receipt, source identity, exact fees and
+supply, canonical settlement, coordinator route, descriptor, manifest root and
+signed payload byte count to the final statement and complete witness. The root
+comes from an actual Space Directory record. One atomic input produces one
+coordinator economic effect. Missing-root controls first demonstrate genuine
+scratch receipt production, then require recorded metadata refusal with complete
+rollback and recorder release. No receipt, root, or economic output is injected.
+
+Combined build27 passes on 7,221 unchanged recorded inputs. Exact emitted
+executables pass all 346 selected runtime controls (240 composition/output,
+59 Native/recorder, 17 original-review, 30 storage). The current source passes
+118 scoped preparation/inventory/mutation controls, both original-review
+ledger/production joins and three separate reviewed-source closure checks using
+the isolated index. The three main-index closure cases remain deselected for
+untracked providers; no release rule or main index was changed. Formatting of
+69 changed Rust files and the codec guard pass, without stack overrides.
+Build26 first compiled and passed 344/346 controls. The only failures were the
+new missing-manifest fixtures assuming a retained derived UAID binding despite
+startup rebuilding it from actual manifests. Build27 removes that redundant
+seed, compares the actual optional root and requires `MissingManifestRoot`;
+production and formal sources are byte-identical to build26.
+
+The next code boundary is the actual pristine canonical control owner from
+`ValidBlock::state_block_for_execution`: consume it after exact Native source
+preflight and recorder acquisition, before shared hooks, and retain the original
+authenticated applying context through suffix finalization. Common AXT/DA/SCCP
+postchecks must precede the one capture. Do not run another validator against an
+already retained overlay or open the live gate with these components alone.
+
+Mandatory control composition, suffix-opening authority, sponsor/lease relay
+coverage, aggregate resource admission, complete consuming publication,
+Validate-to-Apply custody and production activation remain required. Real
+unchanged four/seven-validator fault/restart/final-transaction qualification,
+full workspace/release checks and all L1–L6 outcomes remain open.
