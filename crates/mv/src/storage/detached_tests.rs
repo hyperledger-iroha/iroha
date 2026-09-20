@@ -1,6 +1,7 @@
 //! Detached storage deltas preserve the original pair and release every writer.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},

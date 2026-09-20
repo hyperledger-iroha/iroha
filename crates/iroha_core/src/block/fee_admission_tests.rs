@@ -1427,7 +1427,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     );
 }
 #[test]
-fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_transfer() {
+fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -1548,15 +1548,10 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         Some(0),
         "the failing instruction after the transfer must reject the whole transaction"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
     assert_eq!(
-        snapshot
-            .pipeline_execution
-            .detached_fallback_unsupported_instruction_total,
+        valid_block.as_ref().output_results().count(),
         1,
-        "multi-instruction transfer transactions must not use detached transfer merge"
+        "the canonical execution owner must retain exactly one transaction result"
     );
     let (_, rejection) = valid_block
         .as_ref()

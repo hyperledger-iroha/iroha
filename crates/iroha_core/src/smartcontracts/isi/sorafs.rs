@@ -2874,7 +2874,7 @@ fn bind_alias_record(
         .insert(alias_id, record);
 }
 fn drop_alias_binding_if_matches(
-    aliases: &mut StorageTransaction<'_, '_, ManifestAliasId, ManifestAliasRecord>,
+    aliases: &mut StorageTransaction<'_, ManifestAliasId, ManifestAliasRecord>,
     alias: &ManifestAliasBinding,
     manifest: &ManifestDigest,
 ) {

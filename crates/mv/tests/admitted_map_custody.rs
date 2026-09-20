@@ -1127,7 +1127,7 @@ fn retired_tracking_charge_unwind_sees_installed_bookkeeping_and_aborts_all_priv
 }
 
 fn checkpoint_insert(
-    checkpoint: &mut BptreeMapCheckpoint<'_, Payload, Payload, Policy>,
+    checkpoint: &mut BptreeMapCheckpoint<'_, Payload, Payload, Prepaid<Policy>>,
     budget: &AllocationBudget,
     counters: &Arc<Counters>,
     order: usize,

@@ -374,6 +374,13 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
         }
     }
 
+    pub(crate) fn checkpoint(&mut self) -> Option<CursorCheckpoint<'_, K, V, M>>
+    where
+        M: MapMode,
+    {
+        CursorCheckpoint::new(self, None)
+    }
+
     pub(crate) fn assert_operable(&self) {
         assert!(
             !self.edit_failed,
@@ -506,10 +513,6 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
 impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
     CursorWrite<K, V, crate::bptree::Prepaid<P>>
 {
-    pub(crate) fn checkpoint(&mut self) -> Option<CursorCheckpoint<'_, K, V, P>> {
-        CursorCheckpoint::new(self, None)
-    }
-
     /// Existing original bookkeeping counts, inspected before further admission.
     pub(crate) fn admitted_tracking(&self) -> [(usize, usize); 2] {
         let retired = self.last_seen.as_ref().expect("original retirement buffer");
@@ -525,7 +528,7 @@ impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
         provider: P,
         first: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
         last: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
-        mut saved: Option<&mut CheckpointBuffers<K, V, P>>,
+        mut saved: Option<&mut CheckpointBuffers<K, V, crate::bptree::Prepaid<P>>>,
     ) {
         assert!(self.funding.0.is_none(), "previous edit must be sealed");
         self.funding.0 = Some(provider);
@@ -566,11 +569,16 @@ impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
-        self.try_insert(k, v)
-            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"))
+        self.begin_admitted_edit();
+        let previous = self
+            .try_insert(k, v)
+            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"));
+        self.edit_failed = false;
+        previous
     }
 
     pub(crate) fn clear(&mut self) {
+        self.begin_admitted_edit();
         // Reset the values in this tree.
         // We need to mark everything as disposable, and create a new root!
         self.last_seen
@@ -586,9 +594,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         self.first_seen.push(nroot);
         mem::swap(&mut self.root, &mut nroot);
         self.length = 0;
+        self.edit_failed = false;
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
+        self.begin_admitted_edit();
         let r = match clone_and_remove(
             self.root,
             self.txid,
@@ -640,6 +650,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         if r.is_some() {
             self.length -= 1;
         }
+        self.edit_failed = false;
         r
     }
 
@@ -661,6 +672,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
+        self.begin_admitted_edit();
         match path_clone(
             self.root,
             self.txid,
@@ -674,11 +686,17 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             }
             CRCloneState::NoClone => {}
         };
-        // Now get the ref.
-        path_get_mut_ref(self.root, k)
+        // Resolve the borrowed slot while edits are still marked failed, so a
+        // caught key-comparison panic cannot leave this cursor publishable.
+        let value = path_get_mut_ref(self.root, k).map(|value| value as *mut V);
+        self.edit_failed = false;
+        // SAFETY: this path is private to the current generation. The returned
+        // reference is tied to the exclusive cursor borrow and cannot escape it.
+        value.map(|value| unsafe { &mut *value })
     }
 
     pub(crate) fn split_off_lt(&mut self, k: &K) {
+        self.assert_operable();
         /*
         // Remove all the values less than from the top of the tree.
         loop {
@@ -772,6 +790,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
+        self.assert_operable();
         RangeMutIter::new(self, range)
     }
 }

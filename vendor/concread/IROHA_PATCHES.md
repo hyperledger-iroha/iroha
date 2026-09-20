@@ -123,17 +123,24 @@ private successor. The constructor admits exact initial node/root/reader storage
 native mutex/runtime storage, actual model payload policies and MV undo/global
 State admission remain required before production cutover.
 
-An attached prepaid writer now lends exclusive nested checkpoints. Fresh private
-generation tags preserve parent nodes; the first buffer growth retains each
-original ancestor allocation. Apply transfers both saved buffers before dropping
-excess charges. Abort restores root/tag/length and original buffers, then pops
-each child-owned pointer before nonrecursive destruction. A cleanup guard drains
-remaining child nodes during unwind. No rollback reservation or allocation is
-needed, and Rust borrows prevent parent publication or reference escape while a
-child is live. A logical failed-edit flag prevents use after a caught mutation or
-cleanup panic, even before the physical mutex unwinds. Public commit and detach
-check this flag before consuming their original shells. The original writer and
-all checkpoint lifetimes must remain inside the original refund-deferral scope.
+Attached writers in both sealed modes lend exclusive nested checkpoints. Fresh
+private generation tags preserve parent nodes, and `get_before` borrows that
+saved root directly. Prepaid buffer growth retains each original ancestor
+allocation. Apply transfers both saved buffers before dropping excess charges.
+Abort restores root/tag/length and prepaid original buffers, then pops each
+child-owned pointer before nonrecursive destruction. Untracked vectors may keep
+grown capacity; abort allocates nothing in either mode. Sealed mode hooks make
+Untracked saved-buffer slots zero-sized while retaining actual prepaid buffers.
+The original saved root is non-null, avoiding an extra resolved-state tag.
+A cleanup guard drains
+remaining child nodes during unwind. Rust borrows prevent parent publication,
+mutation while borrowed or reference escape while a child is live. The logical
+failed-edit flag covers both admitted and ordinary mutation, preventing use after
+a caught mutation or cleanup panic even before the physical mutex unwinds.
+Public commit and detach check this flag before consuming their original shells.
+Prepaid checkpoints still expose only admitted insertion; unrestricted mutation
+belongs to Untracked mode. The original funded writer and all checkpoint lifetimes
+must remain inside the original refund-deferral scope.
 
 Detached map owners expose borrowed ordered iteration directly from their retained
 cursor. The full-tree iterator tracks its remaining length through both forward
