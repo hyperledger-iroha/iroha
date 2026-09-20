@@ -170,16 +170,40 @@ impl DispatcherTransition {
             }
             locks.revalidate()?;
             admission::revalidate(&plan, &held)?;
-            let guard_rows: Vec<Value> = SLUGS.iter().zip(&new_guards).map(|(slug, bytes)|
-                norito::json!({"host_slug": *slug, "upload_guard_sha256": if self.action == Action::Rollback { plan.predecessor.guards[SLUGS.iter().position(|s| s == slug).expect("exact role")].sha256.clone() } else { sha256_hex(bytes) }})).collect();
+            let guard_rows: Vec<Value> = SLUGS
+                .iter()
+                .zip(&new_guards)
+                .enumerate()
+                .map(|(index, (slug, bytes))| {
+                    let upload_guard_sha256 = if self.action == Action::Rollback {
+                        plan.predecessor.guards[index].sha256.clone()
+                    } else {
+                        sha256_hex(bytes)
+                    };
+                    norito::json!({
+                        "host_slug": (*slug),
+                        "upload_guard_sha256": upload_guard_sha256,
+                    })
+                })
+                .collect();
+            let action = match self.action {
+                Action::Check => "check",
+                Action::Apply => "apply",
+                Action::Rollback => "rollback",
+            };
+            let guard_state = if self.action == Action::Check {
+                "candidate_target"
+            } else {
+                "observed_result"
+            };
             let result = norito::json!({
                 "schema": "iroha.taira.dispatcher-transition-result.v1",
-                "plan_sha256": self.expected_plan_sha256,
-                "operation_id": plan.operation_id,
-                "candidate_commit": plan.candidate.commit,
-                "action": match self.action { Action::Check => "check", Action::Apply => "apply", Action::Rollback => "rollback" },
+                "plan_sha256": (self.expected_plan_sha256),
+                "operation_id": (plan.operation_id),
+                "candidate_commit": (plan.candidate.commit),
+                "action": action,
                 "guards": guard_rows,
-                "guard_state": if self.action == Action::Check { "candidate_target" } else { "observed_result" },
+                "guard_state": guard_state,
                 "runtime_and_history_preserved": true,
                 "ledger_mutated": false,
             });

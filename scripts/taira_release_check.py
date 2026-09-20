@@ -730,6 +730,7 @@ TORII_UNIT_STAGES += (("signed account permission query preservation", (
 )),)
 
 DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
+    "taira_public_reset::host::dispatcher_transition::tests::copy::dispatcher_transition_private_copy_modes_survive_restrictive_umask",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_completed_replays_do_not_republish",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_publication_resumes_every_checked_boundary",
@@ -2226,7 +2227,7 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     missing = [harness for harness in harnesses if harness not in observed]
     if missing:
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
-    print(f"[taira-prequalify] native test metadata check passed in {elapsed:.1f}s; "
+    print(f"[taira-check] native test metadata check passed in {elapsed:.1f}s; "
           "full harness compilation remains required", flush=True)
 
 
@@ -3645,6 +3646,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
+        # Expand macros and type-check the exact test graph before expensive codegen.
+        # Keep the same feature union, environment, target lane and held locks; a
+        # metadata pass neither publishes test executables nor qualifies a regression.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:

@@ -55,6 +55,15 @@ relative paths remain in `admission.json`. Complete archives must be retained;
 the owner exposes no extraction or restore command. Interrupted archive output is
 preserved and cannot authorize retirement.
 
+The source stream uses only `zlib-chunks-v1`: each zlib member has an eight-byte
+big-endian expanded/compressed length header, at most 1 MiB expanded and at most
+expanded size plus 1 KiB compressed. The receiver bounds decompression, requires
+exact length and member termination, rejects trailing bytes, and keeps the same
+absolute stream deadline through the final admission frame and EOF. Both ends
+come from the same signed controller. Compression changes transport only;
+`payload.bin`, its indexed offsets, hashes, receipt schema and uncompressed disk
+capacity admission remain unchanged. There is no raw-stream fallback.
+
 Retirement holds the exact initial off-host archive through dispatch, borrows only
 existing update/reset locks and uses a separate source-custody lock. Supervisor
 absence is revalidated, not represented as continuously fenced authority. Current

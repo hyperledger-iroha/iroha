@@ -285,7 +285,7 @@ pub(super) fn validate_sealed_records(
                 .get("rollback_failures")
                 .and_then(Value::as_array)
                 .is_some_and(Vec::is_empty)
-            && terminal.get("touched_validators") == Some(&json::to_value(&SLUGS[..4])?),
+            && terminal.get("touched_validators") == Some(&json::to_value(&SLUGS[..4].to_vec())?),
         "completed predecessor shape differs",
     )?;
     for (name, expected) in [

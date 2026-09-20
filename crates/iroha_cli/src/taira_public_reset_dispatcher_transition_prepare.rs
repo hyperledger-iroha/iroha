@@ -353,9 +353,14 @@ impl PrepareDispatcherTransition {
             writeln!(
                 output,
                 "{}",
-                json::to_json(
-                    &norito::json!({"schema":"iroha.taira.dispatcher-transition-prepared.v1","plan_path":self.output.to_string_lossy().as_ref(),"plan_sha256":sha256_hex(&bytes),"operation_id":plan.operation_id,"controller_mutated":false,"ledger_mutated":false})
-                )?
+                json::to_json(&norito::json!({
+                    "schema": "iroha.taira.dispatcher-transition-prepared.v1",
+                    "plan_path": (self.output.to_string_lossy().as_ref()),
+                    "plan_sha256": (sha256_hex(&bytes)),
+                    "operation_id": (plan.operation_id),
+                    "controller_mutated": false,
+                    "ledger_mutated": false,
+                }))?
             )?;
             Ok(())
         }

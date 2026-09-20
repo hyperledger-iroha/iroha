@@ -2,6 +2,10 @@
 use super::*;
 use std::io::Seek as _;
 
+#[path = "taira_public_reset_dispatcher_transition_storage_copy.rs"]
+pub(super) mod copy;
+use copy::copy_exact;
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Identity {
@@ -323,63 +327,6 @@ fn move_exact(source: &Path, target: &Path, pin: &Pin) -> Result<()> {
     )
 }
 
-/// Resume only a byte-identical prefix of a held source; never truncate a foreign staging file.
-fn copy_exact(source: &Path, target: &Path, pin: &Pin) -> Result<()> {
-    if exists(target)? {
-        checked(target, pin)?;
-        return Ok(());
-    }
-    let parent = target
-        .parent()
-        .ok_or_else(|| eyre!("copy parent missing"))?;
-    let held_parent = direct_directory(parent)?;
-    let mut input = checked(source, pin)?;
-    let staged = target.with_file_name(format!(
-        ".{}.partial",
-        target
-            .file_name()
-            .ok_or_else(|| eyre!("copy name missing"))?
-            .to_string_lossy()
-    ));
-    let mut output = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(pin.mode)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
-        .open(&staged)?;
-    let meta = output.metadata()?;
-    need(
-        meta.is_file()
-            && meta.nlink() == 1
-            && meta.uid() == rustix::process::geteuid().as_raw()
-            && meta.mode() & 0o7777 == pin.mode
-            && meta.len() <= pin.size,
-        "unsafe partial transition copy",
-    )?;
-    let prefix = meta.len();
-    let mut offset = 0u64;
-    let mut left = [0u8; 64 * 1024];
-    let mut right = [0u8; 64 * 1024];
-    while offset < prefix {
-        let n = usize::try_from((prefix - offset).min(left.len() as u64))?;
-        input.read_exact(&mut left[..n])?;
-        output.read_exact(&mut right[..n])?;
-        need(left[..n] == right[..n], "partial copy prefix differs")?;
-        offset += n as u64;
-    }
-    while offset < pin.size {
-        let n = usize::try_from((pin.size - offset).min(left.len() as u64))?;
-        input.read_exact(&mut left[..n])?;
-        output.write_all(&left[..n])?;
-        offset += n as u64;
-    }
-    output.sync_all()?;
-    checked(source, pin)?;
-    checked(&staged, pin)?;
-    check_directory(parent, &held_parent)?;
-    move_exact(&staged, target, pin)
-}
 fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     if exists(path)? {
         checked(path, &pin_bytes(path, bytes, mode))?;
@@ -406,7 +353,7 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         need(bytes.starts_with(&prefix), "partial record prefix differs")?;
         let mut output = OpenOptions::new()
             .append(true)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&temporary)?;
         need(
             output.metadata()?.ino() == snapshot.ino && output.metadata()?.dev() == snapshot.dev,
@@ -419,8 +366,9 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             .write(true)
             .create_new(true)
             .mode(mode)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&temporary)?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
     }
@@ -563,9 +511,12 @@ fn operation_stage(root: &Path) -> Result<PathBuf> {
     )))
 }
 fn ownership_intent(root: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
-    Ok(json::to_vec(
-        &norito::json!({"schema":"iroha.taira.dispatcher-transition-ownership.v1","operation_root":root.to_string_lossy().as_ref(),"staging_root":operation_stage(root)?.to_string_lossy().as_ref(),"plan_sha256":sha256_hex(bytes)}),
-    )?)
+    Ok(json::to_vec(&norito::json!({
+        "schema": "iroha.taira.dispatcher-transition-ownership.v1",
+        "operation_root": (root.to_string_lossy().as_ref()),
+        "staging_root": (operation_stage(root)?.to_string_lossy().as_ref()),
+        "plan_sha256": (sha256_hex(bytes)),
+    }))?)
 }
 fn verify_ownership(root: &Path, bytes: &[u8]) -> Result<()> {
     let path = ownership_path(root)?;
