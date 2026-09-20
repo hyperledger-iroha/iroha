@@ -1260,6 +1260,11 @@ NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
 )),)
 
+NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
+    'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
+    'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
+)),)
+
 # One genuine custody ceremony owns every retained network assertion: paid
 # deployment, additive catalog/full replay, and both public routing sequences.
 # Independent read/permission/root contracts still run before any peer starts.

@@ -34,6 +34,8 @@ use tokio::{
     process::{Child, Command},
 };
 
+#[path = "production_beacon_canary_receipt.rs"]
+mod canary_receipt;
 #[path = "production_epoch_maintenance.rs"]
 mod epoch_maintenance;
 #[path = "production_beacon_prepare.rs"]
@@ -649,45 +651,9 @@ impl Canary<'_> {
                 "beacon fixture {operation} {phase} complete: elapsed={:.3}s",
                 started.elapsed().as_secs_f64()
             );
-            let receipt: Value = json::from_slice(&bytes)?;
-            ensure!(
-                text(&receipt, "status")? == "ok",
-                "native prepared canary did not succeed"
-            );
-            if !prepare {
-                // The native child requires state-resolved Applied and proves
-                // the committed transaction is byte-identical to this retained
-                // envelope. Counters alone must never drive the DKG height FD.
-                let retained = fs::read(&envelope)?;
-                ensure!(
-                    text(&receipt, "recovery_outcome")? == "Applied"
-                        && text(&receipt, "prepared_envelope_sha256")?
-                            == hex(&iroha_crypto::sha256(&retained))
-                        && field(&receipt, "prepared_envelope_size")?.as_u64()
-                            == Some(retained.len() as u64)
-                        && text(&receipt, "authorization_sha256")? == self.authorization
-                        && text(&receipt, "authorization_nonce")? == self.nonce
-                        && text(&receipt, "mutation_kind")? == kind
-                        && text(&receipt, "mutation_phase")? == "pre_edge"
-                        && text(&receipt, "idempotency_key")? == idempotency(&self.nonce, kind)
-                        && !text(&receipt, "evidence")?.is_empty(),
-                    "native canary proof receipt does not bind the exact retained operation"
-                );
-                proved_height = field(&receipt, "applied_block_height")?
-                    .as_u64()
-                    .filter(|height| *height > 1);
-                ensure!(
-                    proved_height.is_some(),
-                    "native canary omitted its proved Applied height"
-                );
+            if let Some(height) = self.retain_receipt(operation, kind, prepare, &bytes)? {
+                proved_height = Some(height);
             }
-            private_file(
-                &self.directory.join(format!(
-                    "{operation}-{}.json",
-                    if prepare { "prepare" } else { "submit" }
-                )),
-                &bytes,
-            )?;
         }
         Ok((
             envelope,
