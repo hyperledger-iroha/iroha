@@ -13,6 +13,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/taira_cargo_cache.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("taira_cargo_cache", SCRIPT)
 cache = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cache)
@@ -72,6 +73,33 @@ class CargoSourceAdmissionTests(unittest.TestCase):
                                      b"compiled output")
                 self.assertEqual(len(list((target / "taira-release-cache-retired").glob("**/ivm-*"))), 2)
                 self.assertEqual(cache.admit_source_fingerprints(source, target, triple, {"ivm"}, repair=False), [])
+
+    def test_retirement_creates_private_host_and_cross_parents_under_permissive_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary).resolve()
+            source = target / "source"
+            source.mkdir(mode=0o700)
+            triple = "aarch64-unknown-linux-gnu"
+            stale = []
+            for profile in (target / "release", target / triple / "release"):
+                directory = profile / ".fingerprint/ivm-1111111111111111"
+                directory.mkdir(parents=True)
+                (directory / "dep-fixture").write_bytes(record([(1, "old-source/crates/ivm/build.rs")]))
+                stale.append(directory)
+            original_umask = os.umask(0o002)
+            try:
+                self.assertEqual(cache.admit_source_fingerprints(source, target, triple, {"ivm"}), ["ivm"])
+                self.assertEqual(os.umask(0o002), 0o002)
+            finally:
+                os.umask(original_umask)
+            parent = target / "taira-release-cache-retired"
+            archive, = parent.iterdir()
+            for path in (parent, archive, archive / "release", archive / "release/.fingerprint",
+                         archive / triple, archive / triple / "release", archive / triple / "release/.fingerprint"):
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            for path in stale:
+                self.assertFalse(path.exists())
+                self.assertTrue((archive / path.relative_to(target) / "dep-fixture").is_file())
 
     def test_generated_build_script_paths_are_bound_to_the_same_profile_family(self):
         with tempfile.TemporaryDirectory() as temporary:

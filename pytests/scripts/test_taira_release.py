@@ -1029,6 +1029,60 @@ class TairaPrepareTests(unittest.TestCase):
             rows.append(f"{mode} {oid} 0\t{name}".encode())
         return b"\0".join(rows) + b"\0"
 
+    def test_prepare_cli_creates_private_source_lane_under_permissive_umask(self):
+        arguments = [sys.executable, "-B", str(SCRIPT), "prepare",
+                     "--target-dir", str(self.target), "--expected-commit", "not-a-commit",
+                     "--expected-signer", "A" * 40, "--output-dir", str(self.out),
+                     "--zig", str(self.zig), "--zig-sha256", self.args.zig_sha256,
+                     "--cargo-zigbuild", str(self.zigbuild),
+                     "--cargo-zigbuild-sha256", self.args.cargo_zigbuild_sha256]
+        result = subprocess.run(arguments, cwd=SCRIPT.parent.parent, capture_output=True,
+                                text=True, timeout=10, umask=0o002)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected commit must be a full lowercase Git object ID", result.stderr)
+        self.assertNotIn("world-writable", result.stderr)
+        key = hashlib.sha256(os.fsencode(self.target)).hexdigest()[:24]
+        for path in (self.target / ".taira-build-lane", self.target / "taira-release-sources",
+                     self.target / "taira-release-sources" / key):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), self.target_mode)
+        self.assertFalse(self.out.exists())
+
+    def test_source_lane_and_nested_capture_are_private_before_freeze_under_permissive_umask(self):
+        entries = self.source_entries({"crates/deep/module/source.rs": ("100644", b"signed source"),
+                                       "nested/modules/iroha-docs": ("160000", b"")})
+        freeze = release.freeze
+        observed = []
+        def checked_freeze(path, *, directory=False):
+            if directory:
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+                observed.append(path)
+            return freeze(path, directory=directory)
+        original_umask = os.umask(0o002)
+        try:
+            with release.source_lane(self.root, self.target) as (source, _fd), \
+                 patch.object(release, "freeze", side_effect=checked_freeze):
+                self.assertEqual(stat.S_IMODE(source.parent.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(source.parent.parent.stat().st_mode), 0o700)
+                release.capture_source(self.root, source, self.target, "a" * 40, entries)
+                self.assertEqual((source / "crates/deep/module/source.rs").read_bytes(), b"signed source")
+                release.frozen_snapshot(source, entries, self.target)
+            self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(original_umask)
+        self.assertGreaterEqual(len(observed), 7)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), self.target_mode)
+
+    def test_source_lane_refuses_existing_shared_parent_without_changing_it(self):
+        parent = self.target / "taira-release-sources"
+        parent.mkdir(mode=0o775)
+        parent.chmod(0o775)
+        with self.assertRaises(release.ReleaseArtifactError):
+            with release.source_lane(self.root, self.target):
+                self.fail("unsafe existing parent was admitted")
+        self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o775)
+        self.assertEqual(list(parent.iterdir()), [])
+
     def test_fixed_capture_reads_git_objects_and_survives_working_source_changes(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed source"),
                                        "run.sh": ("100755", b"#!/bin/sh\nexit 0\n"),

@@ -34,7 +34,9 @@ separate shipping Zig environment; inherited compiler flags remain excluded.
 Changing selection or tools requires a fresh output, and can rebuild native Cargo
 fingerprints in the existing lane. Both platforms still run only host-native gates;
 Mac preparation does not establish Linux-specific supervisor behavior.
-No keys, runtime configuration, SSH, signing, activation or publishing inputs
+New owned preparation directories are created 0700 component by component,
+independent of the parent umask. Unsafe existing directories are refused without
+changing their modes. No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
 after durable publication. Failed captures, outputs and Cargo caches remain intact.
@@ -72,7 +74,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 from release_artifact_contract import (
-    ReleaseArtifactError, canonical_json_bytes, create_fresh_directory,
+    ReleaseArtifactError, canonical_json_bytes, create_fresh_directory, ensure_private_directory,
     exclusive_output_fd, exclusive_write_bytes, stable_hash_path,
     stable_open_relative,
 )
@@ -624,7 +626,7 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                 path = pending / os.fsdecode(relative)
                 require(not Path(os.fsdecode(relative)).is_absolute()
                         and ".." not in Path(os.fsdecode(relative)).parts, "source path escapes capture")
-                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                ensure_private_directory(path.parent, anchor=pending)
                 if mode == b"160000":
                     path.mkdir(mode=0o700)
                     continue
@@ -1098,7 +1100,7 @@ def source_lane(root: Path, target_dir: Path):
     # Preserve the fixed-source custody lock even across preparer upgrades.
     key = hashlib.sha256(os.fsencode(target_dir)).hexdigest()[:24]
     parent = target_dir / "taira-release-sources" / key
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_directory(parent, anchor=target_dir)
     real_path(parent)
     with preparation_lock(parent) as lock_fd:
         yield parent / "source", lock_fd

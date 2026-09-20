@@ -279,6 +279,24 @@ def _absolute_without_symlink_components(path: Path, label: str) -> Path:
 
 def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
     """Create one fresh directory tree without following existing links."""
+    return _create_directory_tree(path, mode=mode)
+
+
+def ensure_private_directory(path: Path, *, anchor: Path) -> Path:
+    """Create or admit an owned 0700 subtree below an existing safe anchor.
+
+    Only newly created descriptors are chmodded. Existing owned components must
+    already be private; shared paths, links, and path replacement fail closed.
+    """
+    if (not path.is_absolute() or str(path) != os.path.abspath(path)
+            or not anchor.is_absolute() or str(anchor) != os.path.abspath(anchor)
+            or not path.is_relative_to(anchor)):
+        _fail("private directory path must remain below its absolute canonical anchor")
+    return _create_directory_tree(path, mode=0o700, owned_root=anchor)
+
+
+def _create_directory_tree(path: Path, *, mode: int, owned_root: Path | None = None) -> Path:
+    """Walk and create with pinned descriptors; optionally admit a private leaf."""
 
     if mode not in {0o700, 0o755}:
         _fail("release directory mode must be exactly 0700 or 0755")
@@ -290,6 +308,8 @@ def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
     try:
         for index, component in enumerate(components):
             final = index == len(components) - 1
+            anchor_depth = len(owned_root.parts) - 1 if owned_root is not None else None
+            owned = anchor_depth is not None and (index >= anchor_depth or final)
             try:
                 before = os.stat(
                     component,
@@ -300,7 +320,7 @@ def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
                 before = None
             created = before is None
             if before is not None:
-                if final:
+                if final and owned_root is None:
                     _fail(f"fresh release directory already exists: {absolute}")
                 if not stat.S_ISDIR(before.st_mode):
                     _fail(
@@ -312,7 +332,13 @@ def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
                         f"release directory component is group- or "
                         f"world-writable: {component}"
                     )
+                if anchor_depth is not None and index == anchor_depth - 1 and before.st_uid != os.geteuid():
+                    _fail("private directory anchor is not owner-held")
+                if owned and (before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o700):
+                    _fail(f"existing private directory component is not owner-held 0700: {component}")
             else:
+                if anchor_depth is not None and index < anchor_depth:
+                    _fail("private directory anchor must already exist")
                 os.mkdir(component, mode=mode, dir_fd=current_fd)
                 os.fsync(current_fd)
                 before = os.stat(
@@ -336,6 +362,15 @@ def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
                     f"release directory component changed while it was opened: "
                     f"{component}"
                 )
+            if not created and (opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+                    or (anchor_depth is not None and index == anchor_depth - 1
+                        and opened.st_uid != os.geteuid())):
+                os.close(next_fd)
+                _fail("release directory custody changed while it was opened")
+            if owned and not created and (opened.st_uid != os.geteuid()
+                    or stat.S_IMODE(opened.st_mode) != 0o700):
+                os.close(next_fd)
+                _fail("private directory custody changed while it was opened")
             if created:
                 os.fchmod(next_fd, mode)
                 created_info = os.fstat(next_fd)
