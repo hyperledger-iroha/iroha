@@ -42,6 +42,8 @@ MAX_TOTAL = 32 * 1024**3
 MAX_FILES = 48
 CHUNK = 1024**2
 RESERVE = 256 * 1024**2
+RETIRE_GUEST_RESERVE = 32 * 1024**2
+RETIRE_BACKING_RESERVE = 32 * 1024**2
 TIMEOUT = 3600
 SUPERVISOR_ROOT = Path("/var/lib/taira-epoch-supervisor")
 SUPERVISOR_UNIT = "iroha-taira-epoch-supervisor.service"
@@ -247,14 +249,18 @@ def reference(value):
     return value
 
 
+def validate_controller(controller):
+    need(isinstance(controller, dict) and set(controller) == {"commit", "signer"}
+         and re.fullmatch(r"[0-9a-f]{40}", controller["commit"])
+         and re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", controller["signer"]), "full controller commit and signer required")
+    return controller
+
+
 def validate_plan(plan):
     need(isinstance(plan, dict) and set(plan) == {"schema", "provider", "controller", "guest_ssh",
          "backing_ssh", "backing_path", "deployment", "current_inventory", "units", "releases"}
          and plan["schema"] == SCHEMA and plan["provider"] == "macstadium-dublin", "closed approved plan required")
-    controller = plan["controller"]
-    need(isinstance(controller, dict) and set(controller) == {"commit", "signer"}
-         and re.fullmatch(r"[0-9a-f]{40}", controller["commit"])
-         and re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", controller["signer"]), "full controller commit and signer required")
+    validate_controller(plan["controller"])
     reference(plan["deployment"])
     reference(plan["current_inventory"])
     direct(plan["backing_path"])
@@ -489,16 +495,49 @@ class Reader:
         return decode(self.exact(count))
 
 
-def archive_stream(plan, deployment, expected, output_fd):
+def hash_prefix(fd, size):
+    digest, offset = hashlib.sha256(), 0
+    while offset < size:
+        part = os.pread(fd, min(CHUNK, size - offset), offset)
+        need(part, "archive prefix truncated")
+        digest.update(part)
+        offset += len(part)
+    return digest.hexdigest()
+
+
+def validate_resume(resume, rows):
+    need(isinstance(resume, dict) and set(resume) == {"completed", "partial"}
+         and type(resume["completed"]) is int and 0 <= resume["completed"] <= len(rows),
+         "exact bounded archive resume descriptor required")
+    partial = resume["partial"]
+    if partial is not None:
+        need(isinstance(partial, dict) and set(partial) == {"index", "size", "sha256"}
+             and type(partial["index"]) is int and partial["index"] == resume["completed"] < len(rows)
+             and type(partial["size"]) is int and 0 <= partial["size"] <= rows[partial["index"]]["size"]
+             and isinstance(partial["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", partial["sha256"]),
+             "exact final partial archive prefix required")
+    return resume
+
+
+def archive_stream(plan, deployment, expected, output_fd, *, resume=None):
+    if resume is None:
+        resume = {"completed": 0, "partial": None}
+    validate_resume(resume, expected["rows"])
     with authority_locks(deployment), contextlib.ExitStack() as stack:
         admission = inspect(plan, deployment)
         need(admission == expected, "archive admission changed")
         opened = [stack.enter_context(held(row["path"], digest=row["sha256"], size=row["size"], mode=0o755,
                   stamp=row["identity"]))[0] for row in admission["rows"]]
         no_live_references([row["path"] for row in admission["rows"]], opened, file_identities=admission["rows"])
+        partial = resume["partial"]
+        if partial is not None:
+            need(hash_prefix(opened[partial["index"]], partial["size"]) == partial["sha256"],
+                 "local archive prefix differs from fresh held source")
         send_frame(output_fd, admission)
-        for row, fd in zip(admission["rows"], opened):
-            offset = 0
+        for index, (row, fd) in enumerate(zip(admission["rows"], opened)):
+            if index < resume["completed"]:
+                continue
+            offset = partial["size"] if partial is not None and index == partial["index"] else 0
             while offset < row["size"]:
                 data = os.pread(fd, min(CHUNK, row["size"] - offset), offset)
                 need(data, "archive source truncated")
@@ -525,6 +564,7 @@ def quarantine_path(row, token, index):
 
 
 def retirement_intent(admission, archive_digest):
+    need(1 <= len(admission["rows"]) <= MAX_FILES, "bounded retained binary census required")
     token = sha(canonical({"admission": admission, "archive": archive_digest}))
     rows = [{**row, "quarantine": str(quarantine_path(row, token, index))} for index, row in enumerate(admission["rows"])]
     value = {"schema": SCHEMA, "operation": "retire-public-binaries", "archive_sha256": archive_digest,
@@ -538,8 +578,13 @@ def retirement_capacity(admission, archive_digest):
     # Exact frozen intent plus two simultaneous publication copies, per-file
     # quarantine/delete receipts (each capped at 4KiB), final evidence and dirs.
     payload = 3 * len(raw) + (3 * len(admission["rows"]) + 8) * 4096
-    return allocation(admission["deployment"]["runtime_root"], payload,
-                      3 * len(admission["rows"]) + 12, 2)
+    plan, result = allocation(admission["deployment"]["runtime_root"], payload,
+                             3 * len(admission["rows"]) + 12, 2, reserve=RETIRE_GUEST_RESERVE)
+    # The fixed operating reserve exceeds even the largest supported metadata
+    # peak. Larger allocation geometries/records must not silently defeat it.
+    need(plan["allocations"][0]["bytes"] <= RETIRE_GUEST_RESERVE,
+         "rounded retirement metadata exceeds the fixed operating reserve")
+    return plan, result
 
 
 def marker(work, name, value):
@@ -724,6 +769,7 @@ def trim_and_observe(runtime):
 
 
 def authenticated_modules(root, controller):
+    validate_controller(controller)
     root = direct(root)
     environment = {key: os.environ[key] for key in ("PATH", "HOME", "GNUPGHOME") if key in os.environ}
     environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", LC_ALL="C")
@@ -746,6 +792,18 @@ def authenticated_modules(root, controller):
         need(raw == git("show", controller["commit"] + ":scripts/" + name + ".py"), "controller differs from signed source")
         modules[name] = raw
     return modules, git
+
+
+def archive_controller_provenance(git, archived, execution):
+    validate_controller(archived)
+    validate_controller(execution)
+    need(archived["signer"] == execution["signer"], "archive and execution controller signers differ")
+    git("verify-commit", archived["commit"])
+    need(git("show", "--no-patch", "--format=%GF", archived["commit"]).decode().strip() == archived["signer"],
+         "archive controller signer differs")
+    git("merge-base", "--is-ancestor", archived["commit"], execution["commit"])
+    return {"archive_controller": archived, "execution_controller": execution,
+            "archive_controller_is_verified_ancestor": True}
 
 
 def load_modules(modules):
@@ -786,7 +844,7 @@ def remote(envelope):
         import taira_disk_capacity as capacity
         send_frame(1, capacity.inspect_filesystem(direct(envelope["path"])))
         return
-    if operation == "backing-capacity":
+    if operation in ("backing-capacity", "binary-retirement-backing-capacity"):
         need(sys.platform == "darwin", "approved Mac backing host required")
         import taira_disk_capacity as capacity
         need(type(envelope["bytes"]) is int and 0 <= envelope["bytes"] <= MAX_TOTAL,
@@ -796,7 +854,8 @@ def remote(envelope):
             {"path": path, "label": "rounded guest retirement metadata and reserve",
              "bytes": envelope["bytes"], "inodes": 1},
             {"path": path, "label": "retained public physical backing reserve",
-             "bytes": RESERVE, "inodes": 256}]})
+             "bytes": RETIRE_BACKING_RESERVE if operation == "binary-retirement-backing-capacity" else RESERVE,
+             "inodes": 256}]})
         need(result["passed"], "insufficient physical backing capacity for retirement")
         send_frame(1, result)
         return
@@ -809,6 +868,8 @@ def remote(envelope):
             send_frame(1, inspect(plan, deployment))
     elif operation == "archive":
         archive_stream(plan, deployment, envelope["admission"], 1)
+    elif operation == "archive-resume":
+        archive_stream(plan, deployment, envelope["admission"], 1, resume=envelope["resume"])
     elif operation == "retire-capacity":
         send_frame(1, retirement_capacity(envelope["admission"], envelope["archive_sha256"])[0])
     elif operation == "retire":
@@ -887,9 +948,10 @@ def archive_local(plan, deployment, admission, modules, output):
 def verify_archive(path):
     private_directory(path)
     need(set(os.listdir(path)) == {"plan.json", "admission.json", "objects", "archive.stderr", "completed.json"}, "archive has incomplete or unexpected entries")
-    plan = validate_plan(decode(read(path / "plan.json", mode=0o400)))
-    admission = decode(read(path / "admission.json", mode=0o400))
-    completed = decode(read(path / "completed.json", mode=0o400))
+    plan, admission = archive_inputs(path)
+    completed_raw = read(path / "completed.json", mode=0o400)
+    completed = decode(completed_raw)
+    need(canonical(completed) == completed_raw, "archive completion must retain exact canonical producer bytes")
     need(completed == {"schema": SCHEMA, "archive_complete": True, "admission_sha256": sha(canonical(admission)),
          "plan_sha256": sha(canonical(plan)), "files": len(admission["rows"]), "retirement_authorized": False}
          and admission["plan_sha256"] == completed["plan_sha256"] and 1 <= len(admission["rows"]) <= MAX_FILES,
@@ -902,6 +964,141 @@ def verify_archive(path):
     return plan, admission, sha(canonical(completed))
 
 
+def archive_inputs(path):
+    plan_raw = read(path / "plan.json", mode=0o400)
+    admission_raw = read(path / "admission.json", mode=0o400)
+    plan = validate_plan(decode(plan_raw))
+    admission = decode(admission_raw)
+    need(canonical(plan) == plan_raw and canonical(admission) == admission_raw,
+         "archive metadata must retain exact canonical producer bytes")
+    need(admission["schema"] == SCHEMA and admission["plan_sha256"] == sha(plan_raw)
+         and 1 <= len(admission["rows"]) <= MAX_FILES
+         and all(type(row["size"]) is int and 0 < row["size"] <= MAX_BINARY for row in admission["rows"])
+         and sum(row["size"] for row in admission["rows"]) <= MAX_TOTAL,
+         "archive admission differs from its exact bounded plan")
+    return plan, admission
+
+
+@contextlib.contextmanager
+def held_archive(path, expected):
+    plan, admission, digest = expected
+    with contextlib.ExitStack() as stack:
+        for name, expected_digest in (("plan.json", sha(canonical(plan))),
+                                      ("admission.json", sha(canonical(admission))),
+                                      ("completed.json", digest)):
+            stack.enter_context(held(path / name, digest=expected_digest, mode=0o400, maximum=MAX_RECORD))
+        for index, row in enumerate(admission["rows"]):
+            stack.enter_context(held(path / "objects" / f"{index:04d}", digest=row["sha256"], size=row["size"], mode=0o400))
+        need(verify_archive(path) == expected, "archive differs from the original verified metadata")
+        yield
+        need(verify_archive(path) == expected, "archive changed from the original verified metadata")
+
+
+def archive_resume_census(path):
+    private_directory(path)
+    names = set(os.listdir(path))
+    required = {"plan.json", "admission.json", "objects", "archive.stderr"}
+    need(required <= names <= required | {".completed.json.pending"},
+         "resume requires the exact incomplete archive namespace")
+    plan, admission = archive_inputs(path)
+    objects = private_directory(path / "objects")
+    names = set(os.listdir(objects))
+    need(len(names) <= len(admission["rows"]) and names == {f"{index:04d}" for index in range(len(names))},
+         "archive objects must be a contiguous prefix without missing middle files")
+    completed, partial = 0, None
+    for index in range(len(names)):
+        row = admission["rows"][index]
+        obj = objects / f"{index:04d}"
+        info = obj.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if mode == 0o400:
+            need(partial is None, "completed object follows a partial archive file")
+            with held(obj, digest=row["sha256"], size=row["size"], mode=0o400):
+                pass
+            completed += 1
+        else:
+            need(mode == 0o600 and index == len(names) - 1 and info.st_size <= row["size"],
+                 "only the final archive object may be a bounded private partial file")
+            with held(obj, size=info.st_size, mode=0o600) as (_, before, digest):
+                partial = {"index": index, "size": before.st_size, "sha256": digest}
+    return plan, admission, validate_resume({"completed": completed, "partial": partial}, admission["rows"])
+
+
+def archive_resume_local(plan, deployment, admission, modules, output, diagnostics, *, expected_resume=None):
+    actual_plan, actual_admission, resume = archive_resume_census(output)
+    need((actual_plan, actual_admission) == (plan, admission), "resume metadata differs from original admission")
+    need(expected_resume is None or resume == expected_resume, "archive prefix changed from the authenticated resume intent")
+    need(deployment == admission["deployment"], "resume occupied deployment differs")
+    need(diagnostics.parent != output and output not in diagnostics.parents,
+         "resume diagnostics must remain outside the immutable archive namespace")
+    partial = resume["partial"]
+    missing = sum(row["size"] for row in admission["rows"][resume["completed"]:])
+    if partial is not None:
+        missing -= partial["size"]
+    allocation(output.parent, missing + 3 * MAX_RECORD, len(admission["rows"]) - resume["completed"] + 8)
+    with contextlib.ExitStack() as stack:
+        for name, value in (("plan.json", plan), ("admission.json", admission)):
+            stack.enter_context(held(output / name, digest=sha(canonical(value)), mode=0o400, maximum=MAX_RECORD))
+        for index, row in enumerate(admission["rows"][:resume["completed"]]):
+            stack.enter_context(held(output / "objects" / f"{index:04d}", digest=row["sha256"], size=row["size"], mode=0o400))
+        partial_identity = None
+        if partial is not None:
+            with held(output / "objects" / f"{partial['index']:04d}", digest=partial["sha256"],
+                      size=partial["size"], mode=0o600) as (_, info, _):
+                partial_identity = identity(info)
+        envelope = {"operation": "archive-resume", "plan": plan, "deployment": deployment,
+                    "admission": admission, "resume": resume}
+        with session(plan["guest_ssh"], envelope, modules, diagnostics) as reader:
+            need(reader.frame() == admission, "resumed archive source admission differs")
+            for index in range(resume["completed"], len(admission["rows"])):
+                row = admission["rows"][index]
+                path = output / "objects" / f"{index:04d}"
+                continuing = partial is not None and index == partial["index"]
+                offset = partial["size"] if continuing else 0
+                with anchored_directory(path.parent) as directory:
+                    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                    fd = os.open(path.name, flags if continuing else flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory)
+                    try:
+                        info = os.fstat(fd)
+                        need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                             and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600,
+                             "unsafe resumed archive object")
+                        if continuing:
+                            need(identity(info) == partial_identity and hash_fd(fd, offset) == partial["sha256"],
+                                 "partial archive changed before continuation")
+                        else:
+                            need(info.st_size == 0, "new archive object is not empty")
+                        os.lseek(fd, offset, os.SEEK_SET)
+                        remaining = row["size"] - offset
+                        while remaining:
+                            raw = reader.exact(min(CHUNK, remaining))
+                            write_all(fd, raw)
+                            remaining -= len(raw)
+                        os.fsync(fd)
+                        need(hash_fd(fd, row["size"]) == row["sha256"], "resumed full object digest differs")
+                        os.fchmod(fd, 0o400)
+                        os.fsync(fd)
+                        need(identity(os.fstat(fd)) == identity(os.stat(path.name, dir_fd=directory, follow_symlinks=False)),
+                             "resumed archive object replaced")
+                        os.fsync(directory)
+                    finally:
+                        # Interrupted tails remain owned, synchronized and resumable.
+                        os.fsync(fd)
+                        os.close(fd)
+                        os.fsync(directory)
+            need(reader.frame() == {"archive_stream_verified": True, "admission_sha256": sha(canonical(admission))},
+                 "resumed archive final verification differs")
+        need(archive_inputs(output) == (plan, admission), "archive metadata changed during resume")
+    completed = {"schema": SCHEMA, "archive_complete": True, "admission_sha256": sha(canonical(admission)),
+                 "plan_sha256": sha(canonical(plan)), "files": len(admission["rows"]), "retirement_authorized": False}
+    # Verify every complete payload before publishing the same current-format receipt.
+    _, _, finished = archive_resume_census(output)
+    need(finished == {"completed": len(admission["rows"]), "partial": None}, "resumed archive is incomplete")
+    write_new(output / "completed.json", canonical(completed))
+    need(verify_archive(output) == (plan, admission, sha(canonical(completed))), "resumed archive verification differs")
+    return completed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -912,6 +1109,12 @@ def main():
     retire_parser = sub.add_parser("retire", help="retire only the exact binaries of a complete verified archive")
     retire_parser.add_argument("--archive-dir", required=True, type=Path)
     retire_parser.add_argument("--output-dir", required=True, type=Path)
+    resume_parser = sub.add_parser("resume-archive", help="verify retained archive prefix and copy only the missing tail")
+    resume_parser.add_argument("--archive-dir", required=True, type=Path)
+    resume_parser.add_argument("--output-dir", required=True, type=Path)
+    for command in (retire_parser, resume_parser):
+        command.add_argument("--execution-controller-commit", required=True)
+        command.add_argument("--execution-controller-signer", required=True)
     verify = sub.add_parser("verify", help="rehash an existing off-host archive without remote access")
     verify.add_argument("--archive-dir", required=True, type=Path)
     args = parser.parse_args()
@@ -922,9 +1125,19 @@ def main():
         return
     if args.operation == "archive":
         plan = validate_plan(decode(read(args.plan, mode=0o600)))
+        execution_controller = plan["controller"]
     else:
-        plan, admission, archive_digest = verify_archive(direct(args.archive_dir))
-    modules, git = authenticated_modules(args.repo_root, plan["controller"])
+        execution_controller = validate_controller({"commit": args.execution_controller_commit,
+                                                    "signer": args.execution_controller_signer})
+        if args.operation == "resume-archive":
+            plan, admission, resume = archive_resume_census(direct(args.archive_dir))
+        else:
+            expected_archive = verify_archive(direct(args.archive_dir))
+            plan, admission, archive_digest = expected_archive
+    modules, git = authenticated_modules(args.repo_root, execution_controller)
+    provenance = archive_controller_provenance(git, plan["controller"], execution_controller)
+    provenance.update(archive_plan_sha256=sha(canonical(plan)),
+                      execution_module_sha256={name: sha(raw) for name, raw in modules.items()})
     loaded = load_modules(modules)
     owner = loaded["taira_retained_release"]
     retry = loaded["taira_retry"]
@@ -941,22 +1154,32 @@ def main():
             need(git("show", "--no-patch", "--format=%GF", source["commit"]).decode().strip() == plan["controller"]["signer"]
                  and git("rev-parse", source["commit"] + "^{tree}").decode().strip() == source["tree"], "retained signed source identity differs")
         result = owner.archive_local(plan, deployment, admission, modules, output)
+    elif args.operation == "resume-archive":
+        need(deployment == admission["deployment"], "occupied deployment changed since archive")
+        fresh_directory(output)
+        provenance.update(archive_admission_sha256=sha(canonical(admission)), resume=resume)
+        write_new(output / "controller-provenance.json", canonical(provenance))
+        completed = owner.archive_resume_local(plan, deployment, admission, modules, direct(args.archive_dir),
+            output / "resume.stderr", expected_resume=resume)
+        result = {"schema": SCHEMA, "archive_resumed": True, "archive_complete": completed,
+                  "archive_sha256": sha(canonical(completed)), "controller_provenance_sha256": sha(canonical(provenance)),
+                  "retirement_authorized": False}
+        write_new(output / "completed.json", canonical(result))
     else:
         need(deployment == admission["deployment"], "occupied deployment changed since archive")
         fresh_directory(output)
+        provenance.update(archive_admission_sha256=sha(canonical(admission)), archive_completion_sha256=archive_digest)
+        write_new(output / "controller-provenance.json", canonical(provenance))
         envelope = {"plan": plan, "deployment": deployment, "admission": admission, "archive_sha256": archive_digest}
-        capacity = owner.call(plan["guest_ssh"], {**envelope, "operation": "retire-capacity"}, modules, output / "capacity.stderr")
-        required = sum(row["bytes"] for row in capacity["allocations"])
-        backing_before = owner.call(plan["backing_ssh"], {"operation": "backing-capacity", "path": plan["backing_path"], "bytes": required}, modules, output / "backing.stderr")
-        # Hold every verified off-host file through remote retirement. A changed
-        # backup prevents dispatch; post-use rereads also invalidate completion.
-        with contextlib.ExitStack() as stack:
-            for name in ("plan.json", "admission.json", "completed.json"):
-                stack.enter_context(held(args.archive_dir / name, mode=0o400, maximum=MAX_RECORD))
-            for index, row in enumerate(admission["rows"]):
-                stack.enter_context(held(args.archive_dir / "objects" / f"{index:04d}", digest=row["sha256"], size=row["size"], mode=0o400))
+        # Pin original A metadata as well as payloads across every probe and
+        # retirement dispatch; a separately valid replacement B is never adopted.
+        with owner.held_archive(direct(args.archive_dir), expected_archive):
+            capacity = owner.call(plan["guest_ssh"], {**envelope, "operation": "retire-capacity"}, modules, output / "capacity.stderr")
+            required = sum(row["bytes"] for row in capacity["allocations"])
+            backing_before = owner.call(plan["backing_ssh"], {"operation": "binary-retirement-backing-capacity",
+                "path": plan["backing_path"], "bytes": required}, modules, output / "backing.stderr")
             result = owner.call(plan["guest_ssh"], {**envelope, "operation": "retire"}, modules, output / "retire.stderr")
-        owner.verify_archive(direct(args.archive_dir))
+        result["controller_provenance_sha256"] = sha(canonical(provenance))
         result["backing_before"] = backing_before
         result["backing_after"] = owner.call(plan["backing_ssh"], {"operation": "backing-observe", "path": plan["backing_path"]}, modules, output / "backing-after.stderr")
         write_new(output / "completed.json", canonical(result))

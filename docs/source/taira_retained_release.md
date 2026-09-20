@@ -9,9 +9,16 @@ source payloads, transport packs, runtime configuration, keys, ledger data, or
 currently bound executables. Canonical local Git history supplies signature
 verification and remains unchanged.
 
-Run from the canonical `optimizations` checkout. The controller and its three
-shared modules must exactly match the plan's signed commit and full signer
-fingerprint. Both SSH routes must pass `taira_retry.validate_ssh` and match the
+Run from the canonical `optimizations` checkout. Archive creation authenticates
+the controller and its three shared modules against the plan's signed commit
+and full signer fingerprint. Resume and retirement require an explicit signed
+execution-controller commit and signer; the current four-module closure must
+match that commit. The immutable archive plan retains its original controller,
+whose signature and full signer are verified independently and whose commit
+must be an ancestor of the execution controller under the same signer. This
+separates archive provenance from current execution without accepting another
+archive schema or weakening native ownership records. Both SSH routes must pass
+`taira_retry.validate_ssh` and match the
 pinned MacStadium bound-deployment record. Python 3.11 or later and Git/GPG are
 required locally. The guest must be root on AArch64 Linux; the backing observer
 runs on the approved Mac. Apple Python 3.9 supports the backing bootstrap.
@@ -61,6 +68,8 @@ python3 scripts/taira_retained_release.py verify \
   --archive-dir /absolute/private/retained-archive
 
 python3 scripts/taira_retained_release.py --repo-root "$PWD" retire \
+  --execution-controller-commit "$FULL_SIGNED_EXECUTION_COMMIT" \
+  --execution-controller-signer "$FULL_SIGNER_FINGERPRINT" \
   --archive-dir /absolute/private/retained-archive \
   --output-dir /absolute/private/retirement-evidence
 ```
@@ -72,7 +81,11 @@ with their original mode in the admission record. `completed.json` is published
 only after the entire source stream and authority revalidation succeed.
 
 Retirement rehashes the completed archive and holds its descriptors through
-the operation. It borrows only existing updater/native reset locks and creates
+capacity probes and retirement. Original plan, admission and completion hashes
+are pinned alongside every payload; an internally valid replacement archive
+cannot substitute for the one originally verified. The operation records both
+controller identities and the execution module hashes in separate evidence.
+It borrows only existing updater/native reset locks and creates
 its own private `retained-public-release-v1` intent directory. Missing epoch
 authority is never created. Those advisory locks are not represented as a
 continuous fence against every supervisor creator.
@@ -96,14 +109,39 @@ cannot authorize deployment.
 The off-host archive requires all materialized binary bytes, bounded records,
 directory allocation, and a 256 MiB operating reserve. Guest retirement charges
 only its bounded serialized intent, progress receipts, simultaneous publication
-copies, directory allocation, and a separate 256 MiB reserve. Backing admission
-charges that entire guest demand plus a 256 MiB physical reserve. There are at
+copies, directory allocation, and a separate fixed 32 MiB operating reserve.
+The binary-retirement backing operation charges that entire guest demand plus
+a fixed 32 MiB physical operating reserve. Each reserve exceeds the enforced
+maximum metadata peak: 26,435,428 bytes with 4 KiB allocation units, 48 files
+and an 8 MiB intent. Actual allocation-unit rounding is always included; a
+rounded metadata peak above 32 MiB is refused. The shared archive default and
+source-retirement policies retain their own 256 MiB reserves. There are at
 most 48 files, 8 MiB per record, 4 GiB per binary, and 32 GiB total. Expected
 reclamation is never credited during admission. Deployment's existing 2 GiB
 guest plus 2 GiB backing reserves are unchanged.
 
-An interrupted archive cannot authorize retirement; retain it and archive to a
-new output. For interrupted retirement, rerun `retire` with the same complete
+An interrupted archive cannot authorize retirement. Resume preserves its exact
+metadata and original diagnostics, verifies every completed object, and accepts
+only a contiguous object prefix with at most one final `0600` partial object.
+Its size can be zero or the complete expected size if interruption occurred
+before sealing. The fresh remote held source must match the partial prefix hash
+before any missing bytes are sent. Only missing bytes are copied; completed
+objects are held unchanged. Full remote source revalidation, full local object
+rereads and synchronization are required before publishing the existing
+completion record. Missing middle objects, later objects after a partial file,
+changed source identities, corrupt prefixes or replaced metadata fail closed.
+Resume diagnostics and controller evidence use a fresh directory outside the
+original archive:
+
+```sh
+python3 scripts/taira_retained_release.py --repo-root "$PWD" resume-archive \
+  --execution-controller-commit "$FULL_SIGNED_EXECUTION_COMMIT" \
+  --execution-controller-signer "$FULL_SIGNER_FINGERPRINT" \
+  --archive-dir /absolute/private/retained-archive \
+  --output-dir /absolute/private/archive-resume-evidence
+```
+
+For interrupted retirement, rerun `retire` with the same complete
 archive and a fresh evidence output. The owner validates its original intent,
 quarantine identities, and per-file deletion intents before resuming. An absent
 file without the owner's durable deletion intent is an error. A completed
@@ -121,5 +159,5 @@ gate. This owner does not truncate logs, alter services, or stop the VM.
 Run the offline custody regression suite with:
 
 ```sh
-python3 -m unittest discover -s pytests/scripts -p test_taira_retained_release.py
+python3 -m unittest discover -s pytests/scripts -p 'test_taira_retained_release*.py'
 ```
