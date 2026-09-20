@@ -79,7 +79,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeMutIter<'n, K, V> {
 #[cfg(test)]
 mod tests {
     use super::super::cursor::SuperBlock;
-    use super::super::node::{Leaf, Node, L_CAPACITY};
+    use super::super::node::{Leaf, Node, Untracked, L_CAPACITY};
     use super::RangeMutIter;
     use std::ops::Bound;
     use std::ops::Bound::*;
@@ -88,12 +88,12 @@ mod tests {
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
         assert!(vbase.is_multiple_of(10));
-        let node = Node::new_leaf(0);
+        let node = Node::new_leaf(0, &mut Untracked);
         {
-            let nmut = leaf_ref!(node, usize, usize);
+            let nmut = leaf_ref!(node, usize, usize, Untracked);
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(v, v, &mut Untracked);
             }
         }
         node as *mut _
@@ -104,7 +104,7 @@ mod tests {
         let node = create_leaf_node_full(10);
 
         let sb = SuperBlock::new_test(1, node);
-        let mut wcurs = sb.create_writer();
+        let mut wcurs = sb.create_writer(());
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let range_mut_iter = RangeMutIter::new(&mut wcurs, bounds);

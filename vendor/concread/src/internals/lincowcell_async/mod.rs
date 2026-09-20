@@ -160,14 +160,20 @@ where
         }
     }
 
-    /// Begin a write txn
-    pub async fn write<'x>(&'x self) -> LinCowCellWriteTxn<'x, T, R, U> {
+    /// Construct explicit writer input after acquiring the original writer lock.
+    ///
+    /// This asynchronous cell does not provide allocation admission.
+    pub async fn write_with(
+        &self,
+        input: impl FnOnce(&T) -> T::WriterInput,
+    ) -> LinCowCellWriteTxn<'_, T, R, U> {
         /* Take the exclusive write lock first */
         let write_guard = self.write.lock().await;
         /* Now take a ro-txn to get the data copied */
         // let active_guard = self.active.lock();
         /* This copies the data */
-        let work: U = (*write_guard).create_writer();
+        let input = input(&write_guard);
+        let work: U = (*write_guard).create_writer(input);
         /* Now build the write struct */
         LinCowCellWriteTxn {
             caller: self,
@@ -176,13 +182,17 @@ where
         }
     }
 
-    /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
+    /// Try an unaccounted writer, constructing its input only after locking.
+    pub fn try_write_with(
+        &self,
+        input: impl FnOnce(&T) -> T::WriterInput,
+    ) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
         self.write
             .try_lock()
             .map(|write_guard| {
                 /* This copies the data */
-                let work: U = (*write_guard).create_writer();
+                let input = input(&write_guard);
+                let work: U = (*write_guard).create_writer(input);
                 /* Now build the write struct */
                 LinCowCellWriteTxn {
                     caller: self,
@@ -218,6 +228,21 @@ where
         }
         // now over-write the last value in the mutex.
         *rwguard = new_inner;
+    }
+}
+
+impl<T, R, U> LinCowCell<T, R, U>
+where
+    T: LinCowCellCapable<R, U, WriterInput = ()>,
+{
+    /// Begin an unaccounted writer with explicit unit constructor input.
+    pub async fn write(&self) -> LinCowCellWriteTxn<'_, T, R, U> {
+        self.write_with(|_| ()).await
+    }
+
+    /// Try an unaccounted unit-input writer without waiting.
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
+        self.try_write_with(|_| ())
     }
 }
 
@@ -307,11 +332,13 @@ mod tests {
     }
 
     impl LinCowCellCapable<TestDataReadTxn, TestDataWriteTxn> for TestData {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestDataReadTxn {
             TestDataReadTxn { x: self.x }
         }
 
-        fn create_writer(&self) -> TestDataWriteTxn {
+        fn create_writer(&self, (): Self::WriterInput) -> TestDataWriteTxn {
             TestDataWriteTxn { x: self.x }
         }
 
@@ -461,13 +488,15 @@ mod tests {
     impl<T: Clone> LinCowCellCapable<TestGcWrapperReadTxn<T>, TestGcWrapperWriteTxn<T>>
         for TestGcWrapper<T>
     {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
                 _data: self.data.clone(),
             }
         }
 
-        fn create_writer(&self) -> TestGcWrapperWriteTxn<T> {
+        fn create_writer(&self, (): Self::WriterInput) -> TestGcWrapperWriteTxn<T> {
             TestGcWrapperWriteTxn {
                 data: self.data.clone(),
             }
@@ -579,13 +608,15 @@ mod tests_linear {
     impl<T: Clone> LinCowCellCapable<TestGcWrapperReadTxn<T>, TestGcWrapperWriteTxn<T>>
         for TestGcWrapper<T>
     {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
                 _data: self.data.clone(),
             }
         }
 
-        fn create_writer(&self) -> TestGcWrapperWriteTxn<T> {
+        fn create_writer(&self, (): Self::WriterInput) -> TestGcWrapperWriteTxn<T> {
             TestGcWrapperWriteTxn {
                 data: self.data.clone(),
             }
@@ -672,5 +703,59 @@ mod tests_linear {
 
         // gc count should be 2 (A + B, C is still live)
         assert!(GC_COUNT.load(Ordering::Acquire) == 2);
+    }
+}
+
+#[cfg(test)]
+mod writer_input_tests {
+    use super::{LinCowCell, LinCowCellCapable};
+
+    struct Data(usize);
+
+    impl LinCowCellCapable<usize, Box<usize>> for Data {
+        type WriterInput = Box<usize>;
+
+        fn create_reader(&self) -> usize {
+            self.0
+        }
+
+        fn create_writer(&self, mut input: Self::WriterInput) -> Box<usize> {
+            *input += self.0;
+            input
+        }
+
+        fn pre_commit(&mut self, new: Box<usize>, _previous: &usize) -> usize {
+            self.0 = *new;
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_async_input_is_consumed_only_after_original_writer_acquisition() {
+        let cell = LinCowCell::new(Data(10));
+        let input = Box::new(7);
+        let original = input.as_ref() as *const usize;
+        let writer = cell
+            .write_with(|data| {
+                assert_eq!(data.0, 10);
+                assert!(cell
+                    .try_write_with(|_| panic!("busy constructor input was evaluated"))
+                    .is_none());
+                input
+            })
+            .await;
+        assert_eq!(writer.as_ref().as_ref() as *const usize, original);
+        assert_eq!(**writer, 17);
+        writer.commit();
+        assert_eq!(*cell.read(), 17);
+        let writer = cell
+            .try_write_with(|data| {
+                assert_eq!(data.0, 17);
+                Box::new(3)
+            })
+            .unwrap();
+        assert_eq!(**writer, 20);
+        drop(writer);
+        assert_eq!(*cell.read(), 17);
     }
 }

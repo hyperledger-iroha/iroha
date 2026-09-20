@@ -12,7 +12,8 @@
 
 use std::{
     alloc::Layout,
-    fmt,
+    cell::Cell,
+    fmt, ptr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -20,6 +21,38 @@ use std::{
 };
 
 use crate::{ReleaseNotification, ReleaseWait};
+
+thread_local! {
+    // Scope records live on this thread's stack; registration allocates nothing.
+    static REFUND_SCOPES: Cell<*const RefundScope> = const { Cell::new(ptr::null()) };
+}
+
+struct RefundScope {
+    pool: *const Pool,
+    previous: *const RefundScope,
+    pending: Cell<bool>,
+}
+
+// This borrow keeps the stack record at its registered address. Neither the
+// record nor this guard escapes the synchronous closure API or crosses threads.
+struct EnteredRefundScope<'scope> {
+    scope: &'scope RefundScope,
+    pool: &'scope Pool,
+}
+
+impl Drop for EnteredRefundScope<'_> {
+    fn drop(&mut self) {
+        REFUND_SCOPES.with(|head| {
+            debug_assert_eq!(head.get(), ptr::from_ref(self.scope));
+            head.set(self.scope.previous);
+        });
+        // Unlink and end the TLS access before invoking any user callback. A
+        // matching outer scope receives this wake; other threads are unaffected.
+        if self.scope.pending.get() {
+            self.pool.notify_refund();
+        }
+    }
+}
 
 struct Pool {
     limit: usize,
@@ -32,12 +65,33 @@ impl Pool {
         if bytes == 0 {
             return;
         }
-        // Signal only after credits become available. Observations acquired
-        // before a failed reservation cannot lose a concurrent refund.
-        let signal = self.released.guard(());
+        // Credits become reusable immediately, even if this thread must defer
+        // notification until its physical writer guards have been released.
         let previous = self.reserved.fetch_sub(bytes, Ordering::AcqRel);
         debug_assert!(previous >= bytes, "allocation custody cannot refund twice");
-        drop(signal);
+        self.notify_refund();
+    }
+
+    fn notify_refund(&self) {
+        let deferred = REFUND_SCOPES.with(|head| {
+            let mut current = head.get();
+            while !current.is_null() {
+                // SAFETY: only this thread accesses its TLS chain. Each record
+                // is borrowed at a stable stack address by EnteredRefundScope,
+                // whose destructor unlinks it before that borrow or pool ends.
+                let scope = unsafe { &*current };
+                if ptr::eq(scope.pool, self) {
+                    scope.pending.set(true);
+                    return true;
+                }
+                current = scope.previous;
+            }
+            false
+        });
+        if !deferred {
+            // No TLS access or pool lock remains while Waker::wake can reenter.
+            drop(self.released.guard(()));
+        }
     }
 }
 
@@ -72,6 +126,35 @@ impl AllocationBudget {
     /// This snapshot is diagnostic and grants no allocation permission.
     pub fn reserved_bytes(&self) -> usize {
         self.pool.reserved.load(Ordering::Acquire)
+    }
+
+    /// Defer this thread's refund notifications through a synchronous operation.
+    ///
+    /// Freed allocation credits become available immediately. Only wakes for
+    /// this exact pool wait until the closure returns or unwinds. Nested scopes
+    /// for the same pool coalesce; other pools and other threads notify normally.
+    /// Entering, recording refunds and leaving the scope allocate no storage.
+    /// User waker callbacks can still allocate or panic when notification runs.
+    ///
+    /// Acquire and release every physical guard inside the closure. Do not keep
+    /// an enclosing guard held or return one from the closure: the budget cannot
+    /// infer lock ownership. Detached allocation owners may escape after their
+    /// physical guards have been released. This API exposes no movable scope
+    /// guard and does not make an asynchronous future execute inside the scope.
+    pub fn with_deferred_refund_notifications<R>(&self, operation: impl FnOnce() -> R) -> R {
+        let scope = RefundScope {
+            pool: Arc::as_ptr(&self.pool),
+            previous: REFUND_SCOPES.with(Cell::get),
+            pending: Cell::new(false),
+        };
+        let entered = EnteredRefundScope {
+            scope: &scope,
+            pool: &self.pool,
+        };
+        REFUND_SCOPES.with(|head| head.set(ptr::from_ref(&scope)));
+        let output = operation();
+        drop(entered);
+        output
     }
 
     /// Prepay one exact allocation layout without allocating its payload.

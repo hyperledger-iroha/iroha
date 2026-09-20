@@ -27,10 +27,11 @@ witness, or complete State commitment; a delta alone does not bind untouched dat
 `Block::try_detach` consumes the actual Cell or Storage block after a caller
 admission callback. The detached owner retains that callback's resource guard,
 the original ordinary/replacement mode, the published current/undo identity,
-and exact candidate touches. Capture moves keys and preimages and copies only
-touched final values. It releases every original writer; no EBR reader or
-borrowed B-tree snapshot is retained. Untouched reads remain tied to the original
-owner/version even when the detached delta is empty.
+and exact candidate touches. Capture moves the original current and undo
+allocation owners without copying keys or values, then releases the physical
+writers. A detached map retains its original base reader and root owner to keep
+untouched shared nodes alive. Untouched reads remain tied to that original
+owner/version even when no entry was changed.
 
 Identity is private, local and non-serializable. Every actual MV publication,
 including undo-only commits, direct insertion and current-only replacement,
@@ -40,9 +41,10 @@ while preserving the exact serialized values and undo. Equal values after a
 later publication cannot recreate an earlier identity.
 
 `Detached::try_prepare_publication` admits installation before reacquiring either
-writer: acquiring an EBR writer itself clones its value. It acquires both
-original writers without waiting, checks the exact captured identity under
-those writers, stages current and undo, and preallocates the next identity.
+writer around the original current and undo owners. Acquisition does not clone
+values or allocate successor generations. It acquires both original writers
+without waiting and checks the exact captured identity under those writers;
+the next publication identity was already allocated during capture.
 A refusal returns the unchanged journal. A prepared publication can be aborted
 back to that journal without changing visible state. Publishing consumes the
 prepared pair and returns both capture and installation reservations to the
@@ -50,10 +52,33 @@ aggregate caller; the caller owns their eventual transfer/release.
 
 These are component operations, not cross-field finality or atomic visibility.
 The aggregate owner must prepare every component and retain all writers before
-publishing any component. Admission covers current/undo copies, staging overlap,
-Concread publication allocations and retained-reader reclamation; publication is
-not promised to be allocation-free. Data writers precede the identity lock;
+publishing any component. Original execution and retained-reader allocation
+custody require admission before those allocations occur; capture or installation
+callbacks cannot fund them retroactively. Scalar controls verify allocation-free
+detach, retry, abort and publication, including the first commit. Arbitrary
+payload destructors may still allocate. Data writers precede the identity lock;
 identity observation never acquires a data writer while holding that lock.
+
+The underlying synchronous linear cell also accepts prepaid charges for its
+exact cursor and reader control-block layouts. The original charges follow
+detached and published allocations until physical free, with refunds outside
+publication locks. Map teardown uses a bounded stack without heap allocation;
+notification mutexes initialize before they can be needed by reclamation. See
+[allocation ownership](ALLOCATION_OWNERSHIP.md) for the allocator controls and
+remaining node, nested payload and aggregate-policy requirements. Production
+maps still use explicit untracked allocation custody until those are complete.
+
+Funded synchronous operations can use an original budget's
+`with_deferred_refund_notifications` scope to return freed credits immediately
+and wake retries after their physical guards are released. Other threads and
+pools keep notifying normally. Notification also preserves the remaining
+original waiters when one callback unwinds, without suppressing its panic.
+
+Writer admission now carries explicit move-only constructor input alongside both
+shell charges. The B+tree's original padded node allocations can retain typed
+charges through clone/split/unwind and actual free, with the untracked map using
+the same implementation. Closed map admission still requires bounded tracking
+buffers, nested payload funding and complete initial/undo ownership.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

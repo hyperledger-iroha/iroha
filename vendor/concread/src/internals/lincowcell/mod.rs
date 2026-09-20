@@ -55,20 +55,64 @@
  *
  */
 
+use std::alloc::Layout;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 
+mod shared_allocation;
+use shared_allocation::{Reserved, Shared};
+
+/// Explicitly unaccounted shell ownership; this provides no admission policy.
+#[derive(Debug)]
+pub struct Untracked;
+
+/// Actual control-block layouts allocated before constructing a writer.
+#[derive(Clone, Copy, Debug)]
+pub struct WriterLayouts {
+    /// Original mutable cursor and its allocation control block.
+    pub cursor: Layout,
+    /// Original next-reader shell and its allocation control block.
+    pub reader: Layout,
+}
+
+/// Move-only prepaid custody for the original cursor and next-reader shell.
+///
+/// These charges do not fund the cursor's nested buffers, nodes or payloads.
+/// A complete caller must reserve those before their construction as well.
+#[derive(Debug)]
+pub struct WriterCharges<Charge> {
+    /// Custody held until the original cursor allocation is reclaimed.
+    pub cursor: Charge,
+    /// Custody retained by the original published or abandoned reader shell.
+    pub reader: Charge,
+}
+
+/// Original shell charges and the move-only input admitted for one writer.
+///
+/// The input is consumed by the original writer constructor after both shells
+/// have been allocated. Reattaching a detached writer does not admit or construct
+/// another input. Neither this type nor the cell supplies a default input.
+#[derive(Debug)]
+pub struct WriterAdmission<Charge, Input> {
+    /// Prepaid custody for the original cursor and next-reader shells.
+    pub charges: WriterCharges<Charge>,
+    /// The original constructor input admitted while the writer was locked.
+    pub input: Input,
+}
+
 /// Do not implement this. You don't need this negativity in your life.
 pub trait LinCowCellCapable<R, U> {
+    /// Move-only input explicitly supplied by original writer admission.
+    type WriterInput;
+
     /// Create the first reader snapshot for a new instance.
     fn create_reader(&self) -> R;
 
     /// Create a writer that may be rolled back.
-    fn create_writer(&self) -> U;
+    fn create_writer(&self, input: Self::WriterInput) -> U;
 
     /// Given the current active reader, and the writer to commit, update our
     /// main structure as mut self, and our previously linear generations based on
@@ -78,30 +122,33 @@ pub trait LinCowCellCapable<R, U> {
 
 #[derive(Debug)]
 /// A concurrently readable cell with linearised drop behaviour.
-pub struct LinCowCell<T, R, U> {
+pub struct LinCowCell<T, R, U, Charge = Untracked> {
     updater: PhantomData<U>,
-    write: Arc<Mutex<WriteState<T, R>>>,
-    active: Mutex<Arc<LinCowCellInner<R>>>,
+    write: Arc<Mutex<WriteState<T, R, Charge>>>,
+    active: Mutex<Shared<LinCowCellInner<R, Charge>, Charge>>,
 }
 
 #[derive(Debug)]
-struct WriteState<T, R> {
+struct WriteState<T, R, Charge> {
     data: T,
     // The exact active generation is also available under the writer lock.
     // Adopting an owned writer never contends with the short-lived reader lock.
-    current: Arc<LinCowCellInner<R>>,
+    current: Shared<LinCowCellInner<R, Charge>, Charge>,
 }
 
 #[derive(Debug)]
 /// A write txn over a linear cell.
-pub struct LinCowCellWriteTxn<'a, T, R, U> {
-    caller: &'a LinCowCell<T, R, U>,
+pub struct LinCowCellWriteTxn<'a, T, R, U, Charge = Untracked> {
+    caller: &'a LinCowCell<T, R, U, Charge>,
+    // Unlock before abort destroys a charge: refunds can synchronously wake a
+    // retry that reenters the cell. The retained base protects the private work
+    // just as it does after detachment, until that work has been destroyed.
+    guard: MutexGuard<'a, WriteState<T, R, Charge>>,
     // Allocate the cursor only during original acquisition. Every handoff moves
-    // this same box; abort destroys it before releasing its base and lock.
-    work: Box<U>,
-    next: Arc<MaybeUninit<LinCowCellInner<R>>>,
-    base: Arc<LinCowCellInner<R>>,
-    guard: MutexGuard<'a, WriteState<T, R>>,
+    // this same allocation; abort destroys it before releasing its base.
+    work: Shared<U, Charge>,
+    next: Reserved<LinCowCellInner<R, Charge>, Charge>,
+    base: Shared<LinCowCellInner<R, Charge>, Charge>,
 }
 
 #[derive(Debug)]
@@ -110,11 +157,11 @@ pub struct LinCowCellWriteTxn<'a, T, R, U> {
 /// The original cursor allocation moves intact through handoff and retry.
 /// Field order keeps shared nodes alive until that cursor and its allocation
 /// are destroyed, including when the original cell has already been dropped.
-pub struct LinCowCellOwned<T, R, U> {
-    work: Box<U>,
-    next: Arc<MaybeUninit<LinCowCellInner<R>>>,
-    base: Arc<LinCowCellInner<R>>,
-    root: Arc<Mutex<WriteState<T, R>>>,
+pub struct LinCowCellOwned<T, R, U, Charge = Untracked> {
+    work: Shared<U, Charge>,
+    next: Reserved<LinCowCellInner<R, Charge>, Charge>,
+    base: Shared<LinCowCellInner<R, Charge>, Charge>,
+    root: Arc<Mutex<WriteState<T, R, Charge>>>,
 }
 
 /// Why an original unpublished writer could not be reacquired.
@@ -129,23 +176,23 @@ pub enum OwnedWriteError {
 }
 
 #[derive(Debug)]
-struct LinCowCellInner<R> {
+struct LinCowCellInner<R, Charge> {
     // The original writer installs exactly one successor. A once-set link
     // avoids a lazily allocated OS mutex at publication on pthread platforms.
-    pin: OnceLock<Arc<LinCowCellInner<R>>>,
+    pin: OnceLock<Shared<LinCowCellInner<R, Charge>, Charge>>,
     data: R,
 }
 
 #[derive(Debug)]
 /// A read txn over a linear cell.
-pub struct LinCowCellReadTxn<'a, T, R, U> {
+pub struct LinCowCellReadTxn<'a, T, R, U, Charge = Untracked> {
     // We must outlive the root
-    _caller: &'a LinCowCell<T, R, U>,
+    _caller: &'a LinCowCell<T, R, U, Charge>,
     // We pin the current version.
-    work: Arc<LinCowCellInner<R>>,
+    work: Shared<LinCowCellInner<R, Charge>, Charge>,
 }
 
-impl<R> LinCowCellInner<R> {
+impl<R, Charge> LinCowCellInner<R, Charge> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
             pin: OnceLock::new(),
@@ -154,16 +201,16 @@ impl<R> LinCowCellInner<R> {
     }
 }
 
-impl<R> Drop for LinCowCellInner<R> {
+impl<R, Charge> Drop for LinCowCellInner<R, Charge> {
     fn drop(&mut self) {
         // Ensure the default drop won't recursively drop the chain
-        // Use Arc::into_inner so we only advance on unique ownership
+        // Consuming the last strong reference also reclaims its exact allocation.
         let mut current = self.pin.take();
 
         // Drop the chain iteratively to avoid stack overflow
         while let Some(arc) = current {
             // Try to get exclusive ownership of the next link
-            match Arc::into_inner(arc) {
+            match arc.into_inner() {
                 Some(mut inner) => {
                     // Continue with the next link.
                     current = inner.pin.take();
@@ -177,61 +224,106 @@ impl<R> Drop for LinCowCellInner<R> {
     }
 }
 
-impl<T, R, U> LinCowCell<T, R, U>
+impl<T, R, U, Charge> LinCowCell<T, R, U, Charge>
 where
     T: LinCowCellCapable<R, U>,
 {
-    /// Create a new linear 🐄 cell.
-    pub fn new(data: T) -> Self {
-        let current = Arc::new(LinCowCellInner::new(data.create_reader()));
-        let active = Mutex::new(Arc::clone(&current));
-        // pthread targets such as macOS allocate their native mutex lazily on
-        // first use. Prepare this one long-lived reader lock during construction
-        // so even the first publication, without a prior read, needs no lock
-        // allocation. Subsequent generations reuse this same initialized lock.
+    /// Exact layout of each reader generation, including its reference counter.
+    pub fn reader_allocation_layout() -> Layout {
+        Reserved::<LinCowCellInner<R, Charge>, Charge>::layout()
+    }
+
+    /// Exact original cursor and next-reader layouts; nested storage is separate.
+    pub fn writer_allocation_layouts() -> WriterLayouts {
+        WriterLayouts {
+            cursor: Reserved::<U, Charge>::layout(),
+            reader: Self::reader_allocation_layout(),
+        }
+    }
+
+    /// Construct the initial reader under its already prepaid allocation charge.
+    ///
+    /// Its shell is allocated before `create_reader`. The permanent root Arc,
+    /// reader mutex, input T and all nested storage require separate admission.
+    pub fn new_charged(data: T, reader_charge: Charge) -> Self {
+        let shell = Reserved::new(reader_charge);
+        let current = shell.initialize(LinCowCellInner::new(data.create_reader()));
+        let active = Mutex::new(current.clone());
+        // Initialize both permanent native mutexes during construction. A first
+        // refused writer must not allocate a lazy platform mutex at admission.
         drop(active.lock().unwrap());
+        let write = Arc::new(Mutex::new(WriteState { data, current }));
+        drop(write.lock().unwrap());
         LinCowCell {
             updater: PhantomData,
-            write: Arc::new(Mutex::new(WriteState { data, current })),
+            write,
             active,
         }
     }
 
-    /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U> {
+    /// Begin a read transaction retaining the original generation and its charge.
+    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U, Charge> {
         let rwguard = self.active.lock().unwrap();
         LinCowCellReadTxn {
             _caller: self,
-            // inc the arc.
             work: rwguard.clone(),
         }
     }
 
-    /// Begin a write txn
-    pub fn write(&self) -> LinCowCellWriteTxn<'_, T, R, U> {
-        let write_guard = self.write.lock().unwrap();
-        let work = Box::new(write_guard.data.create_writer());
+    /// Admit both original shells before allocating either or creating a cursor.
+    ///
+    /// This callback must draw from one complete prepaid operation. It does not
+    /// retroactively fund input T, nested cursor buffers, nodes or payloads.
+    /// The input constructor can destroy nested ownership before this call
+    /// unwinds. Callback-bearing refunds in that input must use the caller's
+    /// original notification-deferral scope around acquisition and construction,
+    /// so callbacks run only after its physical guards have been released.
+    pub fn write_charged<E>(
+        &self,
+        admit: impl FnOnce(&T, WriterLayouts) -> Result<WriterAdmission<Charge, T::WriterInput>, E>,
+    ) -> Result<LinCowCellWriteTxn<'_, T, R, U, Charge>, E> {
+        let guard = self.write.lock().unwrap();
+        let admission = admit(&guard.data, Self::writer_allocation_layouts())?;
+        Ok(self.create_writer(guard, admission))
+    }
+
+    /// Admit original shells only after acquiring the writer without waiting.
+    ///
+    /// Contention or poison returns None without invoking admission or allocating.
+    /// Use `is_poisoned` to distinguish poison from physical contention.
+    pub fn try_write_charged<E>(
+        &self,
+        admit: impl FnOnce(&T, WriterLayouts) -> Result<WriterAdmission<Charge, T::WriterInput>, E>,
+    ) -> Result<Option<LinCowCellWriteTxn<'_, T, R, U, Charge>>, E> {
+        let Ok(guard) = self.write.try_lock() else {
+            return Ok(None);
+        };
+        let admission = admit(&guard.data, Self::writer_allocation_layouts())?;
+        Ok(Some(self.create_writer(guard, admission)))
+    }
+
+    fn create_writer<'a>(
+        &'a self,
+        guard: MutexGuard<'a, WriteState<T, R, Charge>>,
+        admission: WriterAdmission<Charge, T::WriterInput>,
+    ) -> LinCowCellWriteTxn<'a, T, R, U, Charge> {
+        // Field order also releases the writer lock before shell refunds when
+        // create_writer unwinds. A refund may invoke arbitrary Waker::wake code.
+        let construction = (
+            guard,
+            Reserved::new(admission.charges.cursor),
+            Reserved::new(admission.charges.reader),
+        );
+        let value = construction.0.data.create_writer(admission.input);
+        let (guard, work, next) = construction;
+        let work = work.initialize(value);
         LinCowCellWriteTxn {
             caller: self,
             work,
-            next: Arc::new_uninit(),
-            base: Arc::clone(&write_guard.current),
-            guard: write_guard,
+            next,
+            base: guard.current.clone(),
+            guard,
         }
-    }
-
-    /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
-        self.write.try_lock().ok().map(|write_guard| {
-            let work = Box::new(write_guard.data.create_writer());
-            LinCowCellWriteTxn {
-                caller: self,
-                work,
-                next: Arc::new_uninit(),
-                base: Arc::clone(&write_guard.current),
-                guard: write_guard,
-            }
-        })
     }
 
     /// Reacquire only the original writer lock without copying or allocating.
@@ -240,8 +332,11 @@ where
     /// its base tree. Both the physical root and exact base must still match.
     pub fn try_write_owned(
         &self,
-        owned: LinCowCellOwned<T, R, U>,
-    ) -> Result<LinCowCellWriteTxn<'_, T, R, U>, (LinCowCellOwned<T, R, U>, OwnedWriteError)> {
+        owned: LinCowCellOwned<T, R, U, Charge>,
+    ) -> Result<
+        LinCowCellWriteTxn<'_, T, R, U, Charge>,
+        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
+    > {
         if !Arc::ptr_eq(&self.write, &owned.root) {
             return Err((owned, OwnedWriteError::Changed));
         }
@@ -250,7 +345,7 @@ where
             Err(TryLockError::WouldBlock) => return Err((owned, OwnedWriteError::Busy)),
             Err(TryLockError::Poisoned(_)) => return Err((owned, OwnedWriteError::Poisoned)),
         };
-        if !Arc::ptr_eq(&guard.current, &owned.base) {
+        if !Shared::ptr_eq(&guard.current, &owned.base) {
             return Err((owned, OwnedWriteError::Changed));
         }
         let LinCowCellOwned {
@@ -275,42 +370,47 @@ where
         self.write.is_poisoned()
     }
 
-    fn commit(&self, write: LinCowCellWriteTxn<T, R, U>) {
+    fn commit(&self, write: LinCowCellWriteTxn<T, R, U, Charge>) {
         let LinCowCellWriteTxn {
             caller: _caller,
             work,
-            mut next,
+            next,
             base,
             mut guard,
         } = write;
 
         // Perform every lock and ownership check before pre_commit transfers
         // node ownership. The shell stays private until it is initialized.
-        let slot = Arc::get_mut(&mut next).expect("unpublished successor must be uniquely owned");
         let mut rwguard = self.active.lock().unwrap();
-        assert!(Arc::ptr_eq(&base, &guard.current));
-        assert!(Arc::ptr_eq(&base, &rwguard));
+        assert!(Shared::ptr_eq(&base, &guard.current));
+        assert!(Shared::ptr_eq(&base, &rwguard));
         assert!(base.pin.get().is_none());
 
-        // Consume the original cursor; moving out deallocates its box without
-        // allocating or reconstructing any cursor or node at publication.
-        let newdata = guard.data.pre_commit(*work, &base.data);
-        slot.write(LinCowCellInner::new(newdata));
-        // SAFETY: this is the original, uniquely owned writer shell. The line
-        // above initialized its complete payload exactly once, and there is no
-        // fallible operation between initialization and this conversion.
-        let new_inner = unsafe { next.assume_init() };
+        // Reclaim the original cursor block, retain its charge through the
+        // consuming callback, then initialize the already allocated reader shell.
+        let (newdata, cursor_charge) = work
+            .into_inner()
+            .expect("original cursor must be uniquely owned")
+            .consume(|work| guard.data.pre_commit(work, &base.data));
+        let new_inner = next.initialize(LinCowCellInner::new(newdata));
         // Only the original writer can reach this link, and the retained base
-        // Arc prevents destruction while it is set. No reader sets the link.
+        // owner prevents destruction while it is set. No reader sets the link.
         base.pin
-            .set(Arc::clone(&new_inner))
+            .set(new_inner.clone())
             .unwrap_or_else(|_| unreachable!("original generation already has a successor"));
-        guard.current = Arc::clone(&new_inner);
+        guard.current = new_inner.clone();
         *rwguard = new_inner;
+        // No user charge destructor runs between ownership transfer and reader
+        // publication, or under either physical lock. Its shell was already
+        // freed before pre_commit.
+        drop(rwguard);
+        drop(guard);
+        drop(base);
+        drop(cursor_charge);
     }
 }
 
-impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, Charge> Deref for LinCowCellReadTxn<'_, T, R, U, Charge> {
     type Target = R;
 
     #[inline]
@@ -319,21 +419,21 @@ impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> AsRef<R> for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, Charge> AsRef<R> for LinCowCellReadTxn<'_, T, R, U, Charge> {
     #[inline]
     fn as_ref(&self) -> &R {
         &self.work.data
     }
 }
 
-impl<T, R, U> LinCowCellWriteTxn<'_, T, R, U>
+impl<T, R, U, Charge> LinCowCellWriteTxn<'_, T, R, U, Charge>
 where
     T: LinCowCellCapable<R, U>,
 {
     #[inline]
     /// Get the mutable inner of this type
     pub fn get_mut(&mut self) -> &mut U {
-        &mut self.work
+        Shared::get_mut(&mut self.work).expect("original cursor must be uniquely owned")
     }
 
     /// Commit the active changes.
@@ -344,7 +444,7 @@ where
 
     /// Retain the original unpublished work and release its writer lock.
     /// No publication or reconstruction takes place.
-    pub fn detach(self) -> LinCowCellOwned<T, R, U> {
+    pub fn detach(self) -> LinCowCellOwned<T, R, U, Charge> {
         let Self {
             caller,
             work,
@@ -363,13 +463,13 @@ where
     }
 }
 
-impl<T, R, U> AsRef<U> for LinCowCellOwned<T, R, U> {
+impl<T, R, U, Charge> AsRef<U> for LinCowCellOwned<T, R, U, Charge> {
     fn as_ref(&self) -> &U {
         &self.work
     }
 }
 
-impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, Charge> Deref for LinCowCellWriteTxn<'_, T, R, U, Charge> {
     type Target = U;
 
     #[inline]
@@ -378,24 +478,83 @@ impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> DerefMut for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, Charge> DerefMut for LinCowCellWriteTxn<'_, T, R, U, Charge> {
     #[inline]
     fn deref_mut(&mut self) -> &mut U {
-        &mut self.work
+        Shared::get_mut(&mut self.work).expect("original cursor must be uniquely owned")
     }
 }
 
-impl<T, R, U> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, Charge> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U, Charge> {
     #[inline]
     fn as_ref(&self) -> &U {
         &self.work
     }
 }
 
-impl<T, R, U> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, Charge> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U, Charge> {
     #[inline]
     fn as_mut(&mut self) -> &mut U {
-        &mut self.work
+        Shared::get_mut(&mut self.work).expect("original cursor must be uniquely owned")
+    }
+}
+
+impl<T, R, U> LinCowCell<T, R, U, Untracked>
+where
+    T: LinCowCellCapable<R, U>,
+{
+    /// Construct explicitly unaccounted generation shells.
+    pub fn new(data: T) -> Self {
+        Self::new_charged(data, Untracked)
+    }
+
+    /// Construct an explicitly unaccounted input under the original writer lock.
+    pub fn write_with(
+        &self,
+        input: impl FnOnce(&T) -> T::WriterInput,
+    ) -> LinCowCellWriteTxn<'_, T, R, U> {
+        self.write_charged(|data, _| {
+            Ok::<_, std::convert::Infallible>(WriterAdmission {
+                charges: WriterCharges {
+                    cursor: Untracked,
+                    reader: Untracked,
+                },
+                input: input(data),
+            })
+        })
+        .unwrap_or_else(|never| match never {})
+    }
+
+    /// Try an unaccounted writer, constructing its input only after locking.
+    pub fn try_write_with(
+        &self,
+        input: impl FnOnce(&T) -> T::WriterInput,
+    ) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
+        self.try_write_charged(|data, _| {
+            Ok::<_, std::convert::Infallible>(WriterAdmission {
+                charges: WriterCharges {
+                    cursor: Untracked,
+                    reader: Untracked,
+                },
+                input: input(data),
+            })
+        })
+        .unwrap_or_else(|never| match never {})
+    }
+}
+
+impl<T, R, U> LinCowCell<T, R, U, Untracked>
+where
+    T: LinCowCellCapable<R, U, WriterInput = ()>,
+{
+    /// Begin an explicitly unaccounted writer with unit constructor input.
+    pub fn write(&self) -> LinCowCellWriteTxn<'_, T, R, U> {
+        self.write_with(|_| ())
+    }
+
+    /// Try an unaccounted unit-input writer without waiting.
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
+        self.try_write_with(|_| ())
     }
 }
 
@@ -423,11 +582,13 @@ mod tests {
     }
 
     impl LinCowCellCapable<TestDataReadTxn, TestDataWriteTxn> for TestData {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestDataReadTxn {
             TestDataReadTxn { x: self.x }
         }
 
-        fn create_writer(&self) -> TestDataWriteTxn {
+        fn create_writer(&self, (): Self::WriterInput) -> TestDataWriteTxn {
             TestDataWriteTxn { x: self.x }
         }
 
@@ -583,13 +744,15 @@ mod tests {
     impl<T: Clone> LinCowCellCapable<TestGcWrapperReadTxn<T>, TestGcWrapperWriteTxn<T>>
         for TestGcWrapper<T>
     {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
                 _data: self.data.clone(),
             }
         }
 
-        fn create_writer(&self) -> TestGcWrapperWriteTxn<T> {
+        fn create_writer(&self, (): Self::WriterInput) -> TestGcWrapperWriteTxn<T> {
             TestGcWrapperWriteTxn {
                 data: self.data.clone(),
             }
@@ -708,13 +871,15 @@ mod tests_linear {
     impl<T: Clone> LinCowCellCapable<TestGcWrapperReadTxn<T>, TestGcWrapperWriteTxn<T>>
         for TestGcWrapper<T>
     {
+        type WriterInput = ();
+
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
                 _data: self.data.clone(),
             }
         }
 
-        fn create_writer(&self) -> TestGcWrapperWriteTxn<T> {
+        fn create_writer(&self, (): Self::WriterInput) -> TestGcWrapperWriteTxn<T> {
             TestGcWrapperWriteTxn {
                 data: self.data.clone(),
             }
@@ -801,5 +966,57 @@ mod tests_linear {
 
         // gc count should be 2 (A + B, C is still live)
         assert!(GC_COUNT.load(Ordering::Acquire) == 2);
+    }
+}
+
+#[cfg(test)]
+mod writer_input_tests {
+    use super::{LinCowCell, LinCowCellCapable};
+
+    struct Data(usize);
+
+    impl LinCowCellCapable<usize, Box<usize>> for Data {
+        type WriterInput = Box<usize>;
+
+        fn create_reader(&self) -> usize {
+            self.0
+        }
+
+        fn create_writer(&self, mut input: Self::WriterInput) -> Box<usize> {
+            *input += self.0;
+            input
+        }
+
+        fn pre_commit(&mut self, new: Box<usize>, _previous: &usize) -> usize {
+            self.0 = *new;
+            self.0
+        }
+    }
+
+    #[test]
+    fn untracked_entry_points_consume_explicit_input_only_under_original_lock() {
+        let cell = LinCowCell::new(Data(10));
+        let input = Box::new(7);
+        let original = input.as_ref() as *const usize;
+        let writer = cell.write_with(|data| {
+            assert_eq!(data.0, 10);
+            assert!(cell
+                .try_write_with(|_| panic!("busy constructor input was evaluated"))
+                .is_none());
+            input
+        });
+        assert_eq!(writer.as_ref().as_ref() as *const usize, original);
+        assert_eq!(**writer, 17);
+        writer.commit();
+        assert_eq!(*cell.read(), 17);
+        let writer = cell
+            .try_write_with(|data| {
+                assert_eq!(data.0, 17);
+                Box::new(3)
+            })
+            .unwrap();
+        assert_eq!(**writer, 20);
+        drop(writer);
+        assert_eq!(*cell.read(), 17);
     }
 }

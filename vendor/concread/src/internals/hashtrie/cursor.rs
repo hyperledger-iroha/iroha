@@ -467,11 +467,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
 impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
     for SuperBlock<K, V>
 {
+    type WriterInput = ();
+
     fn create_reader(&self) -> CursorRead<K, V> {
         CursorRead::new(self)
     }
 
-    fn create_writer(&self) -> CursorWrite<K, V> {
+    fn create_writer(&self, (): Self::WriterInput) -> CursorWrite<K, V> {
         CursorWrite::new(self)
     }
 
@@ -1145,7 +1147,7 @@ mod tests {
     fn test_hashtrie_cursor_basic() {
         let sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
 
-        let mut wr = sb.create_writer();
+        let mut wr = sb.create_writer(());
 
         assert!(wr.len() == 0);
         assert!(wr.search(0, &0).is_none());
@@ -1167,7 +1169,7 @@ mod tests {
     fn test_hashtrie_cursor_insert_max_depth() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
         let rdr = sb.create_reader();
-        let mut wr = sb.create_writer();
+        let mut wr = sb.create_writer(());
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * 2) {
@@ -1203,7 +1205,7 @@ mod tests {
     fn test_hashtrie_cursor_insert_broad() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
         let rdr = sb.create_reader();
-        let mut wr = sb.create_writer();
+        let mut wr = sb.create_writer(());
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
@@ -1243,7 +1245,7 @@ mod tests {
         assert!(rdr.len() == 0);
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = sb.create_writer();
+            let mut wr = sb.create_writer(());
             assert!(wr.insert(i, i, i).is_none());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);
@@ -1258,7 +1260,7 @@ mod tests {
         }
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = sb.create_writer();
+            let mut wr = sb.create_writer(());
             assert!(wr.remove(i, &i).is_some());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);

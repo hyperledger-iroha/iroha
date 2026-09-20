@@ -22,9 +22,19 @@ struct State {
 /// if the blocking owner released before the caller registered an async waiter.
 /// Readers that exclude writers must also be wrapped. Signals grant no mutation
 /// authority: every retry must acquire the lock and authenticate its predecessor.
-#[derive(Default)]
 pub struct ReleaseNotification {
     state: Arc<Mutex<State>>,
+}
+
+impl Default for ReleaseNotification {
+    fn default() -> Self {
+        let state = Arc::new(Mutex::new(State::default()));
+        // Some platforms allocate native mutex storage on first acquisition.
+        // Pay that construction cost here, before allocation-free observations
+        // or a release that may itself be returning exhausted capacity.
+        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        Self { state }
+    }
 }
 
 impl ReleaseNotification {
@@ -90,6 +100,30 @@ impl ReleaseNotification {
     }
 
     fn released(&self, poisoned: bool) {
+        struct WakeCohort {
+            waiters: std::vec::IntoIter<Weak<Mutex<Option<Waker>>>>,
+        }
+        impl WakeCohort {
+            fn drain(&mut self) {
+                for waiter in self.waiters.by_ref().filter_map(|waiter| waiter.upgrade()) {
+                    let waker = waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+                    // The registration guard is gone before either the wake
+                    // callback or its consumed waker's destructor can run.
+                    if let Some(waker) = waker {
+                        waker.wake();
+                    }
+                }
+            }
+        }
+        impl Drop for WakeCohort {
+            fn drop(&mut self) {
+                // A failed callback must not strand the remaining original
+                // registrations after their sequence has already advanced.
+                // Preserve its panic while waking the unvisited cohort. A
+                // second callback panic has ordinary double-panic semantics.
+                self.drain();
+            }
+        }
         let waiters = {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             // Exhaustion makes observations immediately ready, never silently
@@ -98,12 +132,10 @@ impl ReleaseNotification {
             state.poisoned |= poisoned;
             std::mem::take(&mut state.waiters)
         };
-        for waiter in waiters.into_iter().filter_map(|waiter| waiter.upgrade()) {
-            let waker = waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
-            if let Some(waker) = waker {
-                waker.wake();
-            }
-        }
+        let mut cohort = WakeCohort {
+            waiters: waiters.into_iter(),
+        };
+        cohort.drain();
     }
 }
 
@@ -184,6 +216,10 @@ impl Future for ReleaseFuture {
             }
         } else {
             let registration = Arc::new(Mutex::new(Some(replacement)));
+            // Initialize native mutex storage before publishing this waiter.
+            // The first release must not allocate in order to take its waker;
+            // dropping this fresh guard invokes no waker callback.
+            drop(registration.lock().unwrap_or_else(|p| p.into_inner()));
             state.waiters.retain(|waiter| waiter.strong_count() != 0);
             state.waiters.push(Arc::downgrade(&registration));
             this.registration = Some(registration);
