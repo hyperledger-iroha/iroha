@@ -30488,10 +30488,44 @@ impl State {
     /// derived when the complete configured catalog is installed.
     #[must_use]
     pub fn new_with_pre_genesis_nexus_for_testing(
+        world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+    ) -> Self {
+        Self::new_pre_genesis_nexus_fixture(
+            world,
+            nexus,
+            query_handle,
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            *DEFAULT_TEST_NETWORK_ID,
+        )
+        .0
+    }
+    /// Construct a fresh configured-catalog fixture with explicit display and security identities.
+    ///
+    /// The returned Kura is the same authenticated storage owned by State. This
+    /// applies the runtime defaults of [`Self::new_with_chain_and_network_id_for_testing`]
+    /// after the supplied Nexus catalog has completed the production fresh-start sequence.
+    #[must_use]
+    pub fn new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_model_base::chain::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> (Self, Arc<Kura>) {
+        let (mut state, kura) =
+            Self::new_pre_genesis_nexus_fixture(world, nexus, query_handle, chain_id, network_id);
+        state.configure_test_runtime_defaults();
+        (state, kura)
+    }
+    fn new_pre_genesis_nexus_fixture(
         mut world: World,
         mut nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
-    ) -> Self {
+        chain_id: iroha_model_base::chain::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> (Self, Arc<Kura>) {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
@@ -30521,11 +30555,12 @@ impl State {
         )
         .expect("initialize authenticated temporary Kura for pre-genesis fixture");
         let configured_lane_catalog = nexus.configured_lane_catalog.clone();
-        let mut state = Self::try_new_with_chain(
+        let mut state = Self::try_new_with_chain_and_network_id(
             world,
-            kura,
+            Arc::clone(&kura),
             query_handle,
-            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            chain_id,
+            network_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )
@@ -30540,7 +30575,7 @@ impl State {
             .set_nexus_from_config(nexus)
             .expect("install configured Nexus geometry for pre-genesis fixture");
         state.install_active_lane_markers_for_tests();
-        state
+        (state, kura)
     }
     /// Bind an already configured test Kura to its exact pre-genesis Nexus geometry.
     ///

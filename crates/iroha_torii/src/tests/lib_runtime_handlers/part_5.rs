@@ -1077,7 +1077,10 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     let keypair =
         checked_torii_test_ed25519_keypair(0x2c, "derive Torii routed account-read fixture key");
     let account_id = AccountId::new(keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&account_id),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1597,7 +1600,10 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
 async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_missing() {
     let missing =
         checked_torii_test_account_id(0x2d, "derive Torii missing routed account-read fixture key");
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1626,7 +1632,10 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
         0x2e,
         "derive Torii unavailable routed account-read fixture key",
     );
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1796,13 +1805,15 @@ fn canonical_outcome_test_fixture(
     if let Some(reason) = rejection {
         crate::test_utils::attach_fixture_execution_outputs(
             &mut block,
-            vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                    input_index: 0,
-                    result: iroha_data_model::transaction::TransactionResult::new(Err(reason)),
-                    completions: vec![],
-                },
-            )],
+            vec![
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: iroha_data_model::transaction::TransactionResult::new(Err(reason)),
+                        completions: vec![],
+                    },
+                ),
+            ],
         );
     }
     let hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
@@ -2013,15 +2024,17 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
     let mut replacement = canonical.as_ref().clone();
     crate::test_utils::attach_fixture_execution_outputs(
         &mut replacement,
-        vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                input_index: 0,
-                result: iroha_data_model::transaction::TransactionResult::new(Err(
-                    TransactionRejectionReason::Validation(ValidationFail::TooComplex),
-                )),
-                completions: vec![],
-            },
-        )],
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Err(
+                        TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                    )),
+                    completions: vec![],
+                },
+            ),
+        ],
     );
     assert_eq!(
         replacement.hash(),
@@ -2070,7 +2083,8 @@ async fn canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cac
     let error = pipeline_status_terminal_or_state_entry(&app, &hash)
         .expect_err("a cached terminal result must not mask canonical authentication failure");
     let unavailable = iroha_data_model::query::error::QueryExecutionFail::Conversion(
-        "canonical Network transaction history is inconsistent: finalized carrier is unavailable".to_owned(),
+        "canonical Network transaction history is inconsistent: finalized carrier is unavailable"
+            .to_owned(),
     );
     assert_eq!(
         query_conversion_message(&error).expect("projection error"),
@@ -2160,7 +2174,9 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     };
     assert_eq!(
         message,
-        format!("committed transaction status projection is inconsistent: transaction {bogus_hash} is absent from its finalized carrier"),
+        format!(
+            "committed transaction status projection is inconsistent: transaction {bogus_hash} is absent from its finalized carrier"
+        ),
         "authenticated output absence must not be confused with missing finality",
     );
 }
@@ -2392,10 +2408,18 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
     };
     let mut outputs = block.execution_outputs().to_vec();
     let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
-        &mut outputs[0] else { unreachable!("single Network fixture") };
+        &mut outputs[0]
+    else {
+        unreachable!("single Network fixture")
+    };
     assert_eq!(output.input_index, 0);
-    assert_eq!(block.network_entrypoint_at(0).unwrap().hash(), entrypoint_hash);
-    output.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
+    assert_eq!(
+        block.network_entrypoint_at(0).unwrap().hash(),
+        entrypoint_hash
+    );
+    output
+        .result
+        .set_batch_transfer_outcomes(vec![outcome.clone()]);
     crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
     let signed_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     let public = pipeline_status_response(
@@ -2546,11 +2570,15 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
     ];
     for (label, instruction, names_native_beneficiary) in instructions {
         for applied in [true, false] {
-            let mut app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
-                sender.clone(),
-                beneficiary.clone(),
-                unrelated.clone(),
-            ]));
+            let mut app =
+                crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                    transaction_details_test_world(&[
+                        sender.clone(),
+                        beneficiary.clone(),
+                        unrelated.clone(),
+                    ]),
+                    crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+                );
             let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
             assert!(
                 torii_all_dataspace_routes(app.as_ref())
@@ -2610,13 +2638,15 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
             };
             crate::test_utils::attach_fixture_execution_outputs(
                 &mut block,
-                vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                        input_index: 0,
-                        result: iroha_data_model::transaction::TransactionResult::new(result),
-                        completions: vec![],
-                    },
-                )],
+                vec![
+                    iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                        iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                            input_index: 0,
+                            result: iroha_data_model::transaction::TransactionResult::new(result),
+                            completions: vec![],
+                        },
+                    ),
+                ],
             );
             store_and_index_transaction_details_block(&app, block, entrypoint_hash);
             for (caller_label, key_pair, allowed) in [

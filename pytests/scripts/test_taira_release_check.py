@@ -29,7 +29,9 @@ from unittest.mock import MagicMock, patch
 # canonical Taira stake-asset selection during no-config signing, and one
 # inert PendingKura validation preview control, and six invocation-owned
 # authenticated finality prefix controls, and two faucet-policy doctor controls.
-# Four occupied-runtime and component-owned supervisor cleanup controls are mandatory.
+# Four occupied-runtime and component-owned supervisor cleanup controls and two
+# candidate funding-policy admission controls are mandatory, together with two
+# content-bound journal/original-seed controls for metadata timestamp collisions.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -38,8 +40,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -831,6 +833,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_public_producer_controls_replace_stale_names_and_remain_required(self):
         required = (
+            "taira_dataspace_deploy::tests::journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions",
+            "taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions",
+            "taira_public_reset::inputs::tests::validator_faucet_policy_requires_enabled_exact_signed_intent",
+            "taira_public_reset::inputs::tests::pinned_validator_configs_reject_faucet_policy_mismatch_before_dispatch",
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
             'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
@@ -899,7 +905,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1029, 1207)), ("linux", (1034, 1212))):
+        for platform, counts in (("darwin", (1033, 1211)), ("linux", (1038, 1216))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)

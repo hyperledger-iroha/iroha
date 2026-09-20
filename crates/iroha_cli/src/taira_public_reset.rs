@@ -3102,6 +3102,66 @@ fn validate_validator_operator_config(bytes: &[u8], expected_public_key: &str) -
     result
 }
 
+/// Bind the public startup policy to independently authorized intent without opening signer files.
+fn validate_validator_faucet_config(bytes: &[u8], expected: &FaucetPolicyV1) -> Result<()> {
+    use iroha_config::{
+        base::{read::ConfigReader, toml::TomlSource},
+        parameters::user,
+    };
+
+    validate_faucet_policy(expected)
+        .map_err(|_| eyre!("signed faucet policy failed canonical admission"))?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator startup config is not UTF-8"))?;
+    let table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator startup config is not TOML"))?;
+    let path = PathBuf::from("validator-faucet");
+    let mut source = TomlSource::new_sensitive(
+        path.clone(),
+        table,
+        crate::soracloud::zeroize_taira_toml_table,
+    );
+    let root = source.table_mut();
+    if root.contains_key("extends") {
+        return Err(eyre!(
+            "validator startup config cannot inherit unbound TOML"
+        ));
+    }
+    let faucet = root
+        .get("torii")
+        .and_then(toml::Value::as_table)
+        .and_then(|torii| torii.get("faucet"))
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| eyre!("validator config requires explicit faucet policy"))?
+        .clone();
+    // Read the native user fields, including Quantity and defaults, but do not
+    // parse the runtime signer or infer policy from its key or the public API.
+    let parsed = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::new_sensitive(
+            path,
+            faucet,
+            crate::soracloud::zeroize_taira_toml_table,
+        ))
+        .read_and_complete::<user::ToriiFaucet>()
+        .map_err(|_| eyre!("validator faucet policy failed typed admission"))?;
+    if !parsed.enabled {
+        return Err(eyre!("validator faucet must be enabled for public reset"));
+    }
+    if parsed.authority != expected.authority {
+        return Err(eyre!(
+            "validator faucet authority differs from signed intent"
+        ));
+    }
+    if parsed.asset_definition_id != expected.asset_definition_id {
+        return Err(eyre!("validator faucet asset differs from signed intent"));
+    }
+    if parsed.amount != expected.amount {
+        return Err(eyre!("validator faucet amount differs from signed intent"));
+    }
+    Ok(())
+}
+
 fn validate_pinned_validator_genesis_configs(
     inventory: &InventoryV1,
     pinned: &[PinnedArtifact],
@@ -3127,6 +3187,7 @@ fn validate_pinned_validator_genesis_configs(
             &inventory.next_genesis_hash,
         )?;
         validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
+        validate_validator_faucet_config(&bytes, &inventory.faucet_policy)?;
     }
     Ok(())
 }

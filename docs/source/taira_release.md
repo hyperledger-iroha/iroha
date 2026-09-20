@@ -40,8 +40,10 @@ invalidates Cargo fingerprints and can rebuild dependencies once in the
 existing warm lane; keeping the same selection reuses that cache. Switching
 back invalidates it again. Linker timing alone does not establish end-to-end
 build or release qualification time.
-`llvm` is rejected on macOS, and authenticated `prepare` does not accept
-`--native-linker`; its native and release environments remain unchanged.
+`llvm` is rejected on macOS. Authenticated `prepare` accepts the same
+`--native-linker` selection and binds the resolved compiler/linker paths, bytes
+and native environment into its request. Resume revalidates those identities.
+The native selection is independent of the explicitly pinned Zig shipping tools.
 
 Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
@@ -300,6 +302,16 @@ Validate the local orchestration without Cargo or network:
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
+## Transferring a prepared release
+
+Use [the maintained transfer command](taira_release_transfer.md) to import a
+completed preparation's four binaries and exact signed source into the approved
+MacStadium guest. It validates the preparation and checks both physical backing
+and guest capacity before payload writes. Completed transfers are revalidated on
+retry; an SSH or storage failure does not require rebuilding unchanged artifacts.
+The command publishes verified binary/source receipts and leaves activation to
+the native deployment workflow below.
+
 ## Preparing validator configuration for a public reset
 
 Generate the fresh four-validator Taira bundle with the qualified native Kagami
@@ -331,6 +343,11 @@ registry cache overlay is rejected. Native signing and startup bind its semantic
 policy digest to signed genesis. Retain and revalidate the generated public
 manifest receipt for exact byte custody; the reset inventory does not declare a
 separate manifest artifact.
+
+Assembly, authorization and forward preflight require every candidate faucet to
+be enabled, with authority, canonical asset and quantity exactly matching the
+independently signed intent. This policy check reads the pinned configuration
+without opening faucet signer files.
 
 Derive the complete public identity bundle using the maintained CLI:
 

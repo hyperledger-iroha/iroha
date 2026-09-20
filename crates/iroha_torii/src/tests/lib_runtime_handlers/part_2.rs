@@ -948,7 +948,10 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
         "derive public peer inventory handler fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
@@ -1198,7 +1201,10 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
         "derive target-domain routing authority fixture key",
     );
     let authority = AccountId::new(authority_key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     let query = authorize_query_for_test(
@@ -1227,7 +1233,10 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaqu
         "derive opaque asset-definition routing authority fixture key",
     );
     let authority = AccountId::new(authority_key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     let domain_id =
@@ -1261,7 +1270,10 @@ async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
         "derive target-alias routing authority fixture key",
     );
     let authority = AccountId::new(authority_key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     let alias = iroha_data_model::account::AccountAlias::domainless(
@@ -1484,11 +1496,10 @@ async fn signed_query_authorization_allows_exact_self_target_without_broad_read_
     let authority = checked_torii_test_account_id(0xf1, "derive self-read authority fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::signed-query-self-read"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let request = request_for_test(
         &authority,
@@ -1513,13 +1524,15 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
         checked_torii_test_account_id(0xf3, "derive foreign-read authority fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::foreign-read-target"));
-    let mut app =
-        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
             &target,
             &authority,
             uaid,
             restricted_dataspace,
-        ));
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let request = request_for_test(
         &authority,
@@ -1555,7 +1568,10 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
 async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_access() {
     let authority = checked_torii_test_account_id(0xfa, "derive alias query authority fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let alias = iroha_data_model::account::AccountAlias::domainless(
         "recipient".parse().expect("alias label"),
@@ -1599,7 +1615,10 @@ async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_acces
 async fn signed_query_authorization_gates_global_history_and_replicated_inventories() {
     let authority = checked_torii_test_account_id(0xf4, "derive global-read authority fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let history = request_for_test(
         &authority,
@@ -1632,7 +1651,10 @@ async fn signed_query_authorization_gates_global_history_and_replicated_inventor
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     let alias = iroha_data_model::account::AccountAlias::domainless(
@@ -1697,40 +1719,58 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
     let restricted_dataspace = DataSpaceId::new(10);
     let mut app = match case {
         AccountRouteMatrixCase::AccountSigned => {
-            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-                &authority,
-                UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes")),
-                restricted_dataspace,
-            ))
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                world_with_account_bound_to_dataspace(
+                    &authority,
+                    UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes")),
+                    restricted_dataspace,
+                ),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
         AccountRouteMatrixCase::AccountUnsigned => {
-            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-                &authority,
-                UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes")),
-                restricted_dataspace,
-            ))
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                world_with_account_bound_to_dataspace(
+                    &authority,
+                    UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes")),
+                    restricted_dataspace,
+                ),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
         AccountRouteMatrixCase::AccountAssets => {
-            mk_app_state_for_tests_with_world(world_with_account(&authority))
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                world_with_account(&authority),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
         AccountRouteMatrixCase::PermissionsSigned => {
-            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-                &authority,
-                UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes")),
-                restricted_dataspace,
-            ))
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                world_with_account_bound_to_dataspace(
+                    &authority,
+                    UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes")),
+                    restricted_dataspace,
+                ),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
         AccountRouteMatrixCase::PermissionsUnsigned => {
-            mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-                &authority,
-                UniversalAccountId::from_hash(Hash::new(
-                    b"torii::permissions-public-account-routes",
-                )),
-                restricted_dataspace,
-            ))
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                world_with_account_bound_to_dataspace(
+                    &authority,
+                    UniversalAccountId::from_hash(Hash::new(
+                        b"torii::permissions-public-account-routes",
+                    )),
+                    restricted_dataspace,
+                ),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
         AccountRouteMatrixCase::TargetUnknown | AccountRouteMatrixCase::NexusTargetUnknown => {
-            mk_app_state_for_tests()
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                iroha_core::state::World::default(),
+                crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+            )
         }
     };
     let (_restricted_lane, configured_restricted_dataspace) =
@@ -1893,13 +1933,15 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
     let target = checked_torii_test_account_id(0xd8, "derive app-read target fixture key");
     let caller = checked_torii_test_account_id(0xd9, "derive app-read caller fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
-    let mut app =
-        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
             &target,
             &caller,
             UniversalAccountId::from_hash(Hash::new(b"torii::app-read-target")),
             restricted_dataspace,
-        ));
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
 
     assert!(!super::torii_should_use_target_account_routes(
@@ -1949,7 +1991,10 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
 #[tokio::test]
 async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
     let caller = checked_torii_test_account_id(0xda, "derive global reader fixture key");
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
 
     let public_only = super::torii_visible_account_read_routes(app.as_ref(), Some(&caller));
@@ -1973,7 +2018,10 @@ async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
 #[test]
 fn long_lived_dataspace_context_rechecks_permission_revocation() {
     let caller = checked_torii_test_account_id(0xdb, "derive revocable stream reader fixture key");
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&caller),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
     let permission: Permission = CanReadRestrictedDataspace {
         dataspace: restricted_dataspace,
@@ -2036,11 +2084,10 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         checked_torii_test_account_id(0xee, "derive missing account asset fanout fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::assets-known-scope"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
@@ -2113,7 +2160,10 @@ async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn fanout_routed_by_uses_attempted_routes_even_when_only_local_payloads_survive() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     assert_eq!(super::routed_by_for_routes(&app, &[local_route]), "local");
@@ -2225,7 +2275,10 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
     let key_pair =
         checked_torii_test_ed25519_keypair(0xf4, "derive find triggers authority fixture key");
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
@@ -2259,7 +2312,10 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         "derive find active trigger ids authority fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
@@ -2293,7 +2349,10 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
 }
 #[tokio::test]
 async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let response = super::handler_accounts_list(
         State(app),
@@ -2324,7 +2383,10 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         0xf6,
         "derive visible account assets fanout authority fixture key",
     );
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
@@ -2361,7 +2423,10 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
 }
 #[tokio::test]
 async fn handler_transactions_query_fan_outs_across_dataspaces() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
@@ -2630,7 +2695,10 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
         0xf8,
         "derive global account get fanout authority fixture key",
     );
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}")
         .parse()
@@ -2889,7 +2957,10 @@ async fn anonymous_space_directory_manifest_selector_hides_restricted_route() {
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
@@ -2942,11 +3013,10 @@ async fn anonymous_loopback_cannot_read_restricted_or_missing_explorer_accounts(
         checked_torii_test_account_id(0xfc, "derive missing explorer account detail fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::explorer-account-detail-routes"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);

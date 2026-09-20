@@ -73,25 +73,53 @@ fn app_with_indexed_sccp_message_for_test(
     let mut block = builder.build_with_signature(0, keypair.private_key());
     crate::test_utils::attach_fixture_execution_outputs(
         &mut block,
-        vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                input_index: 0,
-                result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
-                completions: vec![],
-            },
-        )],
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
     );
     let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
     assert_eq!(messages.len(), 1);
     let message = &messages[0];
     let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
         .expect("SCCP commitment root");
+    // Changing a proposal commitment invalidates its attached execution outputs.
+    // Bind the same declared successful fixture rows to the final SCCP proposal
+    // before deriving the executed-wire commitment and its genuine Commit QC.
+    let outputs = block.execution_outputs().to_vec();
     block.set_sccp_commitment_root(Some(commitment_root));
-    block.replace_signatures(
-        [checked_torii_test_block_signature(
-            0, &keypair, &block.header(), "sign SCCP fixture with final proposal commitment",
-        )].into_iter().collect(),
-    ).expect("signature binds the complete SCCP fixture proposal");
+    assert!(
+        !block.has_results(),
+        "proposal mutation must discard stale outputs"
+    );
+    let proposal = block.canonical_resultless_proposal();
+    crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(block.execution_outputs().len(), 1);
+    block
+        .validate_output_merkle_cache()
+        .expect("complete fixture output tree");
+    assert_eq!(
+        iroha_core::bridge::collect_sccp_messages_from_signed_block(&block),
+        messages
+    );
+    block
+        .replace_signatures(
+            [checked_torii_test_block_signature(
+                0,
+                &keypair,
+                &block.header(),
+                "sign SCCP fixture with final proposal commitment",
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("signature binds the complete SCCP fixture proposal");
     let block_hash = block.hash();
     let message_id = message.commitment.message_id;
     let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)

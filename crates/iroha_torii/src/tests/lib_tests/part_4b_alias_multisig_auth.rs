@@ -660,7 +660,10 @@ async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspac
         "derive alias resolve-index fanout authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
@@ -713,7 +716,10 @@ async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bind
         "derive alias resolve-index route-conflict authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
@@ -786,11 +792,10 @@ async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-miss-offline"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(12),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(12)),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, _foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
                 &mut app,
@@ -875,13 +880,15 @@ async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_c
         "derive alias resolve-index hidden-route target fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-denied-fanout"));
-    let mut app =
-        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
             &target,
             &caller,
             uaid,
             DataSpaceId::new(10),
-        ));
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
     let request = routing::AliasResolveIndexRequestDto { index: 0 };

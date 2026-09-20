@@ -2568,18 +2568,24 @@ fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
         "valid high-bit macOS device identities must not be rejected"
     );
 }
+fn broker_socket_test_directory() -> io::Result<tempfile::TempDir> {
+    // A shared checkout or operator-selected TMPDIR may not support Unix socket
+    // permissions (for example, a macOS directory mounted into a Linux guest).
+    // Both real and fake brokers need the native socket filesystem. Canonical
+    // /tmp also keeps absolute paths below macOS's 104-byte sun_path limit.
+    let root = fs::canonicalize("/tmp")?;
+    tempfile::Builder::new()
+        .prefix(".iroha-rpb-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)
+}
 fn bind_fake_broker() -> (
     tempfile::TempDir,
     std::path::PathBuf,
     BrokerTestEndpoint,
     BrokerTestListener,
 ) {
-    // Keep the pathname supplied to `bind(2)` short even when the caller has a
-    // deeply nested TMPDIR; macOS limits `sockaddr_un.sun_path` to 104 bytes.
-    let directory = tempfile::Builder::new()
-        .prefix(".iroha-rpb-")
-        .tempdir_in(".")
-        .expect("create short fake broker directory");
+    let directory = broker_socket_test_directory().expect("create short fake broker directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden fake broker directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
