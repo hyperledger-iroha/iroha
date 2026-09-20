@@ -59,6 +59,8 @@ fn admit_journals_for_test(
 ) -> Result<(), std::convert::Infallible> {
     let state = inputs.state;
     assert_eq!(inputs.prefix.sources().proposal(), state._curr_block.hash());
+    assert_eq!(inputs.valid.as_ref().hash(), state._curr_block.hash());
+    assert_eq!(inputs.context.height, state._curr_block.height().get());
     inputs
         .prefix
         .inventory()
@@ -273,12 +275,45 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         ProviderIngestFinalizedArchiveV1::try_open(directory_path.join("archive"), bounds).unwrap(),
     );
     let original_archive = reserve_provider_for_test(&archive, &state, &proposal, &context);
-    let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
+    let mut prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
+    // A retained allocation can exceed its serialized contents. Admission must
+    // inspect its actual capacity without reconstructing or shrinking the owner.
+    assert!(!prepared._publication_events.is_empty());
+    prepared._publication_events.reserve(128);
+    let events_pointer = prepared._publication_events.as_ptr();
+    let events_capacity = prepared._publication_events.capacity();
+    assert!(events_capacity > prepared._publication_events.len());
+    let context_owner = Arc::clone(&prepared.context);
+    let outputs_pointer = prepared.block().execution_outputs().as_ptr();
+    assert!(!prepared.block().execution_outputs().is_empty());
+    let manifest_root = prepared.native_amx_manifest.root();
+    let manifest_entries = prepared.native_amx_manifest.entries().as_ptr();
+    let da_pins_pointer = prepared._world_effects.admission_pins().as_ptr();
+    let da_pins_capacity = prepared._world_effects.admission_pins().capacity();
     let mut called = false;
     let original_prefix = prepared.execution_prefix_commitment();
     let original_state_pointer = std::ptr::from_ref(prepared.state.as_ref());
+    let inspect_original = |original: &CarrierJournalInputs<'_, '_>| {
+        assert_eq!(std::ptr::from_ref(original.state), original_state_pointer);
+        assert_eq!(
+            original.valid.as_ref().execution_outputs().as_ptr(),
+            outputs_pointer
+        );
+        assert!(Arc::ptr_eq(original.context, &context_owner));
+        assert_eq!(*original.execution_prefix, original_prefix);
+        assert_eq!(original.native_amx_manifest.root(), manifest_root);
+        assert_eq!(
+            original.native_amx_manifest.entries().as_ptr(),
+            manifest_entries
+        );
+        assert_eq!(original.da_pins.as_ptr(), da_pins_pointer);
+        assert_eq!(original.da_pins.capacity(), da_pins_capacity);
+        assert_eq!(original.publication_events.as_ptr(), events_pointer);
+        assert_eq!(original.publication_events.capacity(), events_capacity);
+    };
     let result = prepared.prepare_journals(Some(original_archive), None, |original| {
+        inspect_original(&original);
         assert!(original.provider.is_some());
         assert!(original.reputation.is_none());
         assert!(!called);
@@ -333,9 +368,19 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. }));
     // Retry synchronously on the original borrowed owner; no second execution.
     let journals = carrier
-        .prepare_journals(provider, reputation, admit_journals_for_test)
+        .prepare_journals(provider, reputation, |original| {
+            inspect_original(&original);
+            admit_journals_for_test(original)
+        })
         .unwrap();
     assert_eq!(journals.execution_prefix_commitment(), original_prefix);
+    assert_eq!(
+        journals.valid.as_ref().execution_outputs().as_ptr(),
+        outputs_pointer
+    );
+    assert!(Arc::ptr_eq(&journals.context, &context_owner));
+    assert_eq!(journals.publication_events.as_ptr(), events_pointer);
+    assert_eq!(journals.publication_events.capacity(), events_capacity);
     drop(journals);
     assert!(called);
     assert_eq!(
@@ -754,7 +799,7 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
             .count(),
         0
     );
-    let carrier = *carrier;
+    let original_box = std::ptr::from_ref(carrier.as_ref());
     drop(state);
     assert!(original_state.upgrade().is_none());
     let carrier = std::thread::spawn(move || {
@@ -768,6 +813,7 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
     })
     .join()
     .unwrap();
+    assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
     assert!(!released.load(Ordering::SeqCst));
     drop(carrier);
     assert!(released.load(Ordering::SeqCst));
@@ -1025,7 +1071,7 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
             .poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(())
     ));
-    let carrier = *carrier;
+    let original_box = std::ptr::from_ref(carrier.as_ref());
     let provider_bytes = carrier
         .provider
         .as_ref()
@@ -1050,6 +1096,7 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
         .with_index_reader_for_test(|| carrier.try_complete())
         .err()
         .expect("another real reader still refuses the same owner");
+    assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
     assert_eq!(
         carrier
             .provider
@@ -1139,10 +1186,12 @@ fn archive_original_capture_identity_refusal_retains_static_recovery_owner() {
         ));
         assert!(state.block_hashes.inner.try_write().is_some());
         drop(state.world.block());
-        let (carrier, repeated) = (*carrier)
+        let original_box = std::ptr::from_ref(carrier.as_ref());
+        let (carrier, repeated) = carrier
             .try_complete()
             .err()
             .expect("failed capture is recovery-required");
+        assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
         let CarrierArchivePreparationError::Reputation(repeated) = repeated else {
             panic!("same exact refusal");
         };

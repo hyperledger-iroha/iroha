@@ -20,6 +20,7 @@ struct Validator {
     commitment: wire::ExecutionCommitment,
     ready: bool,
     calls: Arc<AtomicUsize>,
+    resume_calls: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
 }
 impl CarrierValidator for Validator {
@@ -42,6 +43,11 @@ impl CarrierValidator for Validator {
         &mut self,
         owner: Self::Owner,
     ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
+        self.resume_calls.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            !self.ready,
+            "a ready original owner must not resume capture"
+        );
         Ok(owner)
     }
 }
@@ -55,6 +61,7 @@ fn validator(
             commitment: ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment(),
             ready: true,
             calls: Arc::clone(&calls),
+            resume_calls: Arc::new(AtomicUsize::new(0)),
             drops: Arc::clone(&drops),
         },
         calls,
@@ -71,6 +78,7 @@ fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_
     let durable = store.store(manifest, body).unwrap();
     let (mut producer, calls, drops) = validator(&durable);
     producer.ready = false;
+    let resumes = Arc::clone(&producer.resume_calls);
     let mut service = store.retained_validation_service(producer).unwrap();
     let mut original = None;
     for _ in 0..2 {
@@ -104,8 +112,54 @@ fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_
             Err(CarrierCustodyError::Unconfirmed)
         ));
     }
+    assert_eq!(resumes.load(Ordering::SeqCst), 2);
     drop(service);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest(&context, &keys, None);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let (producer, calls, drops) = validator(&durable);
+    let resumes = Arc::clone(&producer.resume_calls);
+    let mut service = store.retained_validation_service(producer).unwrap();
+    fail_next_marker_file_sync();
+    assert!(matches!(
+        store.execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut service
+        ),
+        Err(V2BodyStoreError::Io { .. })
+    ));
+    let allocation = service
+        .owner_for_test(durable.subject())
+        .unwrap()
+        .allocation();
+    for _ in 0..2 {
+        store
+            .execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                &mut service,
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation(),
+            allocation
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resumes.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(service.marker_counts_for_test(), (0, 1));
 }
 
 #[test]
@@ -165,10 +219,15 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
             .allocation(),
         allocation
     );
-    let result = service.select(&receipt).unwrap().try_consume(|owner| {
-        assert_eq!(owner.allocation(), allocation);
-        Err::<(), _>((owner, "local publication refusal"))
-    });
+    let result = service
+        .select(&receipt)
+        .unwrap()
+        .try_consume(|producer, owner| {
+            assert!(Arc::ptr_eq(&producer.calls, &calls));
+            assert!(Arc::ptr_eq(&producer.drops, &drops));
+            assert_eq!(owner.allocation(), allocation);
+            Err::<(), _>((owner, "local publication refusal"))
+        });
     assert_eq!(result, Err("local publication refusal"));
     assert_eq!(
         service
@@ -180,7 +239,9 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
     service
         .select(&receipt)
         .unwrap()
-        .try_consume(|owner| {
+        .try_consume(|producer, owner| {
+            assert!(Arc::ptr_eq(&producer.calls, &calls));
+            assert!(Arc::ptr_eq(&producer.drops, &drops));
             assert_eq!(owner.allocation(), allocation);
             drop(owner);
             Ok::<_, (TrackedOwner, ())>(())
@@ -308,7 +369,7 @@ fn retained_consumption_tombstone_rejects_delayed_earlier_round_without_executio
     service
         .select(&receipt)
         .unwrap()
-        .try_consume(|owner| {
+        .try_consume(|_, owner| {
             drop(owner);
             Ok::<_, (TrackedOwner, ())>(())
         })
@@ -456,7 +517,7 @@ fn retained_descriptor_capacity_refuses_before_execution_or_marker_write() {
     service
         .select(&confirmed)
         .unwrap()
-        .try_consume(|owner| {
+        .try_consume(|_, owner| {
             drop(owner);
             Ok::<_, (TrackedOwner, ())>(())
         })

@@ -72,6 +72,7 @@ HISTORICAL_GEOMETRY_BINDINGS = (
     (EFFECTS, "fn", "historical", (
         "ObservedHistoricalRecoveryEvidence", "Self::Observe => observation.into_observed()",
         "Self::MaintainAndAttest { .. } => observation.attest()",
+        "#[cfg(test)]\n            Self::Observe => observation.into_observed()",
     )),
     (RECOVERY, "fn", EXACT_READ, (
         "read_regular_sidecar_snapshot", "HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES",
@@ -219,7 +220,7 @@ def validate_historical_geometry_contract(
         "checked_add(metadata.len()).filter(|bytes| *bytes <= aggregate_byte_limit).ok_or_else(",
     )
     require("historical",
-        "match self { Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
+        "match self { #[cfg(test)] Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
     )
     count(SCANNER, f"self.{OBSERVER}(", 2)
     count(SCANNER, "effects.historical(", 2)

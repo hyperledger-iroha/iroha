@@ -158,12 +158,17 @@ now preserves incomplete archive capture, validated, decided and checkpointed
 journals inside the existing candidate slot. Capture refusal returns that same
 owner before exposing its typed local dependency; no marker authority exists
 until original capture completes. `SelectedValidationCarrier::try_consume` can
-restore the current publication phase without reconstructing a ValidBlock.
+restore the current publication phase without reconstructing a ValidBlock, and
+lends the original producer for call-local State/Queue access. Journal admission
+exhaustively borrows the complete candidate, including original deferred-record
+and event capacities; this input surface does not supply allocation funding.
 Identity and ready commitment derive from original journals; descriptor
 reservation precedes execution. The captured State/header now authenticates the
-physical target before derived persistence. Build104's completed phase controls
-remain historical; the added capture and target checks are being qualified on
-the combined source. Next carry this owner through the worker's original Apply
+physical target before derived persistence. Incomplete capture keeps its existing
+boxed allocation through local refusal; ready phases skip consuming resume.
+Build107 passed the seven-package build, 192 runtime regressions and 67 focused
+source-contract controls on unchanged inputs without a stack override. These
+checks do not activate the live path. Next carry this owner through the worker's original Apply
 service and State/Queue pair, including pre-launch recovery ownership.
 Physical writers must be released before retaining a refused phase.
 Cold unfinished recovery must create that executed owner once before restoring

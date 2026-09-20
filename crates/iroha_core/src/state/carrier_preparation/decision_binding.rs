@@ -104,7 +104,7 @@ pub(crate) struct DecisionBoundCarrierJournals<
 #[must_use = "retain the current carrier phase until authorized publication or drop"]
 pub(crate) enum RetainedCarrier<Admission, BindingAdmission> {
     /// Original detached execution awaiting its original archive capture owners.
-    Capturing(super::StagedCarrierCapture<Admission>),
+    Capturing(Box<super::StagedCarrierCapture<Admission>>),
     /// Actual detached execution, before an exact verified decision is joined.
     Validated(PreparedCarrierJournals<Admission>),
     /// The same journals after consuming their ValidBlock under verified finality.

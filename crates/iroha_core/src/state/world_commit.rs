@@ -28,6 +28,13 @@ pub(in crate::state) struct PreparedWorldEffects {
 }
 
 impl PreparedWorldEffects {
+    /// Borrow every deferred record and its original vector capacity for admission.
+    /// This view allocates nothing and cannot publish or change the prepared tail.
+    pub(in crate::state) fn admission_pins(&self) -> &Vec<DaPinIntentWithLocation> {
+        let Self { da_pins } = self;
+        da_pins
+    }
+
     /// Consume the exact deferred cache records after their World is published.
     /// The enclosing State publisher retains all authorization and writer gates.
     pub(in crate::state) fn publish(self, state: &State) {

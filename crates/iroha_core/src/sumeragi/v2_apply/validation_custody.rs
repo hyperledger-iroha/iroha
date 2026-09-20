@@ -256,10 +256,41 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         if !owner.matches_candidate(context, body) {
             return Err(CarrierCustodyError::Identity);
         }
+        let commitment = match owner.ready_commitment() {
+            Some(commitment) => commitment,
+            None => {
+                if let Some(refusal) = self.resume_candidate(index, context, body)? {
+                    return Ok(CarrierMarkerPreparation::Deferred(refusal));
+                }
+                self.candidates[index]
+                    .owner
+                    .as_ref()
+                    .ok_or(CarrierCustodyError::MissingOwner)?
+                    .ready_commitment()
+                    .ok_or(CarrierCustodyError::IncompleteCapture)?
+            }
+        };
+        if marker.is_none() {
+            self.markers.push(Marker {
+                durable: durable.clone(),
+                confirmed: None,
+            });
+        }
+        Ok(CarrierMarkerPreparation::Ready(commitment))
+    }
+
+    // Only unfinished capture enters this consuming frame. Ready marker/cache
+    // paths borrow their original owner without moving it through a resume Result.
+    fn resume_candidate(
+        &mut self,
+        index: usize,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<Option<LocalValidationRefusal>, CarrierCustodyError> {
         let owner = self.candidates[index]
             .owner
             .take()
-            .expect("the original candidate was checked before capture completion");
+            .ok_or(CarrierCustodyError::MissingOwner)?;
         // Resume consumes the same phase; ordinary refusal restores it before
         // any outward error or wake can escape. Panic remains fail-stop, with an
         // occupied subject tombstone that cannot authorize fresh execution.
@@ -280,19 +311,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         if !owner.matches_candidate(context, body) {
             return Err(CarrierCustodyError::Identity);
         }
-        if let Some(refusal) = refusal {
-            return Ok(CarrierMarkerPreparation::Deferred(refusal));
-        }
-        let commitment = owner
-            .ready_commitment()
-            .ok_or(CarrierCustodyError::IncompleteCapture)?;
-        if marker.is_none() {
-            self.markers.push(Marker {
-                durable: durable.clone(),
-                confirmed: None,
-            });
-        }
-        Ok(CarrierMarkerPreparation::Ready(commitment))
+        Ok(refusal)
     }
 
     /// Record only the receipt returned after the original marker's fsync.
@@ -364,17 +383,20 @@ impl<P: CarrierValidator> SelectedValidationCarrier<'_, P> {
     /// A local refusal must return the same complete owner in its current phase,
     /// including a decision or checkpoint attached during this callback. Drop
     /// restores that phase into its original slot without rebuilding execution.
+    /// The callback borrows this service's original producer only for this call;
+    /// publication dependencies must come from that producer. Guards borrowing
+    /// it must finish inside the callback and cannot escape in its result.
     /// Panic is fail-stop;
     /// the occupied row remains a tombstone and cannot trigger reexecution.
     pub(crate) fn try_consume<R, E>(
         mut self,
-        publish: impl FnOnce(P::Owner) -> Result<R, (P::Owner, E)>,
+        publish: impl FnOnce(&P, P::Owner) -> Result<R, (P::Owner, E)>,
     ) -> Result<R, E> {
         let owner = self
             .owner
             .take()
             .expect("live selection retains its original owner");
-        match publish(owner) {
+        match publish(&self.service.validator, owner) {
             Ok(value) => {
                 // Keep the bounded subject tombstone until this height retires.
                 // An earlier unvalidated round can arrive after consumption;

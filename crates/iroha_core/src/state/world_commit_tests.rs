@@ -90,6 +90,12 @@ fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
             1,
             "cache content cannot veto an authoritative write"
         );
+        // Capacity admission receives the actual nonempty deferred allocation,
+        // before either World or cache publication, including its nested alias.
+        let retained = prepared.effects.admission_pins();
+        assert!(std::ptr::eq(retained, &prepared.effects.da_pins));
+        assert_eq!(retained.capacity(), prepared.effects.da_pins.capacity());
+        assert_eq!(retained[0].intent, pin);
         assert_eq!(
             state.da_pin_intents.read().len(),
             usize::from(ahead),

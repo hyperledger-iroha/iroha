@@ -117,30 +117,38 @@ impl<Admission> StagedCarrierCapture<Admission> {
             .matches_validation_candidate(context, proposal)
     }
 
-    /// Resume only archive insertion preparation on the exact detached execution.
-    /// Local refusal returns this complete original owner unchanged for release-driven retry.
+    /// Resume the exact boxed capture without replacing its allocation on refusal.
     pub(crate) fn try_complete(
-        mut self,
-    ) -> Result<PreparedCarrierJournals<Admission>, (Self, CarrierArchivePreparationError)> {
-        let result = (|| {
-            if let Some(error) = &self.capture_refusal {
-                return Err(error.clone());
-            }
-            if let Some(provider) = &mut self.provider {
-                provider
-                    .try_prepare()
-                    .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;
-            }
-            if let Some(reputation) = &mut self.reputation {
-                reputation
-                    .try_prepare()
-                    .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
+        mut self: Box<Self>,
+    ) -> Result<PreparedCarrierJournals<Admission>, (Box<Self>, CarrierArchivePreparationError)>
+    {
+        if let Err(error) = self.try_prepare_archives() {
             return Err((self, error));
         }
+        Ok((*self).into_journals())
+    }
+
+    // Initial capture and boxed retries prepare the same retained archive owners.
+    // This borrowed step never moves the large carrier or allocates another box.
+    fn try_prepare_archives(&mut self) -> Result<(), CarrierArchivePreparationError> {
+        if let Some(error) = &self.capture_refusal {
+            return Err(error.clone());
+        }
+        if let Some(provider) = &mut self.provider {
+            provider
+                .try_prepare()
+                .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;
+        }
+        if let Some(reputation) = &mut self.reputation {
+            reputation
+                .try_prepare()
+                .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;
+        }
+        Ok(())
+    }
+
+    // Both callers complete original insertion preparation before moving journals.
+    fn into_journals(mut self) -> PreparedCarrierJournals<Admission> {
         self.journals.provider_capture = self.provider.take().map(|owner| {
             owner
                 .into_prepared()
@@ -153,7 +161,7 @@ impl<Admission> StagedCarrierCapture<Admission> {
                 .ok()
                 .expect("successful exact reputation preparation")
         });
-        Ok(self.journals)
+        self.journals
     }
 }
 
@@ -163,10 +171,22 @@ impl<Admission> StagedCarrierCapture<Admission> {
 /// Archive predecessor owners were acquired earlier under their existing bounds;
 /// this callback does not retroactively fund those preexecution allocations.
 pub(crate) struct CarrierJournalInputs<'owner, 'state> {
+    /// Original result-bearing block, including its retained validation state.
+    pub(crate) valid: &'owner crate::block::ValidBlock,
     /// The original complete staged State journals and deterministic tail.
     pub(crate) state: &'owner StateBlock<'state>,
     /// Exact validated execution owners retained before that tail changed World.
     pub(crate) prefix: &'owner ValidatedExecutionPrefix,
+    /// Original shared context allocation, not a reconstructed context identity.
+    pub(crate) context: &'owner Arc<iroha_data_model::block::consensus_v2::HeightContext>,
+    /// Commitment retained with these exact execution owners.
+    pub(crate) execution_prefix: &'owner iroha_data_model::block::consensus_v2::ExecutionCommitment,
+    /// Original manifest and its retained entry/result/tree allocations.
+    pub(crate) native_amx_manifest: &'owner crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+    /// Original deferred DA cache records, exposing capacity as well as contents.
+    pub(crate) da_pins: &'owner Vec<DaPinIntentWithLocation>,
+    /// Original event allocation, including unused capacity and nested payloads.
+    pub(crate) publication_events: &'owner Vec<EventBox>,
     /// Exact preexecution provider owner; this is not a new archive observation.
     pub(crate) provider: Option<&'owner ProviderCandidateCapture>,
     /// Exact preexecution reputation predecessor and its retained capture cursors.
@@ -252,8 +272,9 @@ impl<'state> PreparedCarrier<'state> {
     ///
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
-    /// The required admission callback sees the complete original StateBlock and
-    /// retained execution prefix before projections and journal detachment.
+    /// The required admission callback sees every retained candidate owner before
+    /// projections and journal detachment. Its borrowed inputs preserve allocation
+    /// capacities; serialized lengths alone do not account for retained memory.
     /// Detachment moves original MV allocations without cloning; execution's
     /// earlier allocations require their own prior admission. The reservation stays
     /// alive until all journals and deferred effects have been released. Archive
@@ -269,12 +290,30 @@ impl<'state> PreparedCarrier<'state> {
         PreparedCarrierJournals<Admission>,
         CarrierJournalPreparationError<'state, Admission, E>,
     > {
+        // Exhaustively borrow the complete owner. Adding a retained field must
+        // also update admission; a partial State/prefix projection is insufficient.
+        let Self {
+            valid,
+            state,
+            source_prefix,
+            context,
+            execution_prefix,
+            native_amx_manifest,
+            _world_effects,
+            _publication_events,
+        } = &self;
         // Declare before the original owners: reverse local drop order must
         // release them before capacity on every early error, including archive
         // admission before the StateBlock has been decomposed.
         let admission = match admit_journals(CarrierJournalInputs {
-            state: &self.state,
-            prefix: &self.source_prefix,
+            valid,
+            state,
+            prefix: source_prefix,
+            context,
+            execution_prefix,
+            native_amx_manifest,
+            da_pins: _world_effects.admission_pins(),
+            publication_events: _publication_events,
             provider: provider_capture.as_ref(),
             reputation: reputation_capture.as_ref(),
         }) {
@@ -444,19 +483,19 @@ impl<'state> PreparedCarrier<'state> {
             },
             admission,
         };
-        StagedCarrierCapture {
+        let mut carrier = StagedCarrierCapture {
             provider: provider_capture,
             reputation: reputation_capture,
             capture_refusal,
             journals,
-        }
-        .try_complete()
-        .map_err(
-            |(carrier, error)| CarrierJournalPreparationError::ArchivePreparation {
+        };
+        if let Err(error) = carrier.try_prepare_archives() {
+            return Err(CarrierJournalPreparationError::ArchivePreparation {
                 carrier: Box::new(carrier),
                 error,
-            },
-        )
+            });
+        }
+        Ok(carrier.into_journals())
     }
 }
 

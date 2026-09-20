@@ -122,18 +122,21 @@ fn prevalidation_returns_owner_without_visibility_then_real_owner_publishes() {
 
 #[test]
 fn foreign_geometry_returns_original_owner_before_any_visibility_change() {
-    let (state, mut decision) = fixture_decision();
+    let (state, decision) = fixture_decision();
     let mut foreign_header = decision.block().header();
     foreign_header.set_view_change_index(foreign_header.view_change_index() + 1);
     let foreign = state
         .merge_preexecution_block(foreign_header)
         .prepare_carrier_geometry()
         .unwrap();
-    let original = std::mem::replace(&mut decision.journals.geometry, foreign);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let generation = state.state_view_generation();
     let checkpoint = decision.journals.checkpoint;
-    let (mut decision, error) = acquire(decision, &state)
+    let mut physical = acquire(decision, &state);
+    // Substitute after the early target check to exercise the independent
+    // terminal recheck under the original physical ownership.
+    let original = std::mem::replace(&mut physical.decision.journals.geometry, foreign);
+    let (mut decision, error) = physical
         .publish()
         .err()
         .expect("foreign geometry cannot authorize State");

@@ -49,7 +49,7 @@ def test_native_preparation_accepts_actual_owners(fixture):
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
-    ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(super::StagedCarrierCapture<Admission>)", "Capturing(Box<super::StagedCarrierCapture<Admission>>)"),
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(Box<super::StagedCarrierCapture<Admission>>)", "Capturing(super::StagedCarrierCapture<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Validated(PreparedCarrierJournals<Admission>)", "Validated(Box<PreparedCarrierJournals<Admission>>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)", "Decided(PreparedCarrierJournals<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "crate::kura::KuraWsvCheckpointReceipt", "()"),
@@ -72,10 +72,23 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "Err((owner, refusal))", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
     ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "if !owner.matches_candidate(context, body)", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", ".ok_or(CarrierCustodyError::IncompleteCapture)?", ".unwrap_or_default()"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "Some(commitment) => commitment", "Some(commitment) => { self.resume_candidate(index, context, body)?; commitment }"),
+    ("JOURNALS", "fn try_complete", "mut self: Box<Self>", "mut self: Self"),
+    ("JOURNALS", "fn try_complete", "return Err((self, error));", "return Err((Box::new(*self), error));"),
+    ("JOURNALS", "fn try_complete", "self.try_prepare_archives()", "Ok::<_, CarrierArchivePreparationError>(())"),
+    ("JOURNALS", "fn try_prepare_archives", "if let Some(error) = &self.capture_refusal", "if let Some(error) = &None"),
+    ("JOURNALS", "fn into_journals", "self.provider.take()", "other.provider.take()"),
+    ("JOURNALS", "fn into_journals", "self.reputation.take()", "other.reputation.take()"),
     ("VALIDATION_CUSTODY", "fn confirm(", "owner.ready_commitment() != Some(receipt.execution_commitment())", "false"),
     ("RETAINED_VALIDATION", "CarrierMarkerPreparation::Deferred(refusal)", "Err(V2BodyStoreError::LocalValidation(refusal))", "Ok(self.persist_rejected_outcome(&durable, 0, refusal.to_string())?)"),
     ("VALIDATION_CUSTODY", "fn try_consume", "self.owner = Some(owner);", "drop(owner);"),
     ("VALIDATION_CUSTODY", "fn try_consume", "Ok(value) => {", "Ok(value) => { self.service.candidates.remove(self.index);"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "FnOnce(&P, P::Owner)", "FnOnce(P::Owner)"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "FnOnce(&P, P::Owner)", "FnOnce(&mut P, P::Owner)"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "FnOnce(&P, P::Owner)", "FnOnce(&'static P, P::Owner)"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "match publish(&self.service.validator, owner)", "match publish(&other, owner)"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "match publish(&self.service.validator, owner)", "match publish(&self.service.validator, other)"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "match publish(&self.service.validator, owner)", "let _old = std::mem::replace(&mut self.service.validator, other); match publish(&self.service.validator, owner)"),
     ("VALIDATION_CUSTODY", "fn drop(&mut self)", "self.service.candidates[self.index].owner = Some(owner);", "self.service.candidates[0].owner = Some(owner);"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !service.matches_store(&self.instance_identity())", "if false"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "already_validated.is_some() || reused.is_some()", "false"),
@@ -86,6 +99,49 @@ def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, 
     errors = validate(fixture)
     assert any("executable relation" in e or "retained carrier" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("JOURNALS", "struct CarrierJournalInputs", "&'owner crate::block::ValidBlock", "&'owner SignedBlock"),
+    ("JOURNALS", "struct CarrierJournalInputs", "&'owner Arc<iroha_data_model::block::consensus_v2::HeightContext>", "&'owner iroha_data_model::block::consensus_v2::HeightContext"),
+    ("JOURNALS", "struct CarrierJournalInputs", "&'owner Vec<DaPinIntentWithLocation>", "&'owner [DaPinIntentWithLocation]"),
+    ("JOURNALS", "struct CarrierJournalInputs", "&'owner Vec<EventBox>", "&'owner [EventBox]"),
+    ("JOURNALS", "fn prepare_journals", "        } = &self;", "            ..\n        } = &self;"),
+    ("JOURNALS", "fn prepare_journals", "} = &self;", "} = &other;"),
+    ("JOURNALS", "let admission = match admit_journals", "            valid,", "            valid: other_valid,"),
+    ("JOURNALS", "let admission = match admit_journals", "            state,", "            state: other_state,"),
+    ("JOURNALS", "let admission = match admit_journals", "            context,", "            context: other_context,"),
+    ("JOURNALS", "let admission = match admit_journals", "            execution_prefix,", "            execution_prefix: other_commitment,"),
+    ("JOURNALS", "let admission = match admit_journals", "            native_amx_manifest,", "            native_amx_manifest: other_manifest,"),
+    ("JOURNALS", "let admission = match admit_journals", "da_pins: _world_effects.admission_pins()", "da_pins: &Vec::new()"),
+    ("JOURNALS", "let admission = match admit_journals", "publication_events: _publication_events", "publication_events: &Vec::new()"),
+    ("JOURNALS", "let admission = match admit_journals", "provider: provider_capture.as_ref()", "provider: None"),
+    ("JOURNALS", "let admission = match admit_journals", "reputation: reputation_capture.as_ref()", "reputation: None"),
+    ("WORLD_COMMIT", "fn admission_pins", "&Vec<DaPinIntentWithLocation>", "&[DaPinIntentWithLocation]"),
+    ("WORLD_COMMIT", "fn admission_pins", "let Self { da_pins } = self;", "let Self { da_pins, .. } = self;"),
+    ("WORLD_COMMIT", "fn admission_pins", "let Self { da_pins } = self;", "let Self { da_pins } = other;"),
+])
+def test_retained_carrier_admission_requires_complete_original_inputs(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in e or "retained carrier" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("projection", [
+    "PreparedTieredSnapshot::prepare(&self.state.world, &self.state.state_ref.tiered_snapshot_worker);",
+    "state.prepare_carrier_geometry();",
+    "owner.capture_original(state.as_ref());",
+    "world.try_detach_journals(|_| Ok(()));",
+])
+def test_retained_carrier_admission_precedes_original_projection(fixture, projection):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.JOURNALS,
+                              "fn prepare_journals", "let admission = match admit_journals",
+                              projection + "\n        let admission = match admit_journals")
+    errors = validate(fixture)
+    assert any("journal admission follows projection" in e for e in errors), errors
 
 
 @pytest.mark.parametrize("phase", ["Capturing", "Validated", "Decided", "Checkpointed"])
@@ -133,7 +189,7 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
                                   "let existing = self", "self.validator.prepare(context, body); let existing = self")
     elif mutation == "resume-before-install":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
-                                  "self.candidates.push(Candidate {", "self.validator.resume(owner); self.candidates.push(Candidate {")
+                                  "self.candidates.push(Candidate {", "self.resume_candidate(0, context, body); self.candidates.push(Candidate {")
     elif mutation == "marker-before-resume":
         path = root / c.VALIDATION_CUSTODY
         source = path.read_text()
@@ -141,7 +197,7 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
         end = source.index("        Ok(CarrierMarkerPreparation::Ready(commitment))", start)
         marker = source[start:end]
         source = source[:start] + source[end:]
-        at = source.index("        let refusal = match self.validator.resume(owner)")
+        at = source.index("        let commitment = match owner.ready_commitment()", source.index("fn prepare_marker"))
         path.write_text(source[:at] + marker + source[at:])
     else:
         path = root / c.RETAINED_VALIDATION
@@ -317,13 +373,13 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("PREFIX", "prepare", "Err(error) => Err((Box::new(valid.into()), error))", "Err(error) => retain_partial(error)"),
     ("PREFIX", "prepare_world_effects", "!self.prefix.retains_closed_state(state)", "false"),
     ("PREFIX", "prepare_world_effects", "state.verify_lane_consensus_contexts_publication()?;", "// state.verify_lane_consensus_contexts_publication()?;"),
-    ("JOURNALS", "prepare_journals", "prefix: &self.source_prefix,", "prefix: &other_prefix,"),
+    ("JOURNALS", "prepare_journals", "prefix: source_prefix,", "prefix: &other_prefix,"),
     ("JOURNALS", "prepare_journals", "carrier: self,", "carrier: other_carrier,"),
     ("JOURNALS", "prepare_journals", "provider: provider_capture,", "provider: None,"),
     ("JOURNALS", "prepare_journals", "reputation: reputation_capture,", "reputation: None,"),
     ("JOURNALS", "prepare_journals", "&state.state_ref.tiered_snapshot_worker,", "&other_state.tiered_snapshot_worker,"),
-    ("JOURNALS", "try_complete", "provider\n                    .try_prepare()", "other_provider\n                    .try_prepare()"),
-    ("JOURNALS", "try_complete", "reputation\n                    .try_prepare()", "other_reputation\n                    .try_prepare()"),
+    ("JOURNALS", "try_prepare_archives", "provider\n                .try_prepare()", "other_provider\n                .try_prepare()"),
+    ("JOURNALS", "try_prepare_archives", "reputation\n                .try_prepare()", "other_reputation\n                .try_prepare()"),
     ("PHYSICAL_CARRIER", "try_new", "&original.checkpoint,", "&other_checkpoint,"),
     ("PHYSICAL_CARRIER", "try_new", "&original.journals.execution_prefix,", "&other_prefix,"),
     ("PHYSICAL_CARRIER", "try_new", "original.checkpoint.finality_receipt(),", "other_checkpoint.finality_receipt(),"),

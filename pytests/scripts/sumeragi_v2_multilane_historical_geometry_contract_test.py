@@ -134,6 +134,21 @@ def test_historical_geometry_contract_rejects_changed_dispatch(fixture, old, new
     assert any("executable relation" in e for e in validate(fixture))
 
 
+@pytest.mark.parametrize("mutation", ["removed", "production", "on-maintenance"])
+def test_historical_geometry_contract_requires_test_only_observation(fixture, mutation):
+    root, support, checker, _ = fixture
+    path = root / checker.historical_geometry_contract.EFFECTS
+    anchor = "fn historical("
+    support.replace_once_after(path, anchor, "#[cfg(test)]",
+                               "#[cfg(not(test))]" if mutation == "production" else "")
+    if mutation == "on-maintenance":
+        support.replace_once_after(path, anchor, "Self::MaintainAndAttest",
+                                   "#[cfg(test)] Self::MaintainAndAttest")
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
 @pytest.mark.parametrize("observation", ["historical_observation", "confirmed_historical_observation"])
 def test_historical_geometry_contract_rejects_bypassed_dispatch(fixture, observation):
     root, support, checker, _ = fixture
