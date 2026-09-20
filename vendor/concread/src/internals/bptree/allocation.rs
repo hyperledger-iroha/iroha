@@ -12,10 +12,12 @@ use crate::internals::lincowcell::Untracked;
 ///
 /// A funded operation must reserve its complete demand before mutation. Taking
 /// a node charge only splits that owner; it must not acquire fresh pool credit.
-/// Nested key/value allocations require a separate admitted cloning policy.
-pub(crate) trait NodeFunding {
+/// Nested key/value allocations are supplied by the explicit `NodeCloning` policy.
+pub trait NodeFunding {
+    /// Original move-only charge retained until actual allocation reclamation.
     type Charge;
 
+    /// Split this exact layout from the operation's already prepaid owner.
     fn take_node_charge(&mut self, layout: Layout) -> Self::Charge;
 }
 
@@ -24,6 +26,35 @@ impl NodeFunding for Untracked {
 
     fn take_node_charge(&mut self, _layout: Layout) -> Untracked {
         Untracked
+    }
+}
+
+/// Constructs payload copies using the operation's original prepaid ownership.
+///
+/// This is deliberately separate from `Clone`: a node allocation charge covers
+/// only the concrete padded node, not allocations owned by its keys or values.
+/// A funded implementation must split the original admission before allocating
+/// each nested payload, and the returned payload must retain that ownership
+/// until its actual storage is reclaimed. It must not acquire fresh pool credit.
+/// An unwind must reclaim any partly constructed payload before returning its
+/// credits. Moving an existing payload between slots needs no new charge.
+///
+/// There is no default implementation for funded providers. Only the explicit
+/// untracked mode delegates to ordinary `Clone`.
+pub trait NodeCloning<K, V>: NodeFunding {
+    /// Copy a key, retaining prepaid ownership of all new nested allocations.
+    fn clone_key(&mut self, key: &K) -> K;
+    /// Copy a value, retaining prepaid ownership of all new nested allocations.
+    fn clone_value(&mut self, value: &V) -> V;
+}
+
+impl<K: Clone, V: Clone> NodeCloning<K, V> for Untracked {
+    fn clone_key(&mut self, key: &K) -> K {
+        key.clone()
+    }
+
+    fn clone_value(&mut self, value: &V) -> V {
+        value.clone()
     }
 }
 

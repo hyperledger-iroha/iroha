@@ -11,18 +11,32 @@ use crate::utils::MapCollector;
 
 use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
+use super::{MapMode, NodeCloning, Untracked};
+
+type MapCell<K, V, M> = LinCowCell<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>>;
+type MapRead<'a, K, V, M> =
+    LinCowCellReadTxn<'a, SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>>;
+type MapWrite<'a, K, V, M> =
+    LinCowCellWriteTxn<'a, SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>>;
+
 include!("impl.rs");
+
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMap<K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Initiate a read transaction for the tree, concurrent to any
+    /// other readers or writers.
+    pub fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V, M> {
+        let inner = self.inner.read();
+        BptreeMapReadTxn { inner }
+    }
+}
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
     BptreeMap<K, V>
 {
-    /// Initiate a read transaction for the tree, concurrent to any
-    /// other readers or writers.
-    pub fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V> {
-        let inner = self.inner.read();
-        BptreeMapReadTxn { inner }
-    }
-
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub async fn write<'x>(&'x self) -> BptreeMapWriteTxn<'x, K, V> {
@@ -31,8 +45,10 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapWriteTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
@@ -44,8 +60,9 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+impl<K, V, M> Serialize for BptreeMapReadTxn<'_, K, V, M>
 where
+    M: MapMode + NodeCloning<K, V>,
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
 {
@@ -64,8 +81,9 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMap<K, V>
+impl<K, V, M> Serialize for BptreeMap<K, V, M>
 where
+    M: MapMode + NodeCloning<K, V>,
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
 {

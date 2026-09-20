@@ -410,7 +410,7 @@ PREPARATION_OWNER_BINDINGS = (
         "pub(crate) valid:", "pub(crate) state:", "pub(crate) prefix:",
         "pub(crate) context:", "pub(crate) execution_prefix:", "pub(crate) native_amx_manifest:",
         "pub(crate) da_pins:", "pub(crate) publication_events:",
-        "pub(crate) provider:", "pub(crate) reputation:",
+        "pub(crate) provider:", "pub(crate) reputation:", "pub(crate) retained_effects_layout:",
     )),
     (WORLD_COMMIT, "struct", "PreparedWorldEffects", ("da_pins: Vec<DaPinIntentWithLocation>",)),
     (WORLD_COMMIT, "method", "PreparedWorldEffects::admission_pins", (
@@ -423,6 +423,8 @@ PREPARATION_OWNER_BINDINGS = (
         "prefix: source_prefix", "da_pins: _world_effects.admission_pins()",
         "publication_events: _publication_events",
         "provider: provider_capture.as_ref()", "reputation: reputation_capture.as_ref()",
+        "retained_effects_layout: std::alloc::Layout::new::<RetainedCarrierEffects>()",
+        "Box::new(RetainedCarrierEffects {",
         'CarrierJournalPreparationError::JournalAdmission {\n                    carrier: self,\n                    provider: provider_capture,\n                    reputation: reputation_capture,\n                    error,\n                }',
         "let mut provider_capture = provider_capture;", "let mut reputation_capture = reputation_capture;",
         'PreparedTieredSnapshot::prepare(\n            &state.world,\n            &state.state_ref.tiered_snapshot_worker,\n        )',
@@ -1134,6 +1136,7 @@ def validate_native_preparation_contract(
             pub(crate) publication_events: &'owner Vec<EventBox>,
             pub(crate) provider: Option<&'owner ProviderCandidateCapture>,
             pub(crate) reputation: Option<&'owner ReputationCandidateCapture>,
+            pub(crate) retained_effects_layout: std::alloc::Layout,
         }""",
         "PreparedWorldEffects": "{ da_pins: Vec<DaPinIntentWithLocation> }",
         "PreparedWorldEffects::admission_pins": "{ let Self { da_pins } = self; da_pins }",
@@ -1618,18 +1621,21 @@ def validate_native_preparation_contract(
         valid, state, prefix: source_prefix, context, execution_prefix, native_amx_manifest,
         da_pins: _world_effects.admission_pins(), publication_events: _publication_events,
         provider: provider_capture.as_ref(), reputation: reputation_capture.as_ref(),
+        retained_effects_layout: std::alloc::Layout::new::<RetainedCarrierEffects>(),
     }) {"""
     ordered("PreparedCarrier::prepare_journals", admission_borrow, admission_inputs,
             "let mut provider_capture = provider_capture;", "let Self {",
             "PreparedTieredSnapshot::prepare(", "state.prepare_carrier_geometry()?;",
             "owner.capture_original(state.as_ref())", "world.try_detach_journals(",
-            "let journals = PreparedCarrierJournals {", "StagedCarrierCapture {", "carrier.try_prepare_archives()",
+            "let journals = PreparedCarrierJournals {", "Box::new(RetainedCarrierEffects {",
+            "StagedCarrierCapture {", "carrier.try_prepare_archives()",
             "return Err(CarrierJournalPreparationError::ArchivePreparation {", "carrier: Box::new(carrier)",
             "Ok(carrier.into_journals())")
     journal_prepare = items.get("PreparedCarrier::prepare_journals", "")
     admission_start = journal_prepare.find(_code(admission_inputs))
     for projection in ("PreparedTieredSnapshot::prepare(", "state.prepare_carrier_geometry(",
-                       "owner.capture_original(", "world.try_detach_journals("):
+                       "owner.capture_original(", "world.try_detach_journals(",
+                       "Box::new(RetainedCarrierEffects {"):
         if _code(projection) in journal_prepare[:max(0, admission_start)]:
             errors.append(f"Native preparation journal admission follows projection: {projection}")
     ordered("StagedCarrierCapture::try_prepare_archives", "self.capture_refusal", "provider.try_prepare()",

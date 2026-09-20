@@ -17,6 +17,36 @@ use crate::internals::lincowcell::{
     LinCowCell, LinCowCellOwned, LinCowCellReadTxn, LinCowCellWriteTxn,
 };
 
+mod admission;
+mod mode;
+
+pub use crate::internals::bptree::allocation::{NodeCloning, NodeFunding};
+pub use crate::internals::bptree::tracking::{FixedTrackingBuffer, TrackingBuffer};
+pub use crate::internals::lincowcell::Untracked;
+pub use admission::{AllocationDemand, ClonePlanning, InsertAdmissionError, PlanningError};
+pub use mode::{MapMode, Prepaid};
+
+type MapCell<K, V, M> = LinCowCell<
+    SuperBlock<K, V, M>,
+    CursorRead<K, V, M>,
+    CursorWrite<K, V, M>,
+    <M as NodeFunding>::Charge,
+>;
+type MapRead<'a, K, V, M> = LinCowCellReadTxn<
+    'a,
+    SuperBlock<K, V, M>,
+    CursorRead<K, V, M>,
+    CursorWrite<K, V, M>,
+    <M as NodeFunding>::Charge,
+>;
+type MapWrite<'a, K, V, M> = LinCowCellWriteTxn<
+    'a,
+    SuperBlock<K, V, M>,
+    CursorRead<K, V, M>,
+    CursorWrite<K, V, M>,
+    <M as NodeFunding>::Charge,
+>;
+
 include!("impl.rs");
 
 /// The exact unpublished successor of a synchronous [`BptreeMap`].
@@ -28,16 +58,20 @@ include!("impl.rs");
 /// Reattachment accepts only that original map and unchanged reader generation.
 /// It does not recreate a cursor, copy entries or grant higher-level publication
 /// authority. Destruction aborts the unpublished work.
-pub struct BptreeMapOwned<K, V>
+pub struct BptreeMapOwned<K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellOwned<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner:
+        LinCowCellOwned<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapOwned<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapOwned<K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Borrow a value from the original unpublished successor.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
@@ -49,28 +83,23 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Borrow an immutable snapshot of the retained successor.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMap<K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> BptreeMapReadTxn<'_, K, V> {
+    pub fn read(&self) -> BptreeMapReadTxn<'_, K, V, M> {
         let inner = self.inner.read();
         BptreeMapReadTxn { inner }
-    }
-
-    /// Initiate a write transaction for the tree, exclusive to this
-    /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
-        let inner = self.inner.write();
-        BptreeMapWriteTxn { inner }
     }
 
     /// Reacquire the original writer without copying or allocating a successor.
@@ -80,8 +109,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// and never takes the reader mutex; `Busy` identifies writer contention.
     pub fn try_write_owned(
         &self,
-        owned: BptreeMapOwned<K, V>,
-    ) -> Result<BptreeMapWriteTxn<'_, K, V>, (BptreeMapOwned<K, V>, OwnedWriteError)> {
+        owned: BptreeMapOwned<K, V, M>,
+    ) -> Result<BptreeMapWriteTxn<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)> {
         self.inner
             .try_write_owned(owned.inner)
             .map(|inner| BptreeMapWriteTxn { inner })
@@ -94,8 +123,10 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapWriteTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
@@ -109,16 +140,28 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     ///
     /// This moves the original cursor and preallocated publication shell. It
     /// neither publishes changes nor clones keys or values.
-    pub fn detach(self) -> BptreeMapOwned<K, V> {
+    pub fn detach(self) -> BptreeMapOwned<K, V, M> {
         BptreeMapOwned {
             inner: self.inner.detach(),
         }
     }
 }
 
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMap<K, V>
+{
+    /// Initiate a write transaction for the tree, exclusive to this
+    /// writer, and concurrently to all existing reads.
+    pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
+        let inner = self.inner.write();
+        BptreeMapWriteTxn { inner }
+    }
+}
+
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+impl<K, V, M> Serialize for BptreeMapReadTxn<'_, K, V, M>
 where
+    M: MapMode + NodeCloning<K, V>,
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
 {
@@ -137,8 +180,9 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMap<K, V>
+impl<K, V, M> Serialize for BptreeMap<K, V, M>
 where
+    M: MapMode + NodeCloning<K, V>,
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
 {
@@ -172,6 +216,69 @@ mod tests {
     use crate::internals::bptree::node::{assert_released, L_CAPACITY};
     // use rand::prelude::*;
     use rand::seq::SliceRandom;
+
+    #[test]
+    fn public_map_owners_account_for_original_policy_and_charge_thread_safety() {
+        use std::{cell::Cell, marker::PhantomData, rc::Rc};
+
+        struct Policy<C, P>(PhantomData<(C, P)>);
+        impl<C, P> super::NodeFunding for Policy<C, P> {
+            type Charge = C;
+
+            fn take_node_charge(&mut self, _layout: std::alloc::Layout) -> C {
+                unreachable!("type-only capability assertion")
+            }
+        }
+        impl<C, P> super::NodeCloning<usize, usize> for Policy<C, P> {
+            fn clone_key(&mut self, key: &usize) -> usize {
+                *key
+            }
+
+            fn clone_value(&mut self, value: &usize) -> usize {
+                *value
+            }
+        }
+        type Mode<C, P> = super::Prepaid<Policy<C, P>>;
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<BptreeMap<usize, usize, Mode<usize, ()>>>();
+        send_sync::<super::BptreeMapReadTxn<'_, usize, usize, Mode<usize, ()>>>();
+        send_sync::<super::BptreeMapOwned<usize, usize, Mode<usize, ()>>>();
+        #[cfg(feature = "asynch")]
+        send_sync::<super::asynch::BptreeMap<usize, usize, Mode<usize, ()>>>();
+
+        trait AmbiguousIfSend<A> {
+            fn probe() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
+        trait AmbiguousIfSync<A> {
+            fn probe() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+        impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+        let _ = <BptreeMap<usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<_>>::probe;
+        let _ = <BptreeMap<usize, usize, Mode<usize, Rc<()>>> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, usize, Mode<usize, Cell<usize>>> as AmbiguousIfSync<_>>::probe;
+        let _ = <super::BptreeMapReadTxn<'_, usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<
+            _,
+        >>::probe;
+        let _ =
+            <super::BptreeMapReadTxn<'_, usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<
+                _,
+            >>::probe;
+        let _ =
+            <super::BptreeMapOwned<usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<_>>::probe;
+        let _ = <super::BptreeMapOwned<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<
+            _,
+        >>::probe;
+        #[cfg(feature = "asynch")]
+        {
+            let _ = <super::asynch::BptreeMap<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSend<_>>::probe;
+            let _ = <super::asynch::BptreeMapReadTxn<'_, usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSync<_>>::probe;
+        }
+    }
 
     #[test]
     fn test_bptree2_map_basic_write() {

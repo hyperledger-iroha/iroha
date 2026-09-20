@@ -8,22 +8,23 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
 
-pub(crate) struct LeafIter<'a, K, V>
+pub(crate) struct LeafIter<'a, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    stack: VecDeque<(*mut Node<K, V>, usize)>,
+    stack: VecDeque<(*mut Node<K, V, C>, usize)>,
     phantom_k: PhantomData<&'a K>,
     phantom_v: PhantomData<&'a V>,
+    phantom_charge: PhantomData<&'a C>,
 }
 
-impl<K, V> LeafIter<'_, K, V>
+impl<K, V, C> LeafIter<'_, K, V, C>
 where
     K: Clone + Ord + Debug,
     V: Clone,
 {
-    pub(crate) fn new<T>(root: *mut Node<K, V>, bound: Bound<&T>) -> Self
+    pub(crate) fn new<T>(root: *mut Node<K, V, C>, bound: Bound<&T>) -> Self
     where
         T: Ord + ?Sized,
         K: Borrow<T>,
@@ -33,13 +34,13 @@ where
 
         let mut work_node = root;
         loop {
-            if self_meta!(work_node).is_leaf() {
+            if self_meta_shared!(work_node).is_leaf() {
                 stack.push_back((work_node, 0));
                 break;
             } else {
                 match bound {
                     Bound::Excluded(q) | Bound::Included(q) => {
-                        let bref = branch_ref!(work_node, K, V, Untracked);
+                        let bref = branch_ref_shared!(work_node, K, V, C);
                         let idx = bref.locate_node(q);
                         // This is the index we are currently chasing from
                         // within this node.
@@ -48,7 +49,7 @@ where
                     }
                     Bound::Unbounded => {
                         stack.push_back((work_node, 0));
-                        work_node = branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(0);
+                        work_node = branch_ref_shared!(work_node, K, V, C).get_idx_unchecked(0);
                     }
                 }
             }
@@ -60,6 +61,7 @@ where
             stack,
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_charge: PhantomData,
         }
     }
 
@@ -69,13 +71,14 @@ where
             stack: VecDeque::new(),
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_charge: PhantomData,
         }
     }
 
     pub(crate) fn stack_position(&mut self) {
         debug_assert!(match self.stack.back() {
             Some((node, _)) => {
-                self_meta!(*node).is_branch()
+                self_meta_shared!(*node).is_branch()
             }
             None => true,
         });
@@ -83,7 +86,7 @@ where
         'outer: loop {
             // Get the current branch, it must the the back.
             if let Some((bref, bpidx)) = self.stack.back_mut() {
-                let wbranch = branch_ref!(*bref, K, V, Untracked);
+                let wbranch = branch_ref_shared!(*bref, K, V, C);
                 // We were currently looking at bpidx in bref. Increment and
                 // check what's next.
                 *bpidx += 1;
@@ -93,11 +96,10 @@ where
                     let mut work_node = node;
                     loop {
                         self.stack.push_back((work_node, 0));
-                        if self_meta!(work_node).is_leaf() {
+                        if self_meta_shared!(work_node).is_leaf() {
                             break 'outer;
                         } else {
-                            work_node =
-                                branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(0);
+                            work_node = branch_ref_shared!(work_node, K, V, C).get_idx_unchecked(0);
                         }
                     }
                 } else {
@@ -113,7 +115,7 @@ where
         // Done!
     }
 
-    pub(crate) fn get_mut(&mut self) -> Option<&mut (*mut Node<K, V>, usize)> {
+    pub(crate) fn get_mut(&mut self) -> Option<&mut (*mut Node<K, V, C>, usize)> {
         self.stack.back_mut()
     }
 
@@ -126,8 +128,8 @@ where
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
-    type Item = &'a Leaf<K, V>;
+impl<'a, K: Clone + Ord + Debug, V: Clone, C: 'a> Iterator for LeafIter<'a, K, V, C> {
+    type Item = &'a Leaf<K, V, C>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // base case is the vecdeque is empty
@@ -138,7 +140,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref_shared!(leafref, K, V, Untracked))
+        Some(leaf_ref_shared!(leafref, K, V, C))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -146,22 +148,23 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
     }
 }
 
-pub(crate) struct RevLeafIter<'a, K, V>
+pub(crate) struct RevLeafIter<'a, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    stack: VecDeque<(*mut Node<K, V>, usize)>,
+    stack: VecDeque<(*mut Node<K, V, C>, usize)>,
     phantom_k: PhantomData<&'a K>,
     phantom_v: PhantomData<&'a V>,
+    phantom_charge: PhantomData<&'a C>,
 }
 
-impl<K, V> RevLeafIter<'_, K, V>
+impl<K, V, C> RevLeafIter<'_, K, V, C>
 where
     K: Clone + Ord + Debug,
     V: Clone,
 {
-    pub(crate) fn new<T>(root: *mut Node<K, V>, bound: Bound<&T>) -> Self
+    pub(crate) fn new<T>(root: *mut Node<K, V, C>, bound: Bound<&T>) -> Self
     where
         T: Ord + ?Sized,
         K: Borrow<T>,
@@ -171,15 +174,15 @@ where
 
         let mut work_node = root;
         loop {
-            if self_meta!(work_node).is_leaf() {
+            if self_meta_shared!(work_node).is_leaf() {
                 // Put in the max len here ...
-                let lref = leaf_ref!(work_node, K, V, Untracked);
+                let lref = leaf_ref_shared!(work_node, K, V, C);
                 if lref.count() > 0 {
                     stack.push_back((work_node, lref.count() - 1));
                 }
                 break;
             } else {
-                let bref = branch_ref_shared!(work_node, K, V, Untracked);
+                let bref = branch_ref_shared!(work_node, K, V, C);
                 let bref_count = bref.count();
                 match bound {
                     Bound::Excluded(q) | Bound::Included(q) => {
@@ -193,7 +196,7 @@ where
                         // count shows the most right node.
                         stack.push_back((work_node, bref_count));
                         work_node =
-                            branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(bref_count);
+                            branch_ref_shared!(work_node, K, V, C).get_idx_unchecked(bref_count);
                     }
                 }
             }
@@ -205,6 +208,7 @@ where
             stack,
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_charge: PhantomData,
         }
     }
 
@@ -214,13 +218,14 @@ where
             stack: VecDeque::new(),
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_charge: PhantomData,
         }
     }
 
     pub(crate) fn stack_position(&mut self) {
         debug_assert!(match self.stack.back() {
             Some((node, _)) => {
-                self_meta!(*node).is_branch()
+                self_meta_shared!(*node).is_branch()
             }
             None => true,
         });
@@ -228,7 +233,7 @@ where
         'outer: loop {
             // Get the current branch, it must the the back.
             if let Some((bref, bpidx)) = self.stack.back_mut() {
-                let wbranch = branch_ref!(*bref, K, V, Untracked);
+                let wbranch = branch_ref_shared!(*bref, K, V, C);
                 // We were currently looking at bpidx in bref. Increment and
                 // check what's next.
                 // NOTE: If this underflows, it's okay because idx_checked won't
@@ -246,12 +251,12 @@ where
                     // Got the new node, continue down.
                     let mut work_node = node;
                     loop {
-                        if self_meta!(work_node).is_leaf() {
-                            let lref = leaf_ref!(work_node, K, V, Untracked);
+                        if self_meta_shared!(work_node).is_leaf() {
+                            let lref = leaf_ref_shared!(work_node, K, V, C);
                             self.stack.push_back((work_node, lref.count() - 1));
                             break 'outer;
                         } else {
-                            let bref = branch_ref!(work_node, K, V, Untracked);
+                            let bref = branch_ref_shared!(work_node, K, V, C);
                             let idx = bref.count();
                             self.stack.push_back((work_node, idx));
                             work_node = bref.get_idx_unchecked(idx);
@@ -269,7 +274,7 @@ where
         }
     }
 
-    pub(crate) fn get_mut(&mut self) -> Option<&mut (*mut Node<K, V>, usize)> {
+    pub(crate) fn get_mut(&mut self) -> Option<&mut (*mut Node<K, V, C>, usize)> {
         self.stack.back_mut()
     }
 
@@ -282,8 +287,8 @@ where
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
-    type Item = &'a Leaf<K, V>;
+impl<'a, K: Clone + Ord + Debug, V: Clone, C: 'a> Iterator for RevLeafIter<'a, K, V, C> {
+    type Item = &'a Leaf<K, V, C>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // base case is the vecdeque is empty
@@ -294,7 +299,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref_shared!(leafref, K, V, Untracked))
+        Some(leaf_ref_shared!(leafref, K, V, C))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -305,23 +310,23 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
 // Wrappers
 
 /// Iterator over references to Key Value pairs stored in the map.
-pub struct Iter<'n, K, V>
+pub struct Iter<'n, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: RangeIter<'n, K, V>,
+    iter: RangeIter<'n, K, V, C>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Iter<'_, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone, C> Iter<'_, K, V, C> {
+    pub(crate) fn new(root: *mut Node<K, V, C>, length: usize) -> Self {
         let bounds: (Bound<K>, Bound<K>) = (Bound::Unbounded, Bound::Unbounded);
         let iter = RangeIter::new(root, bounds, length);
         Iter { iter }
     }
 }
 
-impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'n, K, V> {
+impl<'n, K: Clone + Ord + Debug, V: Clone, C: 'n> Iterator for Iter<'n, K, V, C> {
     type Item = (&'n K, &'n V);
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -339,7 +344,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'n, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, C> DoubleEndedIterator for Iter<'_, K, V, C> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
@@ -347,23 +352,23 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, K, V> {
 }
 
 /// Iterator over references to Keys stored in the map.
-pub struct KeyIter<'n, K, V>
+pub struct KeyIter<'n, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: Iter<'n, K, V>,
+    iter: Iter<'n, K, V, C>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> KeyIter<'_, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone, C> KeyIter<'_, K, V, C> {
+    pub(crate) fn new(root: *mut Node<K, V, C>, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
         }
     }
 }
 
-impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'n, K, V> {
+impl<'n, K: Clone + Ord + Debug, V: Clone, C: 'n> Iterator for KeyIter<'n, K, V, C> {
     type Item = &'n K;
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -376,7 +381,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'n, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, C> DoubleEndedIterator for KeyIter<'_, K, V, C> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(k, _)| k)
@@ -384,23 +389,23 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, K, V>
 }
 
 /// Iterator over references to Values stored in the map.
-pub struct ValueIter<'n, K, V>
+pub struct ValueIter<'n, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: Iter<'n, K, V>,
+    iter: Iter<'n, K, V, C>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> ValueIter<'_, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone, C> ValueIter<'_, K, V, C> {
+    pub(crate) fn new(root: *mut Node<K, V, C>, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),
         }
     }
 }
 
-impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'n, K, V> {
+impl<'n, K: Clone + Ord + Debug, V: Clone, C: 'n> Iterator for ValueIter<'n, K, V, C> {
     type Item = &'n V;
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -413,7 +418,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'n, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, C> DoubleEndedIterator for ValueIter<'_, K, V, C> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, v)| v)
@@ -421,23 +426,23 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, K, 
 }
 
 /// Iterator over references to Key Value pairs stored, bounded by a range.
-pub struct RangeIter<'n, K, V>
+pub struct RangeIter<'n, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
     length: Option<usize>,
-    left_iter: LeafIter<'n, K, V>,
-    right_iter: RevLeafIter<'n, K, V>,
+    left_iter: LeafIter<'n, K, V, C>,
+    right_iter: RevLeafIter<'n, K, V, C>,
     phantom_root: PhantomData<&'n ()>,
 }
 
-impl<K, V> RangeIter<'_, K, V>
+impl<K, V, C> RangeIter<'_, K, V, C>
 where
     K: Clone + Ord + Debug,
     V: Clone,
 {
-    pub(crate) fn new<R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
+    pub(crate) fn new<R, T>(root: *mut Node<K, V, C>, range: R, length: usize) -> Self
     where
         T: Ord + ?Sized,
         K: Borrow<T>,
@@ -460,7 +465,7 @@ where
             }
             Bound::Included(k) => {
                 if let Some((node, idx)) = left_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V, Untracked);
+                    let leaf = leaf_ref_shared!(*node, K, V, C);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) | Err(fidx) => {
@@ -475,7 +480,7 @@ where
             }
             Bound::Excluded(k) => {
                 if let Some((node, idx)) = left_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V, Untracked);
+                    let leaf = leaf_ref_shared!(*node, K, V, C);
                     // eprintln!("Positioning Excluded with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) => {
@@ -514,7 +519,7 @@ where
             }
             Bound::Included(k) => {
                 if let Some((node, idx)) = right_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V, Untracked);
+                    let leaf = leaf_ref_shared!(*node, K, V, C);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) => {
@@ -545,7 +550,7 @@ where
             }
             Bound::Excluded(k) => {
                 if let Some((node, idx)) = right_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V, Untracked);
+                    let leaf = leaf_ref_shared!(*node, K, V, C);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) | Err(fidx) => {
@@ -610,7 +615,7 @@ where
     }
 }
 
-impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'n, K, V> {
+impl<'n, K: Clone + Ord + Debug, V: Clone, C: 'n> Iterator for RangeIter<'n, K, V, C> {
     type Item = (&'n K, &'n V);
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -618,7 +623,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'n, K, V> {
         loop {
             if let Some((node, idx)) = self.left_iter.get_mut() {
                 // eprintln!("Next with ... {:?} {:?}", node, idx);
-                let leaf = leaf_ref!(*node, K, V, Untracked);
+                let leaf = leaf_ref_shared!(*node, K, V, C);
                 // Get idx checked.
                 if let Some(r) = leaf.get_kv_idx_checked(*idx) {
                     if let Some((rnode, ridx)) = self.right_iter.get_mut() {
@@ -657,12 +662,12 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'n, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, C> DoubleEndedIterator for RangeIter<'_, K, V, C> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
             if let Some((node, idx)) = self.right_iter.get_mut() {
-                let leaf = leaf_ref_shared!(*node, K, V, Untracked);
+                let leaf = leaf_ref_shared!(*node, K, V, C);
                 // Get idx checked.
                 if let Some(r) = leaf.get_kv_idx_checked(*idx) {
                     if let Some((lnode, lidx)) = self.left_iter.get_mut() {
@@ -704,6 +709,53 @@ mod tests {
     use crate::internals::lincowcell::Untracked;
     use std::ops::Bound;
     use std::ops::Bound::*;
+
+    #[test]
+    fn shared_readers_keep_live_items_across_traversal_and_private_edits() {
+        let map = crate::bptree::BptreeMap::<usize, usize>::new();
+        let mut writer = map.write();
+        for key in 0..64 {
+            writer.insert(key, key * 3);
+        }
+        writer.commit();
+
+        let left = map.read();
+        let right = map.read();
+        let pinned = left.range(7..=11).collect::<Vec<_>>();
+        let first = left.first_key_value().unwrap();
+        let last = right.last_key_value().unwrap();
+        let middle = right.get(&48).unwrap();
+        let mut forward = left.range(0..64);
+        let mut reverse = right.range(0..64).rev();
+        for key in 0..64 {
+            assert_eq!(forward.next(), Some((&key, &(key * 3))));
+            let opposite = 63 - key;
+            assert_eq!(reverse.next(), Some((&opposite, &(opposite * 3))));
+            assert_eq!(right.get(&key), Some(&(key * 3)));
+        }
+        assert!(forward.next().is_none());
+        assert!(reverse.next().is_none());
+
+        // The old references remain live while a new writer clones paths for
+        // mutable access and removal. Only the private successors may be mutable.
+        let mut writer = map.write();
+        *writer.get_mut(&48).unwrap() = 999;
+        for key in 0..32 {
+            assert_eq!(writer.remove(&key), Some(key * 3));
+        }
+        writer.commit();
+        let current = map.read();
+        assert_eq!(current.get(&48), Some(&999));
+        assert!(current.get(&7).is_none());
+        assert_eq!(first, (&0, &0));
+        assert_eq!(last, (&63, &189));
+        assert_eq!(*middle, 144);
+        for (offset, (key, value)) in pinned.into_iter().enumerate() {
+            assert_eq!((*key, *value), (7 + offset, (7 + offset) * 3));
+        }
+        assert_eq!(left.iter().count(), 64);
+        assert_eq!(right.iter().rev().count(), 64);
+    }
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
         assert!(vbase.is_multiple_of(10));

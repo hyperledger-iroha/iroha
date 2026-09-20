@@ -53,6 +53,22 @@ the isolated manifest that exercises the actual vendor source, including native
 sanitizer and skinny-node configurations. Failed initial compile attempts and the
 old-bound counterexample remain in `generation115/`; they are not passing evidence.
 
+An external commit and subsequent merge advanced `optimizations` during the first
+captures. The merge adds original boxed retained-effects custody and ordinary
+2 MiB Native publication stack controls. Earlier captures retain their exact
+source/metadata outcomes; they do not qualify the merged Core source. Final
+qualification rebuilds that combined source. Three pre-existing workspace format
+findings were corrected without logic changes before this final capture.
+The merge's private retained-effects Box now exposes its actual pointee `Layout`
+to journal admission before allocation. The original refusal/retry test verifies
+that layout against the retained allocation, and a test-only thread-local counter
+checks that refusal allocates no effects owner. The formal ledger and checker
+require the exact layout and ordering together; four mutation controls reject
+pointer-sized, zero-sized or mistyped layout substitution and early allocation.
+This supplies a required admission input, not an aggregate funding policy.
+
+
+
 All current map cursors still explicitly provide `Untracked`. A closed map edit
 must next plan one complete bounded operation under the original root, pass its
 prepaid provider through the cursor, and replace growing tracking vectors with

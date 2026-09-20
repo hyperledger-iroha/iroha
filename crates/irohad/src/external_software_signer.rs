@@ -40,10 +40,6 @@ pub(crate) use consensus_threshold::tests::{
     consensus_threshold_tle_broker_test_fixture_v1,
 };
 #[cfg(unix)]
-pub(crate) use consensus_threshold::{
-    MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, decode_global_beacon_runtime_signer_v1,
-};
-#[cfg(unix)]
 pub use consensus_threshold::{
     GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1,
     PARLIAMENT_TLE_PARTIAL_RELEASE_SIGNER_CREDENTIAL_NAME_V1,
@@ -55,6 +51,10 @@ pub use consensus_threshold::{
     global_beacon_partial_signer_inventory_digest_v1,
     global_beacon_partial_signer_public_inventory_digest_v1,
     parliament_tle_partial_release_signer_inventory_digest_v1,
+};
+#[cfg(unix)]
+pub(crate) use consensus_threshold::{
+    MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, decode_global_beacon_runtime_signer_v1,
 };
 pub use envelope::{
     SoftwareSignerEnvelopeErrorV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,

@@ -11536,7 +11536,8 @@
             "pub(crate) da_pins:",
             "pub(crate) publication_events:",
             "pub(crate) provider:",
-            "pub(crate) reputation:"
+            "pub(crate) reputation:",
+            "pub(crate) retained_effects_layout:"
           ]
         },
         {
@@ -11571,6 +11572,8 @@
             "publication_events: _publication_events",
             "provider: provider_capture.as_ref()",
             "reputation: reputation_capture.as_ref()",
+            "retained_effects_layout: std::alloc::Layout::new::<RetainedCarrierEffects>()",
+            "Box::new(RetainedCarrierEffects {",
             "CarrierJournalPreparationError::JournalAdmission {\n                    carrier: self,\n                    provider: provider_capture,\n                    reputation: reputation_capture,\n                    error,\n                }",
             "let mut provider_capture = provider_capture;",
             "let mut reputation_capture = reputation_capture;",

@@ -29,40 +29,57 @@ use std::ops::RangeBounds;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `BptreeMapWriteTxn` without calling `commit()`.
-pub struct BptreeMap<K, V>
+/// The default mode permits ordinary mutation. A prepaid mode retains its
+/// allocation policy through readers and unpublished successors, and admits
+/// edits only through its closed operation API.
+pub struct BptreeMap<K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: MapCell<K, V, M>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
-    for BptreeMap<K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    Send for BptreeMap<K, V, M>
+where
+    M: MapMode + NodeCloning<K, V> + Send + Sync,
+    M::Charge: Send + Sync,
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for BptreeMap<K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    Sync for BptreeMap<K, V, M>
+where
+    M: MapMode + NodeCloning<K, V> + Send + Sync,
+    M::Charge: Send + Sync,
 {
 }
 
 /// An active read transaction over a [BptreeMap]. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
-pub struct BptreeMapReadTxn<'a, K, V>
+pub struct BptreeMapReadTxn<'a, K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: MapRead<'a, K, V, M>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
-    for BptreeMapReadTxn<'_, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    Send for BptreeMapReadTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V> + Send + Sync,
+    M::Charge: Send + Sync,
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for BptreeMapReadTxn<'_, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    Sync for BptreeMapReadTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V> + Send + Sync,
+    M::Charge: Send + Sync,
 {
 }
 
@@ -71,21 +88,25 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
 /// able to access and perceive changes in new transactions.
-pub struct BptreeMapWriteTxn<'a, K, V>
+/// Unrestricted edit methods exist only in the default mode. A reattached
+/// prepaid successor permits inspection, publication, detachment or abort.
+pub struct BptreeMapWriteTxn<'a, K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: MapWrite<'a, K, V, M>,
 }
 
-enum SnapshotType<'a, K, V>
+enum SnapshotType<'a, K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    R(&'a CursorRead<K, V>),
-    W(&'a CursorWrite<K, V>),
+    R(&'a CursorRead<K, V, M>),
+    W(&'a CursorWrite<K, V, M>),
 }
 
 /// A point-in-time snapshot of the tree from within a read OR write. This is
@@ -96,12 +117,13 @@ where
 /// This snapshot IS safe within the read thread due to the nature of the
 /// implementation borrowing the inner tree to prevent mutations within the
 /// same thread while the read snapshot is open.
-pub struct BptreeMapReadSnapshot<'a, K, V>
+pub struct BptreeMapReadSnapshot<'a, K, V, M = Untracked>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: SnapshotType<'a, K, V>,
+    inner: SnapshotType<'a, K, V, M>,
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
@@ -158,8 +180,10 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapWriteTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     // == RO methods
 
@@ -193,7 +217,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -203,17 +227,17 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<'_, K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<'_, K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V, M::Charge> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<'_, K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V, M::Charge> {
         self.inner.as_ref().k_iter()
     }
 
@@ -236,6 +260,18 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
         self.inner.as_ref().get_txid()
     }
 
+    /// Borrow a read-snapshot of the current unpublished tree. Its shared
+    /// borrow prevents mutable access to this transaction while it remains live.
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
+        BptreeMapReadSnapshot {
+            inner: SnapshotType::W(self.inner.as_ref()),
+        }
+    }
+}
+
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapWriteTxn<'_, K, V>
+{
     // == RW methods
 
     /// Reset this tree to an empty state. As this is within the transaction this
@@ -301,19 +337,12 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     pub(crate) fn verify(&self) -> bool {
         self.inner.as_ref().verify()
     }
-
-    /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
-    /// not be mutated during the read, so you MUST guarantee that no functions of the
-    /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
-        BptreeMapReadSnapshot {
-            inner: SnapshotType::W(self.inner.as_ref()),
-        }
-    }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapReadTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
@@ -350,7 +379,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -360,17 +389,17 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<'_, K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<'_, K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V, M::Charge> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<'_, K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V, M::Charge> {
         self.inner.as_ref().k_iter()
     }
 
@@ -386,7 +415,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -399,8 +428,10 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadSnapshot<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapReadSnapshot<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
@@ -441,7 +472,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -454,7 +485,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<'_, K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
         match self.inner {
             SnapshotType::R(inner) => inner.kv_iter(),
             SnapshotType::W(inner) => inner.kv_iter(),
@@ -462,7 +493,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<'_, K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V, M::Charge> {
         match self.inner {
             SnapshotType::R(inner) => inner.v_iter(),
             SnapshotType::W(inner) => inner.v_iter(),
@@ -470,7 +501,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<'_, K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V, M::Charge> {
         match self.inner {
             SnapshotType::R(inner) => inner.k_iter(),
             SnapshotType::W(inner) => inner.k_iter(),

@@ -191,6 +191,10 @@ pub(crate) struct CarrierJournalInputs<'owner, 'state> {
     pub(crate) provider: Option<&'owner ProviderCandidateCapture>,
     /// Exact preexecution reputation predecessor and its retained capture cursors.
     pub(crate) reputation: Option<&'owner ReputationCandidateCapture>,
+    /// Exact pointee layout of the effects Box allocated after this admission.
+    /// This covers its inline storage; nested owners still require their own
+    /// accounting within the complete original candidate admission.
+    pub(crate) retained_effects_layout: std::alloc::Layout,
 }
 
 /// Original journals after candidate execution, deterministic tails and capture.
@@ -320,6 +324,7 @@ impl<'state> PreparedCarrier<'state> {
             publication_events: _publication_events,
             provider: provider_capture.as_ref(),
             reputation: reputation_capture.as_ref(),
+            retained_effects_layout: std::alloc::Layout::new::<RetainedCarrierEffects>(),
         }) {
             Ok(admission) => admission,
             Err(error) => {
@@ -461,30 +466,34 @@ impl<'state> PreparedCarrier<'state> {
             geometry,
             publication_events,
             tiered_snapshot,
-            effects: Box::new(RetainedCarrierEffects {
-                header,
-                nexus,
-                runtime_policy,
-                sccp_registry,
-                verified_lane_relay_records,
-                da_commitments,
-                lifecycle,
-                staged_merge_entry,
-                canonical_wsv_merge_commit_authorization,
-                canonical_carrier_commit_metadata_authorization,
-                merge_carrier_entrypoints,
-                pending_public_lane_slash_observability,
-                #[cfg(feature = "telemetry")]
-                pending_parliament_telemetry_events,
-                #[cfg(feature = "telemetry")]
-                committed_parliament_attempt_counts,
-                #[cfg(feature = "telemetry")]
-                committed_citizens_total,
-                #[cfg(feature = "telemetry")]
-                committed_musubi_replication_shortfall_releases,
-                authenticated_replay_commit,
-                replay_prevalidation,
-            }),
+            effects: {
+                #[cfg(test)]
+                tests::observe_effects_allocation_attempt();
+                Box::new(RetainedCarrierEffects {
+                    header,
+                    nexus,
+                    runtime_policy,
+                    sccp_registry,
+                    verified_lane_relay_records,
+                    da_commitments,
+                    lifecycle,
+                    staged_merge_entry,
+                    canonical_wsv_merge_commit_authorization,
+                    canonical_carrier_commit_metadata_authorization,
+                    merge_carrier_entrypoints,
+                    pending_public_lane_slash_observability,
+                    #[cfg(feature = "telemetry")]
+                    pending_parliament_telemetry_events,
+                    #[cfg(feature = "telemetry")]
+                    committed_parliament_attempt_counts,
+                    #[cfg(feature = "telemetry")]
+                    committed_citizens_total,
+                    #[cfg(feature = "telemetry")]
+                    committed_musubi_replication_shortfall_releases,
+                    authenticated_replay_commit,
+                    replay_prevalidation,
+                })
+            },
             admission,
         };
         let mut carrier = StagedCarrierCapture {

@@ -657,3 +657,28 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     drop(owner);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn checked_aggregate_bytes_need_no_fabricated_single_allocation_layout() {
+    let bytes = (isize::MAX as usize) + 1;
+    assert!(Layout::from_size_align(bytes, 1).is_err());
+    let budget = AllocationBudget::new(bytes);
+    let mut reservation = without_allocations(|| budget.try_reserve_bytes(bytes).unwrap());
+    let first = reservation.try_split(layout(isize::MAX as usize)).unwrap();
+    let second = reservation.try_split(layout(1)).unwrap();
+    assert_eq!(reservation.remaining_bytes(), 0);
+    assert_eq!(budget.reserved_bytes(), bytes);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    drop(reservation);
+    drop(first);
+    assert_eq!(budget.reserved_bytes(), 1);
+    drop(second);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(matches!(
+        budget.try_reserve_bytes(bytes + 1),
+        Err(AllocationRefusal::ExceedsLimit { .. })
+    ));
+}

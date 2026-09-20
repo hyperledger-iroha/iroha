@@ -223,9 +223,11 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
         );
         // Manifest refresh owns another publication guard while checking its
         // catalog binding, including rejection of an unbound registry.
-        assert!(!state.install_lane_manifests_if_consensus_compatible(&Arc::new(
-            LaneManifestRegistry::default()
-        )));
+        assert!(
+            !state.install_lane_manifests_if_consensus_compatible(&Arc::new(
+                LaneManifestRegistry::default()
+            ))
+        );
         assert!(crate::snapshot::CapturedStateSnapshot::capture(&state).is_ok());
     });
 }

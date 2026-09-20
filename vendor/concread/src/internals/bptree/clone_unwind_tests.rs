@@ -231,7 +231,10 @@ fn every_branch_key_clone_unwind_preserves_original_children_and_separator_keys(
         OwnedNode(Node::new_branch(1, children[0].0, children[1].0, &mut Untracked).cast());
     let source = unsafe { &mut *original.0.cast::<Branch<Payload, Payload>>() };
     for child in &children[2..] {
-        assert!(matches!(source.add_node(child.0), BranchInsertState::Ok));
+        assert!(matches!(
+            source.add_node(child.0, &mut Untracked),
+            BranchInsertState::Ok
+        ));
     }
     assert_eq!(source.count(), L_CAPACITY);
     let original_payloads = owners.live();
@@ -400,11 +403,11 @@ fn replacing_initialized_separator_reclaims_original_key_after_clone_succeeds() 
     let old_key = unsafe { source.key[0].assume_init_ref() }.id;
     let original_payloads = owners.live();
     owners.arm(1);
-    assert!(catch_unwind(AssertUnwindSafe(|| source.rekey_by_idx(1))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| source.rekey_by_idx(1, &mut Untracked))).is_err());
     assert_eq!(owners.live(), original_payloads);
     assert_eq!(unsafe { source.key[0].assume_init_ref() }.id, old_key);
     owners.arm(0);
-    source.rekey_by_idx(1);
+    source.rekey_by_idx(1, &mut Untracked);
     let old_key_drops = owners.drops.lock().unwrap()[old_key];
     assert_eq!(old_key_drops, 1);
     assert_ne!(unsafe { source.key[0].assume_init_ref() }.id, old_key);
@@ -435,7 +438,10 @@ impl OwnedBranch {
             assert_eq!(branch.remove_by_idx(1), children[1].0);
         } else {
             for child in &children[2..] {
-                assert!(matches!(branch.add_node(child.0), BranchInsertState::Ok));
+                assert!(matches!(
+                    branch.add_node(child.0, &mut Untracked),
+                    BranchInsertState::Ok
+                ));
             }
         }
         Self {
@@ -480,9 +486,11 @@ fn full_branch_split_clone_refusal_preserves_original_separator_and_child_owners
         owners.arm(1);
         assert!(catch_unwind(AssertUnwindSafe(|| {
             if direction == 0 {
-                original.branch_mut().add_node(inserted.0)
+                original.branch_mut().add_node(inserted.0, &mut Untracked)
             } else {
-                original.branch_mut().add_node_left(inserted.0, sibidx)
+                original
+                    .branch_mut()
+                    .add_node_left(inserted.0, sibidx, &mut Untracked)
             }
         }))
         .is_err());
@@ -492,9 +500,11 @@ fn full_branch_split_clone_refusal_preserves_original_separator_and_child_owners
 
         owners.arm(0);
         let result = if direction == 0 {
-            original.branch_mut().add_node(inserted.0)
+            original.branch_mut().add_node(inserted.0, &mut Untracked)
         } else {
-            original.branch_mut().add_node_left(inserted.0, sibidx)
+            original
+                .branch_mut()
+                .add_node_left(inserted.0, sibidx, &mut Untracked)
         };
         let BranchInsertState::Split(left, right) = result else {
             panic!("a full branch must return its actual split children");
@@ -528,7 +538,7 @@ fn branch_merge_clone_refusal_preserves_both_original_initialized_prefixes() {
         let original_nodes = node_ids();
         owners.arm(1);
         assert!(catch_unwind(AssertUnwindSafe(|| {
-            left.branch_mut().merge(right.branch_mut());
+            left.branch_mut().merge(right.branch_mut(), &mut Untracked);
         }))
         .is_err());
         assert_eq!(left.snapshot(), left_before);
@@ -537,7 +547,7 @@ fn branch_merge_clone_refusal_preserves_both_original_initialized_prefixes() {
         assert_eq!(node_ids(), original_nodes);
 
         owners.arm(0);
-        left.branch_mut().merge(right.branch_mut());
+        left.branch_mut().merge(right.branch_mut(), &mut Untracked);
         assert_eq!(owners.attempts.load(Ordering::SeqCst), 1);
         assert_eq!(left.branch().count(), 3);
         assert_eq!(right.branch().count(), 0);
@@ -574,9 +584,11 @@ fn branch_redistribution_moves_existing_keys_and_prepares_only_the_bridge_before
         owners.arm(1);
         assert!(catch_unwind(AssertUnwindSafe(|| {
             if left_to_right {
-                left.branch_mut().take_from_l_to_r(right.branch_mut());
+                left.branch_mut()
+                    .take_from_l_to_r(right.branch_mut(), &mut Untracked);
             } else {
-                left.branch_mut().take_from_r_to_l(right.branch_mut());
+                left.branch_mut()
+                    .take_from_r_to_l(right.branch_mut(), &mut Untracked);
             }
         }))
         .is_err());
@@ -587,9 +599,11 @@ fn branch_redistribution_moves_existing_keys_and_prepares_only_the_bridge_before
 
         owners.arm(0);
         if left_to_right {
-            left.branch_mut().take_from_l_to_r(right.branch_mut());
+            left.branch_mut()
+                .take_from_l_to_r(right.branch_mut(), &mut Untracked);
         } else {
-            left.branch_mut().take_from_r_to_l(right.branch_mut());
+            left.branch_mut()
+                .take_from_r_to_l(right.branch_mut(), &mut Untracked);
         }
         assert_eq!(owners.attempts.load(Ordering::SeqCst), 1);
         assert!(Node::verify_raw(left.node.0));

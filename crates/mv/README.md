@@ -77,8 +77,11 @@ original waiters when one callback unwinds, without suppressing its panic.
 Writer admission now carries explicit move-only constructor input alongside both
 shell charges. The B+tree's original padded node allocations can retain typed
 charges through clone/split/unwind and actual free, with the untracked map using
-the same implementation. Closed map admission still requires bounded tracking
-buffers, nested payload funding and complete initial/undo ownership.
+the same implementation. The same cursor now carries fixed charged tracking buffers through retirement
+and checks their complete structural insertion bound before mutation. Closed map
+admission still requires complete payload demand planning, concrete MV payload
+policies and initial/undo ownership. Node payload copies now require an explicit
+funding-provider policy; node credits alone cannot authorize ordinary Clone.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

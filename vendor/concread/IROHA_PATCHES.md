@@ -87,5 +87,25 @@ the original raw pointer, and reconstructs the same padded Box for reclamation.
 It returns credits after payload destruction and actual deallocation; payload
 unwind retains credits conservatively. `Untracked` has no layout overhead.
 Raw node `Sync` additionally requires `K: Sync`; a compile-time regression rejects
-the former bound. Tracking vectors, nested K/V clones, initial control/root and
-complete map admission remain uncharged; current cursors say so explicitly.
+the former bound. The same cursor now carries its mode's funding and node charge type. Fixed
+tracking buffers own exact admitted backing storage and move intact into retired
+readers. Structural preflight refuses before node allocation when either buffer
+lacks room. Shared reads and original clone probes use immutable references;
+thread traits include the actual charges and writer provider. Public maps still
+select Untracked pending closed node/payload admission, initial control storage
+and MV undo funding. The private fixed-buffer constructor retains one narrow non-test
+dead-code expectation for that explicit unfinished integration.
+
+
+Every node-owned key/value copy now requires an explicit `NodeCloning` policy
+from the original funding provider. This includes leaf and branch cloning,
+new-root separators, left/right splits, replacement, merge and redistribution.
+The only production ordinary-Clone policy is explicit `Untracked`; providing a
+node charge alone grants no payload-cloning capability. Funded policies must
+prepay each concrete nested allocation and retain its original owner in the
+returned payload until actual free. Slot transfers keep existing payload owners.
+Concrete regression payloads reject ordinary Clone and observe original nested
+allocation frees/refunds and partial-construction unwind. This supplies the
+engine boundary, not complete operation admission: shipped map types still use
+Untracked, and complete demand planning and actual MV payload policies remain
+required before enabling funded production edits.

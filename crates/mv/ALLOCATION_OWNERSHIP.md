@@ -193,9 +193,25 @@ cleanup and comparisons, extracts it before payload destruction, then drops it
 only after the exact Box has deallocated. Payload destructor unwind conservatively
 retains credits. `Untracked` is zero-sized and preserves ordinary cache geometry.
 
-Current cursors still supply `Untracked` explicitly. A closed funded map edit,
-fixed-capacity charged tracking/retirement buffers, admitted nested cloning,
-initial roots and MV undo storage remain required. These are concrete node and
-constructor ownership primitives, not complete State admission. The
-[implementation record](../../docs/history/2026-09-20/prepaid-writer-and-node-custody.md)
-records exact qualification scope and remaining integration.
+The original cursor now carries its mode's concrete node charge, funding provider
+and tracking buffers through the same insertion engine. Fixed tracking buffers
+retain exact original backing storage and charges; retirement moves the original
+buffer into its previous reader until actual free. A bounded insertion refuses
+insufficient slots before mutation and returns the original entry. Shared reads
+and clone probes no longer create mutable references to published nodes.
+
+Every payload copy in the node engine now consumes its funding provider's
+explicit `NodeCloning` policy, including separator copies during splits and
+rebalancing. Node funding alone cannot select ordinary Clone. Concrete funded
+policies must split prepaid ownership before nested allocation and retain the
+original charge in the returned key/value until actual free. Moving initialized
+slots preserves their existing owners. The production Untracked policy delegates
+to ordinary Clone; tests separately exercise concrete charged payload copies.
+
+Public maps still select explicit Untracked custody. Closed map admission,
+complete payload demand planning, actual MV payload policies, initial control
+storage and MV undo funding remain required. Real callback-bearing charges need
+their original notification-deferral scope around physical guards and destruction.
+The [cursor/retirement record](../../docs/history/2026-09-20/charged-cursor-retirement.md)
+and [payload-cloning record](../../docs/history/2026-09-20/prepaid-payload-cloning.md)
+identify allocator tests, source joins and unfinished production integration.

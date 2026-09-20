@@ -1518,9 +1518,18 @@ retirement buffers; unrestricted mutation cannot satisfy that admission contract
 The [prepaid writer/node boundary](../docs/history/2026-09-20/prepaid-writer-and-node-custody.md)
 now consumes original move-only writer input under locked admission and attaches
 typed charges to each exact padded node allocation through clone, split, unwind
-and deallocation. Current cursors explicitly remain untracked. The closed edit,
-charged fixed-capacity retirement buffers, nested payload policy and complete
-initial/undo ownership are still required before production activation.
+and deallocation. The [charged cursor/retirement boundary](../docs/history/2026-09-20/charged-cursor-retirement.md)
+now threads the provider and concrete charge through that same engine, retains
+original fixed buffers through real reader release, and refuses deficient
+bookkeeping before mutation. Shared traversal and clone probes use immutable
+references. Public maps remain explicitly untracked until the closed edit, nested
+payload policy and complete initial/undo ownership are connected. These are still
+required before production activation.
+
+The [explicit payload-cloning boundary](../docs/history/2026-09-20/prepaid-payload-cloning.md)
+requires each node payload copy to use the original provider's policy. Node
+credits alone cannot authorize ordinary Clone; complete operation demand and
+concrete MV payload owners remain required before production funded edits.
 
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing

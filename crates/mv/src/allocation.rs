@@ -176,6 +176,21 @@ impl AllocationBudget {
                 .checked_add(layout.size())
                 .ok_or(AllocationRefusal::DemandOverflow)
         })?;
+        self.try_reserve_bytes(bytes)
+    }
+
+    /// Prepay an already checked sum of concrete requested allocation layouts.
+    ///
+    /// Use this when allocation-free planning has accumulated a complete demand
+    /// without retaining a collection of layouts. The sum may exceed the maximum
+    /// size of one allocation; it is not represented by a fabricated aggregate
+    /// `Layout`. Each actual allocation still splits its exact layout from the
+    /// returned original reservation. This method does not infer nested storage
+    /// or validate a caller's payload-cloning policy.
+    pub fn try_reserve_bytes(
+        &self,
+        bytes: usize,
+    ) -> Result<AllocationReservation, AllocationRefusal> {
         if bytes > self.pool.limit {
             return Err(AllocationRefusal::ExceedsLimit {
                 requested_bytes: bytes,

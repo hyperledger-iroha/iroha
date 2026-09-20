@@ -4,7 +4,10 @@
 // Additionally, the cursor also is responsible for general movement
 // throughout the structure and how to handle that effectively
 
+use super::allocation::NodeCloning;
 use super::node::*;
+use super::tracking::TrackingBuffer;
+use crate::bptree::MapMode;
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
 use std::fmt::Debug;
@@ -17,56 +20,87 @@ use std::ops::RangeBounds;
 
 use std::sync::OnceLock;
 
+/// Original node funding and bookkeeping selected before cursor construction.
+/// Implementations must consume already admitted input, never obtain more pool
+/// capacity midway through an edit. Only Untracked exposes unrestricted mutation.
+pub(crate) trait CursorMode<K: Clone + Ord + Debug, V: Clone>:
+    NodeCloning<K, V> + Sized
+{
+    type Buffer: TrackingBuffer<*mut Node<K, V, Self::Charge>, Charge = Self::Charge>;
+    type Input;
+
+    fn into_parts(input: Self::Input) -> (Self, Self::Buffer, Self::Buffer);
+}
+
+impl<K: Clone + Ord + Debug, V: Clone, M: MapMode + NodeCloning<K, V>> CursorMode<K, V> for M {
+    type Buffer = M::Buffer<*mut Node<K, V, M::Charge>>;
+    type Input = M::Input<*mut Node<K, V, M::Charge>>;
+
+    fn into_parts(input: Self::Input) -> (Self, Self::Buffer, Self::Buffer) {
+        <M as MapMode>::into_parts(input)
+    }
+}
+
 /// The internal root of the tree, with associated garbage lists etc.
 #[derive(Debug)]
-pub(crate) struct SuperBlock<K, V>
+pub(crate) struct SuperBlock<K, V, M: CursorMode<K, V> = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    root: *mut Node<K, V>,
-    size: usize,
-    txid: u64,
+    pub(crate) root: *mut Node<K, V, M::Charge>,
+    pub(crate) size: usize,
+    pub(crate) txid: u64,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
-    for SuperBlock<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for SuperBlock<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for SuperBlock<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for SuperBlock<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
-    for SuperBlock<K, V>
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>>
+    LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V, M>> for SuperBlock<K, V, M>
 {
-    type WriterInput = ();
+    type WriterInput = M::Input;
 
-    fn create_reader(&self) -> CursorRead<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V, M> {
         // This sets up the first reader.
         CursorRead::new(self)
     }
 
-    fn create_writer(&self, (): ()) -> CursorWrite<K, V> {
+    fn create_writer(&self, input: M::Input) -> CursorWrite<K, V, M> {
         // Create a writer.
-        CursorWrite::new(self)
+        CursorWrite::with_input(self, input)
     }
 
     fn pre_commit(
         &mut self,
-        mut new: CursorWrite<K, V>,
-        prev: &CursorRead<K, V>,
-    ) -> CursorRead<K, V> {
+        mut new: CursorWrite<K, V, M>,
+        prev: &CursorRead<K, V, M>,
+    ) -> CursorRead<K, V, M> {
         assert!(prev.last_seen.get().is_none());
         // The original writer retires this reader exactly once. Move the
-        // existing vector intact without acquiring a lazily allocated mutex.
+        // existing buffer and its charge intact, without replacement or allocation.
         prev.last_seen
-            .set(std::mem::take(&mut new.last_seen))
+            .set(new.last_seen.take().expect("original retirement buffer"))
             .unwrap_or_else(|_| unreachable!("original reader already has retired nodes"));
 
         // We are done, time to seal everything.
-        new.first_seen.iter().for_each(|n| {
+        new.first_seen.as_slice().iter().for_each(|n| {
             Node::make_ro_raw(*n);
         });
         // Clear first seen, we won't be dropping them from here.
@@ -82,6 +116,18 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
     }
 }
 
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> SuperBlock<K, V, M> {
+    /// The caller must put this unique root under the original linear owner.
+    pub(crate) unsafe fn new_with_funding(funding: &mut M) -> Self {
+        let root = Node::<K, V, M::Charge>::new_leaf(1, funding).cast();
+        Self {
+            root,
+            size: 0,
+            txid: 1,
+        }
+    }
+}
+
 impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
     /// This is UNSAFE because you *MUST* understand how to manage the transactions
     /// of this type and to give a correct linearised transaction manager the ability
@@ -90,12 +136,7 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
     /// More than likely, you WILL NOT do this so you should RUN AWAY and try to forget
     /// you ever saw this function at all.
     pub unsafe fn new() -> Self {
-        let leaf: *mut Leaf<K, V> = Node::new_leaf(1, &mut Untracked);
-        SuperBlock {
-            root: leaf as *mut Node<K, V>,
-            size: 0,
-            txid: 1,
-        }
+        unsafe { Self::new_with_funding(&mut Untracked) }
     }
 
     #[cfg(test)]
@@ -128,54 +169,73 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct CursorRead<K, V>
+pub(crate) struct CursorRead<K, V, M: CursorMode<K, V> = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
     txid: u64,
     length: usize,
-    root: *mut Node<K, V>,
-    last_seen: OnceLock<Vec<*mut Node<K, V>>>,
+    root: *mut Node<K, V, M::Charge>,
+    last_seen: OnceLock<M::Buffer>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
-    for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for CursorRead<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for CursorRead<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
 
-#[derive(Debug)]
-pub(crate) struct CursorWrite<K, V>
+pub(crate) struct CursorWrite<K, V, M: CursorMode<K, V> = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
     txid: u64,
     length: usize,
-    root: *mut Node<K, V>,
-    last_seen: Vec<*mut Node<K, V>>,
-    first_seen: Vec<*mut Node<K, V>>,
+    root: *mut Node<K, V, M::Charge>,
+    last_seen: Option<M::Buffer>,
+    first_seen: M::Buffer,
+    funding: M,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
-    for CursorWrite<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V> + Send,
+    > Send for CursorWrite<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for CursorWrite<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V> + Send + Sync,
+    > Sync for CursorWrite<K, V, M>
+where
+    M::Charge: Send + Sync,
 {
 }
 
-pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
+pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone, C = Untracked> {
     #[allow(unused)]
-    fn get_root_ref(&self) -> &Node<K, V>;
+    fn get_root_ref(&self) -> &Node<K, V, C>;
 
-    fn get_root(&self) -> *mut Node<K, V>;
+    fn get_root(&self) -> *mut Node<K, V, C>;
 
     fn len(&self) -> usize;
 
@@ -196,7 +256,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         let mut node = self.get_root();
         for _i in 0..65536 {
             if unsafe { (*node).is_leaf() } {
-                let lref = leaf_ref!(node, K, V, Untracked);
+                let lref = leaf_ref_shared!(node, K, V, C);
                 return lref.get_ref(k).map(|v| unsafe {
                     // Strip the lifetime and rebind to the lifetime of `self`.
                     // This is safe because we know that these nodes will NOT
@@ -206,7 +266,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
                     &*x as &V
                 });
             } else {
-                let bref = branch_ref!(node, K, V, Untracked);
+                let bref = branch_ref_shared!(node, K, V, C);
                 let idx = bref.locate_node(k);
                 node = bref.get_idx_unchecked(idx);
             }
@@ -222,35 +282,41 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         self.search(k).is_some()
     }
 
-    fn first_key_value(&self) -> Option<(&K, &V)> {
+    fn first_key_value<'a>(&'a self) -> Option<(&'a K, &'a V)>
+    where
+        C: 'a,
+    {
         let mut node = self.get_root();
         for _i in 0..65536 {
             if unsafe { (*node).is_leaf() } {
-                let lref = leaf_ref!(node, K, V, Untracked);
+                let lref = leaf_ref_shared!(node, K, V, C);
                 return lref.min_value();
             } else {
-                let bref = branch_ref!(node, K, V, Untracked);
+                let bref = branch_ref_shared!(node, K, V, C);
                 node = bref.min_node();
             }
         }
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    fn last_key_value(&self) -> Option<(&K, &V)> {
+    fn last_key_value<'a>(&'a self) -> Option<(&'a K, &'a V)>
+    where
+        C: 'a,
+    {
         let mut node = self.get_root();
         for _i in 0..65536 {
             if unsafe { (*node).is_leaf() } {
-                let lref = leaf_ref!(node, K, V, Untracked);
+                let lref = leaf_ref_shared!(node, K, V, C);
                 return lref.max_value();
             } else {
-                let bref = branch_ref!(node, K, V, Untracked);
+                let bref = branch_ref_shared!(node, K, V, C);
                 node = bref.max_node();
             }
         }
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, K, V>
+    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, K, V, C>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -259,15 +325,15 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         RangeIter::new(self.get_root(), range, self.len())
     }
 
-    fn kv_iter<'n>(&'n self) -> Iter<'n, K, V> {
+    fn kv_iter<'n>(&'n self) -> Iter<'n, K, V, C> {
         Iter::new(self.get_root(), self.len())
     }
 
-    fn k_iter<'n>(&'n self) -> KeyIter<'n, K, V> {
+    fn k_iter<'n>(&'n self) -> KeyIter<'n, K, V, C> {
         KeyIter::new(self.get_root(), self.len())
     }
 
-    fn v_iter<'n>(&'n self) -> ValueIter<'n, K, V> {
+    fn v_iter<'n>(&'n self) -> ValueIter<'n, K, V, C> {
         ValueIter::new(self.get_root(), self.len())
     }
 
@@ -280,48 +346,41 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
-    pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M> {
+    pub(crate) fn with_input(sblock: &SuperBlock<K, V, M>, input: M::Input) -> Self {
         let txid = sblock.txid + 1;
         assert!(txid < (TXID_MASK >> TXID_SHF));
         // println!("starting wr txid -> {:?}", txid);
         let length = sblock.size;
         let root = sblock.root;
-        // TODO: Could optimise how big these are based
-        // on past trends? Or based on % tree size?
-        let last_seen = Vec::with_capacity(16);
-        let first_seen = Vec::with_capacity(16);
+        let (funding, first_seen, last_seen) = M::into_parts(input);
 
         CursorWrite {
             txid,
             length,
             root,
-            last_seen,
+            last_seen: Some(last_seen),
             first_seen,
+            funding,
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        // Reset the values in this tree.
-        // We need to mark everything as disposable, and create a new root!
-        self.last_seen.push(self.root);
-        unsafe { (*self.root).sblock_collect(&mut self.last_seen) };
-        let nroot: *mut Leaf<K, V> = Node::new_leaf(self.txid, &mut Untracked);
-        let mut nroot = nroot as *mut Node<K, V>;
-        self.first_seen.push(nroot);
-        mem::swap(&mut self.root, &mut nroot);
-        self.length = 0;
-    }
-
-    // Functions as insert_or_update
-    pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
+    /// Refuse exhausted bookkeeping before cloning, splitting or changing nodes.
+    /// The unchanged original entry is returned for a newly admitted operation.
+    /// This checks structural slots only: complete node/payload funding remains
+    /// the original mode's responsibility before constructing this cursor.
+    pub(crate) fn try_insert(&mut self, k: K, v: V) -> Result<Option<V>, (K, V)> {
+        if !self.insert_tracking_fits(&k) {
+            return Err((k, v));
+        }
         let r = match clone_and_insert(
             self.root,
             self.txid,
             k,
             v,
-            &mut self.last_seen,
+            self.last_seen.as_mut().expect("original retirement buffer"),
             &mut self.first_seen,
+            &mut self.funding,
         ) {
             CRInsertState::NoClone(res) => res,
             CRInsertState::Clone(res, mut nnode) => {
@@ -336,8 +395,8 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             CRInsertState::CloneSplit(lnode, rnode) => {
                 // The previous root had to split - make a new
                 // root now and put it inplace.
-                let mut nroot =
-                    Node::new_branch(self.txid, lnode, rnode, &mut Untracked) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode, &mut self.funding)
+                    as *mut Node<K, V, M::Charge>;
                 self.first_seen.push(nroot);
                 // The root was cloned as part of clone split
                 // This swaps the POINTERS not the content!
@@ -352,8 +411,8 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 //
                 // Note, that we have to briefly take an extra RC on the root so
                 // that we can get it into the branch.
-                let mut nroot = Node::new_branch(self.txid, self.root, rnode, &mut Untracked)
-                    as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, self.root, rnode, &mut self.funding)
+                    as *mut Node<K, V, M::Charge>;
                 self.first_seen.push(nroot);
                 // println!("ls push 2");
                 // self.last_seen.push(self.root);
@@ -363,8 +422,8 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 None
             }
             CRInsertState::RevSplit(lnode) => {
-                let mut nroot = Node::new_branch(self.txid, lnode, self.root, &mut Untracked)
-                    as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, lnode, self.root, &mut self.funding)
+                    as *mut Node<K, V, M::Charge>;
                 self.first_seen.push(nroot);
                 // println!("ls push 3");
                 // self.last_seen.push(self.root);
@@ -372,8 +431,8 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 None
             }
             CRInsertState::CloneRevSplit(rnode, lnode) => {
-                let mut nroot =
-                    Node::new_branch(self.txid, lnode, rnode, &mut Untracked) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode, &mut self.funding)
+                    as *mut Node<K, V, M::Charge>;
                 self.first_seen.push(nroot);
                 // root was cloned in the rev split
                 // println!("ls push 4");
@@ -386,7 +445,75 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         if r.is_none() {
             self.length += 1;
         }
-        r
+        Ok(r)
+    }
+
+    fn insert_tracking_fits(&self, key: &K) -> bool {
+        let new_slots = self.first_seen.remaining_capacity();
+        let retired_slots = self
+            .last_seen
+            .as_ref()
+            .expect("original retirement buffer")
+            .remaining_capacity();
+        if new_slots.is_none() && retired_slots.is_none() {
+            return true;
+        }
+        // One insertion can clone each node on its path, split its leaf and
+        // every branch above it, then grow one root. Count the complete checked
+        // worst case before mutation; never seek another tracking allocation.
+        let mut node = self.root;
+        let mut branches = 0usize;
+        while !self_meta_shared!(node).is_leaf() {
+            branches = branches.checked_add(1).expect("valid tree depth");
+            assert!(
+                branches < usize::BITS as usize,
+                "tree exceeds addressable depth"
+            );
+            let branch = branch_ref_shared!(node, K, V, M::Charge);
+            node = branch.get_idx_unchecked(branch.locate_node(key));
+        }
+        let new_required = branches
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(3))
+            .expect("valid tree insertion bound");
+        let retired_required = branches.checked_add(1).expect("valid retirement bound");
+        new_slots.is_none_or(|remaining| remaining >= new_required)
+            && retired_slots.is_none_or(|remaining| remaining >= retired_required)
+    }
+}
+
+impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
+    CursorWrite<K, V, crate::bptree::Prepaid<P>>
+{
+    /// Seal the one closed edit, returning only unused original admission.
+    /// Allocated node/payload/buffer/shell charges remain in their own storage.
+    pub(crate) fn finish_admitted_funding(&mut self) {
+        drop(self.funding.0.take().expect("original completed provider"));
+    }
+}
+
+impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
+    pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
+        self.try_insert(k, v)
+            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        // Reset the values in this tree.
+        // We need to mark everything as disposable, and create a new root!
+        self.last_seen
+            .as_mut()
+            .expect("original retirement buffer")
+            .push(self.root);
+        unsafe {
+            (*self.root)
+                .sblock_collect(self.last_seen.as_mut().expect("original retirement buffer"))
+        };
+        let nroot: *mut Leaf<K, V> = Node::new_leaf(self.txid, &mut Untracked);
+        let mut nroot = nroot as *mut Node<K, V>;
+        self.first_seen.push(nroot);
+        mem::swap(&mut self.root, &mut nroot);
+        self.length = 0;
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
@@ -394,7 +521,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             self.root,
             self.txid,
             k,
-            &mut self.last_seen,
+            self.last_seen.as_mut().expect("original retirement buffer"),
             &mut self.first_seen,
         ) {
             CRRemoveState::NoClone(res) => res,
@@ -409,7 +536,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 } else {
                     // Root is being demoted, get the last branch and
                     // promote it to the root.
-                    self.last_seen.push(self.root);
+                    self.last_seen
+                        .as_mut()
+                        .expect("original retirement buffer")
+                        .push(self.root);
                     let rmut = branch_ref!(self.root, K, V, Untracked);
                     let mut pnode = rmut.extract_last_node();
                     mem::swap(&mut self.root, &mut pnode);
@@ -423,7 +553,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                     res
                 } else {
                     // Our root is getting demoted here, get the remaining branch
-                    self.last_seen.push(nnode);
+                    self.last_seen
+                        .as_mut()
+                        .expect("original retirement buffer")
+                        .push(nnode);
                     let rmut = branch_ref!(nnode, K, V, Untracked);
                     let mut pnode = rmut.extract_last_node();
                     // Promote it to the new root
@@ -444,7 +577,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             self.root,
             self.txid,
             k,
-            &mut self.last_seen,
+            self.last_seen.as_mut().expect("original retirement buffer"),
             &mut self.first_seen,
         ) {
             CRCloneState::Clone(mut nroot) => {
@@ -460,7 +593,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             self.root,
             self.txid,
             k,
-            &mut self.last_seen,
+            self.last_seen.as_mut().expect("original retirement buffer"),
             &mut self.first_seen,
         ) {
             CRCloneState::Clone(mut nroot) => {
@@ -481,7 +614,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 self.root,
                 self.txid,
                 k,
-                &mut self.last_seen,
+                self.last_seen.as_mut().expect("original retirement buffer"),
                 &mut self.first_seen,
             );
             // println!("clone_and_split_off_trim_lt -> {:?}", result);
@@ -570,7 +703,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         RangeMutIter::new(self, range)
     }
 }
-
 impl<K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         iter.into_iter().for_each(|(k, v)| {
@@ -579,27 +711,30 @@ impl<K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorWrite<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> Drop for CursorWrite<K, V, M> {
     fn drop(&mut self) {
         // If there is content in first_seen, this means we aborted and must rollback
         // of these items!
         // println!("Releasing CW FS -> {:?}", self.first_seen);
-        self.first_seen.iter().for_each(|n| Node::free(*n))
+        self.first_seen
+            .as_slice()
+            .iter()
+            .for_each(|n| Node::free(*n))
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorRead<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> Drop for CursorRead<K, V, M> {
     fn drop(&mut self) {
         // If there is content in last_seen, a future generation wants us to remove it!
         // Exclusive destruction cannot race the original writer: it retains
         // this reader generation until after the retirement vector is set.
         if let Some(last_seen) = self.last_seen.get_mut() {
-            last_seen.iter().for_each(|n| Node::free(*n));
+            last_seen.as_slice().iter().for_each(|n| Node::free(*n));
         }
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> Drop for SuperBlock<K, V, M> {
     fn drop(&mut self) {
         // SAFETY: the final root owner has no remaining readers or cursors.
         // Detached writers retain this same root and drop their unpublished
@@ -609,8 +744,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
-    pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorRead<K, V, M> {
+    pub(crate) fn new(sblock: &SuperBlock<K, V, M>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
         CursorRead {
             txid: sblock.txid,
@@ -621,12 +756,14 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
-    fn get_root_ref(&self) -> &Node<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorReadOps<K, V, M::Charge>
+    for CursorRead<K, V, M>
+{
+    fn get_root_ref(&self) -> &Node<K, V, M::Charge> {
         unsafe { &*(self.root) }
     }
 
-    fn get_root(&self) -> *mut Node<K, V> {
+    fn get_root(&self) -> *mut Node<K, V, M::Charge> {
         self.root
     }
 
@@ -639,12 +776,14 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> 
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V> {
-    fn get_root_ref(&self) -> &Node<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorReadOps<K, V, M::Charge>
+    for CursorWrite<K, V, M>
+{
+    fn get_root_ref(&self) -> &Node<K, V, M::Charge> {
         unsafe { &*(self.root) }
     }
 
-    fn get_root(&self) -> *mut Node<K, V> {
+    fn get_root(&self) -> *mut Node<K, V, M::Charge> {
         self.root
     }
 
@@ -657,14 +796,15 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
     }
 }
 
-fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+fn clone_and_insert<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>>(
+    node: *mut Node<K, V, M::Charge>,
     txid: u64,
     k: K,
     v: V,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
-) -> CRInsertState<K, V> {
+    last_seen: &mut M::Buffer,
+    first_seen: &mut M::Buffer,
+    funding: &mut M,
+) -> CRInsertState<K, V, M::Charge> {
     /*
      * Let's talk about the magic of this function. Come, join
      * me around the [🔥🔥🔥]
@@ -681,49 +821,49 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
      * thus keeping them alive.
      */
 
-    if self_meta!(node).is_leaf() {
+    if self_meta_shared!(node).is_leaf() {
         // NOTE: We have to match, rather than map here, as rust tries to
         // move k:v into both closures!
 
         // Leaf path
-        match leaf_ref!(node, K, V, Untracked).req_clone(txid, &mut Untracked) {
+        match leaf_ref_shared!(node, K, V, M::Charge).req_clone(txid, funding) {
             Some(cnode) => {
                 // println!();
                 first_seen.push(cnode);
                 // println!("ls push 5");
                 last_seen.push(node);
                 // Clone was required.
-                let mref = leaf_ref!(cnode, K, V, Untracked);
+                let mref = leaf_ref!(cnode, K, V, M::Charge);
                 // insert to the new node.
-                match mref.insert_or_update(k, v, &mut Untracked) {
+                match mref.insert_or_update(k, v, funding) {
                     LeafInsertState::Ok(res) => CRInsertState::Clone(res, cnode),
                     LeafInsertState::Split(rnode) => {
-                        first_seen.push(rnode as *mut Node<K, V>);
+                        first_seen.push(rnode as *mut Node<K, V, M::Charge>);
                         // let rnode = Node::new_leaf_ins(txid, sk, sv);
-                        CRInsertState::CloneSplit(cnode, rnode as *mut Node<K, V>)
+                        CRInsertState::CloneSplit(cnode, rnode as *mut Node<K, V, M::Charge>)
                     }
                     LeafInsertState::RevSplit(lnode) => {
-                        first_seen.push(lnode as *mut Node<K, V>);
-                        CRInsertState::CloneRevSplit(cnode, lnode as *mut Node<K, V>)
+                        first_seen.push(lnode as *mut Node<K, V, M::Charge>);
+                        CRInsertState::CloneRevSplit(cnode, lnode as *mut Node<K, V, M::Charge>)
                     }
                 }
             }
             None => {
                 // No clone required.
                 // simply do the insert.
-                let mref = leaf_ref!(node, K, V, Untracked);
-                match mref.insert_or_update(k, v, &mut Untracked) {
+                let mref = leaf_ref!(node, K, V, M::Charge);
+                match mref.insert_or_update(k, v, funding) {
                     LeafInsertState::Ok(res) => CRInsertState::NoClone(res),
                     LeafInsertState::Split(rnode) => {
                         // We split, but left is already part of the txn group, so lets
                         // just return what's new.
                         // let rnode = Node::new_leaf_ins(txid, sk, sv);
-                        first_seen.push(rnode as *mut Node<K, V>);
-                        CRInsertState::Split(rnode as *mut Node<K, V>)
+                        first_seen.push(rnode as *mut Node<K, V, M::Charge>);
+                        CRInsertState::Split(rnode as *mut Node<K, V, M::Charge>)
                     }
                     LeafInsertState::RevSplit(lnode) => {
-                        first_seen.push(lnode as *mut Node<K, V>);
-                        CRInsertState::RevSplit(lnode as *mut Node<K, V>)
+                        first_seen.push(lnode as *mut Node<K, V, M::Charge>);
+                        CRInsertState::RevSplit(lnode as *mut Node<K, V, M::Charge>)
                     }
                 }
             }
@@ -738,16 +878,16 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         //
         // NOTE: We have to match, rather than map here, as rust tries to
         // move k:v into both closures!
-        match branch_ref!(node, K, V, Untracked).req_clone(txid, &mut Untracked) {
+        match branch_ref_shared!(node, K, V, M::Charge).req_clone(txid, funding) {
             Some(cnode) => {
                 first_seen.push(cnode);
                 last_seen.push(node);
                 // Not same txn, clone instead.
-                let nmref = branch_ref!(cnode, K, V, Untracked);
+                let nmref = branch_ref!(cnode, K, V, M::Charge);
                 let anode_idx = nmref.locate_node(&k);
                 let anode = nmref.get_idx_unchecked(anode_idx);
 
-                match clone_and_insert(anode, txid, k, v, last_seen, first_seen) {
+                match clone_and_insert(anode, txid, k, v, last_seen, first_seen, funding) {
                     CRInsertState::Clone(res, lnode) => {
                         nmref.replace_by_idx(anode_idx, lnode);
                         // Pass back up that we cloned.
@@ -761,25 +901,31 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
 
                         // Third we insert rnode - perfect world it's at anode_idx + 1, but
                         // we use the normal insert routine for now.
-                        match nmref.add_node(rnode) {
+                        match nmref.add_node(rnode, funding) {
                             BranchInsertState::Ok => CRInsertState::Clone(None, cnode),
                             BranchInsertState::Split(clnode, crnode) => {
                                 // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                                first_seen.push(nrnode as *mut Node<K, V>);
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
                                 // Return it
-                                CRInsertState::CloneSplit(cnode, nrnode as *mut Node<K, V>)
+                                CRInsertState::CloneSplit(
+                                    cnode,
+                                    nrnode as *mut Node<K, V, M::Charge>,
+                                )
                             }
                         }
                     }
                     CRInsertState::CloneRevSplit(nnode, lnode) => {
                         nmref.replace_by_idx(anode_idx, nnode);
-                        match nmref.add_node_left(lnode, anode_idx) {
+                        match nmref.add_node_left(lnode, anode_idx, funding) {
                             BranchInsertState::Ok => CRInsertState::Clone(None, cnode),
                             BranchInsertState::Split(clnode, crnode) => {
-                                let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                CRInsertState::CloneSplit(cnode, nrnode as *mut Node<K, V>)
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
+                                CRInsertState::CloneSplit(
+                                    cnode,
+                                    nrnode as *mut Node<K, V, M::Charge>,
+                                )
                             }
                         }
                     }
@@ -798,11 +944,11 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                 } // end match
             } // end Some,
             None => {
-                let nmref = branch_ref!(node, K, V, Untracked);
+                let nmref = branch_ref!(node, K, V, M::Charge);
                 let anode_idx = nmref.locate_node(&k);
                 let anode = nmref.get_idx_unchecked(anode_idx);
 
-                match clone_and_insert(anode, txid, k, v, last_seen, first_seen) {
+                match clone_and_insert(anode, txid, k, v, last_seen, first_seen, funding) {
                     CRInsertState::Clone(res, lnode) => {
                         nmref.replace_by_idx(anode_idx, lnode);
                         // We did not clone, and no further work needed.
@@ -814,16 +960,16 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                         CRInsertState::NoClone(res)
                     }
                     CRInsertState::Split(rnode) => {
-                        match nmref.add_node(rnode) {
+                        match nmref.add_node(rnode, funding) {
                             // Similar to CloneSplit - we are either okay, and the insert was happy.
                             BranchInsertState::Ok => CRInsertState::NoClone(None),
                             // Or *we* split as well, and need to return a new sibling branch.
                             BranchInsertState::Split(clnode, crnode) => {
                                 // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                                first_seen.push(nrnode as *mut Node<K, V>);
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
                                 // Return it
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
+                                CRInsertState::Split(nrnode as *mut Node<K, V, M::Charge>)
                             }
                         }
                     }
@@ -834,35 +980,37 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
 
                         // Third we insert rnode - perfect world it's at anode_idx + 1, but
                         // we use the normal insert routine for now.
-                        match nmref.add_node(rnode) {
+                        match nmref.add_node(rnode, funding) {
                             // Similar to CloneSplit - we are either okay, and the insert was happy.
                             BranchInsertState::Ok => CRInsertState::NoClone(None),
                             // Or *we* split as well, and need to return a new sibling branch.
                             BranchInsertState::Split(clnode, crnode) => {
                                 // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                                first_seen.push(nrnode as *mut Node<K, V>);
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
                                 // Return it
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
+                                CRInsertState::Split(nrnode as *mut Node<K, V, M::Charge>)
                             }
                         }
                     }
-                    CRInsertState::RevSplit(lnode) => match nmref.add_node_left(lnode, anode_idx) {
-                        BranchInsertState::Ok => CRInsertState::NoClone(None),
-                        BranchInsertState::Split(clnode, crnode) => {
-                            let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                            first_seen.push(nrnode as *mut Node<K, V>);
-                            CRInsertState::Split(nrnode as *mut Node<K, V>)
-                        }
-                    },
-                    CRInsertState::CloneRevSplit(nnode, lnode) => {
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        match nmref.add_node_left(lnode, anode_idx) {
+                    CRInsertState::RevSplit(lnode) => {
+                        match nmref.add_node_left(lnode, anode_idx, funding) {
                             BranchInsertState::Ok => CRInsertState::NoClone(None),
                             BranchInsertState::Split(clnode, crnode) => {
-                                let nrnode = Node::new_branch(txid, clnode, crnode, &mut Untracked);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
+                                CRInsertState::Split(nrnode as *mut Node<K, V, M::Charge>)
+                            }
+                        }
+                    }
+                    CRInsertState::CloneRevSplit(nnode, lnode) => {
+                        nmref.replace_by_idx(anode_idx, nnode);
+                        match nmref.add_node_left(lnode, anode_idx, funding) {
+                            BranchInsertState::Ok => CRInsertState::NoClone(None),
+                            BranchInsertState::Split(clnode, crnode) => {
+                                let nrnode = Node::new_branch(txid, clnode, crnode, funding);
+                                first_seen.push(nrnode as *mut Node<K, V, M::Charge>);
+                                CRInsertState::Split(nrnode as *mut Node<K, V, M::Charge>)
                             }
                         }
                     }
@@ -870,6 +1018,25 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
             }
         } // end match branch ref clone
     } // end if leaf
+}
+
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> Debug for CursorRead<K, V, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CursorRead")
+            .field("txid", &self.txid)
+            .field("length", &self.length)
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
+}
+impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> Debug for CursorWrite<K, V, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CursorWrite")
+            .field("txid", &self.txid)
+            .field("length", &self.length)
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
 }
 
 fn path_clone<K: Clone + Ord + Debug, V: Clone>(
@@ -880,23 +1047,21 @@ fn path_clone<K: Clone + Ord + Debug, V: Clone>(
     first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRCloneState<K, V> {
     if unsafe { (*node).is_leaf() } {
-        unsafe {
-            (*(node as *mut Leaf<K, V>))
-                .req_clone(txid, &mut Untracked)
-                .map(|cnode| {
-                    // Track memory
-                    last_seen.push(node);
-                    // println!("ls push 7 {:?}", node);
-                    first_seen.push(cnode);
-                    CRCloneState::Clone(cnode)
-                })
-                .unwrap_or(CRCloneState::NoClone)
-        }
+        leaf_ref_shared!(node, K, V, Untracked)
+            .req_clone(txid, &mut Untracked)
+            .map(|cnode| {
+                // Track memory
+                last_seen.push(node);
+                // println!("ls push 7 {:?}", node);
+                first_seen.push(cnode);
+                CRCloneState::Clone(cnode)
+            })
+            .unwrap_or(CRCloneState::NoClone)
     } else {
         // We are in a branch, so locate our descendent and prepare
         // to clone if needed.
         // println!("txid -> {:?} {:?}", node_txid, txid);
-        let nmref = branch_ref!(node, K, V, Untracked);
+        let nmref = branch_ref_shared!(node, K, V, Untracked);
         let anode_idx = nmref.locate_node(k);
         let anode = nmref.get_idx_unchecked(anode_idx);
         match path_clone(anode, txid, k, last_seen, first_seen) {
@@ -914,7 +1079,8 @@ fn path_clone<K: Clone + Ord + Debug, V: Clone>(
                         CRCloneState::Clone(acnode)
                     })
                     .unwrap_or_else(|| {
-                        // Nope, just insert and unwind.
+                        // This branch is already private to the same transaction.
+                        let nmref = branch_ref!(node, K, V, Untracked);
                         nmref.replace_by_idx(anode_idx, cnode);
                         CRCloneState::NoClone
                     })
@@ -934,8 +1100,8 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
     last_seen: &mut Vec<*mut Node<K, V>>,
     first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRRemoveState<K, V> {
-    if self_meta!(node).is_leaf() {
-        leaf_ref!(node, K, V, Untracked)
+    if self_meta_shared!(node).is_leaf() {
+        leaf_ref_shared!(node, K, V, Untracked)
             .req_clone(txid, &mut Untracked)
             .map(|cnode| {
                 first_seen.push(cnode);
@@ -957,7 +1123,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
     } else {
         // Locate the node we need to work on and then react if it
         // requests a shrink.
-        branch_ref!(node, K, V, Untracked)
+        branch_ref_shared!(node, K, V, Untracked)
             .req_clone(txid, &mut Untracked)
             .map(|cnode| {
                 first_seen.push(cnode);
@@ -992,7 +1158,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                             &mut Untracked,
                         );
                         // Okay, now work out what we need to do.
-                        match nmref.shrink_decision(right_idx) {
+                        match nmref.shrink_decision(right_idx, &mut Untracked) {
                             BranchShrinkState::Balanced => {
                                 // K:V were distributed through left and right,
                                 // so no further action needed.
@@ -1035,7 +1201,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                             first_seen,
                             &mut Untracked,
                         );
-                        match nmref.shrink_decision(right_idx) {
+                        match nmref.shrink_decision(right_idx, &mut Untracked) {
                             BranchShrinkState::Balanced => {
                                 // K:V were distributed through left and right,
                                 // so no further action needed.
@@ -1077,7 +1243,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                             first_seen,
                             &mut Untracked,
                         );
-                        match nmref.shrink_decision(right_idx) {
+                        match nmref.shrink_decision(right_idx, &mut Untracked) {
                             BranchShrinkState::Balanced => {
                                 // K:V were distributed through left and right,
                                 // so no further action needed.
@@ -1335,7 +1501,7 @@ mod tests {
         let bref = branch_ref!(lbranch, usize, usize, Untracked);
         for i in 2..BV_CAPACITY {
             let l = create_leaf_node(vbase + (10 * i));
-            let r = bref.add_node(l);
+            let r = bref.add_node(l, &mut Untracked);
             match r {
                 BranchInsertState::Ok => {}
                 _ => debug_assert!(false),
@@ -1849,7 +2015,7 @@ mod tests {
         let znode = create_leaf_node(0);
         let root = Node::new_branch(0, znode, lnode, &mut Untracked);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
+        unsafe { (*root).add_node(rnode, &mut Untracked) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer(());
         // println!("{:?}", wcurs);
@@ -1876,7 +2042,7 @@ mod tests {
         let znode = create_leaf_node(30);
         let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(znode) };
+        unsafe { (*root).add_node(znode, &mut Untracked) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer(());
         assert!(wcurs.verify());
@@ -1902,7 +2068,7 @@ mod tests {
         let znode = create_leaf_node(0);
         let root = Node::new_branch(0, znode, lnode, &mut Untracked);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
+        unsafe { (*root).add_node(rnode, &mut Untracked) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer(());
         assert!(wcurs.verify());
@@ -1932,7 +2098,7 @@ mod tests {
         let znode = create_leaf_node(0);
         let root = Node::new_branch(0, znode, lnode, &mut Untracked);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
+        unsafe { (*root).add_node(rnode, &mut Untracked) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer(());
         assert!(wcurs.verify());
@@ -1962,7 +2128,7 @@ mod tests {
         let znode = create_leaf_node(30);
         let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(znode) };
+        unsafe { (*root).add_node(znode, &mut Untracked) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer(());
         assert!(wcurs.verify());
@@ -2531,8 +2697,8 @@ mod tests {
 
         let branch = Node::new_branch(0, l1, l2, &mut Untracked);
         let nref = branch_ref!(branch, usize, usize, Untracked);
-        nref.add_node(l3);
-        nref.add_node(l4);
+        nref.add_node(l3, &mut Untracked);
+        nref.add_node(l4, &mut Untracked);
 
         branch as *mut _
     }
@@ -2545,8 +2711,8 @@ mod tests {
         let b4 = create_split_off_branch(300);
         let root = Node::new_branch(0, b1, b2, &mut Untracked);
         let nref = branch_ref!(root, usize, usize, Untracked);
-        nref.add_node(b3);
-        nref.add_node(b4);
+        nref.add_node(b3, &mut Untracked);
+        nref.add_node(b4, &mut Untracked);
 
         root as *mut _
     }
@@ -2753,3 +2919,7 @@ mod tests {
     }
     */
 }
+
+#[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
+#[path = "cursor_allocation_tests.rs"]
+mod allocation_tests;

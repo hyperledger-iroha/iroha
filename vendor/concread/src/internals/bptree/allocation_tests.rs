@@ -7,11 +7,11 @@ use std::cmp::Ordering;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Clone, Copy)]
-struct Record {
-    pointer: usize,
-    layout: Layout,
-    freed: bool,
-    refunded: bool,
+pub(crate) struct Record {
+    pub(crate) pointer: usize,
+    pub(crate) layout: Layout,
+    pub(crate) freed: bool,
+    pub(crate) refunded: bool,
 }
 
 thread_local! {
@@ -22,6 +22,7 @@ thread_local! {
     static PANIC_CLONE: Cell<usize> = const { Cell::new(0) };
     static PANIC_COMPARE: Cell<bool> = const { Cell::new(false) };
     static PANIC_DROP: Cell<bool> = const { Cell::new(false) };
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 struct ObservedAllocator;
@@ -29,6 +30,11 @@ struct ObservedAllocator;
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let pointer = unsafe { System.alloc(layout) };
+        let _ = ALLOCATIONS.try_with(|allocations| {
+            if let Some(count) = allocations.get() {
+                allocations.set(Some(count + 1));
+            }
+        });
         if !pointer.is_null() {
             let _ = EXPECTED.try_with(|expected| {
                 if let Some((id, exact)) = expected.get().filter(|(_, exact)| *exact == layout) {
@@ -67,7 +73,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
 // Intentionally neither Clone nor Default. Its size also changes real padding.
-struct Charge {
+pub(crate) struct Charge {
     id: usize,
     layout: Layout,
     _storage: [u8; 129],
@@ -89,22 +95,56 @@ impl Drop for Charge {
     }
 }
 
-struct Prepaid {
-    next: usize,
+pub(crate) struct Prepaid {
+    pub(crate) next: usize,
     // A finite admitted count suffices for this allocator-observation fixture;
     // production must prepay the complete exact layout sum before mutation.
-    remaining: usize,
+    pub(crate) remaining: usize,
 }
 
 impl NodeFunding for Prepaid {
     type Charge = Charge;
 
     fn take_node_charge(&mut self, layout: Layout) -> Charge {
+        self.take_allocation_charge(layout)
+    }
+}
+
+// This fixture observes node storage only. Nested funded payloads use the
+// explicit ownership policy exercised by cloning_tests.rs.
+impl<K: Clone, V: Clone> NodeCloning<K, V> for Prepaid {
+    fn clone_key(&mut self, key: &K) -> K {
+        key.clone()
+    }
+    fn clone_value(&mut self, value: &V) -> V {
+        value.clone()
+    }
+}
+
+impl Prepaid {
+    /// Observe one original admitted node or tracking-buffer allocation.
+    pub(crate) fn take_allocation_charge(&mut self, layout: Layout) -> Charge {
         assert!(self.remaining > 0, "operation exceeded original admission");
         self.remaining -= 1;
         let id = self.next;
         self.next += 1;
-        EXPECTED.with(|expected| assert!(expected.replace(Some((id, layout))).is_none()));
+        if layout.size() == 0 {
+            // Empty/ZST backing storage never reaches the allocator. Preserve
+            // its separate original charge without inventing an allocation.
+            EXPECTED.with(|expected| assert!(expected.get().is_none()));
+            RECORDS.with(|records| {
+                let mut all = records.get();
+                all[id] = Some(Record {
+                    pointer: 0,
+                    layout,
+                    freed: true,
+                    refunded: false,
+                });
+                records.set(all);
+            });
+        } else {
+            EXPECTED.with(|expected| assert!(expected.replace(Some((id, layout))).is_none()));
+        }
         Charge {
             id,
             layout,
@@ -113,7 +153,7 @@ impl NodeFunding for Prepaid {
     }
 }
 
-fn prepaid() -> Prepaid {
+pub(crate) fn prepaid() -> Prepaid {
     assert_eq!(LIVE.with(Cell::get), 0);
     RECORDS.with(|records| records.set([None; 128]));
     EXPECTED.with(|expected| expected.set(None));
@@ -127,17 +167,37 @@ fn prepaid() -> Prepaid {
     }
 }
 
-fn record(id: usize) -> Record {
+pub(crate) fn record(id: usize) -> Record {
     RECORDS.with(|records| records.get()[id].expect("original allocation record"))
 }
 
-fn all_refunded(funding: &Prepaid) {
+pub(crate) fn all_refunded(funding: &Prepaid) {
     assert!(EXPECTED.with(Cell::get).is_none());
     for id in 0..funding.next {
         assert!(record(id).refunded);
     }
     assert_eq!(LIVE.with(Cell::get), 0);
     assert_released();
+}
+
+/// Check a real operation without leaving allocator observation armed on panic.
+pub(crate) fn without_allocations<T>(action: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ALLOCATIONS.with(|allocations| allocations.set(None));
+        }
+    }
+    ALLOCATIONS.with(|allocations| {
+        assert!(allocations.get().is_none(), "nested allocation observation");
+        allocations.set(Some(0));
+    });
+    let restore = Restore;
+    let result = action();
+    let allocations = ALLOCATIONS.with(|allocations| allocations.get().unwrap());
+    drop(restore);
+    assert_eq!(allocations, 0);
+    result
 }
 
 #[derive(Debug)]
@@ -271,7 +331,10 @@ fn every_charged_branch_clone_panic_preserves_children_and_original_charge() {
     let root = Owner(ChargedNode::new_branch(1, children[0].0, children[1].0, &mut funding).cast());
     let original = unsafe { &mut *root.0.cast::<ChargedBranch>() };
     for child in &children[2..] {
-        assert!(matches!(original.add_node(child.0), BranchInsertState::Ok));
+        assert!(matches!(
+            original.add_node(child.0, &mut funding),
+            BranchInsertState::Ok
+        ));
     }
     for at in 1..=L_CAPACITY {
         CLONES.with(|count| count.set(0));
@@ -396,4 +459,25 @@ fn raw_node_thread_traits_require_original_key_value_and_charge_safety() {
     let _ = <Node<Cell<u64>, u64> as AmbiguousIfSync<_>>::probe;
     let _ = <Node<u64, u64, std::rc::Rc<()>> as AmbiguousIfSend<_>>::probe;
     let _ = <Node<u64, u64, Cell<u64>> as AmbiguousIfSync<_>>::probe;
+}
+
+#[test]
+fn node_funding_alone_never_grants_payload_cloning() {
+    struct NodeOnly;
+    impl NodeFunding for NodeOnly {
+        type Charge = Untracked;
+        fn take_node_charge(&mut self, _: Layout) -> Untracked {
+            Untracked
+        }
+    }
+    // This becomes ambiguous (and fails compilation) if a blanket policy ever
+    // makes node funding alone sufficient to clone arbitrary nested payloads.
+    trait AmbiguousIfCloning<A> {
+        fn probe() {}
+    }
+    impl<T: ?Sized> AmbiguousIfCloning<()> for T {}
+    impl<T: ?Sized + NodeCloning<usize, usize>> AmbiguousIfCloning<u8> for T {}
+    let _ = <NodeOnly as AmbiguousIfCloning<_>>::probe;
+    fn explicit_policy<T: NodeCloning<usize, usize>>() {}
+    explicit_policy::<Untracked>();
 }

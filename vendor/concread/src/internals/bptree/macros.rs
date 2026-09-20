@@ -16,6 +16,13 @@ macro_rules! self_meta {
     }};
 }
 
+/// Read node metadata without creating exclusive access to a shared generation.
+macro_rules! self_meta_shared {
+    ($x:expr) => {{
+        unsafe { &*($x as *const Meta) }
+    }};
+}
+
 macro_rules! branch_ref {
     ($x:expr, $k:ty, $v:ty, $c:ty) => {{
         debug_assert!(unsafe { (*$x).meta.is_branch() });
@@ -23,8 +30,7 @@ macro_rules! branch_ref {
     }};
 }
 
-/// Like [`branch_ref`], but yields &Leaf without coercing from &mut Leaf. This is useful
-/// to avoid triggering Miri's analysis.
+/// Borrow a shared branch directly, without creating an intermediate exclusive reference.
 macro_rules! branch_ref_shared {
     ($x:expr, $k:ty, $v:ty, $c:ty) => {{
         debug_assert!(unsafe { (*$x).meta.is_branch() });
@@ -32,8 +38,7 @@ macro_rules! branch_ref_shared {
     }};
 }
 
-/// Like [`leaf_ref`], but yields &Leaf without coercing from &mut Leaf. This is useful
-/// to avoid triggering Miri's analysis.
+/// Borrow a shared leaf directly, without creating an intermediate exclusive reference.
 macro_rules! leaf_ref_shared {
     ($x:expr, $k:ty, $v:ty, $c:ty) => {{
         debug_assert!(unsafe { (*$x).meta.is_leaf() });

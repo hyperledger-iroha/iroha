@@ -4,6 +4,18 @@ use super::*;
 use crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveBoundsV1;
 use mv::storage::StorageReadOnly;
 
+std::thread_local! {
+    static EFFECTS_ALLOCATION_ATTEMPTS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+// Observe only entry into the real Box allocation expression. This is not a
+// memory-accounting policy or a claim about nested effects allocations.
+pub(super) fn observe_effects_allocation_attempt() {
+    EFFECTS_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
+}
+
 fn reserve_provider_for_test(
     archive: &Arc<ProviderIngestFinalizedArchiveV1>,
     state: &State,
@@ -294,7 +306,15 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     let mut called = false;
     let original_prefix = prepared.execution_prefix_commitment();
     let original_state_pointer = std::ptr::from_ref(prepared.state.as_ref());
+    let effects_allocation_attempts = EFFECTS_ALLOCATION_ATTEMPTS.with(std::cell::Cell::get);
+    let effects_layout = std::alloc::Layout::new::<RetainedCarrierEffects>();
     let inspect_original = |original: &CarrierJournalInputs<'_, '_>| {
+        assert_eq!(original.retained_effects_layout, effects_layout);
+        assert_eq!(
+            EFFECTS_ALLOCATION_ATTEMPTS.with(std::cell::Cell::get),
+            effects_allocation_attempts,
+            "effects allocation must await successful original admission"
+        );
         assert_eq!(std::ptr::from_ref(original.state), original_state_pointer);
         assert_eq!(
             original.valid.as_ref().execution_outputs().as_ptr(),
@@ -350,6 +370,11 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         original_state_pointer
     );
     assert_eq!(carrier.execution_prefix_commitment(), original_prefix);
+    assert_eq!(
+        EFFECTS_ALLOCATION_ATTEMPTS.with(std::cell::Cell::get),
+        effects_allocation_attempts,
+        "refused admission must not allocate retained effects"
+    );
     assert!(state.block_hashes.inner.try_write().is_none());
     let reserved = archive
         .try_reserve_candidate(
@@ -374,6 +399,15 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         })
         .unwrap();
     assert_eq!(journals.execution_prefix_commitment(), original_prefix);
+    assert_eq!(
+        EFFECTS_ALLOCATION_ATTEMPTS.with(std::cell::Cell::get),
+        effects_allocation_attempts + 1
+    );
+    assert_eq!(
+        std::alloc::Layout::for_value(journals.effects.as_ref()),
+        effects_layout,
+        "admission exposes the actual effects pointee, not its Box handle"
+    );
     assert_eq!(
         journals.valid.as_ref().execution_outputs().as_ptr(),
         outputs_pointer

@@ -106,6 +106,9 @@ def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, 
     ("JOURNALS", "struct CarrierJournalInputs", "&'owner Arc<iroha_data_model::block::consensus_v2::HeightContext>", "&'owner iroha_data_model::block::consensus_v2::HeightContext"),
     ("JOURNALS", "struct CarrierJournalInputs", "&'owner Vec<DaPinIntentWithLocation>", "&'owner [DaPinIntentWithLocation]"),
     ("JOURNALS", "struct CarrierJournalInputs", "&'owner Vec<EventBox>", "&'owner [EventBox]"),
+    ("JOURNALS", "struct CarrierJournalInputs", "retained_effects_layout: std::alloc::Layout", "retained_effects_layout: usize"),
+    ("JOURNALS", "let admission = match admit_journals", "std::alloc::Layout::new::<RetainedCarrierEffects>()", "std::alloc::Layout::new::<Box<RetainedCarrierEffects>>()"),
+    ("JOURNALS", "let admission = match admit_journals", "std::alloc::Layout::new::<RetainedCarrierEffects>()", "std::alloc::Layout::new::<()>()"),
     ("JOURNALS", "fn prepare_journals", "        } = &self;", "            ..\n        } = &self;"),
     ("JOURNALS", "fn prepare_journals", "} = &self;", "} = &other;"),
     ("JOURNALS", "let admission = match admit_journals", "            valid,", "            valid: other_valid,"),
@@ -134,6 +137,7 @@ def test_retained_carrier_admission_requires_complete_original_inputs(fixture, o
     "state.prepare_carrier_geometry();",
     "owner.capture_original(state.as_ref());",
     "world.try_detach_journals(|_| Ok(()));",
+    "Box::new(RetainedCarrierEffects {});",
 ])
 def test_retained_carrier_admission_precedes_original_projection(fixture, projection):
     root, helper, checker, _ = fixture
