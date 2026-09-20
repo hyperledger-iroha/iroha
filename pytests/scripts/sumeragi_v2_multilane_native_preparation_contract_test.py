@@ -48,6 +48,90 @@ def test_native_preparation_accepts_actual_owners(fixture):
     assert validate(fixture) == ()
 
 
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Validated(PreparedCarrierJournals<Admission>)", "Validated(Box<PreparedCarrierJournals<Admission>>)"),
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)", "Decided(PreparedCarrierJournals<Admission>)"),
+    ("DECISION_CARRIER", "enum RetainedCarrier", "crate::kura::KuraWsvCheckpointReceipt", "()"),
+    ("VALIDATION_CUSTODY", "struct Candidate", "owner: Option<O>,", "owner: Option<O>, commitment: wire::ExecutionCommitment,"),
+    ("VALIDATION_CUSTODY", "struct RetainedBodyValidationService", "limit: usize,", "limit: usize, decided: Vec<P::Owner>,"),
+    ("VALIDATION_CUSTODY", "struct SelectedValidationCarrier", "owner: Option<P::Owner>,", "owner: Option<P::Owner>, saved: Option<P::Owner>,"),
+    ("JOURNALS", "fn matches_validation_candidate", "if self.context.as_ref() != context", "if false"),
+    ("JOURNALS", "fn matches_validation_candidate", "original == candidate", "true"),
+    ("JOURNALS", "fn execution_prefix_commitment", "self.execution_prefix", "Default::default()"),
+    ("VALIDATION_CUSTODY", "fn new", "candidates.try_reserve_exact(limit)?;", "// descriptor admission removed"),
+    ("VALIDATION_CUSTODY", "fn new", "markers.try_reserve_exact(limit)?;", "// marker admission removed"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "if self.candidates.len() == self.limit", "if false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "if requires_existing_owner", "if false"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "self.owner = Some(owner);", "drop(owner);"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "Ok(value) => {", "Ok(value) => { self.service.candidates.remove(self.index);"),
+    ("VALIDATION_CUSTODY", "fn drop(&mut self)", "self.service.candidates[self.index].owner = Some(owner);", "self.service.candidates[0].owner = Some(owner);"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !service.matches_store(&self.instance_identity())", "if false"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "already_validated.is_some() || reused.is_some()", "false"),
+])
+def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in e or "retained carrier" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("phase", ["Validated", "Decided", "Checkpointed"])
+@pytest.mark.parametrize("method", ["matches_validation_candidate", "execution_prefix_commitment"])
+def test_retained_carrier_requires_original_delegation_in_every_phase(fixture, phase, method):
+    root, helper, checker, _ = fixture
+    argument = "journals" if phase == "Validated" else "carrier"
+    helper.replace_once_after(root / checker.native_preparation_contract.DECISION_CARRIER,
+                              f"fn {method}", f"Self::{phase}({argument}) =>",
+                              f"Self::{phase}({argument}) => return Default::default(), _ =>")
+    errors = validate(fixture)
+    assert any("retained carrier" in e or "executable relation" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["unsealed", "old-owner", "fixture-production", "fixture-escape", "cached-commitment"])
+def test_retained_carrier_requires_sealed_phase_owner(fixture, mutation):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.VALIDATION_CUSTODY
+    if mutation == "unsealed":
+        helper.replace_once_after(path, "trait RetainedValidationOwner", "sealed::Owner + Send", "Send")
+    elif mutation == "old-owner":
+        path.write_text(path.read_text() + "\nimpl<A> sealed::Owner for crate::state::PreparedCarrierJournals<A> {}\n")
+    elif mutation == "fixture-production":
+        helper.replace_once_after(path, "#[cfg(test)]", "pub(in crate::sumeragi) mod test_support", "pub(crate) mod test_support")
+        path.write_text(path.read_text().replace("#[cfg(test)]", "", 1))
+    elif mutation == "fixture-escape":
+        declaration = "impl sealed::Owner for TrackedOwner {}"
+        source = path.read_text()
+        assert source.count(declaration) == 1
+        path.write_text(source.replace(declaration, "", 1) + "\n" + declaration + "\n")
+    else:
+        helper.replace_once_after(path, "impl<A: Send", "self.execution_prefix_commitment()", "Default::default()")
+    assert any("retained carrier" in e for e in validate(fixture))
+
+
+@pytest.mark.parametrize("mutation", ["execute-before-capacity", "persist-before-install", "confirm-before-persist"])
+def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation):
+    root, helper, checker, _ = fixture
+    c = checker.native_preparation_contract
+    if mutation == "execute-before-capacity":
+        helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
+                                  "let existing = self", "self.validator.prepare(context, body); let existing = self")
+    else:
+        path = root / c.RETAINED_VALIDATION
+        anchor = "fn execute_retained_durable_validation"
+        persistence = "let validated = self.persist_validated_receipt(&durable, commitment)?;"
+        if mutation == "persist-before-install":
+            helper.replace_once_after(path, anchor, persistence, "")
+            helper.replace_once_after(path, anchor, "match service.prepare_marker(", persistence + "\n        match service.prepare_marker(")
+        else:
+            helper.replace_once_after(path, anchor, "service.confirm(&validated)?;", "")
+            helper.replace_once_after(path, anchor, persistence, "service.confirm(&validated)?;\n" + persistence)
+    errors = validate(fixture)
+    assert any("reorders executable relation" in e or "repeats execution" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
 def test_native_preparation_is_connected_to_release_gate():
     checker = support().load_checker()
     tree = ast.parse(Path(checker.__file__).read_text())
@@ -391,6 +475,65 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
                               f"fn {symbol}", old, new)
     errors = validate(fixture)
     assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("GEOMETRY_CARRIER", "prepare_carrier_geometry", "state_owner: Arc::clone(&self.state_ref.block_hashes.owner)", "state_owner: Arc::clone(&other.block_hashes.owner)", id="original-state-capture"),
+    pytest.param("GEOMETRY_CARRIER", "matches_publication_target", "self._header == header", "true", id="exact-header"),
+    pytest.param("GEOMETRY_CARRIER", "matches_publication_target", "Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)", "true", id="exact-state"),
+    pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.plan.retire.is_empty()", "false", id="retired-route"),
+    pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.catalog_update.replaced_lane_ids.is_empty()", "false", id="replaced-route"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.matches_publication_target(target, header)", "false", id="completion-binding"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "self.requires_queue_custody()", "false", id="completion-queue-refusal"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.publish_catalog_under(lease, None)", "raw.publish_catalog_under(other_lease, None)", id="catalog-lease"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.reauthenticate_catalog_under(lease)", "raw.reauthenticate_catalog_under(other_lease)", id="completed-catalog-lease"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "geometry: self,", "geometry: other,", id="completed-original-owner"),
+    pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "!journals.geometry.requires_storage_transition()", "false", id="identity-needs-no-backend"),
+    pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "&journals.components._fences._kura", "other_lease", id="retained-preparation-lease"),
+    pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "            self.target,", "            other_target,", id="completion-original-target"),
+    pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "let journals = &mut self.decision.journals;", "let journals = &mut self.decision.journals; let _fresh = self.target.kura.try_publication_lease()?;", id="no-fresh-kura-lease"),
+    pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", ".try_lock_or_wait()", ".lock()", id="no-blocking-backend-lock"),
+    pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()", "false", id="exact-lifecycle-effects"),
+    pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.requires_queue_custody()", "false", id="publisher-queue-refusal"),
+    pytest.param("TERMINAL_CARRIER", "publish", ".sync_mapping(&effects.nexus.lane_config)", ".sync_mapping(&other_mapping)", id="accepted-mapping"),
+    pytest.param("TERMINAL_CARRIER", "publish", ".lifecycle\n            .take()", ".lifecycle\n            .clone()", id="consume-lifecycle"),
+    pytest.param("TERMINAL_CARRIER", "publish", "if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }", "drop(lifecycle_post_publication);", id="consume-lifecycle-post-work"),
+])
+def test_terminal_geometry_rejects_owner_mutation(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner),
+                              f"fn {symbol}", old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "geometry completion" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["resume-before-guards", "completion-before-source", "release-before-lifecycle-post"])
+def test_terminal_geometry_rejects_effects_before_their_guards(fixture, mutation):
+    root, helper, checker, _ = fixture
+    contract = checker.native_preparation_contract
+    if mutation == "resume-before-guards":
+        path = root / contract.GEOMETRY_CARRIER
+        statement = "self.resume_under(backend, lease)?;"
+        helper.replace_once_after(path, "fn complete_under", statement, "")
+        helper.replace_once_after(path, "fn complete_under",
+                                  "if !self.matches_publication_target(target, header)",
+                                  statement + "\n        if !self.matches_publication_target(target, header)")
+    elif mutation == "completion-before-source":
+        # Retaining the correct later completion must not hide an earlier effect.
+        helper.replace_once_after(root / contract.TERMINAL_CARRIER, "fn publish(",
+                                  "let journals = &self.decision.journals;",
+                                  "self.try_complete_geometry()?; let journals = &self.decision.journals;")
+    else:
+        path = root / contract.TERMINAL_CARRIER
+        statement = "let commit = fences.release_for_completion();"
+        helper.replace_once_after(path, "fn publish(", statement, "")
+        helper.replace_once_after(path, "fn publish(",
+                                  "if let Some(post) = lifecycle_post_publication",
+                                  statement + "\n        if let Some(post) = lifecycle_post_publication")
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error or "terminal lifecycle" in error for error in errors), errors
     assert not any("digest" in error or "must have one" in error for error in errors), errors
 
 

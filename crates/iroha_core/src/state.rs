@@ -388,7 +388,7 @@ mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
 pub(crate) use carrier_preparation::{
-    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply,
+    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply, RetainedCarrier,
 };
 mod committed_hash_journal;
 #[cfg(test)]

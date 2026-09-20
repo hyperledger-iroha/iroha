@@ -95,6 +95,57 @@ pub(crate) struct DecisionBoundCarrierJournals<
     _binding_admission: BindingAdmission,
 }
 
+/// The one original detached carrier through decision and durability attachment.
+///
+/// Each phase owns the previous phase's journals and admissions by move. A local
+/// publication refusal returns the current phase to the same preallocated
+/// candidate slot; it must never reconstruct a ValidBlock or execute again.
+/// Checkpoint attachment still grants no publication or retirement authority.
+#[must_use = "retain the current carrier phase until authorized publication or drop"]
+pub(crate) enum RetainedCarrier<Admission, BindingAdmission> {
+    /// Actual detached execution, before an exact verified decision is joined.
+    Validated(PreparedCarrierJournals<Admission>),
+    /// The same journals after consuming their ValidBlock under verified finality.
+    Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
+    /// The same decided carrier with its actual checkpoint writer receipt.
+    Checkpointed(
+        DecisionBoundCarrierJournals<
+            Admission,
+            BindingAdmission,
+            super::DetachedCarrierComponents,
+            crate::kura::KuraWsvCheckpointReceipt,
+        >,
+    ),
+}
+
+impl<Admission, BindingAdmission> RetainedCarrier<Admission, BindingAdmission> {
+    /// Compare the original context and proposal in every retained phase.
+    pub(crate) fn matches_validation_candidate(
+        &self,
+        context: &HeightContext,
+        proposal: &SignedBlock,
+    ) -> bool {
+        match self {
+            Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
+            Self::Decided(carrier) => carrier
+                .journals
+                .matches_validation_candidate(context, proposal),
+            Self::Checkpointed(carrier) => carrier
+                .journals
+                .matches_validation_candidate(context, proposal),
+        }
+    }
+
+    /// Read the original execution prefix without a cached identity projection.
+    pub(crate) fn execution_prefix_commitment(&self) -> ExecutionCommitment {
+        match self {
+            Self::Validated(journals) => journals.execution_prefix_commitment(),
+            Self::Decided(carrier) => carrier.journals.execution_prefix_commitment(),
+            Self::Checkpointed(carrier) => carrier.journals.execution_prefix_commitment(),
+        }
+    }
+}
+
 /// Join canonical consensus identity, not the byte representation of a parent QC.
 /// The opaque artifact already proves its round context id equals its context's
 /// semantic id. The captured context remains the original authenticated owner.

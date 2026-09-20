@@ -1810,3 +1810,188 @@ def test_canonical_queue_plan_retry_rejects_fresh_policy_or_authority(policy: st
     errors = []
     contract.validate_canonical_queue_plan_retry(items, errors)
     assert any(symbol in error and "fresh admission" in error for error in errors), errors
+
+
+@_retained_route_cache(maxsize=1)
+def replay_terminal_queue_plan_items() -> dict:
+    """Read the original claim and release owners for the executable custody contract."""
+    module = load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    sources, items = {}, {}
+    for path, kind, symbol, _ in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS:
+        source = sources.setdefault(path, (ROOT_DIR / path).read_text())
+        owner, = module._extract_rust_binding_items(source, kind, symbol)
+        items[(path, kind, symbol)] = owner
+    return items
+
+
+def test_replay_terminal_queue_plan_custody_accepts_actual_sources() -> None:
+    """Exact canonical evidence survives ordinary selection without becoming Kura proof."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items()
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert errors == [], errors
+    for path, kind, symbol, tokens in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS:
+        for token in tokens:
+            assert token in items[(path, kind, symbol)], (symbol, token)
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("QueuePlanDurableClaimIndexEntry", "local_custody: QueuePlanLocalCustody", "local_custody: bool"),
+    ("Queue::replay_terminal_cleanup_pending", "== QueuePlanLocalCustody::ReplayTerminalPending", "!= QueuePlanLocalCustody::Autonomous"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "&& self.transaction_selection_durability_faulted()", "&& false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if &indexed_binding != binding", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if reservation_owned", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous", "|| false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".local_custody = QueuePlanLocalCustody::ReplayTerminalPending", ".local_custody = QueuePlanLocalCustody::Available"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".store(true, Ordering::Release)", ".store(false, Ordering::Release)"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if self.global_selection_owners.lock().contains_key(&hash)", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.inflight_guards.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.selection_attempts.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::resume_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
+    ("Queue::resume_replay_terminal_cleanup", "claim.global_admission_binding()", "replacement.global_admission_binding()"),
+    ("Queue::resume_replay_terminal_cleanup", "self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)", "self.reject_exact_queue_plan_admission_claim(&binding)"),
+    ("Queue::resume_replay_terminal_cleanup", "self.mark_accepted_work_validation_fault(", "ignore_fault("),
+    ("Queue::resume_unowned_replay_terminal_cleanup", ".swap(false, Ordering::AcqRel)", ".load(Ordering::Acquire)"),
+    ("Queue::resume_unowned_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
+    ("GlobalQueueSelectionLease::retain_only", "\n        drop(owners);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "\n        drop(queue_guard);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "queue.resume_replay_terminal_cleanup(hash);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "!queue.transaction_selection_durability_faulted()", "true"),
+    ("GlobalQueueSelectionLease::drop", "drop(owners);", ""),
+    ("GlobalQueueSelectionLease::drop", "drop(queue_guard);", ""),
+    ("GlobalQueueSelectionLease::drop", "queue.resume_replay_terminal_cleanup(*hash);", ""),
+    ("QueueSelectionAttempt<'_>::drop", "if previous == 1", "if previous == 0"),
+    ("QueueSelectionAttempt<'_>::drop", "self.queue.resume_unowned_replay_terminal_cleanup();", ""),
+    ("TransactionGuard::drop", "self.queue.resume_unowned_replay_terminal_cleanup();", ""),
+    ("Queue::reserve_transactions_for_lane_bounded", "if self.replay_terminal_cleanup_pending(hash)", "if false"),
+    ("Queue::reserve_transactions_for_lane_bounded", ".local_custody = QueuePlanLocalCustody::Autonomous", ".local_custody = QueuePlanLocalCustody::Available"),
+    ("Queue::prepare_plan_journal_replay_locked", "if has_durable_reservation_owner {\n                claim.local_custody", "if false {\n                claim.local_custody"),
+    ("Queue::push_with_lane_internal_with_state_and_routing", "if existing.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "if false"),
+    ("Queue::push_with_lane_internal_with_state_and_routing", "local_custody: existing.local_custody", "local_custody: QueuePlanLocalCustody::Available"),
+    ("Queue::enqueue_prepared_admissions", "local_custody: if restored_reservation", "local_custody: if false"),
+    ("Queue::bounded_pending_snapshot", "if self.replay_terminal_cleanup_pending(*hash)", "if false"),
+    ("Queue::pop_queued_hash", "|| self.replay_terminal_cleanup_pending(hash)", "|| false"),
+    ("Queue::release_pre_kura_autonomous_reservation_batch", "let authorized_projection = checked.into_projection();", "let authorized_projection = projection;"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".first_key_value()", ".pop_first()"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", "batch.pre_kura_direct_release_context()?", "batch.pre_kura_direct_release_context().unwrap_or_default()"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?", ".unwrap_or_default()"),
+])
+def test_replay_terminal_queue_plan_custody_rejects_semantic_mutation(symbol: str, old: str, new: str) -> None:
+    """No local release may bypass exact State proof, autonomous custody, or held writers."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(old) == 1, (symbol, old)
+    items[key] = items[key].replace(old, new, 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,before,after", [
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "self.replay_terminal_cleanup_dirty\n                    .store(true, Ordering::Release);", "self.tombstone_conflicting_global_admission(binding)?;"),
+    ("GlobalQueueSelectionLease::drop", "drop(queue_guard);", "queue.resume_replay_terminal_cleanup(*hash);"),
+    ("TransactionGuard::drop", "self.queue.release_inflight_guard();", "self.queue.resume_unowned_replay_terminal_cleanup();"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".release_pre_kura_autonomous_reservation_batch(context)", "self.pending_autonomous_reservation_batches.remove(&route);"),
+])
+def test_replay_terminal_queue_plan_custody_rejects_release_order_drift(symbol: str, before: str, after: str) -> None:
+    """Presence alone cannot replace publish-before-observe and unlock-before-resume order."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(before) == items[key].count(after) == 1
+    items[key] = items[key].replace(before, "", 1).replace(after, after + "\n" + before, 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+def test_replay_terminal_queue_plan_low_level_guard_release_cannot_reenter() -> None:
+    """The counter helper is also called while Queue locks are held."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == "Queue::release_inflight_guard"]
+    items[key] = items[key].replace("let prev =", "self.resume_unowned_replay_terminal_cleanup(); let prev =", 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any("reenter held Queue locks" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("matches!(&gate, LaneQueueDirectReleaseGate::StrictAbsence(_))", "true"),
+    ("if checked_direct_release {", "if true {"),
+])
+def test_replay_terminal_queue_plan_direct_release_requires_exact_custody_reset(
+    tmp_path: Path, monkeypatch, old: str, new: str,
+) -> None:
+    """Refreshing the digest cannot authorize a raw-key custody reset."""
+    module = load_checker()
+    import check_sumeragi_v2_proof_ledger as ledger
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    for relative in ("crates/iroha_core/src/queue.rs", "crates/iroha_core/src/queue/reservation_journal.rs"):
+        copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    source = path.read_text()
+    symbol = "release_lane_reservations_in_order_inner"
+    owner, = ledger.rust_items(source, symbol)
+    assert owner.source.count(old) == 1
+    mutated = owner.source.replace(old, new, 1)
+    path.write_text(source.replace(owner.source, mutated, 1))
+    current = path.read_text()
+    refreshed = {
+        name: ledger._rust_item_token_sha256(ledger.rust_items(current, name)[0])
+        for name in contract._DIRECT_RELEASE_PRODUCTION_ITEM_SHA256
+    }
+    monkeypatch.setattr(contract, "_DIRECT_RELEASE_PRODUCTION_ITEM_SHA256", refreshed)
+    errors = []
+    contract.validate_direct_release_authority_contract(tmp_path, errors, module._rust_binding_item)
+    assert any("direct-release authority must be mandatory" in error for error in errors), errors
+    assert not any("source seal" in error for error in errors), errors
+
+
+def test_replay_terminal_queue_plan_startup_contract_accepts_actual_sources() -> None:
+    """The startup consumer and live custody consumer share the exact reviewed ledger."""
+    module = load_checker()
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_queue_plan_startup_replay_contract(ROOT_DIR, canonical_models(), errors)
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("symbol", [
+    "Queue::prepare_plan_journal_replay_locked",
+    "Queue::reject_exact_queue_plan_admission_claim_inner",
+    "Queue::remove_state_committed_replay_owners_preserving_globally_bound",
+])
+def test_replay_terminal_queue_plan_shared_startup_ledger_retains_every_obligation(symbol: str) -> None:
+    """Replacing a shared row by only its added custody tokens must fail startup review."""
+    module = load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    startup, = [row for row in contract.QUEUE_PLAN_STARTUP_REPLAY_BINDINGS if row[2] == symbol]
+    live, = [row for row in contract.QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS if row[2] == symbol]
+    addition, = [row for row in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS if row[2] == symbol]
+    assert startup == live
+    assert len(startup[3]) > len(addition[3])
+    assert startup[3][-len(addition[3]):] == addition[3]
+    models = canonical_models()
+    model, = [model for model in models if model['module'] == contract.QUEUE_PLAN_STARTUP_REPLAY_MODULE]
+    binding, = [row for row in model['production_symbols'] if row['symbol'] == symbol]
+    assert binding['required_tokens'] == list(startup[3])
+    binding['required_tokens'] = list(addition[3])
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_queue_plan_startup_replay_contract(ROOT_DIR, models, errors)
+    assert any('reviewed startup replay tokens changed' in error and symbol in error for error in errors), errors

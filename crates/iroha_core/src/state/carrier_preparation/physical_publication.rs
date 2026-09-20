@@ -275,8 +275,9 @@ impl AcquiredCarrierComponents<'_> {
 
 /// A complete decided carrier holding every original storage writer together.
 ///
-/// The private terminal consumer refuses outstanding geometry and participant
-/// durability work. TODO: complete those owners and production resource admission.
+/// The private terminal consumer completes retained nonretiring geometry before
+/// visibility. TODO: join original Queue retirement and participant durability
+/// owners, and complete production resource admission.
 /// Acquiring these writers neither advances State visibility nor grants finality,
 /// retirement or Kura permission. No physical guard may cross an async wait.
 #[must_use = "keep the complete carrier until authorized publication or abort"]
@@ -575,13 +576,17 @@ impl<Admission, BindingAdmission, Installation>
         if !journals.geometry.requires_storage_transition() {
             return Ok(false);
         }
-        let mut backend = self.target.tiered_backend.try_lock_or_wait().map_err(|wait| {
-            crate::state::LaneLifecycleError::PublicationBusy {
+        let mut backend = self
+            .target
+            .tiered_backend
+            .try_lock_or_wait()
+            .map_err(|wait| crate::state::LaneLifecycleError::PublicationBusy {
                 field: "tiered_backend",
                 wait,
-            }
-        })?;
-        journals.geometry.prepare_under(&backend, &journals.components._fences._kura)?;
+            })?;
+        journals
+            .geometry
+            .prepare_under(&backend, &journals.components._fences._kura)?;
         let completed = journals.geometry.complete_under(
             self.target,
             journals.effects.header,

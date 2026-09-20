@@ -144,8 +144,28 @@ settlement. Refusal returns the same armed owner. Accepted opening now shares
 one immutable context across body jobs and retirement. World preparation retains
 the original wrapper/vector allocations across refusal and abort; capacity
 owners outlive retained payloads during unwind, preserving explicit poisoned
-writer recovery. These prerequisites do not supply the live retained validator's
-resource policy or activate the Native runner.
+writer recovery. The private publisher now completes captured nonretiring geometry
+under its original Kura lease before visibility and consumes retained lifecycle
+effects inside the same generation. Its State/header and Queue requirements remain
+explicit; retirement/replacement cannot proceed without original service Queue
+custody. These prerequisites do not supply the live retained validator's resource
+policy or activate the Native runner.
+
+The [Queue selection-release correction](../docs/history/2026-09-20/replay-terminal-queue-release.md) retains already-authenticated canonical cleanup on the original admission when local selection or a popped guard delays removal. Actual owner release resumes the exact journal tombstone and retirement notification without another Apply. Autonomous claims remain under their checked direct-release or Kura Complete authority. Pending pre-Kura batches remain in the adapter until checked release succeeds, including the failed and unvisited suffix. These corrections restore local continuations; they do not reproduce a live runner stall, make local Queue emptiness a consensus-validity rule or complete the shared drain protocol.
+
+The [retained-carrier phase owner](../docs/history/2026-09-20/retained-carrier-phases.md)
+now preserves validated, decided and checkpointed journals inside the existing
+candidate slot. `SelectedValidationCarrier::try_consume` can restore the current
+phase on refusal without reconstructing a ValidBlock. Identity and commitment
+derive from original journals; descriptor reservation precedes execution.
+Its real marker/reproposal and physical publication controls passed in build104.
+Next authenticate the captured State/header before derived persistence, then
+carry this owner through the worker's original Apply service and State/Queue pair.
+Physical writers must be released before retaining a refused phase.
+Cold unfinished recovery must create that executed owner once before restoring
+cached markers; already-applied recovery must repair durable completion without
+executing. Resource admission, retirement and participant completion remain
+prerequisites; a phase enum alone does not discharge them.
 
 ### One economic admission and lane execution pipeline
 

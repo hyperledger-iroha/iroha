@@ -12424,6 +12424,123 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "struct",
+          "symbol": "PreparedCarrierGeometry",
+          "required_tokens": [
+            "_pending: Option<PendingAutoscaleLaneLifecycle>",
+            "raw: Option<crate::kura::RawGeometryAttempt>",
+            "tiered: Option<tiered::TieredGeometryAttempt>",
+            "state_owner: Arc<BlockHashOwner>",
+            "kura: Arc<Kura>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "StateBlock::prepare_carrier_geometry",
+          "required_tokens": [
+            "self.validate_canonical_runtime_projection()",
+            "self.canonical_runtime.get_before_block()",
+            "self.canonical_runtime.get()",
+            "_header: self._curr_block",
+            "_pending: self.pending_autoscale_lifecycle.clone()",
+            "raw: None",
+            "tiered: None",
+            "state_owner: Arc::clone(&self.state_ref.block_hashes.owner)",
+            "kura: Arc::clone(&self.state_ref.kura)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::matches_publication_target",
+          "required_tokens": [
+            "self._header == header && Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::has_pending_lifecycle",
+          "required_tokens": [
+            "self._pending.is_some()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::requires_storage_transition",
+          "required_tokens": [
+            "self._pending",
+            ".as_ref()",
+            ".is_some_and(|pending| pending.transition.requires_geometry())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::requires_queue_custody",
+          "required_tokens": [
+            "self._pending.as_ref().is_some_and(|pending|",
+            "!pending.plan.retire.is_empty() || !pending.catalog_update.replaced_lane_ids.is_empty()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::complete_under",
+          "required_tokens": [
+            "target: &State",
+            "header: BlockHeader",
+            "lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
+            "if !self.matches_publication_target(target, header)",
+            "if self.requires_queue_custody()",
+            "return Err(LaneLifecycleError::Storage(",
+            "self.resume_under(backend, lease)?;",
+            "if let Some(raw) = &mut self.raw",
+            "raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished",
+            "raw.publish_catalog_under(lease, None)",
+            "raw.reauthenticate_catalog_under(lease)",
+            "Ok(CompletedCarrierGeometry {\n            geometry: self,\n            _lease: lease,\n        })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "struct",
+          "symbol": "CompletedCarrierGeometry",
+          "required_tokens": [
+            "geometry: &'geometry PreparedCarrierGeometry",
+            "_lease: &'geometry crate::kura::KuraPublicationLease<'kura>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "CompletedCarrierGeometry::updated_da_mapping",
+          "required_tokens": [
+            "self.geometry",
+            "._pending",
+            ".as_ref()",
+            ".filter(|pending| pending.transition.requires_geometry())",
+            ".map(|pending| &pending.catalog_update.updated_lane_config)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "PhysicallyPreparedCarrier::try_complete_geometry",
+          "required_tokens": [
+            "let journals = &mut self.decision.journals;",
+            "if !journals.geometry.requires_storage_transition() {\n            return Ok(false);\n        }",
+            "self\n            .target\n            .tiered_backend\n            .try_lock_or_wait()",
+            ".map_err(|wait| crate::state::LaneLifecycleError::PublicationBusy {\n                field: \"tiered_backend\",\n                wait,\n            })?;",
+            "journals\n            .geometry\n            .prepare_under(&backend, &journals.components._fences._kura)?;",
+            "journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n        )?",
+            "Ok(completed.updated_da_mapping().is_some())"
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
           "kind": "method",
           "symbol": "CarrierFences::release_for_completion",
@@ -12443,20 +12560,29 @@
             "journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)",
             "journals.effects.header != journals.valid.as_ref().header()",
             "journals.staged_legacy_source()",
-            "journals\n            .geometry\n            .is_identity_transition(journals.effects.header)",
-            "journals.effects.pending_autoscale_lifecycle.is_some()",
+            "journals\n            .geometry\n            .matches_publication_target(self.target, journals.effects.header)",
+            "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
+            "journals.geometry.requires_queue_custody()",
+            "Some(CarrierPublicationError::QueueRetirementRequired)",
             "journals.native_amx_manifest.entries().is_empty()",
             "return Err((self.abort(), error))",
+            "let update_da_mapping = match self.try_complete_geometry()",
+            "return Err((\n                    self.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))",
             "target.begin_state_view_write()",
             "transactions.publish()",
             "runtime.publish()",
             "world.publish()",
             "world_effects.publish(target)",
-            "effects.publish(target, &generation, true)",
+            "if update_da_mapping",
+            "target\n                .da_shard_cursors\n                .write()\n                .sync_mapping(&effects.nexus.lane_config)",
+            "let lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
+            "let da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
             "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
             "block_hashes.publish()",
             "target.update_latest_block_header_cache(effects.header)",
             "drop(generation)",
+            "if let Some(post) = da_post_publication {\n            post.publish(target);\n        }",
+            "if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }",
             "fences.release_for_completion()",
             "effects.publish_observability(target)",
             "target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)",
@@ -13113,6 +13239,163 @@
             "self.sidecar_lock.try_lock_or_wait()",
             "KuraPublicationPreparationError::Busy {\n                    field: \"sidecar_lock\",\n                    wait,\n                }",
             "self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/decision_binding.rs",
+          "kind": "enum",
+          "symbol": "RetainedCarrier",
+          "required_tokens": [
+            "Validated(PreparedCarrierJournals<Admission>)",
+            "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
+            "super::DetachedCarrierComponents",
+            "crate::kura::KuraWsvCheckpointReceipt"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/decision_binding.rs",
+          "kind": "method",
+          "symbol": "RetainedCarrier::matches_validation_candidate",
+          "required_tokens": [
+            "Self::Validated(journals) => journals.matches_validation_candidate(context, proposal)",
+            "Self::Decided(carrier) => carrier\n                .journals\n                .matches_validation_candidate(context, proposal)",
+            "Self::Checkpointed(carrier) => carrier\n                .journals\n                .matches_validation_candidate(context, proposal)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/decision_binding.rs",
+          "kind": "method",
+          "symbol": "RetainedCarrier::execution_prefix_commitment",
+          "required_tokens": [
+            "Self::Validated(journals) => journals.execution_prefix_commitment()",
+            "Self::Decided(carrier) => carrier.journals.execution_prefix_commitment()",
+            "Self::Checkpointed(carrier) => carrier.journals.execution_prefix_commitment()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "fn",
+          "symbol": "matches_validation_candidate",
+          "required_tokens": [
+            "if self.context.as_ref() != context",
+            "return false;",
+            "self.valid.as_ref().canonical_proposal_wire_hash()",
+            "proposal.canonical_proposal_wire_hash()",
+            "(Ok(original), Ok(candidate)) => original == candidate",
+            "_ => false"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "fn",
+          "symbol": "execution_prefix_commitment",
+          "required_tokens": [
+            "self.execution_prefix"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "struct",
+          "symbol": "Candidate",
+          "required_tokens": [
+            "subject: wire::BlockSubject",
+            "owner: Option<O>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "struct",
+          "symbol": "RetainedBodyValidationService",
+          "required_tokens": [
+            "validator: P",
+            "identity: V2BodyStoreInstanceIdentity",
+            "candidates: Vec<Candidate<P::Owner>>",
+            "markers: Vec<Marker>",
+            "limit: usize"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::new",
+          "required_tokens": [
+            "candidates.try_reserve_exact(limit)?",
+            "markers.try_reserve_exact(limit)?",
+            "Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n        })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::prepare_marker",
+          "required_tokens": [
+            "if marker.is_none() && self.markers.len() == self.limit",
+            "if requires_existing_owner",
+            "return Err(CarrierCustodyError::MissingOwner)",
+            "if self.candidates.len() == self.limit",
+            "return Err(CarrierCustodyError::Capacity)",
+            "let owner = match self.validator.prepare(context, body)",
+            "owner: Some(owner)",
+            "if !owner.matches_candidate(context, body)",
+            "return Err(CarrierCustodyError::Identity)",
+            "let commitment = owner.commitment()",
+            "confirmed: None",
+            "Ok(Ok(commitment))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "struct",
+          "symbol": "SelectedValidationCarrier",
+          "required_tokens": [
+            "service: &'a mut RetainedBodyValidationService<P>",
+            "index: usize",
+            "owner: Option<P::Owner>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "SelectedValidationCarrier::try_consume",
+          "required_tokens": [
+            "mut self",
+            "publish: impl FnOnce(P::Owner) -> Result<R, (P::Owner, E)>",
+            "match publish(owner)",
+            "Err((owner, error)) => {\n                self.owner = Some(owner);\n                Err(error)\n            }",
+            "let subject = self.service.candidates[self.index].subject",
+            ".retain(|row| row.durable.subject() != subject)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "SelectedValidationCarrier::drop",
+          "required_tokens": [
+            "if let Some(owner) = self.owner.take()",
+            "debug_assert!(self.service.candidates[self.index].owner.is_none())",
+            "self.service.candidates[self.index].owner = Some(owner)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::retained_validation_service",
+          "required_tokens": [
+            "RetainedBodyValidationService::new(",
+            "self.instance_identity()",
+            "self.capacity.max_body_entries"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::execute_retained_durable_validation",
+          "required_tokens": [
+            "if !service.matches_store(&self.instance_identity())",
+            "service.prepare_marker(",
+            "already_validated.is_some() || reused.is_some()",
+            "let validated = self.persist_validated_receipt(&durable, commitment)?",
+            "service.confirm(&validated)?"
           ]
         }
       ]
@@ -16788,7 +17071,8 @@
             "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
             "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
             "blocked_by_fifo_predecessor = true",
-            "if !open {\n                            match State::queue_plan_pending_route_authority_in_view(\n                                state_view, &binding,\n                            ) {\n                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }"
+            "if !open {\n                            match State::queue_plan_pending_route_authority_in_view(\n                                state_view, &binding,\n                            ) {\n                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }",
+            "if self.replay_terminal_cleanup_pending(*hash) {\n                    return None;\n                }"
           ]
         },
         {
@@ -17971,7 +18255,8 @@
             "final_fifo.len() > self.tx_hashes.capacity()",
             "terminal_removals",
             "terminal_removals.push",
-            "Ok(PreparedQueuePlanReplay {"
+            "Ok(PreparedQueuePlanReplay {",
+            "if has_durable_reservation_owner {\n                claim.local_custody = QueuePlanLocalCustody::Autonomous;\n            }"
           ]
         },
         {
@@ -18005,7 +18290,13 @@
             ".begin_durability_transition_locked([hash])",
             "self.tombstone_conflicting_global_admission(binding)?",
             "self.finalize_conflicting_global_admission_locked(",
-            "return Ok(true)"
+            "return Ok(true)",
+            "if require_unreserved_replay_terminal_owner\n                && self.transaction_selection_durability_faulted()\n            {\n                return Err(LaneQueueReservationError::DurabilityFault);\n            }",
+            "if &indexed_binding != binding {\n                // A delayed losing certificate must not delete a later admission for the same\n                // entrypoint, including an ABA replacement with the same routing-plan digest.\n                return Ok(false);\n            }",
+            "if reservation_owned\n                    || indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous\n                {\n                    return Ok(false);\n                }",
+            "self.durable_plan_claims\n                    .get_mut(&hash)\n                    .expect(\"the Queue lock retains the exact admission claim\")\n                    .local_custody = QueuePlanLocalCustody::ReplayTerminalPending;",
+            "self.replay_terminal_cleanup_dirty\n                    .store(true, Ordering::Release);",
+            "if self.global_selection_owners.lock().contains_key(&hash)\n                    || self.inflight_guards.load(Ordering::Acquire) != 0\n                    || self.selection_attempts.load(Ordering::Acquire) != 0\n                {\n                    return Ok(false);\n                }"
           ]
         },
         {
@@ -18024,7 +18315,10 @@
             "queue_plan_binding_application_evidence_in_view",
             "evidence == expected_evidence",
             "replay_terminal_bindings.push(binding)",
-            "reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?"
+            "reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?",
+            "if registry_match == QueuePlanAdmissionRegistryMatch::Exact {",
+            "Ok(evidence) if evidence == expected_evidence",
+            "self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?"
           ]
         },
         {
@@ -18762,7 +19056,9 @@
           "symbol": "Queue::reserve_transactions_for_lane_bounded",
           "required_tokens": [
             "let routing_plan = match self.immutable_queued_routing_plan_in_view(",
-            "Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,\n                Ok((routing_plan, QueuePlanPendingRouteAuthority::Active)) => routing_plan,"
+            "Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,\n                Ok((routing_plan, QueuePlanPendingRouteAuthority::Active)) => routing_plan,",
+            "if self.replay_terminal_cleanup_pending(hash) {\n                continue;\n            }",
+            "self.durable_plan_claims\n                .get_mut(&record.key.entrypoint_hash)\n                .expect(\"the reservation transition retains its validated admission claim\")\n                .local_custody = QueuePlanLocalCustody::Autonomous;"
           ]
         },
         {
@@ -18781,7 +19077,9 @@
           "required_tokens": [
             "let canonical_pending_handoff = if let Some(binding) = expected_admission_binding {",
             "Ok(Some(canonical_binding)) if canonical_binding == *binding => {",
-            "State::queue_plan_pending_route_authority_in_view(&state_view, binding)\n                            .map_err(|reason| Failure {\n                                tx: tx.clone().into(),\n                                err: Error::UnresolvedRoute { reason },\n                            })?\n                            .is_some()"
+            "State::queue_plan_pending_route_authority_in_view(&state_view, binding)\n                            .map_err(|reason| Failure {\n                                tx: tx.clone().into(),\n                                err: Error::UnresolvedRoute { reason },\n                            })?\n                            .is_some()",
+            "if existing.local_custody == QueuePlanLocalCustody::ReplayTerminalPending {\n                    return Err(Failure {\n                        tx: tx.into(),\n                        err: Error::InBlockchain,\n                    });\n                }",
+            "local_custody: existing.local_custody,"
           ]
         },
         {
@@ -19235,6 +19533,128 @@
             "if accepted == outcomes.len() {\n        return Ok(transaction_batch_submission_response(accepted));\n    }",
             "let mut response = crate::utils::JsonBody(outcomes).into_response();\n    *response.status_mut() = StatusCode::MULTI_STATUS;",
             "HeaderValue::from_str(&accepted.to_string()).expect("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "enum",
+          "symbol": "QueuePlanLocalCustody",
+          "required_tokens": [
+            "enum QueuePlanLocalCustody {\n    /// No autonomous reservation has taken this admission in the current process.\n    Available,\n    /// Autonomous ownership requires its checked direct release or Kura terminal proof.\n    Autonomous,\n    /// Canonical State authenticated cleanup; an ordinary selection still owns the claim.\n    ReplayTerminalPending,\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::replay_terminal_cleanup_pending",
+          "required_tokens": [
+            "    fn replay_terminal_cleanup_pending(&self, hash: EntrypointHash) -> bool {\n        self.durable_plan_claims.get(&hash).is_some_and(|claim| {\n            claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending\n        })\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::resume_replay_terminal_cleanup",
+          "required_tokens": [
+            "    fn resume_replay_terminal_cleanup(&self, hash: EntrypointHash) {\n        if self.transaction_selection_durability_faulted() {\n            return;\n        }\n        let binding = self.durable_plan_claims.get(&hash).and_then(|claim| {\n            (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)\n                .then(|| claim.global_admission_binding())\n        });\n        let result = match binding {\n            Some(Ok(binding)) => {\n                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)\n            }\n            Some(Err(reason)) => Err(LaneQueueReservationError::InvalidIdentity(reason)),\n            None => return,\n        };\n        match result {\n            Ok(true) => self.publish_backpressure_state(self.active_len(), None),\n            Ok(false) => {}\n            Err(error) => {\n                self.mark_accepted_work_validation_fault(\n                    hash,\n                    \"replay_terminal_owner_release\",\n                    &error,\n                    None,\n                );\n            }\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::resume_unowned_replay_terminal_cleanup",
+          "required_tokens": [
+            "    fn resume_unowned_replay_terminal_cleanup(&self) {\n        if self.inflight_guards.load(Ordering::Acquire) != 0\n            || self.selection_attempts.load(Ordering::Acquire) != 0\n            || self.transaction_selection_durability_faulted()\n        {\n            return;\n        }\n        // Clear before scanning: a concurrent new obligation sets the hint\n        // again, and a still-owned obligation does so when its retry defers.\n        // No normal guard release scans unrelated claims without such work.\n        if !self\n            .replay_terminal_cleanup_dirty\n            .swap(false, Ordering::AcqRel)\n        {\n            return;\n        }\n        let pending = self\n            .durable_plan_claims\n            .iter()\n            .filter_map(|claim| {\n                (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)\n                    .then_some(*claim.key())\n            })\n            .collect::<Vec<_>>();\n        for hash in pending {\n            self.resume_replay_terminal_cleanup(hash);\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "GlobalQueueSelectionLease::retain_only",
+          "required_tokens": [
+            "    pub(crate) fn retain_only(&mut self, retained: &[EntrypointHash]) -> bool {\n        if self.owner == 0 {\n            return retained.is_empty();\n        }\n        let Some(queue) = self.queue.upgrade() else {\n            return false;\n        };\n        let retained_set = retained.iter().copied().collect::<HashSet<_>>();\n        let leased_set = self.hashes.iter().copied().collect::<HashSet<_>>();\n        let exact_subset = retained_set.len() == retained.len()\n            && leased_set.len() == self.hashes.len()\n            && retained_set.iter().all(|hash| leased_set.contains(hash));\n        let first_hash = self\n            .hashes\n            .first()\n            .copied()\n            .or_else(|| retained.first().copied());\n        let queue_guard = queue.push_remove_lock.lock();\n        let mut owners = queue.global_selection_owners.lock();\n        let ownership_intact = self\n            .hashes\n            .iter()\n            .all(|hash| owners.get(hash) == Some(&self.owner));\n        if !exact_subset || !ownership_intact {\n            drop(owners);\n            drop(queue_guard);\n            if let Some(hash) = first_hash {\n                queue.mark_accepted_work_validation_fault(\n                    hash,\n                    \"global_candidate_selection\",\n                    \"global candidate selection lease changed before exact narrowing\",\n                    None,\n                );\n            }\n            return false;\n        }\n        let mut released = Vec::new();\n        for hash in &self.hashes {\n            if !retained_set.contains(hash) {\n                owners.remove(hash);\n                released.push(*hash);\n            }\n        }\n        self.hashes.retain(|hash| retained_set.contains(hash));\n        drop(owners);\n        drop(queue_guard);\n        for hash in released {\n            queue.resume_replay_terminal_cleanup(hash);\n        }\n        !queue.transaction_selection_durability_faulted()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "GlobalQueueSelectionLease::drop",
+          "required_tokens": [
+            "    fn drop(&mut self) {\n        if self.owner == 0 {\n            return;\n        }\n        let Some(queue) = self.queue.upgrade() else {\n            return;\n        };\n        let queue_guard = queue.push_remove_lock.lock();\n        let mut owners = queue.global_selection_owners.lock();\n        for hash in &self.hashes {\n            if owners.get(hash) == Some(&self.owner) {\n                owners.remove(hash);\n            }\n        }\n        drop(owners);\n        drop(queue_guard);\n        for hash in &self.hashes {\n            queue.resume_replay_terminal_cleanup(*hash);\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueSelectionAttempt<'_>::drop",
+          "required_tokens": [
+            "    fn drop(&mut self) {\n        let previous = self.queue.selection_attempts.fetch_sub(1, Ordering::AcqRel);\n        debug_assert!(previous > 0, \"queue selection-attempt counter underflow\");\n        if previous == 1 {\n            self.queue.resume_unowned_replay_terminal_cleanup();\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "QueuePlanDurableClaimIndexEntry",
+          "required_tokens": [
+            "local_custody: QueuePlanLocalCustody,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "TransactionGuard::drop",
+          "required_tokens": [
+            "self.queue.release_inflight_guard();\n        self.released = true;\n        self.queue.resume_unowned_replay_terminal_cleanup();"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::release_pre_kura_autonomous_reservation_batch",
+          "required_tokens": [
+            "let records = self.revalidate_complete_live_pre_kura_group_locked(expected_group, keys)?;",
+            "let authorized_projection = checked.into_projection();",
+            "self.durable_plan_claims\n                .get_mut(&record.key.entrypoint_hash)\n                .expect(\"the pre-Kura release retains its validated admission claim\")\n                .local_custody = QueuePlanLocalCustody::Available;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::enqueue_prepared_admissions",
+          "required_tokens": [
+            "local_custody: if restored_reservation {\n                            QueuePlanLocalCustody::Autonomous\n                        } else {\n                            QueuePlanLocalCustody::Available\n                        },"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::pop_queued_hash",
+          "required_tokens": [
+            "if self.durability_transition_active(&hash)\n                    || self.replay_terminal_cleanup_pending(hash)\n                {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::begin_selection_attempt",
+          "required_tokens": [
+            "self.selection_attempts.fetch_add(1, Ordering::AcqRel);\n        QueueSelectionAttempt { queue: self }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::release_inflight_guard",
+          "required_tokens": [
+            "self.inflight_guards.fetch_sub(1, Ordering::Relaxed)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::release_pending_autonomous_reservation_batches",
+          "required_tokens": [
+            "    fn release_pending_autonomous_reservation_batches(&mut self) -> Result<usize, V2LaneWorkError> {\n        if self.pending_autonomous_reservation_batches.is_empty() {\n            return Ok(0);\n        }\n        let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {\n            V2LaneWorkError::InvalidContext(\n                \"autonomous reservation release requires the installed live queue\".to_owned(),\n            )\n        })?;\n        let mut released = 0_usize;\n        while let Some((&route, batch)) = self\n            .pending_autonomous_reservation_batches\n            .first_key_value()\n        {\n            if !batch.reservations.is_empty() {\n                let context = batch.pre_kura_direct_release_context()?;\n                released = released.saturating_add(\n                    queue\n                        .release_pre_kura_autonomous_reservation_batch(context)\n                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,\n                );\n            }\n            // A refused or indeterminate release retains this original batch\n            // and every unvisited batch. Only Queue's completed transition\n            // discharges the adapter's custody; no reconstructed retry owner.\n            self.pending_autonomous_reservation_batches.remove(&route);\n        }\n        Ok(released)\n    }"
           ]
         }
       ]

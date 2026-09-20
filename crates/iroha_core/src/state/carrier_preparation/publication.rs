@@ -228,7 +228,10 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         let update_da_mapping = match self.try_complete_geometry() {
             Ok(update) => update,
             Err(error) => {
-                return Err((self.abort(), CarrierPublicationError::GeometryStorage(error)));
+                return Err((
+                    self.abort(),
+                    CarrierPublicationError::GeometryStorage(error),
+                ));
             }
         };
 
@@ -283,7 +286,10 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         transactions.publish();
         runtime.publish();
         if update_da_mapping {
-            target.da_shard_cursors.write().sync_mapping(&effects.nexus.lane_config);
+            target
+                .da_shard_cursors
+                .write()
+                .sync_mapping(&effects.nexus.lane_config);
         }
         // Canonical resets precede this same carrier's DA observations.
         let lifecycle_post_publication = effects

@@ -539,3 +539,300 @@ mod lane_retirement_observer {
         assert!(!queue.transaction_selection_durability_faulted());
     }
 }
+
+// Included by queue::tests to exercise the actual journal and State fixtures.
+mod replay_terminal_release {
+    //! Canonical cleanup must finish when local selection releases, without another block.
+
+    use super::*;
+
+    fn select(fixture: &GloballyBoundGuardFixture) -> GlobalQueueSelectionLease {
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        let (selected, lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
+            .expect("select the original QueuePlan owner");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].hash_as_entrypoint(),
+            fixture.binding.entrypoint_hash
+        );
+        lease
+    }
+
+    fn defer_committed_cleanup(fixture: &GloballyBoundGuardFixture) -> mv::ReleaseFuture {
+        commit_globally_bound_fixture_directly(fixture);
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("authenticate canonical cleanup while selection is retained"),
+            0,
+        );
+        fixture.assert_live_journal_claim();
+        let mut wait = fixture
+            .queue
+            .lock_lane_retirement_observer()
+            .lane_pending_work_release(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                fixture.binding.admission_context.route_incarnations[0].lane_incarnation,
+            )
+            .expect("healthy original Queue")
+            .expect("the retained Queue owner still blocks retirement")
+            .wait_for_release();
+        assert!(poll_lane_retirement_release(&mut wait).is_pending());
+        wait
+    }
+
+    #[test]
+    fn original_selection_drop_finishes_canonical_cleanup_without_another_apply() {
+        let fixture = globally_bound_guard_fixture();
+        let lease = select(&fixture);
+        let mut wait = defer_committed_cleanup(&fixture);
+        let height = fixture.state.committed_height();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(8);
+        fixture.queue.set_sumeragi_wake(wake_tx);
+
+        drop(lease);
+
+        fixture.assert_terminally_removed();
+        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        assert!(
+            wake_rx.try_recv().is_ok(),
+            "terminal cleanup wakes retirement"
+        );
+        assert_eq!(fixture.state.committed_height(), height);
+        assert!(fixture.queue.global_selection_owners.lock().is_empty());
+    }
+
+    #[test]
+    fn selection_narrowing_finishes_only_released_canonical_owners() {
+        let fixture = globally_bound_guard_fixture();
+        let mut lease = select(&fixture);
+        let mut wait = defer_committed_cleanup(&fixture);
+        assert!(lease.retain_only(&[fixture.binding.entrypoint_hash]));
+        fixture.assert_live_journal_claim();
+        assert!(poll_lane_retirement_release(&mut wait).is_pending());
+
+        assert!(lease.retain_only(&[]));
+
+        fixture.assert_terminally_removed();
+        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        drop(lease);
+        fixture.assert_terminally_removed();
+    }
+
+    #[test]
+    fn last_selection_attempt_finishes_retained_canonical_cleanup() {
+        let fixture = globally_bound_guard_fixture();
+        let first = fixture.queue.begin_selection_attempt();
+        let last = fixture.queue.begin_selection_attempt();
+        let mut wait = defer_committed_cleanup(&fixture);
+        drop(first);
+        fixture.assert_live_journal_claim();
+        assert!(poll_lane_retirement_release(&mut wait).is_pending());
+
+        drop(last);
+
+        fixture.assert_terminally_removed();
+        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+    }
+
+    #[test]
+    fn popped_guard_release_finishes_canonical_cleanup_after_fifo_restoration() {
+        let fixture = globally_bound_guard_fixture();
+        let guard = fixture.pop_guard();
+        let mut wait = defer_committed_cleanup(&fixture);
+
+        drop(guard);
+
+        fixture.assert_terminally_removed();
+        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        assert_eq!(fixture.queue.inflight_guards.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn final_local_owner_release_retries_after_either_release_order() {
+        for guard_first in [false, true] {
+            let fixture = globally_bound_guard_fixture();
+            let guard = fixture.pop_guard();
+            let attempt = fixture.queue.begin_selection_attempt();
+            let mut wait = defer_committed_cleanup(&fixture);
+            if guard_first {
+                drop(guard);
+                fixture.assert_live_journal_claim();
+                assert!(poll_lane_retirement_release(&mut wait).is_pending());
+                drop(attempt);
+            } else {
+                drop(attempt);
+                fixture.assert_live_journal_claim();
+                assert!(poll_lane_retirement_release(&mut wait).is_pending());
+                drop(guard);
+            }
+            fixture.assert_terminally_removed();
+            assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        }
+    }
+
+    #[test]
+    fn local_release_without_canonical_evidence_retains_original_claim() {
+        let fixture = globally_bound_guard_fixture();
+        let lease = select(&fixture);
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("uncommitted owner has no terminal authority"),
+            0,
+        );
+        drop(lease);
+        fixture.assert_restored_fifo_owner();
+        let attempt = fixture.queue.begin_selection_attempt();
+        drop(attempt);
+        fixture.assert_restored_fifo_owner();
+        let guard = fixture.pop_guard();
+        drop(guard);
+        fixture.assert_restored_fifo_owner();
+    }
+
+    #[test]
+    fn terminal_cleanup_durability_failure_retains_owner_and_wakes_recovery() {
+        let fixture = globally_bound_guard_fixture();
+        let lease = select(&fixture);
+        let mut wait = defer_committed_cleanup(&fixture);
+        fixture
+            .queue
+            .inject_plan_journal_fault(QueuePlanJournalTestFault::GeneralParentSync);
+
+        drop(lease);
+
+        let hash = fixture.binding.entrypoint_hash;
+        assert!(fixture.queue.transaction_selection_durability_faulted());
+        assert!(fixture.queue.txs.contains_key(&hash));
+        assert!(fixture.queue.durable_plan_claims.contains_key(&hash));
+        assert!(fixture.queue.routing_plans.contains_key(&hash));
+        assert_eq!(fixture.queue.active_len(), 1);
+        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        assert_eq!(
+            fixture
+                .queue
+                .lock_lane_retirement_observer()
+                .lane_pending_work_release(
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    fixture.binding.admission_context.route_incarnations[0].lane_incarnation,
+                ),
+            Err(QueueLaneRetirementUnavailable::DurabilityFault),
+        );
+    }
+
+    #[test]
+    fn local_release_preserves_actual_autonomous_reservation_custody() {
+        let fixture = globally_bound_guard_fixture_with_journals(0, true);
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        let scope = lane_reservation_scope(
+            &fixture.state,
+            b"replay-terminal-reserved-owner",
+            b"replay-terminal-reserved-proposal",
+        );
+        let reservation = fixture
+            .queue
+            .reserve_transactions_for_lane(&fixture.state, scope, nonzero!(1_usize))
+            .expect("reserve original autonomous owner");
+        assert_eq!(reservation.len(), 1);
+        let original = fixture.queue.live_lane_reservations();
+        let attempt = fixture.queue.begin_selection_attempt();
+        let mut wait = defer_committed_cleanup(&fixture);
+
+        drop(attempt);
+
+        fixture.assert_live_journal_claim();
+        assert_eq!(fixture.queue.active_len(), 1);
+        assert_eq!(fixture.queue.live_lane_reservations(), original);
+        assert!(poll_lane_retirement_release(&mut wait).is_pending());
+        assert!(!fixture.queue.transaction_selection_durability_faulted());
+    }
+}
+
+// Included by queue::tests; use the original QueuePlan and reservation journals.
+mod replay_terminal_custody {
+    //! Ordinary release must not replace an autonomous Kura terminal join.
+
+    use super::*;
+
+    #[test]
+    fn forgotten_queue_release_does_not_authorize_replay_terminal_cleanup() {
+        let fixture = globally_bound_guard_fixture_with_journals(0, true);
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        let reserved = fixture
+            .queue
+            .reserve_transactions_for_lane(
+                &fixture.state,
+                lane_reservation_scope(
+                    &fixture.state,
+                    b"replay-terminal-release-owner",
+                    b"replay-terminal-release-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("reserve the original admission");
+        let keys = reserved
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 1);
+        let barrier = lane_reservation_release_barrier(keys, b"replay-terminal-release");
+        fixture
+            .queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .expect("prepare the exact Queue release");
+        // Exercise the real Queue journal suffix only. No Kura Complete
+        // authorization is manufactured by this fixture or consumed below.
+        assert_eq!(
+            fixture
+                .queue
+                .finalize_lane_reservation_release_barrier(&barrier)
+                .expect("restore FIFO and durably forget the Queue release"),
+            1,
+        );
+        assert!(fixture.queue.live_lane_reservations().is_empty());
+        assert!(fixture.queue.lane_reservation_release_barriers().is_empty());
+        fixture.assert_restored_fifo_owner();
+
+        let attempt = fixture.queue.begin_selection_attempt();
+        commit_globally_bound_fixture_directly(&fixture);
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("State application cannot substitute for Kura Complete"),
+            0,
+        );
+        let mut wait = fixture
+            .queue
+            .lock_lane_retirement_observer()
+            .lane_pending_work_release(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                fixture.binding.admission_context.route_incarnations[0].lane_incarnation,
+            )
+            .expect("healthy original Queue")
+            .expect("released autonomous FIFO still owns retirement work")
+            .wait_for_release();
+        drop(attempt);
+
+        fixture.assert_restored_fifo_owner();
+        assert!(poll_lane_retirement_release(&mut wait).is_pending());
+        assert!(!fixture.queue.transaction_selection_durability_faulted());
+    }
+}

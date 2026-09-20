@@ -4025,6 +4025,8 @@ pub struct Queue {
     inflight_guards: AtomicUsize,
     /// Queue-pop calls between FIFO ownership and guard publication.
     selection_attempts: AtomicUsize,
+    /// Advisory scan hint only; cleanup authority remains on each original claim.
+    replay_terminal_cleanup_dirty: AtomicBool,
     /// The maximum number of transactions in the queue
     capacity: NonZeroUsize,
     /// The maximum number of transactions in the queue per user. Used to apply throttling
@@ -4456,13 +4458,20 @@ impl GlobalQueueSelectionLease {
             }
             return false;
         }
+        let mut released = Vec::new();
         for hash in &self.hashes {
             if !retained_set.contains(hash) {
                 owners.remove(hash);
+                released.push(*hash);
             }
         }
         self.hashes.retain(|hash| retained_set.contains(hash));
-        true
+        drop(owners);
+        drop(queue_guard);
+        for hash in released {
+            queue.resume_replay_terminal_cleanup(hash);
+        }
+        !queue.transaction_selection_durability_faulted()
     }
 }
 impl Drop for GlobalQueueSelectionLease {
@@ -4473,12 +4482,17 @@ impl Drop for GlobalQueueSelectionLease {
         let Some(queue) = self.queue.upgrade() else {
             return;
         };
-        let _queue_guard = queue.push_remove_lock.lock();
+        let queue_guard = queue.push_remove_lock.lock();
         let mut owners = queue.global_selection_owners.lock();
         for hash in &self.hashes {
             if owners.get(hash) == Some(&self.owner) {
                 owners.remove(hash);
             }
+        }
+        drop(owners);
+        drop(queue_guard);
+        for hash in &self.hashes {
+            queue.resume_replay_terminal_cleanup(*hash);
         }
     }
 }
@@ -4604,6 +4618,18 @@ struct QueuePlanDurableClaimIndexEntry {
     global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     enqueue_timestamp_ms: u64,
     journal_record_digest: Hash,
+    /// Process-local custody of this exact durable admission. Restart derives
+    /// custody again under the complete State/Kura reconciliation gate.
+    local_custody: QueuePlanLocalCustody,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanLocalCustody {
+    /// No autonomous reservation has taken this admission in the current process.
+    Available,
+    /// Autonomous ownership requires its checked direct release or Kura terminal proof.
+    Autonomous,
+    /// Canonical State authenticated cleanup; an ordinary selection still owns the claim.
+    ReplayTerminalPending,
 }
 impl QueuePlanDurableClaimIndexEntry {
     fn durable_admission(&self) -> QueuePlanDurableAdmissionV1 {
@@ -4885,12 +4911,15 @@ enum PoppedGlobalAdmissionDisposition {
     Retained,
 }
 struct QueueSelectionAttempt<'queue> {
-    counter: &'queue AtomicUsize,
+    queue: &'queue Queue,
 }
 impl Drop for QueueSelectionAttempt<'_> {
     fn drop(&mut self) {
-        let previous = self.counter.fetch_sub(1, Ordering::AcqRel);
+        let previous = self.queue.selection_attempts.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "queue selection-attempt counter underflow");
+        if previous == 1 {
+            self.queue.resume_unowned_replay_terminal_cleanup();
+        }
     }
 }
 fn first_batch_duplicate_index(prepared: &[PreparedQueueAdmission]) -> Option<usize> {
@@ -5306,6 +5335,7 @@ impl Drop for TransactionGuard {
         }
         self.queue.release_inflight_guard();
         self.released = true;
+        self.queue.resume_unowned_replay_terminal_cleanup();
     }
 }
 trait QueueAdmissionStateAccess {
@@ -6190,6 +6220,9 @@ impl Queue {
             if self.durability_transition_active(&hash) {
                 continue;
             }
+            if self.replay_terminal_cleanup_pending(hash) {
+                continue;
+            }
             let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 continue;
             };
@@ -6563,6 +6596,10 @@ impl Queue {
         }
         let mut store = self.lane_reservations.lock();
         for (record, ..) in &selected {
+            self.durable_plan_claims
+                .get_mut(&record.key.entrypoint_hash)
+                .expect("the reservation transition retains its validated admission claim")
+                .local_custody = QueuePlanLocalCustody::Autonomous;
             store
                 .live_by_entrypoint
                 .insert(record.key.entrypoint_hash, record.clone());
@@ -6727,6 +6764,7 @@ impl Queue {
         keys: &[LaneQueueReservationKeyV1],
         gate: LaneQueueDirectReleaseGate,
     ) -> Result<usize, LaneQueueReservationError> {
+        let checked_direct_release = matches!(&gate, LaneQueueDirectReleaseGate::StrictAbsence(_));
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -6912,6 +6950,12 @@ impl Queue {
         };
         for (key, _) in &records {
             store.live_by_entrypoint.remove(&key.entrypoint_hash);
+            if checked_direct_release {
+                self.durable_plan_claims
+                    .get_mut(&key.entrypoint_hash)
+                    .expect("the direct-release transition retains its validated admission claim")
+                    .local_custody = QueuePlanLocalCustody::Available;
+            }
         }
         self.replace_fifo_locked(&restored_fifo);
         self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -7551,9 +7595,18 @@ impl Queue {
             }
             journal.release_batch(release_keys)
         })?;
+        // The sole live selector and releaser share one V2LaneWorkAdapter: its
+        // synchronous retirement finishes Kura Complete before another batch
+        // can be selected. Startup keeps Queue selection closed through terminal
+        // reconciliation. This pre-Kura batch cannot hide an older Kura Pending
+        // owner when its checked direct release restores ordinary custody.
         let mut store = self.lane_reservations.lock();
         for record in &records {
             store.live_by_entrypoint.remove(&record.key.entrypoint_hash);
+            self.durable_plan_claims
+                .get_mut(&record.key.entrypoint_hash)
+                .expect("the pre-Kura release retains its validated admission claim")
+                .local_custody = QueuePlanLocalCustody::Available;
         }
         self.replace_fifo_locked(&restored_fifo);
         self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -11833,7 +11886,7 @@ impl Queue {
                     "queue-plan journal transaction {hash} changed identity during stateless validation"
                 )));
             }
-            let claim = QueuePlanDurableClaimIndexEntry {
+            let mut claim = QueuePlanDurableClaimIndexEntry {
                 entrypoint_hash,
                 signed_transaction_hash: recorded_signed_transaction_hash,
                 routing_plan: recorded_routing_plan.clone(),
@@ -11841,6 +11894,7 @@ impl Queue {
                 global_admission_identity: recorded_global_admission_identity,
                 enqueue_timestamp_ms,
                 journal_record_digest: recorded_journal_digest,
+                local_custody: QueuePlanLocalCustody::Available,
             };
             let reservation_owner = self
                 .queue_plan_replay_reservation_owner(hash, &claim)
@@ -11858,6 +11912,9 @@ impl Queue {
             }
             let has_materialized_owner = self.txs.contains_key(&hash);
             let has_durable_reservation_owner = reservation_owner.is_present();
+            if has_durable_reservation_owner {
+                claim.local_custody = QueuePlanLocalCustody::Autonomous;
+            }
             let state_committed = accepted.has_committed_replay_identity(state_view);
             let carrier_committed = state_view.has_entrypoint(entrypoint_hash);
             let global_binding = recorded_global_admission_identity
@@ -12928,6 +12985,73 @@ impl Queue {
     ) -> Result<bool, LaneQueueReservationError> {
         self.reject_exact_queue_plan_admission_claim_inner(binding, true)
     }
+    /// Inspect the terminal obligation retained by this exact admission.
+    fn replay_terminal_cleanup_pending(&self, hash: EntrypointHash) -> bool {
+        self.durable_plan_claims.get(&hash).is_some_and(|claim| {
+            claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending
+        })
+    }
+    /// Finish previously authenticated State cleanup after an ordinary owner releases.
+    ///
+    /// Call only outside Queue locks. The claim retains the authority; no State
+    /// read, replacement binding, or Kura Pending inference is permitted here.
+    fn resume_replay_terminal_cleanup(&self, hash: EntrypointHash) {
+        if self.transaction_selection_durability_faulted() {
+            return;
+        }
+        let binding = self.durable_plan_claims.get(&hash).and_then(|claim| {
+            (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)
+                .then(|| claim.global_admission_binding())
+        });
+        let result = match binding {
+            Some(Ok(binding)) => {
+                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)
+            }
+            Some(Err(reason)) => Err(LaneQueueReservationError::InvalidIdentity(reason)),
+            None => return,
+        };
+        match result {
+            Ok(true) => self.publish_backpressure_state(self.active_len(), None),
+            Ok(false) => {}
+            Err(error) => {
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "replay_terminal_owner_release",
+                    &error,
+                    None,
+                );
+            }
+        }
+    }
+    /// Release the conservative queue-wide guard/selection veto once its last owner leaves.
+    fn resume_unowned_replay_terminal_cleanup(&self) {
+        if self.inflight_guards.load(Ordering::Acquire) != 0
+            || self.selection_attempts.load(Ordering::Acquire) != 0
+            || self.transaction_selection_durability_faulted()
+        {
+            return;
+        }
+        // Clear before scanning: a concurrent new obligation sets the hint
+        // again, and a still-owned obligation does so when its retry defers.
+        // No normal guard release scans unrelated claims without such work.
+        if !self
+            .replay_terminal_cleanup_dirty
+            .swap(false, Ordering::AcqRel)
+        {
+            return;
+        }
+        let pending = self
+            .durable_plan_claims
+            .iter()
+            .filter_map(|claim| {
+                (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)
+                    .then_some(*claim.key())
+            })
+            .collect::<Vec<_>>();
+        for hash in pending {
+            self.resume_replay_terminal_cleanup(hash);
+        }
+    }
     fn reject_exact_queue_plan_admission_claim_inner(
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
@@ -12939,6 +13063,11 @@ impl Queue {
         let hash = binding.entrypoint_hash;
         loop {
             let queue_guard = self.push_remove_lock.lock();
+            if require_unreserved_replay_terminal_owner
+                && self.transaction_selection_durability_faulted()
+            {
+                return Err(LaneQueueReservationError::DurabilityFault);
+            }
             if self.durability_transition_active(&hash) {
                 drop(queue_guard);
                 self.wait_for_durability_transitions(&[hash]);
@@ -12993,7 +13122,24 @@ impl Queue {
                         })
                 };
                 if reservation_owned
-                    || self.global_selection_owners.lock().contains_key(&hash)
+                    || indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous
+                {
+                    return Ok(false);
+                }
+                // Canonical State authenticated this exact binding before the
+                // Queue lock. Retain that monotonic evidence on its original
+                // claim before observing the ephemeral owners which defer it.
+                // A retired autonomous claim remains Autonomous until Kura's
+                // Complete-authorized cleanup, even after ForgetRelease.
+                self.durable_plan_claims
+                    .get_mut(&hash)
+                    .expect("the Queue lock retains the exact admission claim")
+                    .local_custody = QueuePlanLocalCustody::ReplayTerminalPending;
+                // Publish before testing counters, so the final owner cannot
+                // observe a clean hint after deciding that this claim defers.
+                self.replay_terminal_cleanup_dirty
+                    .store(true, Ordering::Release);
+                if self.global_selection_owners.lock().contains_key(&hash)
                     || self.inflight_guards.load(Ordering::Acquire) != 0
                     || self.selection_attempts.load(Ordering::Acquire) != 0
                 {
@@ -14163,6 +14309,7 @@ impl Queue {
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
                 selection_attempts: AtomicUsize::new(0),
+                replay_terminal_cleanup_dirty: AtomicBool::new(false),
                 capacity,
                 capacity_per_user,
                 max_retained_bytes,
@@ -14853,6 +15000,9 @@ impl Queue {
                     .get(hash)
                     .is_some_and(|entry| *entry.value() == *enqueued_at_ms);
                 if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
+                    return None;
+                }
+                if self.replay_terminal_cleanup_pending(*hash) {
                     return None;
                 }
                 if live_reservations.contains(hash) || global_owners.contains_key(hash) {
@@ -16741,6 +16891,12 @@ impl Queue {
                 else {
                     unreachable!("durable retry exits or selects one exact replacement")
                 };
+                if existing.local_custody == QueuePlanLocalCustody::ReplayTerminalPending {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::InBlockchain,
+                    });
+                }
                 let transition = self
                     .begin_durability_transition_locked([tx_hash])
                     .expect("active durable retry was checked under the queue lock");
@@ -16812,6 +16968,7 @@ impl Queue {
                     global_admission_identity: replacement_global_admission_identity,
                     enqueue_timestamp_ms: replacement_enqueue_timestamp_ms,
                     journal_record_digest,
+                    local_custody: existing.local_custody,
                 };
                 self.durable_plan_claims.insert(tx_hash, rebound.clone());
                 self.tx_enqueued_at_ms
@@ -17858,6 +18015,11 @@ impl Queue {
                         global_admission_identity: global_admission_identity.clone(),
                         enqueue_timestamp_ms: enqueued_at_ms,
                         journal_record_digest,
+                        local_custody: if restored_reservation {
+                            QueuePlanLocalCustody::Autonomous
+                        } else {
+                            QueuePlanLocalCustody::Available
+                        },
                     },
                 );
             }
@@ -18577,9 +18739,7 @@ impl Queue {
     }
     fn begin_selection_attempt(&self) -> QueueSelectionAttempt<'_> {
         self.selection_attempts.fetch_add(1, Ordering::AcqRel);
-        QueueSelectionAttempt {
-            counter: &self.selection_attempts,
-        }
+        QueueSelectionAttempt { queue: self }
     }
     fn release_inflight_guard(&self) {
         let prev = self.inflight_guards.fetch_sub(1, Ordering::Relaxed);
@@ -20418,7 +20578,9 @@ impl Queue {
                     skipped_owned.push(hash);
                     continue;
                 }
-                if self.durability_transition_active(&hash) {
+                if self.durability_transition_active(&hash)
+                    || self.replay_terminal_cleanup_pending(hash)
+                {
                     // A transaction behind this exact durability boundary must not overtake it.
                     // Put every inspected owner back, restore canonical ordinal order, and defer
                     // selection until the transition publishes or rolls back.
@@ -20872,6 +21034,7 @@ impl Queue {
         }
         self.publish_backpressure_state(self.active_len(), telemetry.as_ref());
         guards.clear();
+        self.resume_unowned_replay_terminal_cleanup();
     }
     /// Atomically return popped transaction guards to the tail of the scheduling queue.
     ///
@@ -21235,6 +21398,7 @@ impl Queue {
             self.wake_sumeragi();
         }
         guards.clear();
+        self.resume_unowned_replay_terminal_cleanup();
         Ok(report)
     }
     /// Remove committed transactions and their indexed queue metadata by hash.
@@ -26271,6 +26435,7 @@ pub mod tests {
                 global_admission_identity: None,
                 enqueue_timestamp_ms: 0,
                 journal_record_digest: Hash::new(b"orphan durable claim"),
+                local_custody: QueuePlanLocalCustody::Available,
             },
         );
         let claimed_path = dir.path().join("durable-claim.norito");
@@ -28894,6 +29059,7 @@ pub mod tests {
                 global_admission_identity: Some(successor_binding.global_admission_identity()),
                 enqueue_timestamp_ms: enqueue_timestamp_ms.saturating_add(1),
                 journal_record_digest: successor_binding.journal_record_digest,
+                local_custody: QueuePlanLocalCustody::Available,
             },
         );
         assert!(

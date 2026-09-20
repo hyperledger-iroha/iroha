@@ -8,7 +8,7 @@ use crate::sumeragi::v2_apply::validation_custody::{
 impl V2BodyStore {
     /// Reserve bounded service descriptors from this exact open height store.
     /// This is not admission for the payload retained by the associated owner.
-    pub(in crate::sumeragi) fn retained_validation_service<P: CarrierValidator>(
+    pub(crate) fn retained_validation_service<P: CarrierValidator>(
         &self,
         validator: P,
     ) -> Result<RetainedBodyValidationService<P>, V2BodyStoreError> {
@@ -23,7 +23,7 @@ impl V2BodyStore {
     /// Cache and reproposal paths require the same executed owner. A local write
     /// refusal leaves its pending receipt and every older confirmed receipt.
     /// TODO: replace live scalar validation only with a real reserved publisher.
-    pub(in crate::sumeragi) fn execute_retained_durable_validation<P: CarrierValidator>(
+    pub(crate) fn execute_retained_durable_validation<P: CarrierValidator>(
         &mut self,
         durable: DurableBodyReceipt,
         expected_manifest_hash: HashOf<wire::PayloadManifest>,
@@ -110,12 +110,12 @@ std::thread_local! {
 
 /// Inject only the next validation marker file sync on the calling test thread.
 #[cfg(test)]
-pub(super) fn fail_next_marker_file_sync() {
+pub(crate) fn fail_next_marker_file_sync() {
     FAIL_MARKER_FILE_SYNC.set(true);
 }
 
 #[cfg(test)]
-pub(super) fn fail_next_marker_directory_sync() {
+pub(crate) fn fail_next_marker_directory_sync() {
     FAIL_MARKER_DIRECTORY_SYNC.set(true);
 }
 

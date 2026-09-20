@@ -15,17 +15,17 @@ mod sealed {
 }
 
 /// A complete original candidate, never an erased allocation or scalar receipt.
-pub(in crate::sumeragi) trait RetainedValidationOwner:
-    sealed::Owner + Send + 'static
-{
+pub(crate) trait RetainedValidationOwner: sealed::Owner + Send + 'static {
     /// Compare only the original frozen context and canonical proposal bytes.
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool;
     /// The original execution-prefix commitment, without executing again.
     fn commitment(&self) -> wire::ExecutionCommitment;
 }
 
-impl<A> sealed::Owner for crate::state::PreparedCarrierJournals<A> {}
-impl<A: Send + 'static> RetainedValidationOwner for crate::state::PreparedCarrierJournals<A> {
+impl<A, B> sealed::Owner for crate::state::RetainedCarrier<A, B> {}
+impl<A: Send + 'static, B: Send + 'static> RetainedValidationOwner
+    for crate::state::RetainedCarrier<A, B>
+{
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
         self.matches_validation_candidate(context, body)
     }
@@ -87,16 +87,13 @@ pub(in crate::sumeragi) mod test_support {
         }
     }
     impl<P: CarrierValidator> RetainedBodyValidationService<P> {
-        pub(in crate::sumeragi) fn owner_for_test(
-            &self,
-            subject: wire::BlockSubject,
-        ) -> Option<&P::Owner> {
+        pub(crate) fn owner_for_test(&self, subject: wire::BlockSubject) -> Option<&P::Owner> {
             self.candidates
                 .iter()
                 .find(|row| row.subject == subject)
                 .and_then(|row| row.owner.as_ref())
         }
-        pub(in crate::sumeragi) fn marker_counts_for_test(&self) -> (usize, usize) {
+        pub(crate) fn marker_counts_for_test(&self) -> (usize, usize) {
             (
                 self.markers
                     .iter()
@@ -112,7 +109,7 @@ pub(in crate::sumeragi) mod test_support {
 }
 
 /// Adapter implemented by the validator that owns the real reservation policy.
-pub(in crate::sumeragi) trait CarrierValidator {
+pub(crate) trait CarrierValidator {
     /// Full detached carrier with its concrete admission owner still attached.
     type Owner: RetainedValidationOwner;
     /// Typed deterministic or local refusal from the actual producer.
@@ -158,7 +155,7 @@ struct Marker {
 }
 
 /// Descriptor-bounded service storage. Payload capacity remains inside each owner.
-pub(in crate::sumeragi) struct RetainedBodyValidationService<P: CarrierValidator> {
+pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
     validator: P,
     identity: V2BodyStoreInstanceIdentity,
     candidates: Vec<Candidate<P::Owner>>,
@@ -168,7 +165,7 @@ pub(in crate::sumeragi) struct RetainedBodyValidationService<P: CarrierValidator
 
 impl<P: CarrierValidator> RetainedBodyValidationService<P> {
     /// Only BodyStore supplies the original instance identity and its bound.
-    pub(in crate::sumeragi) fn new(
+    pub(crate) fn new(
         validator: P,
         identity: V2BodyStoreInstanceIdentity,
         limit: usize,
@@ -186,16 +183,13 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         })
     }
 
-    pub(in crate::sumeragi) fn matches_store(
-        &self,
-        identity: &V2BodyStoreInstanceIdentity,
-    ) -> bool {
+    pub(crate) fn matches_store(&self, identity: &V2BodyStoreInstanceIdentity) -> bool {
         self.identity.same_instance(identity)
     }
 
     /// Install before fsync. Failure after this point leaves the exact owner and
     /// pending occurrence here; a prior confirmed occurrence is never overwritten.
-    pub(in crate::sumeragi) fn prepare_marker(
+    pub(crate) fn prepare_marker(
         &mut self,
         context: &wire::HeightContext,
         body: &SignedBlock,
@@ -248,7 +242,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
     }
 
     /// Record only the receipt returned after the original marker's fsync.
-    pub(in crate::sumeragi) fn confirm(
+    pub(crate) fn confirm(
         &mut self,
         receipt: &ValidatedBodyReceipt,
     ) -> Result<(), CarrierCustodyError> {
@@ -274,7 +268,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
 
     /// Select this exact confirmed occurrence; later failed marker writes do not
     /// prevent its use. The borrowing cut prevents concurrent replacement/removal.
-    pub(in crate::sumeragi) fn select(
+    pub(crate) fn select(
         &mut self,
         receipt: &ValidatedBodyReceipt,
     ) -> Result<SelectedValidationCarrier<'_, P>, CarrierCustodyError> {
@@ -304,7 +298,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
 
 /// Affine candidate selection. Drop/ordinary refusal restores the original owner.
 #[must_use = "selected candidate must be consumed by publication or restored"]
-pub(in crate::sumeragi) struct SelectedValidationCarrier<'a, P: CarrierValidator> {
+pub(crate) struct SelectedValidationCarrier<'a, P: CarrierValidator> {
     service: &'a mut RetainedBodyValidationService<P>,
     index: usize,
     owner: Option<P::Owner>,
@@ -313,9 +307,12 @@ pub(in crate::sumeragi) struct SelectedValidationCarrier<'a, P: CarrierValidator
 impl<P: CarrierValidator> SelectedValidationCarrier<'_, P> {
     /// This callback must run the consuming publisher, which still requires its
     /// own exact Decision/source/storage authority. Custody grants none of it.
-    /// A local refusal must return the same complete owner. Panic is fail-stop;
+    /// A local refusal must return the same complete owner in its current phase,
+    /// including a decision or checkpoint attached during this callback. Drop
+    /// restores that phase into its original slot without rebuilding execution.
+    /// Panic is fail-stop;
     /// the occupied row remains a tombstone and cannot trigger reexecution.
-    pub(in crate::sumeragi) fn try_consume<R, E>(
+    pub(crate) fn try_consume<R, E>(
         mut self,
         publish: impl FnOnce(P::Owner) -> Result<R, (P::Owner, E)>,
     ) -> Result<R, E> {

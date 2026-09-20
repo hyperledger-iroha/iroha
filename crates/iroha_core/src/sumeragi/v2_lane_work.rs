@@ -5946,18 +5946,23 @@ impl V2LaneWorkAdapter {
                 "autonomous reservation release requires the installed live queue".to_owned(),
             )
         })?;
-        let batches = std::mem::take(&mut self.pending_autonomous_reservation_batches);
         let mut released = 0_usize;
-        for batch in batches.into_values() {
-            if batch.reservations.is_empty() {
-                continue;
+        while let Some((&route, batch)) = self
+            .pending_autonomous_reservation_batches
+            .first_key_value()
+        {
+            if !batch.reservations.is_empty() {
+                let context = batch.pre_kura_direct_release_context()?;
+                released = released.saturating_add(
+                    queue
+                        .release_pre_kura_autonomous_reservation_batch(context)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                );
             }
-            let context = batch.pre_kura_direct_release_context()?;
-            released = released.saturating_add(
-                queue
-                    .release_pre_kura_autonomous_reservation_batch(context)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
-            );
+            // A refused or indeterminate release retains this original batch
+            // and every unvisited batch. Only Queue's completed transition
+            // discharges the adapter's custody; no reconstructed retry owner.
+            self.pending_autonomous_reservation_batches.remove(&route);
         }
         Ok(released)
     }

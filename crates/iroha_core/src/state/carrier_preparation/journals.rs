@@ -26,7 +26,7 @@ mod runtime_journals;
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
-pub(crate) use decision_binding::PublishedNativeApply;
+pub(crate) use decision_binding::{PublishedNativeApply, RetainedCarrier};
 #[cfg(test)]
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;
@@ -450,7 +450,9 @@ impl<'state> PreparedCarrier<'state> {
     }
 }
 
-impl<Admission> PreparedCarrierJournals<Admission> {
+impl<Admission, Block: AsRef<iroha_data_model::block::SignedBlock>, Components>
+    PreparedCarrierJournals<Admission, Block, Components>
+{
     /// Match a retry against the original context and resultless proposal wire.
     /// Results remain owned by this carrier; they are not supplied by a retry.
     pub(crate) fn matches_validation_candidate(
@@ -469,7 +471,9 @@ impl<Admission> PreparedCarrierJournals<Admission> {
             _ => false,
         }
     }
+}
 
+impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Components> {
     /// Inspect Native custody after every State writer has been released.
     #[cfg(test)]
     pub(in crate::state) fn native_source_for_test(&self) -> Option<&NativeExecutionCustody> {
@@ -482,9 +486,7 @@ impl<Admission> PreparedCarrierJournals<Admission> {
     ) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
         self.execution_prefix
     }
-}
 
-impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Components> {
     /// Borrow the original source owners after State journal detachment.
     pub(in crate::state) fn source_prefix(&self) -> &ValidatedExecutionPrefix {
         &self.source_prefix

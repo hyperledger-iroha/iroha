@@ -903,6 +903,109 @@ fn corrupt_planner_frontier_retains_exact_pending_producer_reservations() {
 }
 
 #[test]
+fn refused_pre_kura_release_retains_original_batch_until_checked_release_succeeds() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let directory = tempfile::tempdir().expect("real pending release journals");
+    let journal_path = directory.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 2);
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("derive original producer slot");
+    assert_eq!(slot.validator_set.len(), 4);
+    let reservations = queue
+        .reserve_transactions_for_lane_bounded(
+            adapter.state.as_ref(),
+            slot.selection_authorization()
+                .expect("original selection authority"),
+            LaneQueueReservationSelectionLimits {
+                max_transactions: NonZeroUsize::new(2).unwrap(),
+                max_scan: NonZeroUsize::new(2).unwrap(),
+                max_encoded_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+                max_gas: NonZeroU64::new(u64::MAX).unwrap(),
+            },
+            &BTreeSet::new(),
+            LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
+        )
+        .expect("reserve original pending batch");
+    assert_eq!(reservations.len(), 2);
+    let original_allocation = reservations.as_ptr();
+    let ordered_keys = reservations
+        .iter()
+        .map(|reservation| *reservation.key())
+        .collect::<Vec<_>>();
+    let activation = queue
+        .authorize_lane_reservation_kura_activation(
+            slot.selection_authorization()
+                .expect("original activation authority"),
+            &ordered_keys,
+        )
+        .expect("retain the actual competing transition fence");
+    adapter.pending_autonomous_reservation_batches.insert(
+        (lane_id, dataspace_id),
+        PendingAutonomousReservationBatch {
+            slot,
+            reservations,
+            envelope_byte_limit: 4 * 1024 * 1024,
+        },
+    );
+    let live_before = queue.live_lane_reservations();
+    let fifo_before = queue.fifo_snapshot_for_test();
+    let journal_before = std::fs::read(&journal_path).expect("read original journal");
+    assert!(matches!(
+        adapter.release_pending_autonomous_reservation_batches(),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    let retained = adapter
+        .pending_autonomous_reservation_batches
+        .get(&(lane_id, dataspace_id))
+        .expect("failed release must retain its actual batch");
+    assert_eq!(retained.reservations.as_ptr(), original_allocation);
+    assert_eq!(
+        retained
+            .reservations
+            .iter()
+            .map(|reservation| *reservation.key())
+            .collect::<Vec<_>>(),
+        ordered_keys
+    );
+    assert_eq!(queue.live_lane_reservations(), live_before);
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    assert_eq!(std::fs::read(&journal_path).unwrap(), journal_before);
+
+    drop(activation);
+    assert_eq!(
+        adapter
+            .release_pending_autonomous_reservation_batches()
+            .expect("retry original batch after fence release"),
+        2
+    );
+    assert!(adapter.pending_autonomous_reservation_batches.is_empty());
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(
+        queue.fifo_snapshot_for_test(),
+        ordered_keys
+            .iter()
+            .map(|key| key.entrypoint_hash)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        adapter
+            .release_pending_autonomous_reservation_batches()
+            .expect("completed release is empty"),
+        0
+    );
+}
+
+#[test]
 fn corrupt_native_application_receipt_retains_exact_pending_producer_reservations() {
     let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter();
     assert!(
