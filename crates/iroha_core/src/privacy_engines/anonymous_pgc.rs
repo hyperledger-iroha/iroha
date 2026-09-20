@@ -7,6 +7,7 @@
 //! proves the four §6 legality sub-languages without disclosing the sender or recipient indices and
 //! carries that bootstrap invariant forward.
 pub mod bootstrap;
+mod fixed_array;
 pub mod payment;
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,

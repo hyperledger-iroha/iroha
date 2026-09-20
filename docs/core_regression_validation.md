@@ -3,6 +3,48 @@
 These records describe focused repairs against the current first-release
 contracts. They do not establish full workspace or release qualification.
 
+## September 20 Anonymous-PGC proof decoding stack overflow
+
+The isolated `verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects`
+test aborts on the default libtest stack in the original executable. The debugger
+places the fault in nested Norito decoding of the sender's positive range proof.
+Each unsigned range embeds 5,152 bytes of fixed arrays; the sender embeds two
+ranges, and the complete payment embeds the sender. By-value decoder results and
+temporaries multiply that storage across the call chain: the unsigned-range
+decoder alone reserves 98,664 bytes, above the test's roughly 393,000-byte frame.
+
+Both payment and bootstrap range arrays now use a private heap owner with exact
+compile-time dimensions. Serialization and decoding delegate to the canonical
+fixed-array codec, and decoding charges the owned array against the allocation
+budget. Provers retain their existing vector allocation when converting to the
+fixed owner. No additional accepted encoding or enlarged thread stack is needed.
+The rebuilt unsigned-range decoder frame is 7,032 bytes. The original test passes
+on the default libtest stack, and the new full-payment decode/verification test
+passes with a 512 KiB stack.
+
+All 52 focused regressions pass on the final executable in 160.45 seconds with
+eight test workers and `RUST_MIN_STACK` unset: all Anonymous-PGC engine and array
+tests plus the nine PGC bootstrap/payment instruction tests. Coverage includes
+both unchanged proof known-answer vectors, maximum 64-account inputs, malformed
+and tampered proofs, allocation limits, atomic updates and replay rejection.
+The allocation test measures the canonical decoder's existing temporary costs
+separately, then checks the exact additional heap charge and one-byte-short
+budget rejection.
+
+The final test build passes without diagnostics:
+
+```sh
+cargo test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry --no-run
+```
+
+Changed-file `rustfmt --edition 2024 --check`, `git diff --check`, and
+`scripts/check_no_legacy_codec.sh` pass. `cargo fmt --all -- --check` reports
+pre-existing differences in `state/canonical_runtime_tests.rs`,
+`state/carrier_preparation/physical_publication.rs`, the test network's
+`production_beacon_prepare.rs`, and the daemon's `external_software_signer.rs`.
+Those files are outside this repair. Full workspace tests were not run.
+
 ## September 19 CLI output API and carrier warning repair
 
 CLI settlement verification uses canonical network inputs and authenticated typed
