@@ -24,8 +24,16 @@ Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
 Install clang-18 and lld-18 with the platform package manager, or explicitly select
 --native-linker system for diagnosis. macOS keeps the system Apple linker. Changing this
 selection invalidates Cargo fingerprints and can rebuild dependencies once in the
-same warm lane; repeating the selection reuses them. Authenticated preparation
-never accepts this option and retains its existing native and release environments.
+same warm lane; repeating the selection reuses them. Authenticated prepare pins
+--native-linker, platform, and the native Rust linker driver's compiler/linker paths,
+SHA256 digests and sizes in its request and revalidates them before and after work
+and on resume. Linux defaults to LLVM 18; explicit system uses the same clang-18
+driver with /usr/bin/ld. macOS system uses the selected Xcode Apple clang and ld.
+Missing tools fail without fallback. These generated native flags never enter the
+separate shipping Zig environment; inherited compiler flags remain excluded.
+Changing selection or tools requires a fresh output, and can rebuild native Cargo
+fingerprints in the existing lane. Both platforms still run only host-native gates;
+Mac preparation does not establish Linux-specific supervisor behavior.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
@@ -157,23 +165,7 @@ def development_linker_environment(environment: dict[str, str], preference: str)
             and not any(name.startswith("CARGO_TARGET_") and name.endswith("_LINKER")
                         for name in environment),
             "development linker selection requires the sanitized native environment")
-    tools = {}
-    for role, invocation, expected in LINUX_NATIVE_LLVM_TOOL_PATHS:
-        try:
-            path = real_path(invocation.resolve(strict=True))
-        except OSError as error:
-            raise PrepareError(
-                f"--native-linker llvm requires installed LLVM 18 tools: missing {invocation}; "
-                "install clang-18 and lld-18 or select --native-linker system"
-            ) from error
-        require(path == expected, f"LLVM {role} must resolve to the fixed installed path {expected}")
-        info = stable_hash_path(path)
-        require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
-                f"LLVM {role} is not executable: {invocation}; "
-                "install executable clang-18 and lld-18 or select --native-linker system")
-        require(invocation.resolve(strict=True) == path, f"LLVM {role} changed during inspection")
-        tools[role] = {"invocation": str(invocation), "path": str(path),
-                       "sha256": info.sha256, "size": info.size}
+    tools = llvm_native_linker_tools()
     # The ld.lld basename selects ELF mode; invoking its canonical target `lld`
     # directly would select the generic driver instead. Validate and report both.
     flags = (f"-Clinker={tools['compiler']['path']} "
@@ -184,6 +176,82 @@ def development_linker_environment(environment: dict[str, str], preference: str)
           "expect a one-time dependency rebuild in this existing warm lane. "
           "Repeating the same selection reuses its cache; switching back invalidates it again.", flush=True)
     return environment | {"RUSTFLAGS": flags}
+
+
+def llvm_native_linker_tools() -> dict[str, dict[str, object]]:
+    """Inspect the one fixed LLVM installation shared by both native workflows."""
+    tools = {}
+    for role, invocation, expected in LINUX_NATIVE_LLVM_TOOL_PATHS:
+        remedy = ("install executable clang-18" if role == "compiler" else
+                  "install executable lld-18 or select --native-linker system")
+        try:
+            path = real_path(invocation.resolve(strict=True))
+        except OSError as error:
+            raise PrepareError(
+                f"--native-linker llvm requires installed LLVM 18 tools: missing {invocation}; {remedy}"
+            ) from error
+        require(path == expected, f"LLVM {role} must resolve to the fixed installed path {expected}")
+        info = stable_hash_path(path)
+        require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
+                f"LLVM {role} is not executable: {invocation}; {remedy}")
+        require(invocation.resolve(strict=True) == path, f"LLVM {role} changed during inspection")
+        tools[role] = {"invocation": str(invocation), "path": str(path),
+                       "sha256": info.sha256, "size": info.size}
+    return tools
+
+
+def system_native_linker_paths() -> tuple[tuple[str, Path, Path], ...]:
+    """Resolve the system linker with a Clang driver that can name its exact path."""
+    require(sys.platform in {"darwin", "linux"}, "native linker requires macOS or Linux")
+    if sys.platform == "darwin":
+        paths = []
+        for name in ("clang", "ld"):
+            selected = subprocess.check_output(
+                ["/usr/bin/xcrun", "--find", name], cwd="/",
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                stdin=subprocess.DEVNULL, text=True, timeout=15).strip()
+            paths.append(Path(selected))
+    else:
+        linker = Path("/usr/bin/ld")
+        return (LINUX_NATIVE_LLVM_TOOL_PATHS[0],
+                ("linker", linker, linker.resolve(strict=True)))
+    return tuple((role, path, path.resolve(strict=True))
+                 for role, path in zip(("compiler", "linker"), paths))
+
+
+def preparation_native_linker(preference: str) -> dict[str, object]:
+    """Bind the native driver and linker; shipping Zig remains a separate owner."""
+    require(preference in {"system", "llvm"}, "native linker must be system or llvm")
+    if preference == "llvm":
+        require(sys.platform == "linux", "--native-linker llvm is supported only on Linux")
+        tools = llvm_native_linker_tools()
+    else:
+        tools = {}
+        for role, invocation, expected in system_native_linker_paths():
+            path = real_path(invocation.resolve(strict=True))
+            require(path == expected, f"system native {role} changed during resolution")
+            info = stable_hash_path(path)
+            require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
+                    f"system native {role} is not executable: {invocation}")
+            require(invocation.resolve(strict=True) == path,
+                    f"system native {role} changed during inspection")
+            tools[role] = {"invocation": str(invocation), "path": str(path),
+                           "sha256": info.sha256, "size": info.size}
+    return {"preference": preference, "platform": sys.platform, "tools": tools}
+
+
+def preparation_native_environment(environment: dict[str, str], linker: dict[str, object]) -> dict[str, str]:
+    """Generate exact native flags without admitting inherited compiler hooks."""
+    require(not any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"))
+            and not any(name.startswith("CARGO_TARGET_") and name.endswith("_LINKER")
+                        for name in environment),
+            "preparation linker selection requires the sanitized native environment")
+    tools = linker["tools"]
+    # Use the invocation alias for LLVM: ld.lld selects ELF mode, unlike lld.
+    # Encoded flags also preserve spaces in the selected Apple toolchain path.
+    flags = (f"-Clinker={tools['compiler']['path']}",
+             f"-Clink-arg=-fuse-ld={tools['linker']['invocation']}")
+    return environment | {"CARGO_ENCODED_RUSTFLAGS": "\x1f".join(flags)}
 
 
 def recorded_preparation_environment(output: Path, target_dir: Path,
@@ -1105,11 +1173,15 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
     env, compiler_tools = isolated_cargo_environment(root, source, env)
-    native_env = native_check_environment(env, {"CARGO_INCREMENTAL": incremental})
+    native_linker = preparation_native_linker(args.native_linker)
+    native_env = preparation_native_environment(
+        native_check_environment(env, {"CARGO_INCREMENTAL": incremental}), native_linker)
+    print("[taira-release] pinned native linker " + json.dumps(native_linker, sort_keys=True), flush=True)
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
             "native_check_scope": args.native_check_scope,
             "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
+            "native_linker": native_linker,
             "environment_sha256": hashlib.sha256(canonical_json_bytes(environment_record)).hexdigest(),
             # This is the effective gate environment: child_environment excludes
             # CARGO_BUILD_TARGET, and both commit variables are normalized above.
@@ -1127,6 +1199,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         output = create_fresh_directory(output, mode=0o700)
 
     def revalidate():
+        require(preparation_native_linker(args.native_linker) == native_linker,
+                "native linker choice or tool identity changed during preparation")
         require(recorded_preparation_environment(output, target_dir, request) == environment_record,
                 "preparation environment checkpoint changed during preparation")
         require(frozen_snapshot(source, entries, target_dir) == before, "captured source changed during preparation")
@@ -1213,6 +1287,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             retire_checkpoint(independent_checks)
 
         admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
+        revalidate()
         if checks.exists():
             print("[taira-release] reused completed native CLI checks", flush=True)
         else:
@@ -1225,6 +1300,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             revalidate()
             if not checks.exists():
                 write_record(checks, {"request": request, "passed": True})
+        revalidate()
         stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd, mode_lock_fd=mode_lock_fd))
         with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
             revalidate()
@@ -1255,6 +1331,8 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
                                  help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
         if name == "prepare":
+            command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
+                                 help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
             command.add_argument("--output-dir", type=Path, required=True)

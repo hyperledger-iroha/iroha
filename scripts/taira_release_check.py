@@ -53,8 +53,10 @@ Linux development checks default to LLVM 18, requiring executable /usr/bin/clang
 and /usr/bin/ld.lld-18 before compilation. Missing tools fail without fallback;
 install clang-18 and lld-18 with the platform package manager, or explicitly select
 --native-linker system for diagnosis. macOS keeps Apple ld. Switching linkers
-invalidates Cargo fingerprints and can rebuild dependencies once; authenticated
-preparation does not accept this option and keeps its existing environments.
+invalidates Cargo fingerprints and can rebuild dependencies once. Authenticated
+preparation pins its native linker pair separately from shipping Zig. The same
+coordinated pair reaches Cargo and the direct-rustc standalone checks; arbitrary
+inherited compiler flags remain excluded.
 """
 
 from __future__ import annotations
@@ -3229,11 +3231,32 @@ def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple
         description="lifecycle source contracts (shared Core assertions)")
 
 
+def native_linker_rustc_arguments(env: dict[str, str]) -> list[str]:
+    """Forward only the coordinated native linker pair to direct rustc owners."""
+    encoded = env.get("CARGO_ENCODED_RUSTFLAGS")
+    plain = env.get("RUSTFLAGS")
+    if encoded is None and plain is None:
+        return []
+    if encoded is not None and plain is not None:
+        raise CheckError("native linker flags must have one coordinated encoding")
+    arguments = encoded.split("\x1f") if encoded is not None else plain.split()
+    prefixes = ("-Clinker=", "-Clink-arg=-fuse-ld=")
+    if len(arguments) != len(prefixes):
+        raise CheckError("standalone checks accept only the coordinated native linker pair")
+    for argument, prefix in zip(arguments, prefixes):
+        path = argument.removeprefix(prefix)
+        if (not argument.startswith(prefix) or not Path(path).is_absolute()
+                or os.path.abspath(path) != path or any(char in path for char in "\0\r\n\x1f")):
+            raise CheckError("standalone checks require exact absolute native linker paths")
+    return arguments
+
+
 def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...], *,
                            source: str, output_name: str, label: str, description: str) -> None:
     compiler = env.get("RUSTC")
     if not compiler or not Path(compiler).is_absolute():
         raise CheckError(f"{label} checks require the coordinated pinned RUSTC")
+    linker_arguments = native_linker_rustc_arguments(env)
     target = Path(env["CARGO_TARGET_DIR"])
     output = target / "taira-consensus-fsm-check"
     output.mkdir(mode=0o700, exist_ok=True)
@@ -3246,7 +3269,7 @@ def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int,
     print(f"[taira-check] start {description}", flush=True)
     common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
                   capture_output=True, check=False, pass_fds=lock_fds, timeout=120, umask=0o077)
-    compiled = subprocess.run([compiler, "--edition=2024", "--test",
+    compiled = subprocess.run([compiler, *linker_arguments, "--edition=2024", "--test",
         str(root / source), "-o", str(executable)], **common)
     if compiled.returncode:
         sys.stderr.write(compiled.stdout + compiled.stderr)

@@ -51,12 +51,19 @@ class TairaPrepareTests(unittest.TestCase):
             tool.chmod(0o755)
         self.args = argparse.Namespace(
             repo_root=SCRIPT.parent.parent, target_dir=self.target,
-            native_check_scope="basic",
+            native_check_scope="basic", native_linker="system",
             output_dir=self.out, expected_commit="a" * 40, expected_signer="A" * 40, zig=self.zig,
             zig_sha256=hashlib.sha256(self.zig.read_bytes()).hexdigest(),
             cargo_zigbuild=self.zigbuild,
             cargo_zigbuild_sha256=hashlib.sha256(self.zigbuild.read_bytes()).hexdigest(),
         )
+
+        self.native_tools = []
+        for role in ("compiler", "linker"):
+            path = self.root / ("native-" + role)
+            path.write_bytes(("disposable native " + role).encode())
+            path.chmod(0o755)
+            self.native_tools.append((role, path, path))
 
     def tearDown(self):
         for path in [self.root, *self.root.rglob("*")]:
@@ -73,7 +80,7 @@ class TairaPrepareTests(unittest.TestCase):
             path.chmod(0o755)
 
     def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88,
-                isolate=None):
+                isolate=None, native_paths=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -95,6 +102,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(development_gate, "run_checks", side_effect=check) as gate, \
              patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
              patch.object(release, "capacity_preflight", return_value=[]), \
+             patch.object(release, "system_native_linker_paths", side_effect=native_paths or (lambda: tuple(self.native_tools))), \
              contextlib.redirect_stdout(io.StringIO()):
             result = release.prepare(self.args)
         return result, gate, compile
@@ -759,6 +767,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(development_gate, "run_checks", side_effect=check), \
              patch.object(release, "run_build", side_effect=build), \
              patch.object(release, "capacity_preflight", return_value=[]), \
+             patch.object(release, "system_native_linker_paths", return_value=tuple(self.native_tools)), \
              contextlib.redirect_stdout(io.StringIO()):
             return release.main() if through_cli else release.prepare(self.args)
 
@@ -1439,8 +1448,8 @@ class TairaPrepareTests(unittest.TestCase):
                                 with self.assertRaisesRegex(release.PrepareError, "missing" if state == "missing" else "not executable") as failed:
                                     release.development_check(repo, routine, {}, native_linker=preference, focused_regressions=focused)
                                 self.assertIn(str(tools[broken_index][1]), str(failed.exception))
-                                self.assertIn("clang-18 and lld-18", str(failed.exception))
-                                self.assertIn("--native-linker system", str(failed.exception))
+                                self.assertIn("clang-18" if broken_index == 0 else "lld-18", str(failed.exception))
+                                self.assertEqual("--native-linker system" in str(failed.exception), broken_index == 1)
                                 check.assert_not_called()
                                 prequalify.assert_not_called()
                 finally:
@@ -1556,27 +1565,136 @@ class TairaPrepareTests(unittest.TestCase):
                             expected["focused_regressions"] = (focus,)
                         self.assertEqual(check.call_args.kwargs, expected)
 
-    def test_prepare_rejects_native_linker_option_and_never_selects_development_linker(self):
+    def test_prepare_accepts_native_linker_and_scopes_exact_flags_to_native_gate(self):
         arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
                      "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
                      "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64]
-        for preference in ("system", "llvm"):
-            with self.subTest(preference=preference), contextlib.redirect_stderr(io.StringIO()), \
-                 self.assertRaises(SystemExit) as failed:
-                release.parser().parse_args(arguments + ["--native-linker", preference])
-            self.assertEqual(failed.exception.code, 2)
+        for platform, default in (("linux", "llvm"), ("darwin", "system")):
+            with patch.object(release.sys, "platform", platform):
+                self.assertEqual(release.parser().parse_args(arguments).native_linker, default)
+                for preference in ("system", "llvm"):
+                    self.assertEqual(release.parser().parse_args(arguments + ["--native-linker", preference]).native_linker, preference)
         def check(_root, *, environment, **_kwargs):
+            self.assertNotIn("RUSTFLAGS", environment)
+            self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"), [
+                f"-Clinker={self.native_tools[0][2]}", f"-Clink-arg=-fuse-ld={self.native_tools[1][1]}"])
+            self.assertNotIn("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", environment)
+        def build(_root, _command, environment, log):
             self.assertFalse(any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "NATIVE_LINKER")))
-        def build(_root, _command, environment, log):
-            check(_root, environment=environment)
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
-        with patch.object(release, "development_linker_environment", side_effect=AssertionError("prepare reached development linker")) as select, \
+        with patch.object(release, "development_linker_environment", side_effect=AssertionError("prepare reached mutable workflow")), \
              patch.dict(os.environ, {"NATIVE_LINKER": "llvm", "RUSTFLAGS": "bad", "CARGO_ENCODED_RUSTFLAGS": "bad",
                                     "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "bad"}):
-            self.prepare(check=check, build=build)
-        select.assert_not_called()
+            result, _, _ = self.prepare(check=check, build=build)
+        identity = result["native_linker"]
+        self.assertEqual(identity["preference"], "system")
+        self.assertEqual(identity["platform"], sys.platform)
+        for role, invocation, path in self.native_tools:
+            self.assertEqual(identity["tools"][role], {"invocation": str(invocation), "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+        self.assertEqual(release.read_record(self.out / "request.json")["native_linker"], identity)
+
+    def test_prepare_linux_llvm_uses_shared_exact_resolver_and_never_falls_back(self):
+        tools = self.llvm_tools()
+        self.args.native_linker = "llvm"
+        observed = []
+        def check(_root, *, environment, **_kwargs):
+            observed.append(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            result, _, _ = self.prepare(check=check)
+            self.assertEqual(observed, [[f"-Clinker={tools[0][2]}", f"-Clink-arg=-fuse-ld={tools[1][1]}"]])
+            self.assertEqual(result["native_linker"]["preference"], "llvm")
+            tools[1][2].unlink()
+            with self.assertRaisesRegex(release.PrepareError, "requires installed LLVM 18"):
+                self.prepare(check=AssertionError("missing linker resumed checks"), build=AssertionError("missing linker built"))
+
+    def test_prepare_native_tool_changes_before_resume_reject_completed_capture(self):
+        for role, _invocation, path in self.native_tools:
+            with self.subTest(role=role):
+                self.args.output_dir = self.root / ("prepared-" + role)
+                self.out = self.args.output_dir
+                self.prepare()
+                old = path.read_bytes()
+                path.write_bytes(old + b" changed")
+                with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+                    self.prepare(check=AssertionError("changed tool resumed checks"), build=AssertionError("changed tool built"))
+                path.write_bytes(old)
+
+    def test_prepare_native_tool_change_during_gate_or_build_never_publishes_success(self):
+        for stage in ("cache", "gate", "build"):
+            with self.subTest(stage=stage):
+                self.out = self.root / ("changed-during-" + stage)
+                self.args.output_dir = self.out
+                path = self.native_tools[1][2]
+                old = path.read_bytes()
+                def check(_root, **_kwargs):
+                    if stage == "gate": path.write_bytes(old + b" changed")
+                def build(_root, _command, _env, log):
+                    self.binaries()
+                    log.write_bytes(b"fixture compiler output\n")
+                    path.write_bytes(old + b" changed")
+                with self.assertRaisesRegex(release.PrepareError, "native linker choice or tool identity changed"):
+                    self.prepare(check=check, build=build, cache_admission=(
+                        lambda *_a, **_k: path.write_bytes(old + b" changed")) if stage == "cache" else None)
+                if stage != "build":
+                    self.assertFalse((self.out / "checks.json").exists())
+                self.assertFalse((self.out / "result.json").exists())
+                self.assertFalse(any((self.out / "attempts").glob("*/capture.json")))
+                path.write_bytes(old)
+
+    def test_prepare_native_invocation_retarget_rejects_same_bytes_on_resume(self):
+        role, original, _ = self.native_tools[1]
+        alias = self.root / "native-linker-alias"
+        alias.symlink_to(original)
+        alternate = self.root / "native-linker-alternate"
+        alternate.write_bytes(original.read_bytes())
+        alternate.chmod(0o755)
+        self.native_tools[1] = (role, alias, original)
+        def resolve():
+            return tuple((role, invocation, invocation.resolve(strict=True))
+                         for role, invocation, _ in self.native_tools)
+        self.prepare(native_paths=resolve)
+        alias.unlink()
+        alias.symlink_to(alternate)
+        with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+            self.prepare(native_paths=resolve, check=AssertionError("retargeted linker resumed checks"))
+
+    def test_prepared_native_linux_system_keeps_fixed_clang_driver(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             patch.object(Path, "resolve", return_value=Path("/fixed/system-ld")):
+            paths = release.system_native_linker_paths()
+        self.assertEqual(paths, (tools[0], ("linker", Path("/usr/bin/ld"), Path("/fixed/system-ld"))))
+
+    def test_prepare_native_choice_change_does_not_reuse_successful_checkpoint(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            self.prepare()
+            self.args.native_linker = "llvm"
+            with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+                self.prepare(check=AssertionError("choice changed but checks resumed"))
+
+    def test_prepared_native_system_resolves_apple_tools_and_preserves_spaces(self):
+        directory = self.root / "Xcode Beta.app"
+        directory.mkdir()
+        paths = [directory / name for name in ("clang", "ld")]
+        for path in paths:
+            path.write_bytes(b"fixture Apple executable")
+            path.chmod(0o755)
+        with patch.object(release.sys, "platform", "darwin"), \
+             patch.object(release.subprocess, "check_output", side_effect=[str(path) + "\n" for path in paths]) as find:
+            identity = release.preparation_native_linker("system")
+        self.assertEqual([call.args[0] for call in find.call_args_list], [
+            ["/usr/bin/xcrun", "--find", "clang"], ["/usr/bin/xcrun", "--find", "ld"]])
+        self.assertEqual(release.preparation_native_environment({}, identity)["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"),
+                         [f"-Clinker={paths[0]}", f"-Clink-arg=-fuse-ld={paths[1]}"])
+        with patch.object(release.sys, "platform", "darwin"), self.assertRaisesRegex(release.PrepareError, "only on Linux"):
+            release.preparation_native_linker("llvm")
 
     def test_development_target_defaults_and_explicit_selectors_must_agree(self):
         repo, routine = self.development_paths()

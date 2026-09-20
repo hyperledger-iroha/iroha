@@ -4349,6 +4349,38 @@ class PureFsmGateTests(unittest.TestCase):
         self.assertIn("pure FSM PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
+    def test_standalone_rustc_uses_exact_coordinated_native_linker_pair(self):
+        for flags in (
+            {"RUSTFLAGS": "-Clinker=/fixed/clang -Clink-arg=-fuse-ld=/fixed/ld.lld"},
+            {"CARGO_ENCODED_RUSTFLAGS": "-Clinker=/Xcode Beta.app/clang\x1f-Clink-arg=-fuse-ld=/Xcode Beta.app/ld"},
+        ):
+            expected = (flags["RUSTFLAGS"].split() if "RUSTFLAGS" in flags else
+                        flags["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+            with self.subTest(flags=flags), patch.object(gate.subprocess, "run", side_effect=self.results()) as run, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, (77, 88))
+            self.assertEqual(run.call_args_list[0].args[0][:5], ["/pinned/rustc", *expected, "--edition=2024", "--test"])
+            self.assertEqual(run.call_args_list[0].kwargs["env"], self.env | flags)
+            self.assertEqual(run.call_args_list[0].kwargs["pass_fds"], (77, 88))
+            self.assertNotIn(expected[0], run.call_args_list[1].args[0])
+            self.assertNotIn(expected[0], run.call_args_list[2].args[0])
+
+    def test_standalone_rustc_rejects_extra_ambiguous_or_relative_flags_before_compilation(self):
+        pair = "-Clinker=/fixed/clang\x1f-Clink-arg=-fuse-ld=/fixed/ld"
+        for flags in (
+            {"CARGO_ENCODED_RUSTFLAGS": pair, "RUSTFLAGS": ""},
+            {"CARGO_ENCODED_RUSTFLAGS": pair + "\x1f--cfg=unreviewed"},
+            {"RUSTFLAGS": "-Clinker=/fixed/clang"},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/clang", "relative-clang")},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/ld", "/fixed/../ld")},
+            {"CARGO_ENCODED_RUSTFLAGS": "--cfg=unreviewed\x1f-Clink-arg=-fuse-ld=/fixed/ld"},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/ld", "/fixed/ld\n")},
+        ):
+            with self.subTest(flags=flags), patch.object(gate.subprocess, "run") as run, \
+                 self.assertRaises(gate.CheckError):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, ())
+            run.assert_not_called()
+
     def test_empty_duplicate_or_malformed_census_never_executes_suite(self):
         for listing in ("", "one: test\none: test\n", "one: test\nother: benchmark\n"):
             results = self.results(); results[1] = subprocess.CompletedProcess([], 0, listing, "")
