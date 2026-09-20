@@ -11524,13 +11524,51 @@
         },
         {
           "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "struct",
+          "symbol": "CarrierJournalInputs",
+          "required_tokens": [
+            "pub(crate) valid:",
+            "pub(crate) state:",
+            "pub(crate) prefix:",
+            "pub(crate) context:",
+            "pub(crate) execution_prefix:",
+            "pub(crate) native_amx_manifest:",
+            "pub(crate) da_pins:",
+            "pub(crate) publication_events:",
+            "pub(crate) provider:",
+            "pub(crate) reputation:"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_commit.rs",
+          "kind": "struct",
+          "symbol": "PreparedWorldEffects",
+          "required_tokens": [
+            "da_pins: Vec<DaPinIntentWithLocation>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_commit.rs",
+          "kind": "method",
+          "symbol": "PreparedWorldEffects::admission_pins",
+          "required_tokens": [
+            "&self",
+            "-> &Vec<DaPinIntentWithLocation>",
+            "let Self { da_pins } = self;",
+            "da_pins"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
           "kind": "method",
           "symbol": "PreparedCarrier::prepare_journals",
           "required_tokens": [
             "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
+            "} = &self;",
             "let admission = match admit_journals(CarrierJournalInputs {",
-            "state: &self.state",
-            "prefix: &self.source_prefix",
+            "prefix: source_prefix",
+            "da_pins: _world_effects.admission_pins()",
+            "publication_events: _publication_events",
             "provider: provider_capture.as_ref()",
             "reputation: reputation_capture.as_ref()",
             "CarrierJournalPreparationError::JournalAdmission {\n                    carrier: self,\n                    provider: provider_capture,\n                    reputation: reputation_capture,\n                    error,\n                }",
@@ -11544,8 +11582,9 @@
             "let journals = PreparedCarrierJournals {",
             "admission,",
             "StagedCarrierCapture {",
-            ".try_complete()",
-            "carrier: Box::new(carrier)"
+            "carrier.try_prepare_archives()",
+            "carrier: Box::new(carrier)",
+            "Ok(carrier.into_journals())"
           ]
         },
         {
@@ -12853,17 +12892,10 @@
           "kind": "method",
           "symbol": "StagedCarrierCapture::try_complete",
           "required_tokens": [
-            "if let Some(error) = &self.capture_refusal",
-            "return Err(error.clone());",
-            "provider\n                    .try_prepare()",
-            "reputation\n                    .try_prepare()",
+            "mut self: Box<Self>",
+            "if let Err(error) = self.try_prepare_archives()",
             "return Err((self, error));",
-            "self.journals.provider_capture = self.provider.take()",
-            "self.journals.reputation_capture = self.reputation.take()",
-            "owner\n                .into_prepared()",
-            "Ok(self.journals)",
-            "if let Some(provider) = &mut self.provider {\n                provider\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;\n            }",
-            "if let Some(reputation) = &mut self.reputation {\n                reputation\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;\n            }"
+            "Ok((*self).into_journals())"
           ]
         },
         {
@@ -13158,7 +13190,8 @@
             "Self::MaintainAndAttest",
             "maintain_lane_retirement_route_locked",
             "Self::Observe",
-            "observe_lane_retirement_route_locked"
+            "observe_lane_retirement_route_locked",
+            "#[cfg(test)]\n            Self::Observe => kura.observe_lane_retirement_route_locked(entry)"
           ]
         },
         {
@@ -13168,7 +13201,8 @@
           "required_tokens": [
             "ObservedNativeAmxEvidence",
             "Self::Observe => observation.into_observed()",
-            "Self::MaintainAndAttest { .. } => observation.attest()"
+            "Self::MaintainAndAttest { .. } => observation.attest()",
+            "#[cfg(test)]\n            Self::Observe => observation.into_observed()"
           ]
         },
         {
@@ -13178,7 +13212,8 @@
           "required_tokens": [
             "ObservedHistoricalRecoveryEvidence",
             "Self::Observe => observation.into_observed()",
-            "Self::MaintainAndAttest { .. } => observation.attest()"
+            "Self::MaintainAndAttest { .. } => observation.attest()",
+            "#[cfg(test)]\n            Self::Observe => observation.into_observed()"
           ]
         },
         {
@@ -13247,7 +13282,7 @@
           "kind": "enum",
           "symbol": "RetainedCarrier",
           "required_tokens": [
-            "Capturing(super::StagedCarrierCapture<Admission>)",
+            "Capturing(Box<super::StagedCarrierCapture<Admission>>)",
             "Validated(PreparedCarrierJournals<Admission>)",
             "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
             "super::DetachedCarrierComponents",
@@ -13342,10 +13377,11 @@
             "owner: Some(owner)",
             "if !owner.matches_candidate(context, body)",
             "return Err(CarrierCustodyError::Identity)",
-            "match self.validator.resume(owner)",
-            "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
+            "let commitment = match owner.ready_commitment()",
+            "Some(commitment) => commitment",
+            "self.resume_candidate(index, context, body)?",
             "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
-            ".ready_commitment()\n            .ok_or(CarrierCustodyError::IncompleteCapture)?",
+            ".ready_commitment()\n                    .ok_or(CarrierCustodyError::IncompleteCapture)?",
             "confirmed: None",
             "Ok(CarrierMarkerPreparation::Ready(commitment))"
           ]
@@ -13366,8 +13402,8 @@
           "symbol": "SelectedValidationCarrier::try_consume",
           "required_tokens": [
             "mut self",
-            "publish: impl FnOnce(P::Owner) -> Result<R, (P::Owner, E)>",
-            "match publish(owner)",
+            "publish: impl FnOnce(&P, P::Owner) -> Result<R, (P::Owner, E)>",
+            "match publish(&self.service.validator, owner)",
             "Err((owner, error)) => {\n                self.owner = Some(owner);\n                Err(error)\n            }",
             "let subject = self.service.candidates[self.index].subject",
             ".retain(|row| row.durable.subject() != subject)"
@@ -13443,6 +13479,52 @@
             "if owner.ready_commitment() != Some(receipt.execution_commitment())",
             "return Err(CarrierCustodyError::Identity)",
             "marker.confirmed = Some(receipt.clone())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::resume_candidate",
+          "required_tokens": [
+            "match self.validator.resume(owner)",
+            "Ok(owner) => {\n                self.candidates[index].owner = Some(owner);\n                None\n            }",
+            "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
+            "if !owner.matches_candidate(context, body)",
+            "return Err(CarrierCustodyError::Identity)",
+            "Ok(refusal)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "method",
+          "symbol": "StagedCarrierCapture::try_prepare_archives",
+          "required_tokens": [
+            "if let Some(error) = &self.capture_refusal",
+            "return Err(error.clone());",
+            "provider\n                .try_prepare()",
+            "reputation\n                .try_prepare()",
+            "if let Some(provider) = &mut self.provider {\n            provider\n                .try_prepare()\n                .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;\n        }",
+            "if let Some(reputation) = &mut self.reputation {\n            reputation\n                .try_prepare()\n                .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;\n        }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/journals.rs",
+          "kind": "method",
+          "symbol": "StagedCarrierCapture::into_journals",
+          "required_tokens": [
+            "self.journals.provider_capture = self.provider.take()",
+            "self.journals.reputation_capture = self.reputation.take()",
+            "owner\n                .into_prepared()",
+            "self.journals"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry/retirement_observation.rs",
+          "kind": "enum",
+          "symbol": "RetirementScanEffects",
+          "required_tokens": [
+            "#[cfg(test)]\n    Observe",
+            "MaintainAndAttest { pending_canonical_bytes: u64 }"
           ]
         }
       ]

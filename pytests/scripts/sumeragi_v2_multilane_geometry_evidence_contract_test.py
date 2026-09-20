@@ -74,7 +74,7 @@ def test_geometry_evidence_contract_is_connected_to_release_gate():
     "read_and_attest_geometry_native_amx_per_height_evidence", "attest",
     "maintain_lane_retirement_route_locked", "certified_history_has_committed_rewrite_locked",
     "scan_lane_retirement_locked", "ensure_archived_lane_work_released_with_custody",
-    "observe_lane_retirement_locked", "prepare_route", "native", "into_observed",
+    "observe_lane_retirement_locked", "RetirementScanEffects", "prepare_route", "native", "into_observed",
 ])
 def test_geometry_evidence_contract_rejects_missing_ledger_owner(fixture, symbol):
     _, _, checker, models = fixture
@@ -200,6 +200,22 @@ def test_geometry_evidence_contract_rejects_changed_native_dispatch(fixture, old
         "fn native(", old, new,
     )
     assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("symbol", ["RetirementScanEffects", "prepare_route", "native"])
+@pytest.mark.parametrize("mutation", ["removed", "production", "on-maintenance"])
+def test_geometry_evidence_contract_requires_test_only_observation(fixture, symbol, mutation):
+    root, support, checker, _ = fixture
+    path = root / checker.geometry_evidence_contract.EFFECTS
+    anchor = f"enum {symbol}" if symbol == "RetirementScanEffects" else f"fn {symbol}("
+    support.replace_once_after(path, anchor, "#[cfg(test)]",
+                               "#[cfg(not(test))]" if mutation == "production" else "")
+    if mutation == "on-maintenance":
+        variant = "MaintainAndAttest" if symbol == "RetirementScanEffects" else "Self::MaintainAndAttest"
+        support.replace_once_after(path, anchor, variant, "#[cfg(test)] " + variant)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
 
 
 @pytest.mark.parametrize("symbol,old,new,diagnostic", [

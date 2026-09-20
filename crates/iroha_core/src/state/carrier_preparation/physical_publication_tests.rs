@@ -2,6 +2,7 @@
 
 use super::super::tests::{signed_finality, subject};
 use super::*;
+use crate::queue::Queue;
 use crate::state::carrier_preparation::tests::{fixture, prepare};
 use crate::sumeragi::network_topology::Topology;
 use iroha_data_model::block::{SignedBlock, consensus_v2::HeightContext};
@@ -30,12 +31,21 @@ type RetainedPhase = crate::state::RetainedCarrier<PhaseReservation, PhaseReserv
 
 struct ActualPhaseValidator {
     state: Arc<State>,
+    queue: Arc<Queue>,
     topology: Topology,
     calls: Arc<AtomicUsize>,
     releases: Arc<AtomicUsize>,
     provider: Option<crate::query::provider_ingest_finalized::ProviderCandidateCapture>,
     reputation: Option<crate::query::reputation_finalized::ReputationCandidateCapture>,
     wake: Waker,
+}
+
+fn phase_queue() -> Arc<Queue> {
+    let (events, _receiver) = tokio::sync::broadcast::channel(32);
+    Arc::new(Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ))
 }
 
 impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualPhaseValidator {
@@ -57,7 +67,7 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
             Err(super::super::super::CarrierJournalPreparationError::ArchivePreparation {
                 carrier,
                 ..
-            }) => Ok(RetainedPhase::Capturing(*carrier)),
+            }) => Ok(RetainedPhase::Capturing(carrier)),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -128,6 +138,70 @@ fn phase_allocations(phase: &RetainedPhase) -> [*const (); 6] {
     }
 }
 
+// The foreign fixture's construction scratch is released before the retained
+// service begins; the returned Arc remains a strong identity witness throughout.
+#[inline(never)]
+fn phase_foreign_state(state: &Arc<State>) -> Arc<State> {
+    let (mut foreign, _, _, _) = fixture();
+    foreign.kura = Arc::clone(&state.kura);
+    foreign.into()
+}
+
+// Complete the Queue-only selection attempt before later source decoding. Its
+// affine selection/refusal temporaries do not belong on the publication stack.
+#[inline(never)]
+fn assert_original_queue_refusal(
+    service: &mut crate::sumeragi::v2_apply::validation_custody::RetainedBodyValidationService<
+        ActualPhaseValidator,
+    >,
+    receipt: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    foreign: &Arc<State>,
+    allocations: [*const (); 6],
+) {
+    let decoy_queue = phase_queue();
+    assert!(!Arc::ptr_eq(queue, &decoy_queue));
+    let generation = state.state_view_generation();
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    // A lockable empty Queue cannot replace the original producer's dependency.
+    // This nonretiring carrier does not gain retirement authority from an outer
+    // observer: the terminal publisher's retirement refusal remains unchanged.
+    let queue_held = queue.lock_lane_retirement_observer();
+    let refused = service
+        .select(receipt)
+        .unwrap()
+        .try_consume(|producer, phase| {
+            assert!(Arc::ptr_eq(&producer.state, state));
+            assert!(Arc::ptr_eq(&producer.queue, queue));
+            assert!(!Arc::ptr_eq(&producer.state, foreign));
+            assert!(!Arc::ptr_eq(&producer.queue, &decoy_queue));
+            assert!(matches!(phase, RetainedPhase::Checkpointed(_)));
+            match producer.queue.try_lock_lane_retirement_observer() {
+                Ok(_) => panic!("the original Queue must defer this selected owner"),
+                Err(wait) => Err::<(), _>((phase, wait)),
+            }
+        });
+    let mut queue_wait = refused.unwrap_err().wait_for_release();
+    let queue_wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut queue_wait, &queue_wakes).is_pending());
+    drop(decoy_queue.try_lock_lane_retirement_observer().unwrap());
+    assert_eq!(queue_wakes.0.load(Ordering::SeqCst), 0);
+    assert!(poll(&mut queue_wait, &queue_wakes).is_pending());
+    let restored = service.owner_for_test(receipt.durable().subject()).unwrap();
+    assert!(matches!(restored, RetainedPhase::Checkpointed(_)));
+    assert_eq!(phase_allocations(restored), allocations);
+    assert_fences_free_except(state, "");
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before
+    );
+    drop(queue_held);
+    assert_eq!(queue_wakes.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut queue_wait, &queue_wakes).is_ready());
+}
+
 #[test]
 fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals() {
     use crate::sumeragi::{
@@ -142,8 +216,15 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
 
     let (state, proposal, topology, context) = fixture();
     let state: Arc<State> = state.into();
+    let queue = phase_queue();
+    let foreign = phase_foreign_state(&state);
+    assert!(!Arc::ptr_eq(&state, &foreign));
     let generation = state.state_view_generation();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&foreign).unwrap(),
+        before
+    );
     let calls = Arc::new(AtomicUsize::new(0));
     let releases = Arc::new(AtomicUsize::new(0));
     let directory = tempfile::tempdir().unwrap();
@@ -174,6 +255,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     let mut service = store
         .retained_validation_service(ActualPhaseValidator {
             state: Arc::clone(&state),
+            queue: Arc::clone(&queue),
             topology,
             calls: Arc::clone(&calls),
             releases: Arc::clone(&releases),
@@ -208,17 +290,22 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
         .into_validated_receipt()
         .unwrap();
     let finality = signed_finality(context.clone(), subject(&proposal), commitment, 0);
-    let paused = service.select(&receipt).unwrap().try_consume(|phase| {
-        let RetainedPhase::Validated(journals) = phase else {
-            panic!("first selection owns the original validation");
-        };
-        let decision = journals
-            .bind_decision(finality, |_| {
-                Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases)))
-            })
-            .unwrap_or_else(|refusal| panic!("real signed decision: {:?}", refusal.error));
-        Err::<(), _>((RetainedPhase::Decided(decision), "await exact durability"))
-    });
+    let paused = service
+        .select(&receipt)
+        .unwrap()
+        .try_consume(|producer, phase| {
+            assert!(Arc::ptr_eq(&producer.state, &state));
+            assert!(Arc::ptr_eq(&producer.queue, &queue));
+            let RetainedPhase::Validated(journals) = phase else {
+                panic!("first selection owns the original validation");
+            };
+            let decision = journals
+                .bind_decision(finality, |_| {
+                    Ok::<_, Infallible>(PhaseReservation(Arc::clone(&producer.releases)))
+                })
+                .unwrap_or_else(|refusal| panic!("real signed decision: {:?}", refusal.error));
+            Err::<(), _>((RetainedPhase::Decided(decision), "await exact durability"))
+        });
     assert_eq!(paused, Err("await exact durability"));
     let decided = service.owner_for_test(durable.subject()).unwrap();
     assert!(matches!(decided, RetainedPhase::Decided(_)));
@@ -265,16 +352,22 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     let paused = service
         .select(&later_receipt)
         .unwrap()
-        .try_consume(|phase| {
+        .try_consume(|producer, phase| {
             let RetainedPhase::Decided(decision) = phase else {
                 panic!("reproposal retains the current decided phase");
             };
-            state.kura.store_block(decision.block().clone()).unwrap();
-            let durable_finality = state
+            producer
+                .state
+                .kura
+                .store_block(decision.block().clone())
+                .unwrap();
+            let durable_finality = producer
+                .state
                 .kura
                 .store_v2_finality_artifact(decision.finality())
                 .unwrap();
-            let checkpoint = state
+            let checkpoint = producer
+                .state
                 .kura
                 .persist_wsv_checkpoint_for_v2_commit(
                     &durable_finality,
@@ -294,20 +387,38 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert!(checkpointed.matches_candidate(&context, &proposal));
     assert!(!checkpointed.matches_candidate(&wrong_context, &proposal));
 
+    assert_original_queue_refusal(
+        &mut service,
+        &receipt,
+        &state,
+        &queue,
+        &foreign,
+        allocations,
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(releases.load(Ordering::SeqCst), 0);
+
     let held = hold(&state, "world.accounts");
-    let refusal = service.select(&receipt).unwrap().try_consume(|phase| {
-        let RetainedPhase::Checkpointed(decision) = phase else {
-            panic!("physical acquisition must receive the original checkpoint");
-        };
-        match decision.try_prepare_physical(&state, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("original account writer must defer publication"),
-            Err((decision, error)) => Err::<(), _>((RetainedPhase::Checkpointed(decision), error)),
-        }
-    });
+    let refusal = service
+        .select(&receipt)
+        .unwrap()
+        .try_consume(|producer, phase| {
+            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
+            let RetainedPhase::Checkpointed(decision) = phase else {
+                panic!("physical acquisition must receive the original checkpoint");
+            };
+            match decision.try_prepare_physical(&producer.state, |_, _| Ok::<_, Infallible>(())) {
+                Ok(_) => panic!("original account writer must defer publication"),
+                Err((decision, error)) => {
+                    Err::<(), _>((RetainedPhase::Checkpointed(decision), error))
+                }
+            }
+        });
     let mut wait = busy_wait(refusal.unwrap_err()).wait_for_release();
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     assert_fences_free_except(&state, "world.accounts");
+    drop(queue.try_lock_lane_retirement_observer().unwrap());
     drop(state.kura.try_publication_lease().unwrap());
     assert!(state.block_hashes.inner.try_write().is_some());
     assert_eq!(
@@ -327,11 +438,12 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     let aborted = service
         .select(&later_receipt)
         .unwrap()
-        .try_consume(|phase| {
+        .try_consume(|producer, phase| {
+            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
             let RetainedPhase::Checkpointed(decision) = phase else {
                 panic!("retry cannot reconstruct a validation phase");
             };
-            let original = acquire(decision, &state).abort();
+            let original = acquire(decision, &producer.state).abort();
             Err::<(), _>((
                 RetainedPhase::Checkpointed(original),
                 "abort physical attempt",
@@ -343,6 +455,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
         allocations
     );
     assert_fences_free_except(&state, "");
+    drop(queue.try_lock_lane_retirement_observer().unwrap());
     drop(state.kura.try_publication_lease().unwrap());
     store
         .execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut service)
@@ -352,17 +465,24 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     let published = service
         .select(&receipt)
         .unwrap()
-        .try_consume(|phase| {
+        .try_consume(|producer, phase| {
+            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
             let RetainedPhase::Checkpointed(decision) = phase else {
                 panic!("the publisher consumes the retained checkpointed execution");
             };
-            acquire(decision, &state)
+            acquire(decision, &producer.state)
                 .publish()
                 .map_err(|(decision, error)| (RetainedPhase::Checkpointed(decision), error))
         })
         .unwrap();
     assert_eq!(published.block().hash(), proposal.hash());
     assert_eq!(state.committed_height(), 1);
+    assert_eq!(foreign.committed_height(), 0);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&foreign).unwrap(),
+        before
+    );
+    drop(queue.try_lock_lane_retirement_observer().unwrap());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(releases.load(Ordering::SeqCst), 0);
     assert_eq!(service.marker_counts_for_test(), (0, 0));
@@ -499,6 +619,7 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
     let mut service = store
         .retained_validation_service(ActualPhaseValidator {
             state: Arc::clone(&state),
+            queue: phase_queue(),
             topology,
             calls: Arc::clone(&calls),
             releases: Arc::clone(&releases),
@@ -508,6 +629,7 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
         })
         .unwrap();
     let mut allocations = None;
+    let mut capture_allocation = None;
     let mut provider_plan = None;
     for durable in [&first, &later] {
         let wake_count = wakes.0.load(Ordering::SeqCst);
@@ -532,6 +654,11 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
             let RetainedPhase::Capturing(capture) = owner else {
                 panic!("the original execution remains in the candidate slot before validation");
             };
+            let original_capture = std::ptr::from_ref(capture.as_ref());
+            assert_eq!(
+                *capture_allocation.get_or_insert(original_capture),
+                original_capture
+            );
             let actual = phase_allocations(owner);
             assert_eq!(*allocations.get_or_insert(actual), actual);
             let actual_plan = capture
@@ -589,17 +716,18 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
     let published = service
         .select(&receipt)
         .unwrap()
-        .try_consume(|owner| {
+        .try_consume(|producer, owner| {
+            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
             let RetainedPhase::Validated(journals) = owner else {
                 panic!("only completed capture may receive a success marker");
             };
             let decision = bind_and_persist(
-                &state,
+                &producer.state,
                 &context,
                 journals,
-                PhaseReservation(Arc::clone(&releases)),
+                PhaseReservation(Arc::clone(&producer.releases)),
             );
-            acquire(decision, &state)
+            acquire(decision, &producer.state)
                 .publish()
                 .map_err(|(owner, error)| (RetainedPhase::Checkpointed(owner), error))
         })

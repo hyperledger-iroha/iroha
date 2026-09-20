@@ -8,7 +8,7 @@
 //! is therefore equality of the represented integers, not merely equality modulo the scalar field.
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, TwistedElGamalCiphertextV1,
-    TwistedElGamalPublicKeyV1,
+    TwistedElGamalPublicKeyV1, fixed_array::FixedProofArray,
 };
 use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
@@ -229,9 +229,9 @@ pub struct PgcBootstrapWellFormedProofV1 {
 )]
 #[norito(decode_from_slice)]
 pub struct PgcBootstrapUnsignedRangeProofV1 {
-    bit_commitments: [CompressedPointV1; RANGE_BITS],
-    branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
-    branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
+    bit_commitments: FixedProofArray<CompressedPointV1, RANGE_BITS>,
+    branch_challenges: FixedProofArray<CanonicalScalarV1, { RANGE_BITS * 2 }>,
+    branch_responses: FixedProofArray<CanonicalScalarV1, { RANGE_BITS * 2 }>,
 }
 /// Complete proof for one ordered bootstrap account.
 #[derive(norito::NoritoSchema)]
@@ -342,10 +342,14 @@ impl PgcBootstrapWellFormedProofV1 {
 }
 impl PgcBootstrapUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
-        for point in &self.bit_commitments {
+        for point in self.bit_commitments.iter() {
             let _ = point.to_projective()?;
         }
-        for scalar in self.branch_challenges.iter().chain(&self.branch_responses) {
+        for scalar in self
+            .branch_challenges
+            .iter()
+            .chain(self.branch_responses.iter())
+        {
             let _ = scalar.to_scalar()?;
         }
         Ok(())

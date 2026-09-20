@@ -21,6 +21,7 @@ BLOCK = "crates/iroha_core/src/block/carrier_preparation.rs"
 PREPARED = "crates/iroha_core/src/state/carrier_preparation.rs"
 PREFIX = "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs"
 JOURNALS = "crates/iroha_core/src/state/carrier_preparation/journals.rs"
+WORLD_COMMIT = "crates/iroha_core/src/state/world_commit.rs"
 DECISION_CARRIER = "crates/iroha_core/src/state/carrier_preparation/decision_binding.rs"
 VALIDATION_CUSTODY = "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs"
 RETAINED_VALIDATION = "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs"
@@ -405,10 +406,22 @@ PREPARATION_OWNER_BINDINGS = (
         "prepare_carrier_publication_events(block.header())",
         "prefix: source_prefix", "Ok(PreparedCarrier {", "Err(error) => Err((Box::new(valid.into()), error))",
     )),
+    (JOURNALS, "struct", "CarrierJournalInputs", (
+        "pub(crate) valid:", "pub(crate) state:", "pub(crate) prefix:",
+        "pub(crate) context:", "pub(crate) execution_prefix:", "pub(crate) native_amx_manifest:",
+        "pub(crate) da_pins:", "pub(crate) publication_events:",
+        "pub(crate) provider:", "pub(crate) reputation:",
+    )),
+    (WORLD_COMMIT, "struct", "PreparedWorldEffects", ("da_pins: Vec<DaPinIntentWithLocation>",)),
+    (WORLD_COMMIT, "method", "PreparedWorldEffects::admission_pins", (
+        "&self", "-> &Vec<DaPinIntentWithLocation>", "let Self { da_pins } = self;", "da_pins",
+    )),
     (JOURNALS, "method", "PreparedCarrier::prepare_journals", (
         "admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>)",
+        "} = &self;",
         "let admission = match admit_journals(CarrierJournalInputs {",
-        "state: &self.state", "prefix: &self.source_prefix",
+        "prefix: source_prefix", "da_pins: _world_effects.admission_pins()",
+        "publication_events: _publication_events",
         "provider: provider_capture.as_ref()", "reputation: reputation_capture.as_ref()",
         'CarrierJournalPreparationError::JournalAdmission {\n                    carrier: self,\n                    provider: provider_capture,\n                    reputation: reputation_capture,\n                    error,\n                }',
         "let mut provider_capture = provider_capture;", "let mut reputation_capture = reputation_capture;",
@@ -416,15 +429,21 @@ PREPARATION_OWNER_BINDINGS = (
         "state.prepare_carrier_geometry()?", "owner.capture_original(state.as_ref())",
         "world.try_detach_journals", "transactions.prepare_commit()?.detach()",
         "let journals = PreparedCarrierJournals {", "admission,", "StagedCarrierCapture {",
-        ".try_complete()", "carrier: Box::new(carrier)",
+        "carrier.try_prepare_archives()", "carrier: Box::new(carrier)", "Ok(carrier.into_journals())",
     )),
     (JOURNALS, "method", "StagedCarrierCapture::try_complete", (
+        "mut self: Box<Self>", "if let Err(error) = self.try_prepare_archives()",
+        "return Err((self, error));", "Ok((*self).into_journals())",
+    )),
+    (JOURNALS, "method", "StagedCarrierCapture::try_prepare_archives", (
         "if let Some(error) = &self.capture_refusal", "return Err(error.clone());",
-        'provider\n                    .try_prepare()', 'reputation\n                    .try_prepare()', "return Err((self, error));",
+        'provider\n                .try_prepare()', 'reputation\n                .try_prepare()',
+        'if let Some(provider) = &mut self.provider {\n            provider\n                .try_prepare()\n                .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;\n        }',
+        'if let Some(reputation) = &mut self.reputation {\n            reputation\n                .try_prepare()\n                .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;\n        }',
+    )),
+    (JOURNALS, "method", "StagedCarrierCapture::into_journals", (
         "self.journals.provider_capture = self.provider.take()", "self.journals.reputation_capture = self.reputation.take()",
-        'owner\n                .into_prepared()', "Ok(self.journals)",
-        'if let Some(provider) = &mut self.provider {\n                provider\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;\n            }',
-        'if let Some(reputation) = &mut self.reputation {\n                reputation\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;\n            }',
+        'owner\n                .into_prepared()', "self.journals",
     )),
     (OUTPUT, "struct", "SealedExecutionOutputs", (
         "proposal:", "wire_hash: Hash", "wire_bytes: u64", "world_delta:", "sources: OwnedExecutionSources",
@@ -919,7 +938,7 @@ PREPARATION_OWNER_BINDINGS += QUEUE_GEOMETRY_OWNER_BINDINGS
 # the existing descriptor while its block type advances irreversibly.
 RETAINED_CARRIER_BINDINGS = (
     (DECISION_CARRIER, "enum", "RetainedCarrier", (
-        "Capturing(super::StagedCarrierCapture<Admission>)",
+        "Capturing(Box<super::StagedCarrierCapture<Admission>>)",
         "Validated(PreparedCarrierJournals<Admission>)",
         "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
         "super::DetachedCarrierComponents", "crate::kura::KuraWsvCheckpointReceipt",
@@ -970,11 +989,17 @@ RETAINED_CARRIER_BINDINGS = (
         "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
         "let owner = match self.validator.prepare(context, body)",
         "owner: Some(owner)", "if !owner.matches_candidate(context, body)",
-        "return Err(CarrierCustodyError::Identity)", "match self.validator.resume(owner)",
-        "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
+        "return Err(CarrierCustodyError::Identity)", "let commitment = match owner.ready_commitment()",
+        "Some(commitment) => commitment", "self.resume_candidate(index, context, body)?",
         "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
-        ".ready_commitment()\n            .ok_or(CarrierCustodyError::IncompleteCapture)?",
+        ".ready_commitment()\n                    .ok_or(CarrierCustodyError::IncompleteCapture)?",
         "confirmed: None", "Ok(CarrierMarkerPreparation::Ready(commitment))",
+    )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::resume_candidate", (
+        "match self.validator.resume(owner)",
+        "Ok(owner) => {\n                self.candidates[index].owner = Some(owner);\n                None\n            }",
+        "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
+        "if !owner.matches_candidate(context, body)", "return Err(CarrierCustodyError::Identity)", "Ok(refusal)",
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::confirm", (
         "if owner.ready_commitment() != Some(receipt.execution_commitment())",
@@ -984,8 +1009,8 @@ RETAINED_CARRIER_BINDINGS = (
         "service: &'a mut RetainedBodyValidationService<P>", "index: usize", "owner: Option<P::Owner>",
     )),
     (VALIDATION_CUSTODY, "method", "SelectedValidationCarrier::try_consume", (
-        "mut self", "publish: impl FnOnce(P::Owner) -> Result<R, (P::Owner, E)>",
-        "match publish(owner)", "Err((owner, error)) => {\n                self.owner = Some(owner);\n                Err(error)\n            }",
+        "mut self", "publish: impl FnOnce(&P, P::Owner) -> Result<R, (P::Owner, E)>",
+        "match publish(&self.service.validator, owner)", "Err((owner, error)) => {\n                self.owner = Some(owner);\n                Err(error)\n            }",
         "let subject = self.service.candidates[self.index].subject",
         ".retain(|row| row.durable.subject() != subject)",
     )),
@@ -1011,7 +1036,7 @@ PREPARATION_OWNER_BINDINGS += RETAINED_CARRIER_BINDINGS
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
     QUEUE_OWNER, PUBLICATION_MUTEX, GEOMETRY_OWNER, RAW_GEOMETRY,
     PHYSICAL_CARRIER, TERMINAL_CARRIER, ARCHIVE_CARRIER, GEOMETRY_CARRIER, WITNESS_CARRIER, WITNESS_LEASE,
-    APPLY, BLOCK, PREPARED, PREFIX, JOURNALS, DECISION_CARRIER, VALIDATION_CUSTODY, RETAINED_VALIDATION,
+    APPLY, BLOCK, PREPARED, PREFIX, JOURNALS, WORLD_COMMIT, DECISION_CARRIER, VALIDATION_CUSTODY, RETAINED_VALIDATION,
     OUTPUT, SEAL, TAIL, NATIVE_METADATA, NATIVE_STAGE,
     CONTROLS, NATIVE_SOURCE, NATIVE_KERNEL, NATIVE_CARRIER, NATIVE_FINALIZED, BODY_STORE,
     ORDINARY, CAPACITY, DURABLE, KURA, AUTONOMOUS,
@@ -1070,7 +1095,7 @@ def validate_native_preparation_contract(
     # method bodies delegate in every phase rather than caching a scalar result.
     retained_bodies = {
         "RetainedCarrier": """{
-            Capturing(super::StagedCarrierCapture<Admission>),
+            Capturing(Box<super::StagedCarrierCapture<Admission>>),
             Validated(PreparedCarrierJournals<Admission>),
             Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
             Checkpointed(DecisionBoundCarrierJournals<Admission, BindingAdmission,
@@ -1087,6 +1112,31 @@ def validate_native_preparation_contract(
         "SelectedValidationCarrier": """{
             service: &'a mut RetainedBodyValidationService<P>, index: usize, owner: Option<P::Owner>,
         }""",
+        "SelectedValidationCarrier::try_consume": """{
+            let owner = self.owner.take().expect("live selection retains its original owner");
+            match publish(&self.service.validator, owner) {
+                Ok(value) => {
+                    let subject = self.service.candidates[self.index].subject;
+                    self.service.markers.retain(|row| row.durable.subject() != subject);
+                    Ok(value)
+                }
+                Err((owner, error)) => { self.owner = Some(owner); Err(error) }
+            }
+        }""",
+        "CarrierJournalInputs": """{
+            pub(crate) valid: &'owner crate::block::ValidBlock,
+            pub(crate) state: &'owner StateBlock<'state>,
+            pub(crate) prefix: &'owner ValidatedExecutionPrefix,
+            pub(crate) context: &'owner Arc<iroha_data_model::block::consensus_v2::HeightContext>,
+            pub(crate) execution_prefix: &'owner iroha_data_model::block::consensus_v2::ExecutionCommitment,
+            pub(crate) native_amx_manifest: &'owner crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+            pub(crate) da_pins: &'owner Vec<DaPinIntentWithLocation>,
+            pub(crate) publication_events: &'owner Vec<EventBox>,
+            pub(crate) provider: Option<&'owner ProviderCandidateCapture>,
+            pub(crate) reputation: Option<&'owner ReputationCandidateCapture>,
+        }""",
+        "PreparedWorldEffects": "{ da_pins: Vec<DaPinIntentWithLocation> }",
+        "PreparedWorldEffects::admission_pins": "{ let Self { da_pins } = self; da_pins }",
         "RetainedCarrier::matches_validation_candidate": """{ match self {
             Self::Capturing(carrier) => carrier.matches_candidate(context, proposal),
             Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
@@ -1105,6 +1155,10 @@ def validate_native_preparation_contract(
             ready => Ok(ready),
         } }""",
         "StagedCarrierCapture::matches_candidate": "{ self.journals.matches_validation_candidate(context, proposal) }",
+        "StagedCarrierCapture::try_complete": """{
+            if let Err(error) = self.try_prepare_archives() { return Err((self, error)); }
+            Ok((*self).into_journals())
+        }""",
         "execution_prefix_commitment": "{ self.execution_prefix }",
     }
     for symbol, body in retained_bodies.items():
@@ -1117,23 +1171,30 @@ def validate_native_preparation_contract(
             "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
             "self.validator.prepare(context, body)", "owner: Some(owner)",
-            "if !owner.matches_candidate(context, body)", "self.candidates[index].owner.take()",
+            "if !owner.matches_candidate(context, body)",
+            "let commitment = match owner.ready_commitment()", "Some(commitment) => commitment", "None => {",
+            "self.resume_candidate(index, context, body)?",
+            "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
+            ".ready_commitment().ok_or(CarrierCustodyError::IncompleteCapture)?",
+            "self.markers.push(Marker {", "Ok(CarrierMarkerPreparation::Ready(commitment))")
+    ordered("RetainedBodyValidationService::resume_candidate", "self.candidates[index].owner.take()",
             "match self.validator.resume(owner)",
             "Ok(owner) => { self.candidates[index].owner = Some(owner); None }",
             "Err((owner, refusal)) => { self.candidates[index].owner = Some(owner); Some(refusal) }",
             "if !owner.matches_candidate(context, body)",
-            "if let Some(refusal) = refusal", "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
-            ".ready_commitment().ok_or(CarrierCustodyError::IncompleteCapture)?",
-            "self.markers.push(Marker {", "Ok(CarrierMarkerPreparation::Ready(commitment))")
+            "Ok(refusal)")
     prepare = items.get("RetainedBodyValidationService::prepare_marker", "")
     if prepare.count(_code("self.validator.prepare(")) != 1:
         errors.append("Native preparation retained carrier repeats execution before or after descriptor admission")
-    if prepare.count(_code("self.validator.resume(")) != 1:
+    resume = items.get("RetainedBodyValidationService::resume_candidate", "")
+    if prepare.count(_code("self.resume_candidate(")) != 1 or resume.count(_code("self.validator.resume(")) != 1:
         errors.append("Native preparation retained carrier does not resume exactly its installed owner")
+    if _code("Some(commitment) => commitment, None => {") not in prepare or _code("self.validator.resume(") in prepare:
+        errors.append("Native preparation retained carrier moves a ready owner through capture resumption")
     ordered("RetainedBodyValidationService::confirm",
             "owner.ready_commitment() != Some(receipt.execution_commitment())",
             "return Err(CarrierCustodyError::Identity)", "marker.confirmed = Some(receipt.clone())")
-    ordered("SelectedValidationCarrier::try_consume", "self.owner.take()", "match publish(owner)",
+    ordered("SelectedValidationCarrier::try_consume", "self.owner.take()", "match publish(&self.service.validator, owner)",
             "Err((owner, error)) =>", "self.owner = Some(owner)", "Err(error)")
     ordered("SelectedValidationCarrier::drop", "self.owner.take()",
             "self.service.candidates[self.index].owner = Some(owner)")
@@ -1549,14 +1610,32 @@ def validate_native_preparation_contract(
             "preparation.prepare_world_effects()?;", "prepare_carrier_publication_events(block.header())",
             "let PrefixPreparation { state, prefix: source_prefix, } = preparation;",
             "Ok(PreparedCarrier { valid, state, source_prefix, context, execution_prefix, native_amx_manifest,")
-    ordered("PreparedCarrier::prepare_journals", "let admission = match admit_journals(",
+    admission_borrow = """let Self {
+        valid, state, source_prefix, context, execution_prefix,
+        native_amx_manifest, _world_effects, _publication_events,
+    } = &self;"""
+    admission_inputs = """let admission = match admit_journals(CarrierJournalInputs {
+        valid, state, prefix: source_prefix, context, execution_prefix, native_amx_manifest,
+        da_pins: _world_effects.admission_pins(), publication_events: _publication_events,
+        provider: provider_capture.as_ref(), reputation: reputation_capture.as_ref(),
+    }) {"""
+    ordered("PreparedCarrier::prepare_journals", admission_borrow, admission_inputs,
             "let mut provider_capture = provider_capture;", "let Self {",
             "PreparedTieredSnapshot::prepare(", "state.prepare_carrier_geometry()?;",
             "owner.capture_original(state.as_ref())", "world.try_detach_journals(",
-            "let journals = PreparedCarrierJournals {", "StagedCarrierCapture {", ".try_complete()")
-    ordered("StagedCarrierCapture::try_complete", "self.capture_refusal", 'provider\n                    .try_prepare()',
-            'reputation\n                    .try_prepare()', "return Err((self, error));", "self.provider.take()",
-            "self.reputation.take()", "Ok(self.journals)")
+            "let journals = PreparedCarrierJournals {", "StagedCarrierCapture {", "carrier.try_prepare_archives()",
+            "return Err(CarrierJournalPreparationError::ArchivePreparation {", "carrier: Box::new(carrier)",
+            "Ok(carrier.into_journals())")
+    journal_prepare = items.get("PreparedCarrier::prepare_journals", "")
+    admission_start = journal_prepare.find(_code(admission_inputs))
+    for projection in ("PreparedTieredSnapshot::prepare(", "state.prepare_carrier_geometry(",
+                       "owner.capture_original(", "world.try_detach_journals("):
+        if _code(projection) in journal_prepare[:max(0, admission_start)]:
+            errors.append(f"Native preparation journal admission follows projection: {projection}")
+    ordered("StagedCarrierCapture::try_prepare_archives", "self.capture_refusal", "provider.try_prepare()",
+            "reputation.try_prepare()", "Ok(())")
+    ordered("StagedCarrierCapture::into_journals", "self.provider.take()", "owner.into_prepared()",
+            "self.reputation.take()", "owner.into_prepared()")
     require("StateBlock::seal_execution_outputs", "Ok(SealedExecutionOutputs { witness_hash: None, witness_surface: None, sources, world_delta,")
     if "prepare" in items:
         body = items["prepare"]

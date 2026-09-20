@@ -108,12 +108,17 @@ GEOMETRY_EVIDENCE_BINDINGS = (
     (GEOMETRY, "fn", OBSERVED_ADMISSION, (
         "validate_certified_retirements_against_geometry", SCANNER, "RetirementScanEffects::Observe",
     )),
+    (EFFECTS, "enum", "RetirementScanEffects", (
+        "#[cfg(test)]\n    Observe", "MaintainAndAttest { pending_canonical_bytes: u64 }",
+    )),
     (EFFECTS, "fn", "prepare_route", (
         "Self::MaintainAndAttest", MAINTAIN, "Self::Observe", "observe_lane_retirement_route_locked",
+        "#[cfg(test)]\n            Self::Observe => kura.observe_lane_retirement_route_locked(entry)",
     )),
     (EFFECTS, "fn", "native", (
         "ObservedNativeAmxEvidence", "Self::Observe => observation.into_observed()",
         "Self::MaintainAndAttest { .. } => observation.attest()",
+        "#[cfg(test)]\n            Self::Observe => observation.into_observed()",
     )),
 )
 
@@ -281,11 +286,14 @@ def validate_geometry_evidence_contract(
     require(OBSERVED_ADMISSION,
         "self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?; self.scan_lane_retirement_locked(retiring, certified_retirements, RetirementScanEffects::Observe)",
     )
+    require("RetirementScanEffects",
+        "enum RetirementScanEffects { #[cfg(test)] Observe, MaintainAndAttest { pending_canonical_bytes: u64 }, }",
+    )
     require("prepare_route",
-        "match self { Self::MaintainAndAttest { pending_canonical_bytes } => kura.maintain_lane_retirement_route_locked(pending_canonical_bytes, lane, entry, retiring, pairs), Self::Observe => kura.observe_lane_retirement_route_locked(entry) }",
+        "match self { Self::MaintainAndAttest { pending_canonical_bytes } => kura.maintain_lane_retirement_route_locked(pending_canonical_bytes, lane, entry, retiring, pairs), #[cfg(test)] Self::Observe => kura.observe_lane_retirement_route_locked(entry) }",
     )
     require("native",
-        "match self { Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
+        "match self { #[cfg(test)] Self::Observe => observation.into_observed(), Self::MaintainAndAttest { .. } => observation.attest() }",
     )
     require(SCANNER,
         "let fixed_progress_pairs: [(&Path, &Path, &str); 7] = [ (&lane_data, &lane_index, \"\"), (&input_data, &input_index, \"\"), (&preflight_data, &preflight_index, \"\"), (&certified_data, &certified_index, \"\"), (&merge_bundle_data, &merge_bundle_index, \"\"), (&canonical_replica_data, &canonical_replica_index, CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL), (&receipt_data, &receipt_index, \"\") ];",
