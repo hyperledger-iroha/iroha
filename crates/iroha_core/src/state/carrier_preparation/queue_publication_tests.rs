@@ -51,15 +51,20 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
         ));
         assert_eq!(state.state_view_generation(), generation);
         assert_eq!(decision.block().encode_wire().unwrap(), wire);
-        let foreign = Arc::new(State::new_for_testing(
+        let foreign = Arc::new(State::new_with_chain_and_network_id_for_testing(
             crate::state::World::default(),
-            Arc::clone(&state.kura),
+            crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
+            state.chain_id.clone(),
+            state.network_id,
         ));
+        assert_eq!(foreign.chain_id, state.chain_id);
+        assert_eq!(foreign.network_id, state.network_id);
+        assert!(!Arc::ptr_eq(&foreign.kura, &state.kura));
         let foreign_service = V2ApplyService::new(
             Arc::clone(&foreign),
             phase_queue(),
-            Arc::clone(&state.kura),
+            Arc::clone(&foreign.kura),
             None,
             None,
             foreign.sumeragi_block_cadence(),
@@ -68,6 +73,8 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
             Vec::new(),
         );
         let foreign_source = foreign_service.carrier_queue_source();
+        assert!(foreign_source.belongs_to(&foreign));
+        assert!(!foreign_source.belongs_to(&state));
         let (decision, error) = decision
             .try_prepare_physical(
                 &state,
@@ -84,7 +91,36 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
             crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
             before
         );
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.state_view_generation(), generation);
         let source = service.carrier_queue_source();
+        let held = queue.try_lock_lane_retirement_observer().unwrap();
+        let (decision, error) = decision
+            .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+            .err()
+            .expect("the actual original Queue owner must defer publication");
+        let CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {
+            field,
+            wait,
+        }) = error
+        else {
+            panic!("expected original Queue physical contention: {error:?}");
+        };
+        assert_eq!(field, "lane_reservation_transition_lock");
+        assert_eq!(decision.block().encode_wire().unwrap(), wire);
+        assert_eq!(state.state_view_generation(), generation);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+        assert!(state.state_commit_lock.try_lock_or_wait().is_ok());
+        assert!(state.kura.try_publication_lease().is_ok());
+        let mut retry = wait.wait_for_release();
+        let wakes = Arc::new(WakeCount::default());
+        assert!(poll(&mut retry, &wakes).is_pending());
+        drop(held);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut retry, &wakes).is_ready());
         let physical = decision
             .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
             .unwrap_or_else(|(_, error)| {

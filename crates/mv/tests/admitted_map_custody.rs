@@ -164,10 +164,17 @@ struct Charge {
 
 impl Charge {
     fn split(reservation: &mut AllocationReservation, layout: Layout) -> Self {
-        assert_ne!(layout.size(), 0, "these fixtures own nonempty storage");
         let credit = reservation
             .try_split(layout)
             .expect("complete original demand");
+        if layout.size() == 0 {
+            // An empty fixed buffer owns a real zero-layout charge but makes
+            // no System allocation. Do not fabricate an allocator witness.
+            return Self {
+                id: usize::MAX,
+                credit,
+            };
+        }
         let id = NEXT_RECORD.fetch_add(1, SeqCst);
         assert!(id < RECORDS.len());
         EXPECTED.with(|pending| {
@@ -182,6 +189,10 @@ impl Charge {
 
 impl Drop for Charge {
     fn drop(&mut self) {
+        if self.credit.layout().size() == 0 {
+            assert_eq!(self.id, usize::MAX);
+            return;
+        }
         let record = &RECORDS[self.id];
         assert_ne!(
             record.pointer.load(SeqCst),
@@ -1408,6 +1419,183 @@ fn checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publicat
     });
     assert!(map.is_poisoned());
     assert!(map.read().is_empty());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn admitted_writer_start(map: &Map, budget: &AllocationBudget, counters: &Arc<Counters>) -> Owned {
+    let start = NEXT_RECORD.load(SeqCst);
+    let calls = counters.admissions.load(SeqCst);
+    let keys = counters.keys.load(SeqCst);
+    let values = counters.values.load(SeqCst);
+    let mut required = None;
+    let ((owner, bytes), allocations) = counted(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let writer = map
+                .try_write_admitted(|demand| {
+                    required = Some(demand);
+                    Policy::admit(budget, counters, demand, None)
+                })
+                .unwrap_or_else(|error| panic!("admitted writer start refused: {error:?}"));
+            (writer.detach(), required.unwrap().bytes())
+        })
+    });
+    assert_eq!(required.unwrap().allocations(), 2);
+    assert_eq!(
+        allocations, 2,
+        "only original cursor and next-reader shells allocate"
+    );
+    assert_eq!(NEXT_RECORD.load(SeqCst) - start, allocations);
+    assert_eq!(counters.admissions.load(SeqCst), calls + 1);
+    assert_eq!(counters.keys.load(SeqCst), keys);
+    assert_eq!(counters.values.load(SeqCst), values);
+    assert_eq!(
+        RECORDS[start..NEXT_RECORD.load(SeqCst)]
+            .iter()
+            .map(|record| record.bytes.load(SeqCst))
+            .sum::<usize>(),
+        bytes
+    );
+    assert_live_credits(budget);
+    owner
+}
+
+#[test]
+fn admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let original = map.read();
+    let mut owner = admitted_writer_start(&map, &budget, &counters);
+    assert!(owner.to_snapshot().is_empty());
+    assert!(map.read().is_empty());
+    for order in 0..40 {
+        let (key, value) = input(&budget, order);
+        let pointer = value.pointer();
+        let (next, previous) = edit(&map, &budget, &counters, owner, key, value);
+        assert!(previous.is_none());
+        assert_eq!(next.get(&order).unwrap().pointer(), pointer);
+        assert!(map.read().is_empty());
+        owner = next;
+    }
+    commit(&map, &budget, owner);
+    assert_eq!(map.read().len(), 40);
+    assert!(original.is_empty());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_populated_writer_shares_original_entries_and_aborts_without_allocations() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let mut owner = insert(&map, &budget, &counters, 0);
+    for order in 1..40 {
+        let (key, value) = input(&budget, order);
+        let (next, previous) = edit(&map, &budget, &counters, owner, key, value);
+        assert!(previous.is_none());
+        owner = next;
+    }
+    commit(&map, &budget, owner);
+    let original = map.read();
+    let before = budget.reserved_bytes();
+    let owner = admitted_writer_start(&map, &budget, &counters);
+    for order in 0..40 {
+        assert_eq!(
+            owner.get(&order).unwrap().pointer(),
+            original.get(&order).unwrap().pointer()
+        );
+    }
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    assert_eq!(original.len(), 40);
+    assert_eq!(map.read().len(), 40);
+    assert!(!map.is_poisoned());
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    assert_eq!(budget.reserved_bytes(), before);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_demand() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let before = budget.reserved_bytes();
+    let records = NEXT_RECORD.load(SeqCst);
+    let mut required = None;
+    let refused = without_allocations(|| {
+        map.try_write_admitted(|demand| {
+            required = Some(demand);
+            Err::<Policy, ()>(())
+        })
+        .err()
+        .expect("probe must refuse")
+    });
+    assert!(matches!(refused, InsertAdmissionError::Refused(())));
+    let demand = required.unwrap();
+    assert_eq!(demand.allocations(), 2);
+    assert_eq!(budget.reserved_bytes(), before);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes() + 1)
+        .unwrap();
+    let held = budget.reserved_bytes();
+    let calls = counters.admissions.load(SeqCst);
+    let refused = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_write_admitted(|observed| {
+                assert_eq!(observed, demand);
+                Policy::admit(&budget, &counters, observed, None)
+            })
+            .err()
+            .expect("one byte below must refuse")
+        })
+    });
+    assert!(matches!(
+        refused,
+        InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+    ));
+    assert_eq!(counters.admissions.load(SeqCst), calls + 1);
+    assert_eq!(budget.reserved_bytes(), held);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert!(map.read().is_empty());
+    assert!(!map.is_poisoned());
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes())
+        .unwrap();
+    let owner = budget.with_deferred_refund_notifications(|| {
+        map.try_write_admitted(|observed| {
+            assert_eq!(observed, demand);
+            Policy::admit(&budget, &counters, observed, None)
+        })
+        .unwrap_or_else(|error| panic!("exact demand refused: {error:?}"))
+        .detach()
+    });
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    assert_eq!(NEXT_RECORD.load(SeqCst), records + 2);
+    assert_eq!(counters.keys.load(SeqCst), 0);
+    assert_eq!(counters.values.load(SeqCst), 0);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    assert_eq!(budget.reserved_bytes(), before);
     without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);

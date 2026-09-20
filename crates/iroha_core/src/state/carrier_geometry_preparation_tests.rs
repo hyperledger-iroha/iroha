@@ -343,7 +343,7 @@ fn carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects()
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -414,7 +414,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
@@ -424,7 +424,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     let lease = state.kura.try_publication_lease().unwrap();
     // No nested acquisition: this lease remains held throughout the exact retry.
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     assert_eq!(
         geometry.raw.as_ref().unwrap().phase(),
@@ -448,7 +448,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
             .is_dir()
     );
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     assert_eq!(state.canonical_runtime.view().get(), &runtime);
     assert_eq!(norito::json::to_json(&state.world).unwrap(), world);
@@ -479,7 +479,7 @@ fn carrier_geometry_completion_requires_original_prepared_descriptors() {
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(
@@ -524,7 +524,7 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
@@ -646,7 +646,8 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
         .unwrap();
     let journal_path = state.kura.lane_geometry_journal_path();
     let original_bytes = std::fs::read(&journal_path).unwrap();
-    let original_inode = std::fs::metadata(&journal_path).unwrap().ino();
+    let original_metadata = std::fs::metadata(&journal_path).unwrap();
+    let original_inode = original_metadata.ino();
     let original_path = journal_path.with_extension("original-test-owner");
     std::fs::rename(&journal_path, &original_path).unwrap();
     std::fs::write(&journal_path, &original_bytes).unwrap();
@@ -671,25 +672,61 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert_eq!(std::fs::read(&journal_path).unwrap(), original_bytes);
     assert_eq!(state.committed_height(), 0);
-    // Even restoring its name must not refresh the original file's metadata
-    // baseline: an external rename changes ctime and requires storage recovery.
+    // Restoring its name must not refresh the retained metadata baseline. Make
+    // the metadata change explicit: rapid renames can share a filesystem tick.
+    let original_modified = original_metadata.modified().unwrap();
+    let changed_modified = original_modified + std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&original_path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(changed_modified))
+        .unwrap();
+    assert_ne!(
+        std::fs::metadata(&original_path)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        original_modified
+    );
     std::fs::remove_file(&journal_path).unwrap();
     std::fs::rename(&original_path, &journal_path).unwrap();
     assert_eq!(
         std::fs::metadata(&journal_path).unwrap().ino(),
         original_inode
     );
-    assert!(
-        geometry
-            .complete_under(
-                &state,
-                header(),
-                &mut state.tiered_backend.lock(),
-                &lease,
-                None
-            )
-            .is_err()
+    assert_ne!(
+        std::fs::metadata(&journal_path)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        original_modified
     );
+    let error = geometry
+        .complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        )
+        .err()
+        .expect("the original retained metadata baseline cannot be refreshed");
+    let LaneLifecycleError::GeometryStorage(crate::kura::Error::IO(error, path)) = error else {
+        panic!("expected exact original journal metadata refusal: {error:?}");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        error.to_string(),
+        "retained geometry journal predecessor changed"
+    );
+    assert_eq!(path, journal_path);
+    assert_eq!(std::fs::read(&journal_path).unwrap(), original_bytes);
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::CatalogPublished
+    );
+    assert_eq!(state.committed_height(), 0);
 }
 
 #[test]

@@ -312,17 +312,21 @@ impl AssetDefinitionId {
     /// Returns [`ParseError`] when the textual form is not canonical, fails
     /// checksum verification, or bytes do not satisfy `UUIDv4` constraints.
     pub fn parse_address_literal(input: &str) -> Result<Self, ParseError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
+        if input.is_empty() {
             return Err(ParseError::new("Asset Definition ID must not be empty"));
         }
-        if trimmed.contains(':') {
+        if input.trim() != input {
+            return Err(ParseError::new(
+                "Asset Definition ID must not contain surrounding whitespace",
+            ));
+        }
+        if input.contains(':') {
             return Err(ParseError::new(
                 "Asset Definition ID must use unprefixed Base58 format",
             ));
         }
         let mut payload = [0_u8; ASSET_DEFINITION_ADDRESS_LEN];
-        let decoded_len = bs58::decode(trimmed)
+        let decoded_len = bs58::decode(input)
             .onto(&mut payload)
             .map_err(|_| ParseError::new("Asset Definition ID must be valid Base58"))?;
         if decoded_len != ASSET_DEFINITION_ADDRESS_LEN {
@@ -410,11 +414,7 @@ impl fmt::Display for AssetDefinitionId {
 impl FromStr for AssetDefinitionId {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return Err(ParseError::new("Asset Definition ID must not be empty"));
-        }
-        Self::parse_address_literal(trimmed)
+        Self::parse_address_literal(s)
     }
 }
 impl fmt::Display for AssetId {
@@ -463,6 +463,61 @@ mod tests {
         let parsed: AssetDefinitionId = literal.parse().expect("address should parse");
         assert_eq!(parsed, expected);
         assert_eq!(parsed.to_string(), literal);
+    }
+    #[test]
+    fn asset_definition_id_requires_exact_canonical_text_across_decoders() {
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .unwrap();
+        let canonical = expected.to_string();
+        assert_eq!(
+            AssetDefinitionId::parse_address_literal(&canonical).unwrap(),
+            expected
+        );
+        assert_eq!(canonical.parse::<AssetDefinitionId>().unwrap(), expected);
+        assert_eq!(
+            norito::json::from_str::<AssetDefinitionId>(
+                &norito::json::to_json(&canonical).unwrap()
+            )
+            .unwrap(),
+            expected
+        );
+        assert_eq!(
+            <AssetDefinitionId as norito::json::JsonDeserialize>::json_from_value(
+                &norito::json::Value::String(canonical.clone())
+            )
+            .unwrap(),
+            expected
+        );
+        for whitespace in [" ", "\t", "\n", "\r\n", "\u{a0}", "\u{2003}"] {
+            for invalid in [
+                format!("{whitespace}{canonical}"),
+                format!("{canonical}{whitespace}"),
+                format!("{whitespace}{canonical}{whitespace}"),
+            ] {
+                assert!(
+                    AssetDefinitionId::parse_address_literal(&invalid).is_err(),
+                    "{invalid:?}"
+                );
+                assert!(invalid.parse::<AssetDefinitionId>().is_err(), "{invalid:?}");
+                assert!(
+                    norito::json::from_str::<AssetDefinitionId>(
+                        &norito::json::to_json(&invalid).unwrap()
+                    )
+                    .is_err(),
+                    "{invalid:?}"
+                );
+                assert!(
+                    <AssetDefinitionId as norito::json::JsonDeserialize>::json_from_value(
+                        &norito::json::Value::String(invalid.clone())
+                    )
+                    .is_err(),
+                    "{invalid:?}"
+                );
+            }
+        }
     }
     #[test]
     fn asset_definition_id_formats_into_stack_sink_with_zero_decode_heap() {

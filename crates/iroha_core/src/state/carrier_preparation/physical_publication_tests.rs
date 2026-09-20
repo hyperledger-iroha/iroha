@@ -467,9 +467,10 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert_fences_free_except(&state, "");
     drop(queue.try_lock_lane_retirement_observer().unwrap());
     drop(state.kura.try_publication_lease().unwrap());
-    store
+    let revalidated = store
         .execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut service)
         .unwrap();
+    assert_eq!(revalidated.validated_receipt(), Some(&later_receipt));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     let published = service
@@ -1230,6 +1231,8 @@ fn fixture_lifecycle_decision_with_retirement(
             ],
         )
         .unwrap();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
     nexus.fees.base_fee = iroha_primitives::numeric::Quantity::zero();
     nexus.fees.per_byte_fee = iroha_primitives::numeric::Quantity::zero();

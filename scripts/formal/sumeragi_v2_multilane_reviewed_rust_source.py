@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import _imp
 import ast
 import hashlib
 import json
@@ -10,10 +11,12 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from typing import Iterator
 
 
@@ -25,8 +28,113 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "935f48b523f1c5ab82a8100dbf1ed9182773757f5833df096dc7a3459653028e"
+    "495ec9c667d8b7ebb00e33a2a98dd2e42097d370ea8b532426fa93389e9f306b"
 )
+REVIEWED_RUST_TEXT_HELPER_RELATIVE = Path("scripts/formal/sumeragi_v2_rust_text.py")
+_RUST_TEXT_MODULE_NAME = "_iroha_sumeragi_v2_rust_text"
+_RUST_TEXT_RECORD_NAME = "_iroha_sumeragi_v2_rust_text_execution"
+
+
+def _rust_text_helper_bytes(path: Path) -> bytes:
+    """Read one stable regular source file, never a symlink or bytecode cache."""
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
+            raise RuntimeError(
+                f"reviewed Rust text helper is not bounded regular source: {path}"
+            )
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            payload = stream.read(1024 * 1024 + 1)
+            after = os.fstat(stream.fileno())
+        final = path.lstat()
+    except OSError as error:
+        raise RuntimeError(f"cannot read reviewed Rust text helper {path}: {error}") from error
+
+    def identity(meta: os.stat_result) -> tuple[int, ...]:
+        return (
+            meta.st_dev, meta.st_ino, meta.st_mode, meta.st_size,
+            meta.st_mtime_ns, meta.st_ctime_ns,
+        )
+
+    if (
+        any(identity(meta) != identity(before) for meta in (opened, after, final))
+        or len(payload) != before.st_size
+    ):
+        raise RuntimeError(f"reviewed Rust text helper changed during read: {path}")
+    return payload
+
+
+def _load_rust_text_helper() -> ModuleType:
+    """Share only the exact-source implementation from this checker origin."""
+    path = DEFAULT_ROOT / REVIEWED_RUST_TEXT_HELPER_RELATIVE
+    payload = _rust_text_helper_bytes(path)
+    digest = hashlib.sha256(payload).hexdigest()
+    _imp.acquire_lock()
+    try:
+        existing = sys.modules.get(_RUST_TEXT_MODULE_NAME)
+        record = sys.modules.get(_RUST_TEXT_RECORD_NAME)
+        if existing is not None or record is not None:
+            execution = getattr(record, "execution", None)
+            if (
+                not isinstance(existing, ModuleType)
+                or not isinstance(record, ModuleType)
+                or not isinstance(execution, tuple)
+                or len(execution) != 3
+                or execution[0] is not existing
+                or execution[1] != str(path)
+                or not isinstance(execution[2], str)
+            ):
+                raise RuntimeError(
+                    "reviewed Rust text helper: foreign or unauthenticated module"
+                )
+            if execution[2] != digest:
+                raise RuntimeError(
+                    "reviewed Rust text helper executed source changed; start a new process"
+                )
+            return existing
+        module = ModuleType(_RUST_TEXT_MODULE_NAME)
+        module.__file__ = str(path)
+        # Compile precisely the bytes just read; a stale .pyc cannot participate.
+        exec(compile(payload, str(path), "exec"), module.__dict__)
+        module._executed_source_origin = str(path)
+        module._executed_source_sha256 = digest
+        # This separate immutable execution record is established only here,
+        # never inferred from metadata asserted by an already loaded helper.
+        record = ModuleType(_RUST_TEXT_RECORD_NAME)
+        record.execution = (module, str(path), digest)
+        sys.modules[_RUST_TEXT_MODULE_NAME] = module
+        sys.modules[_RUST_TEXT_RECORD_NAME] = record
+        return module
+    finally:
+        _imp.release_lock()
+
+
+_RUST_TEXT_HELPER = _load_rust_text_helper()
+_RUST_TEXT_EXECUTION = sys.modules[_RUST_TEXT_RECORD_NAME].execution
+
+
+def _validate_executed_rust_text_helper(root: Path | None = None) -> None:
+    """Authenticate loaded code afresh, plus a copied full closure when supplied."""
+    canonical = DEFAULT_ROOT / REVIEWED_RUST_TEXT_HELPER_RELATIVE
+    if (
+        sys.modules.get(_RUST_TEXT_MODULE_NAME) is not _RUST_TEXT_HELPER
+        or getattr(sys.modules.get(_RUST_TEXT_RECORD_NAME), "execution", None)
+        is not _RUST_TEXT_EXECUTION
+        or _RUST_TEXT_EXECUTION[0] is not _RUST_TEXT_HELPER
+        or _RUST_TEXT_EXECUTION[1] != str(canonical)
+    ):
+        raise RuntimeError("reviewed Rust text helper: foreign or unauthenticated module")
+    payload = _rust_text_helper_bytes(canonical)
+    if hashlib.sha256(payload).hexdigest() != _RUST_TEXT_EXECUTION[2]:
+        raise RuntimeError("reviewed Rust text helper executed source changed; start a new process")
+    if root is not None:
+        copied = _rust_text_helper_bytes(root / REVIEWED_RUST_TEXT_HELPER_RELATIVE)
+        if copied != payload:
+            raise RuntimeError("reviewed Rust text helper differs from executed source in input closure")
+
+
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
         "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
@@ -736,6 +844,7 @@ def _validate_reviewed_rust_include_manifest(
 ) -> None:
     """Require the target tree to retain the checker-pinned include allowlist."""
 
+    _validate_executed_rust_text_helper()
     errors.extend(_CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS)
     target_errors: list[str] = []
     observed = _decode_reviewed_rust_include_manifest(
@@ -750,126 +859,8 @@ def _validate_reviewed_rust_include_manifest(
 
 
 def _mask_rust_comments(source: str) -> str:
-    """Mask Rust comments and literals while preserving byte offsets and lines."""
-
-    output = list(source)
-
-    def mask(start: int, end: int) -> None:
-        for offset in range(start, end):
-            if output[offset] != "\n":
-                output[offset] = " "
-
-    index = 0
-    length = len(source)
-    state = "code"
-    raw_hashes = 0
-    literal_start = 0
-    while index < length:
-        char = source[index]
-        pair = source[index : index + 2]
-        if state == "string":
-            if char == "\\":
-                index += 2
-            else:
-                if char == '"':
-                    index += 1
-                    mask(literal_start, index)
-                    state = "code"
-                else:
-                    index += 1
-            continue
-        if state == "char":
-            if char == "\\":
-                index += 2
-            else:
-                if char == "'":
-                    index += 1
-                    mask(literal_start, index)
-                    state = "code"
-                else:
-                    index += 1
-            continue
-        if state == "raw-string":
-            terminator = '"' + ("#" * raw_hashes)
-            if source.startswith(terminator, index):
-                index += len(terminator)
-                mask(literal_start, index)
-                state = "code"
-            else:
-                index += 1
-            continue
-
-        if pair == "//":
-            end = source.find("\n", index + 2)
-            end = length if end < 0 else end
-            mask(index, end)
-            index = end
-            continue
-        if pair == "/*":
-            depth = 1
-            end = index + 2
-            while end < length and depth:
-                if source.startswith("/*", end):
-                    depth += 1
-                    end += 2
-                elif source.startswith("*/", end):
-                    depth -= 1
-                    end += 2
-                else:
-                    end += 1
-            mask(index, end)
-            index = end
-            continue
-        raw_prefix = None
-        for prefix in ("br", "cr", "r"):
-            if source.startswith(prefix, index):
-                cursor = index + len(prefix)
-                while cursor < length and source[cursor] == "#":
-                    cursor += 1
-                if cursor < length and source[cursor] == '"':
-                    raw_prefix = (cursor - index - len(prefix), cursor + 1)
-                    break
-        if raw_prefix is not None:
-            literal_start = index
-            raw_hashes, index = raw_prefix
-            state = "raw-string"
-            continue
-        if source.startswith(('b"', 'c"'), index):
-            literal_start = index
-            state = "string"
-            index += 2
-            continue
-        if char == '"':
-            literal_start = index
-            state = "string"
-            index += 1
-            continue
-        char_quote = index + 1 if source.startswith("b'", index) else index
-        if source[char_quote : char_quote + 1] == "'":
-            value = char_quote + 1
-            if value < length and source[value] == "\\":
-                value += 1
-                if source[value : value + 2] == "u{":
-                    closing_brace = source.find("}", value + 2)
-                    value = length if closing_brace < 0 else closing_brace + 1
-                elif source[value : value + 1] == "x":
-                    value += 3
-                else:
-                    value += 1
-            else:
-                value += 1
-            is_char_literal = value < length and source[value] == "'"
-        else:
-            is_char_literal = False
-        if is_char_literal:
-            literal_start = index
-            state = "char"
-            index = char_quote + 1
-            continue
-        index += 1
-    if state in {"string", "char", "raw-string"}:
-        mask(literal_start, length)
-    return "".join(output)
+    """Mask exact text; source authority stays with the per-run resolver."""
+    return _RUST_TEXT_HELPER.mask_rust_comments(source)
 
 
 @dataclass(frozen=True)
@@ -916,6 +907,7 @@ def _reviewed_rust_source_cache() -> Iterator[None]:
 
     global _ACTIVE_REVIEWED_RUST_GIT_INDEX_CACHE
     global _ACTIVE_REVIEWED_RUST_SOURCE_CACHE
+    _validate_executed_rust_text_helper()
     if _ACTIVE_REVIEWED_RUST_SOURCE_CACHE is not None:
         yield
         return
@@ -1691,6 +1683,10 @@ def _expanded_source_manifest_paths(
     expanded = set(relative_paths)
     expanded.add(REVIEWED_RUST_SOURCE_HELPER_RELATIVE)
     expanded.add(REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE)
+    expanded.add(REVIEWED_RUST_TEXT_HELPER_RELATIVE)
+    _validate_executed_rust_text_helper(
+        root if REVIEWED_RUST_SOURCE_HELPER_RELATIVE in relative_paths else None
+    )
     closure_errors: list[str] = []
     with _reviewed_rust_source_cache():
         for parent in sorted(relative_paths):

@@ -154,13 +154,14 @@ fn ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache() {
         .unwrap()
         .allocation();
     for _ in 0..2 {
-        store
+        let outcome = store
             .execute_retained_durable_validation(
                 durable.clone(),
                 durable.manifest_hash(),
                 &mut service,
             )
             .unwrap();
+        assert_eq!(outcome.validated_receipt().unwrap().durable(), &durable);
         assert_eq!(
             service
                 .owner_for_test(durable.subject())
@@ -643,9 +644,10 @@ fn retained_descriptor_charge_outlives_payload_and_wakes_exact_pool_retry() {
     let mut service = store
         .retained_validation_service(producer, &budget)
         .unwrap();
-    store
+    let outcome = store
         .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
         .unwrap();
+    assert_eq!(outcome.validated_receipt().unwrap().durable(), &durable);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let (replacement, retry_calls, _) = validator(&durable);
     let Err(V2BodyStoreError::CarrierCustody(CarrierCustodyError::DescriptorAdmission(

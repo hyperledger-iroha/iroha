@@ -1,9 +1,9 @@
 //! Stack-owned rollback of an original private cursor and its tracking storage.
 
-use super::CursorWrite;
+use super::{CursorWrite, checked_next_generation};
 use crate::bptree::{NodeCloning, Prepaid};
 use crate::internals::bptree::{
-    node::{Node, TXID_MASK, TXID_SHF},
+    node::Node,
     tracking::{FixedTrackingBuffer, TrackingBuffer},
 };
 use std::{fmt::Debug, mem};
@@ -74,10 +74,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>> CursorCheckpoin
             cursor.funding.0.is_none(),
             "checkpoint requires sealed edit funding"
         );
-        let next = cursor
-            .txid
-            .checked_add(1)
-            .filter(|n| *n < (TXID_MASK >> TXID_SHF))?;
+        let next = checked_next_generation(cursor.txid)?;
         let saved = Saved {
             root: cursor.root,
             txid: cursor.txid,

@@ -1,9 +1,10 @@
 //! Consume the actual decided component owners within one State visibility cut.
 //!
 //! Namespace transitions consume their original retryable storage owners before
-//! State visibility while retaining the original Queue retirement cut. Old
-//! participant evidence still needs its real storage owner. TODO: join that and
-//! complete production capacity before changing the live Validate/Apply handoff.
+//! State visibility while retaining the original Queue retirement cut. Native
+//! Decisions use their original source, Kura custody and World application markers;
+//! retired participant manifests remain refused. TODO: complete production resource
+//! admission and retire the old writer with the live Validate/Apply cutover.
 
 use super::super::super::{PreparedCarrierJournals, RetainedCarrierEffects};
 use super::*;

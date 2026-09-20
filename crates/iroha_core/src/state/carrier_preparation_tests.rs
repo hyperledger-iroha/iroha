@@ -30,6 +30,7 @@ use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPA
 fn genesis(
     parameters: SumeragiV2GenesisContextParameters,
     instructions: &[InstructionBox],
+    nexus: &iroha_config::parameters::actual::Nexus,
 ) -> (SignedBlock, Topology) {
     iroha_genesis::init_instruction_registry();
     let mut keys = (0_u8..4)
@@ -69,7 +70,7 @@ fn genesis(
         .with_consensus_meta()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-            None,
+            Some(crate::da::active_proof_policy_bundle_at_height(nexus, 1)),
             None,
             1_000,
         )
@@ -143,7 +144,7 @@ pub(super) fn fixture_with_instructions_and_nexus(
 ) -> (Box<State>, SignedBlock, Topology, HeightContext) {
     let mut parameters = SumeragiV2GenesisContextParameters::recommended();
     {
-        let (proposal, topology) = genesis(parameters, instructions);
+        let (proposal, topology) = genesis(parameters, instructions, nexus);
         let state = state_for(&proposal, nexus);
         let (_, staged) = signed_genesis_execution(&state, proposal, &topology);
         parameters.nexus_amx_context_hash =
@@ -153,7 +154,7 @@ pub(super) fn fixture_with_instructions_and_nexus(
                 .unwrap()
                 .as_ref();
     }
-    let (proposal, topology) = genesis(parameters, instructions);
+    let (proposal, topology) = genesis(parameters, instructions, nexus);
     let state = state_for(&proposal, nexus);
     let context = {
         let (_, staged) = signed_genesis_execution(&state, proposal.clone(), &topology);

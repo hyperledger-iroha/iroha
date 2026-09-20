@@ -387,9 +387,7 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::{
-    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply, RetainedCarrier,
-};
+pub(crate) use carrier_preparation::{PreparedCarrier, PublishedNativeApply, RetainedCarrier};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;

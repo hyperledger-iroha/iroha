@@ -1,7 +1,8 @@
-//! Closed insertion admission for the existing synchronous map engine.
+//! Closed writer and insertion admission for the existing synchronous map engine.
 
 use super::*;
-use crate::internals::bptree::node::{Branch, Leaf, Node, TXID_MASK, TXID_SHF};
+use crate::internals::bptree::cursor::checked_next_generation;
+use crate::internals::bptree::node::{Branch, Leaf, Node};
 use crate::internals::lincowcell::{InitialCharges, WriterAdmission, WriterCharges, WriterLayouts};
 use crossbeam_utils::CachePadded;
 use std::alloc::Layout;
@@ -71,7 +72,7 @@ pub trait ClonePlanning<K, V>: NodeCloning<K, V> {
     fn plan_value(value: &V, demand: &mut AllocationDemand) -> Result<(), PlanningError>;
 }
 
-/// A complete insertion demand cannot be established before allocation.
+/// A complete allocation demand cannot be established before allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanningError {
     /// A count, layout, byte sum or generation exceeds its representable limit.
@@ -80,7 +81,7 @@ pub enum PlanningError {
     UnsupportedPayload,
 }
 
-/// Local refusal before constructing any insertion allocation.
+/// Local refusal before constructing an admitted writer or insertion allocation.
 #[derive(Debug)]
 pub enum InsertAdmissionError<E> {
     /// Another writer currently owns the original map lock.
@@ -93,6 +94,39 @@ pub enum InsertAdmissionError<E> {
     Planning(PlanningError),
     /// The original provider refused the complete checked demand.
     Refused(E),
+}
+
+struct WriterStartPlan {
+    demand: AllocationDemand,
+    tracking_layout: Layout,
+}
+
+fn plan_writer_start<K, V, P>(
+    source: &SuperBlock<K, V, Prepaid<P>>,
+    shells: WriterLayouts,
+) -> Result<WriterStartPlan, PlanningError>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: NodeCloning<K, V>,
+{
+    checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
+    type Buffer<K, V, C> = FixedTrackingBuffer<*mut Node<K, V, C>, C>;
+    let tracking_layout =
+        Buffer::<K, V, P::Charge>::allocation_layout(0).map_err(|_| PlanningError::Overflow)?;
+    let mut demand = AllocationDemand::new();
+    for layout in [
+        shells.cursor,
+        shells.reader,
+        tracking_layout,
+        tracking_layout,
+    ] {
+        demand.add_layout(layout)?;
+    }
+    Ok(WriterStartPlan {
+        demand,
+        tracking_layout,
+    })
 }
 
 struct InsertPlan {
@@ -120,11 +154,7 @@ where
     V: Clone,
     P: ClonePlanning<K, V>,
 {
-    source
-        .txid
-        .checked_add(1)
-        .filter(|txid| *txid < (TXID_MASK >> TXID_SHF))
-        .ok_or(PlanningError::Overflow)?;
+    checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
     // SAFETY: the source is retained under its original writer lock.
     let mut plan = unsafe { plan_tree_insert::<K, V, P>(source.root, source.size, key) }?;
     for layout in [shells.cursor, shells.reader] {
@@ -281,6 +311,73 @@ impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
+    P: NodeCloning<K, V>,
+{
+    /// Admit an original writer without inserting or copying any tree entry.
+    ///
+    /// The callback runs once under the original nonblocking writer lock, after
+    /// checked generation preflight and before either shell is allocated. Its
+    /// complete demand covers the original cursor and next-reader shells; both
+    /// fixed tracking buffers have explicit zero capacity and zero allocation.
+    /// The provider supplies their zero-layout charges without inventing an
+    /// allocator event. A later closed insertion admits its own buffer growth,
+    /// nodes and payload copies; no payload planning is needed to start a writer.
+    ///
+    /// Busy, poison, overflow or refusal leaves the published map unchanged and
+    /// allocates nothing. Successful acquisition preserves the original root,
+    /// length and contents. Call `detach` to retain this same private cursor.
+    /// The caller must keep acquisition, the returned writer and its cleanup in
+    /// the original budget's synchronous refund-notification deferral scope.
+    /// A panic while dropping unused funding aborts the new cursor and poisons
+    /// the original writer lock; no partially sealed writer is returned.
+    pub fn try_write_admitted<E>(
+        &self,
+        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+    ) -> Result<BptreeMapWriteTxn<'_, K, V, Prepaid<P>>, InsertAdmissionError<E>> {
+        let acquired = self.inner.try_write_charged(|source, shells| {
+            let plan = plan_writer_start::<K, V, P>(source, shells)
+                .map_err(InsertAdmissionError::Planning)?;
+            let mut provider = Prepaid(Some(
+                admit(plan.demand).map_err(InsertAdmissionError::Refused)?,
+            ));
+            let first_charge = provider.take_node_charge(plan.tracking_layout);
+            let first = FixedTrackingBuffer::try_new(0, first_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));
+            let last_charge = provider.take_node_charge(plan.tracking_layout);
+            let last = FixedTrackingBuffer::try_new(0, last_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty retirement buffer layout"));
+            let charges = WriterCharges {
+                cursor: provider.take_node_charge(shells.cursor),
+                reader: provider.take_node_charge(shells.reader),
+            };
+            Ok(WriterAdmission {
+                charges,
+                input: (provider, first, last),
+            })
+        });
+        let mut writer = match acquired {
+            Ok(Some(writer)) => writer,
+            Ok(None) => {
+                return Err(if self.inner.is_poisoned() {
+                    InsertAdmissionError::Poisoned
+                } else {
+                    InsertAdmissionError::Busy
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        // Seal this no-edit operation under the same panic discipline as an
+        // insertion: cleanup must succeed before the cursor becomes operable.
+        writer.as_mut().begin_admitted_edit();
+        writer.as_mut().finish_admitted_funding();
+        Ok(BptreeMapWriteTxn { inner: writer })
+    }
+}
+
+impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Construct an empty map with prepaid node, root and initial reader owners.
@@ -369,7 +466,7 @@ where
                     } else {
                         InsertAdmissionError::Busy
                     },
-                ))
+                ));
             }
             Err(error) => return Err((input.take().expect("original refused input"), error)),
         };
