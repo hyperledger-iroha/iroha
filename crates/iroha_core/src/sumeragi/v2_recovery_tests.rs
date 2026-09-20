@@ -544,7 +544,7 @@ fn persist_complete_height(
         .expect("persist authenticated v2 finality");
 }
 #[cfg(feature = "bls")]
-pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
+pub(super) fn production_genesis_complete_tip_fixture() -> (
     Arc<Kura>,
     Arc<State>,
     VerifiedHeightContext,
@@ -552,16 +552,10 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
     KeyPair,
     crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
 ) {
-    let (verified_genesis, keys) = verified_context();
-    let context = verified_genesis.context().clone();
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(state_with_consensus_keys(&kura, context.network_id, &keys));
-    let block = dummy_block(&keys[0], 1, None);
-    kura.store_block(block.clone())
-        .expect("persist production-shaped signed genesis block");
-    commit_to_state(state.as_ref(), &block, &context);
-    let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
-    persist_complete_height(kura.as_ref(), state.as_ref(), &artifact);
+    // CompleteTip recovery must consume actual executed genesis and the physical
+    // catalog admitted before execution, not a metadata-only synthetic block.
+    let (kura, state, verified_genesis, keys, genesis_key) =
+        crate::sumeragi::v2_apply::canonical_genesis_complete_tip_fixture_for_test();
     let context_store =
         V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     context_store
@@ -572,7 +566,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         kura.as_ref(),
         state.as_ref(),
         None,
-        keys[0].public_key().clone(),
+        genesis_key.public_key().clone(),
     )
     .expect("recover the exact Kura height-one CompleteTip");
     let (
@@ -591,7 +585,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         BlockSignaturePolicy::RotatingLeader
     ));
     let Some(RecoveredSuccessorActivationAuthority::CompleteTip(complete_tip)) = activation else {
-        panic!("a complete signed genesis tip must recover CompleteTip authority")
+        panic!("an executed nonempty genesis tip must recover CompleteTip authority")
     };
     let predecessor_frame = complete_tip
         .lifecycle_storage
@@ -600,14 +594,14 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         .join("lifecycle-ledger-v1.norito");
     assert!(
         !predecessor_frame.exists(),
-        "the production-shaped predecessor lifecycle must begin genuinely empty"
+        "the executed genesis has no predecessor lifecycle rows"
     );
     let retirement = complete_tip
         .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &keys[0])
         .and_then(
             crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1::retire,
         )
-        .expect("retire the empty signed-genesis predecessor");
+        .expect("retire the executed-genesis predecessor with no lifecycle rows");
     (
         kura,
         state,

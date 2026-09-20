@@ -21462,7 +21462,10 @@ mod tests {
                 ("taira-validator-2", HostAction::BeaconActivate.label()),
                 ("taira-validator-3", HostAction::BeaconActivate.label()),
                 ("taira-validator-4", HostAction::BeaconActivate.label()),
-                ("taira-validator-1", HostAction::EpochSupervisorStart.label()),
+                (
+                    "taira-validator-1",
+                    HostAction::EpochSupervisorStart.label()
+                ),
             ]
         );
         assert!(
@@ -23569,8 +23572,11 @@ time.sleep(30)
             .expect("current producer service identity");
     }
 
-    fn exact_doctor_report_fixture(public_root: &str) -> norito::json::Value {
-        let checks = crate::taira::doctor_expected_checks(crate::taira::DoctorScope::Basic)
+    fn exact_doctor_report_fixture(
+        public_root: &str,
+        scope: crate::taira::DoctorScope,
+    ) -> norito::json::Value {
+        let checks = crate::taira::doctor_expected_checks(scope)
             .into_iter()
             .map(|(name, http_status, detail)| {
                 let mut check = norito::json::Map::new();
@@ -23587,7 +23593,7 @@ time.sleep(30)
             "command": "taira_doctor",
             "status": "ok",
             "public_root": public_root,
-            "scope": "basic",
+            "scope": (scope.as_str()),
             "checks": checks,
             "warnings": [],
             "failures": [],
@@ -23597,7 +23603,7 @@ time.sleep(30)
     #[test]
     fn doctor_report_requires_the_exact_first_release_check_surface() {
         let public_root = "https://taira.sora.org";
-        let canonical = exact_doctor_report_fixture(public_root);
+        let canonical = exact_doctor_report_fixture(public_root, crate::taira::DoctorScope::Basic);
         validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Basic)
             .expect("exact doctor report");
 
@@ -23608,6 +23614,51 @@ time.sleep(30)
             error.to_string(),
             "Taira doctor report scope does not match signed qualification"
         );
+
+        for scope in [
+            crate::taira::DoctorScope::Basic,
+            crate::taira::DoctorScope::Full,
+        ] {
+            let mut disabled = exact_doctor_report_fixture(public_root, scope);
+            validate_doctor_report(&disabled, public_root, scope)
+                .expect("enabled faucet qualifies in each doctor scope");
+            let faucet = disabled
+                .as_object_mut()
+                .and_then(|root| root.get_mut("checks"))
+                .and_then(norito::json::Value::as_array_mut)
+                .and_then(|checks| {
+                    checks.iter_mut().find(|check| {
+                        check.get("name").and_then(norito::json::Value::as_str)
+                            == Some("faucet_policy")
+                    })
+                })
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("each doctor scope requires the faucet policy check");
+            assert_eq!(
+                faucet
+                    .get("http_status")
+                    .and_then(norito::json::Value::as_u64),
+                Some(200)
+            );
+            assert_eq!(
+                faucet.get("ok").and_then(norito::json::Value::as_bool),
+                Some(true)
+            );
+            faucet.insert("http_status".to_owned(), 403_u64.into());
+            disabled.as_object_mut().expect("doctor object").insert(
+                "warnings".to_owned(),
+                norito::json!(["faucet_policy: Account faucet disabled; funding is unavailable"]),
+            );
+            validate_common_report(&disabled, "taira_doctor", public_root)
+                .expect("disabled faucet remains an otherwise successful diagnostic");
+            let error = validate_doctor_report(&disabled, public_root, scope)
+                .expect_err("release qualification requires an enabled faucet despite the warning");
+            assert_eq!(
+                error.to_string(),
+                "Taira doctor check `faucet_policy` is not exact V1"
+            );
+        }
+
         let mut sparse = canonical.clone();
         sparse
             .as_object_mut()

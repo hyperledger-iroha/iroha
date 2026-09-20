@@ -109,16 +109,61 @@ fn runtime_nexus_setter_requires_exact_protected_dataspace_projection() {
                     .expect("bounded cumulative DS fixture"),
             ));
         world.commit();
-        assert!(
-            state.set_nexus(original.clone()).is_err(),
-            "omitting the committed DS must fail before mutation"
-        );
-        assert_eq!(
-            state.nexus_snapshot().dataspace_catalog,
-            original.dataspace_catalog
-        );
+        assert!(matches!(
+            state.try_nexus_snapshot_once(),
+            Err(LaneLifecycleError::RuntimeCatalog(ref reason))
+                if reason == "canonical runtime ownership differs from its scoped World catalog"
+        ));
+
         let mut requested = original.clone();
         requested.dataspace_catalog = expected.clone();
+        // Complete this metadata-only fixture before exercising the ordinary setter.
+        // A World-only catalog is not a published canonical runtime transition.
+        state
+            .install_canonical_runtime_projection(
+                &requested,
+                &state.lane_incarnation_lineage_snapshot(),
+                &state.autoscale_sample_history_snapshot(),
+            )
+            .expect("matching canonical runtime metadata fixture");
+        assert_eq!(state.nexus_snapshot().dataspace_catalog, expected);
+        let runtime_before = state.canonical_runtime.view().get().clone();
+        let predecessor_before = state.canonical_runtime.predecessor_view().get().clone();
+        let world_before = norito::json::to_json(&state.world).unwrap();
+        let cache_before = state.nexus.read().clone();
+        let geometry_before = state.kura.lane_geometry_journal_state_for_test().unwrap();
+        let error = state
+            .set_nexus(original.clone())
+            .expect_err("omitting the committed DS must fail before mutation");
+        assert!(
+            matches!(error, LaneLifecycleError::RuntimeCatalog(ref reason)
+                if reason == "runtime Nexus setter cannot change committed physical dataspaces")
+        );
+        assert_eq!(state.canonical_runtime.view().get(), &runtime_before);
+        assert_eq!(
+            state.canonical_runtime.predecessor_view().get(),
+            &predecessor_before
+        );
+        assert_eq!(norito::json::to_json(&state.world).unwrap(), world_before);
+        {
+            let cache = state.nexus.read();
+            assert_eq!(cache.lane_catalog, cache_before.lane_catalog);
+            assert_eq!(
+                cache.configured_lane_catalog,
+                cache_before.configured_lane_catalog
+            );
+            assert_eq!(cache.dataspace_catalog, cache_before.dataspace_catalog);
+            assert_eq!(
+                cache.configured_dataspace_catalog,
+                cache_before.configured_dataspace_catalog
+            );
+            assert_eq!(cache.routing_policy, cache_before.routing_policy);
+        }
+        assert_eq!(
+            state.kura.lane_geometry_journal_state_for_test().unwrap(),
+            geometry_before
+        );
+        assert_eq!(state.nexus_snapshot().dataspace_catalog, expected);
         state
             .set_nexus(requested)
             .expect("exact protected DS projection");

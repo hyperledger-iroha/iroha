@@ -95,6 +95,12 @@ pub(crate) fn deployment_genesis_fixture()
     public_inputs::deployment_genesis_fixture()
 }
 
+/// Executed genesis with its exact native manifest and verifier-key binding.
+#[cfg(test)]
+pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+    public_inputs::deployment_validated_genesis_fixture()
+}
+
 /// Executed signed genesis with four explicit active lane-validator account bindings.
 #[cfg(test)]
 pub(crate) fn deployment_lane_genesis_fixture()

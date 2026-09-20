@@ -10519,6 +10519,8 @@ pub(crate) mod valid {
             let _ = static_data.aggregate_lane;
             // Rayon workers must use the caller's configured account address profile.
             let account_discriminant = chain_discriminant();
+            #[cfg(test)]
+            let account_profile_observer = tests::account_profile_validation_observer();
             let max_clock_drift = static_data.max_clock_drift;
             let tx_params = static_data.tx_params;
             let expected_block_height = static_data.expected_block_height;
@@ -10743,7 +10745,13 @@ pub(crate) mod valid {
                 (&SignedTransaction, &PreparedBlockTransaction),
             )|
              -> Option<BlockValidationError> {
+                #[cfg(test)]
+                let inherited_account_profile = chain_discriminant();
                 let _profile = ChainDiscriminantGuard::enter(account_discriminant);
+                #[cfg(test)]
+                if let Some(observer) = account_profile_observer.as_ref() {
+                    observer.observe(idx, inherited_account_profile, chain_discriminant());
+                }
                 let prechecked_signature_result = prechecked_signature_results
                     .get(idx)
                     .and_then(|result| result.as_ref().cloned());
@@ -11880,6 +11888,7 @@ pub(crate) mod valid {
             sync::Arc,
             time::Duration,
         };
+        include!("block/parallel_account_profile_tests.rs");
         fn sumeragi_v2_test_profile(block: &SignedBlock) -> ConsensusValidationProfile {
             ConsensusValidationProfile::SumeragiV2 {
                 block_cadence: Duration::from_millis(1),
@@ -26035,7 +26044,6 @@ pub(crate) mod tests {
         );
     }
     include!("block/native_amx_and_dag_tests.rs");
-    include!("block/parallel_account_profile_tests.rs");
     fn state_with_transaction_policy(
         chain_id: &ChainId,
         authority: &AccountId,
@@ -26358,7 +26366,7 @@ pub(crate) mod tests {
         trigger_transaction.apply();
         trigger_block.commit();
     }
-    fn previous_block_at_height(height: u64) -> SignedBlock {
+    pub(super) fn previous_block_at_height(height: u64) -> SignedBlock {
         let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {

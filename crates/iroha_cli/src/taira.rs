@@ -105,6 +105,12 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
     ("status", RouteCheckMethod::Get, "/status", &[200]),
     ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
     (
+        "faucet_policy",
+        RouteCheckMethod::Get,
+        "/v1/accounts/faucet/policy",
+        &[200, 403],
+    ),
+    (
         "sumeragi_status",
         RouteCheckMethod::Get,
         "/v1/sumeragi/status",
@@ -238,6 +244,7 @@ impl DoctorScope {
                 name,
                 "status"
                     | "time_now"
+                    | "faucet_policy"
                     | "sumeragi_status"
                     | "pipeline_transaction_status"
                     | "public_lane_validators"
@@ -2647,6 +2654,9 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
+                "faucet_policy" => {
+                    validate_faucet_policy_discovery(result.status, result.body.as_ref()).err()
+                }
                 "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
                 _ => None,
             }
@@ -2681,6 +2691,10 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         }
         if *name == "time_now" && ok && scope == DoctorScope::Basic {
             collect_time_warnings(result.body.as_ref(), &mut warnings);
+        }
+        if *name == "faucet_policy" && ok && result.status == 403 {
+            warnings
+                .push("faucet_policy: Account faucet disabled; funding is unavailable".to_owned());
         }
     }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
@@ -6352,6 +6366,66 @@ fn collect_time_warnings(snapshot: Option<&Value>, warnings: &mut Vec<String>) {
     }
 }
 
+/// Untrusted discovery only: these fields never supply a signing-policy pin.
+#[derive(JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct FaucetPolicyDiscoveryV1 {
+    schema: String,
+    network_id: NetworkId,
+    chain_discriminant: u16,
+    authority: String,
+    asset_definition_id: String,
+    amount: Quantity,
+}
+
+fn validate_faucet_policy_discovery(status: u16, body: Option<&Value>) -> Result<(), String> {
+    let body = body.ok_or_else(|| "faucet_policy returned no JSON body".to_owned())?;
+    if status == 403 {
+        return if body
+            == &norito::json!({
+                "code": "query_validation_failed",
+                "message": "Operation is not permitted: Account faucet disabled"
+            }) {
+            Ok(())
+        } else {
+            Err(
+                "faucet_policy returned HTTP 403 without the exact faucet-disabled response"
+                    .to_owned(),
+            )
+        };
+    }
+    if status != 200 {
+        return Err(format!("faucet_policy returned unexpected HTTP {status}"));
+    }
+    let policy: FaucetPolicyDiscoveryV1 = json::from_value(body.clone())
+        .map_err(|error| format!("faucet_policy is not exact V1 JSON: {error}"))?;
+    if policy.schema != "iroha.accounts.faucet.policy.v1"
+        || json::to_value(&policy).map_err(|error| error.to_string())? != *body
+    {
+        return Err("faucet_policy must use the exact canonical V1 response".to_owned());
+    }
+    let _chain = ChainDiscriminantGuard::enter(policy.chain_discriminant);
+    let authority = AccountId::parse_encoded(&policy.authority).map_err(|error| {
+        format!("faucet_policy authority is not a canonical AccountId: {error}")
+    })?;
+    if authority.to_string() != policy.authority || authority.try_signatory().is_none() {
+        return Err(
+            "faucet_policy authority must be a canonical single-signatory account".to_owned(),
+        );
+    }
+    let asset = AssetDefinitionId::from_str(&policy.asset_definition_id)
+        .map_err(|error| format!("faucet_policy asset_definition_id is not canonical: {error}"))?;
+    if asset.to_string() != policy.asset_definition_id {
+        return Err(
+            "faucet_policy asset_definition_id must use its canonical representation".to_owned(),
+        );
+    }
+    if policy.amount.is_zero() {
+        return Err("faucet_policy amount must be positive".to_owned());
+    }
+    Ok(())
+}
+
 fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String> {
     let capability = capability
         .cloned()
@@ -9843,6 +9917,16 @@ mod tests {
             Some(MCP_CLIENT_VERSION)
         );
     }
+    fn doctor_faucet_policy_fixture() -> Value {
+        norito::json!({
+            "schema": "iroha.accounts.faucet.policy.v1",
+            "network_id": (crate::fallback_config().network_id.to_string()),
+            "chain_discriminant": (iroha::data_model::account::address::chain_discriminant()),
+            "authority": (AccountId::new(fixture_key_pair(0x43).public_key().clone()).to_string()),
+            "asset_definition_id": DEFAULT_GAS_ASSET_ID,
+            "amount": "25000"
+        })
+    }
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
             ("GET", "/status") => MockResponse::json(
@@ -9871,6 +9955,9 @@ mod tests {
                     }
                 }),
             ),
+            ("GET", "/v1/accounts/faucet/policy") => {
+                MockResponse::json(200, doctor_faucet_policy_fixture())
+            }
             ("GET", "/v1/sumeragi/status") => MockResponse::json(
                 401,
                 norito::json!({
@@ -12223,6 +12310,228 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn doctor_faucet_policy_checks_both_scopes_without_authentication() {
+        let disabled = norito::json!({
+            "code": "query_validation_failed",
+            "message": "Operation is not permitted: Account faucet disabled"
+        });
+        let cases = [
+            ("enabled", 200, Some(doctor_faucet_policy_fixture()), true),
+            ("disabled", 403, Some(disabled.clone()), true),
+            ("missing", 404, None, false),
+            ("unavailable", 502, None, false),
+            ("non-JSON success", 200, None, false),
+            ("malformed success", 200, Some(norito::json!({})), false),
+            (
+                "disabled body with success status",
+                200,
+                Some(disabled),
+                false,
+            ),
+            (
+                "enabled body with forbidden status",
+                403,
+                Some(doctor_faucet_policy_fixture()),
+                false,
+            ),
+            (
+                "unrelated forbidden",
+                403,
+                Some(norito::json!({
+                    "code": "canonical_authentication_required",
+                    "message": "Operation is not permitted: Account faucet disabled"
+                })),
+                false,
+            ),
+            (
+                "unrelated policy denial",
+                403,
+                Some(norito::json!({
+                    "code": "query_validation_failed", "message": "Operation is not permitted: denied"
+                })),
+                false,
+            ),
+            (
+                "extended disabled response",
+                403,
+                Some(norito::json!({
+                    "code": "query_validation_failed",
+                    "message": "Operation is not permitted: Account faucet disabled", "extra": true
+                })),
+                false,
+            ),
+            (
+                "incomplete disabled response",
+                403,
+                Some(norito::json!({
+                    "code": "query_validation_failed"
+                })),
+                false,
+            ),
+        ];
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (label, status, body, accepted) in &cases {
+                let status = *status;
+                let body = body.clone();
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/v1/accounts/faucet/policy" {
+                        match &body {
+                            Some(body) => MockResponse::json(status, body.clone()),
+                            None => MockResponse::text(status, "not JSON"),
+                        }
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                let requests = finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some(if *accepted { "ok" } else { "fail" }),
+                    "{scope:?}: {label}"
+                );
+                let faucet_requests = requests
+                    .iter()
+                    .filter(|request| path_only(&request.path) == "/v1/accounts/faucet/policy")
+                    .collect::<Vec<_>>();
+                assert_eq!(faucet_requests.len(), 1, "{scope:?}: {label}");
+                let request = faucet_requests[0];
+                assert_eq!(request.method, "GET");
+                assert_eq!(request.path, "/v1/accounts/faucet/policy");
+                assert!(request.body.is_empty());
+                for header in [
+                    "authorization",
+                    "proxy-authorization",
+                    "cookie",
+                    "x-iroha-account",
+                    "x-iroha-signature",
+                    "x-iroha-timestamp-ms",
+                    "x-iroha-nonce",
+                ] {
+                    assert!(
+                        request.header_values(header).is_empty(),
+                        "unexpected {header}"
+                    );
+                }
+                let check = report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("faucet_policy"))
+                    .expect("faucet policy check");
+                assert_eq!(check["http_status"].as_u64(), Some(u64::from(status)));
+                assert_eq!(check["ok"].as_bool(), Some(*accepted));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().len(),
+                    usize::from(!*accepted)
+                );
+                let warnings = report["warnings"].as_array().unwrap();
+                if *accepted && status == 403 {
+                    assert_eq!(
+                        warnings,
+                        &[Value::from(
+                            "faucet_policy: Account faucet disabled; funding is unavailable"
+                        )]
+                    );
+                    assert!(check.get("detail").is_none());
+                } else {
+                    assert!(warnings.is_empty(), "{scope:?}: {label}");
+                }
+            }
+            let expected = doctor_expected_checks(scope);
+            let (_, status, detail) = expected
+                .iter()
+                .find(|(name, _, _)| *name == "faucet_policy")
+                .expect("public reset requires the faucet policy check");
+            assert_eq!(*status, 200);
+            assert!(detail.is_none());
+        }
+    }
+
+    #[test]
+    fn doctor_faucet_policy_requires_exact_canonical_v1_fields() {
+        use iroha::data_model::account::{MultisigMember, MultisigPolicy};
+        let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let policy = doctor_faucet_policy_fixture();
+        validate_faucet_policy_discovery(200, Some(&policy)).expect("canonical V1 discovery");
+        assert!(validate_faucet_policy_discovery(200, None).is_err());
+        for field in policy.as_object().unwrap().keys() {
+            let mut missing = policy.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                validate_faucet_policy_discovery(200, Some(&missing)).is_err(),
+                "missing {field}"
+            );
+            let mut wrong_type = policy.clone();
+            wrong_type
+                .as_object_mut()
+                .unwrap()
+                .insert(field.clone(), Value::Null);
+            assert!(
+                validate_faucet_policy_discovery(200, Some(&wrong_type)).is_err(),
+                "null {field}"
+            );
+        }
+        let mut extended = policy.clone();
+        extended
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), Value::Bool(true));
+        assert!(validate_faucet_policy_discovery(200, Some(&extended)).is_err());
+        let multisig = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(fixture_key_pair(0x94).public_key().clone(), 1).unwrap(),
+                    MultisigMember::new(fixture_key_pair(0x95).public_key().clone(), 1).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        for (field, value) in [
+            ("schema", Value::from("iroha.accounts.faucet.policy.v0")),
+            ("network_id", Value::from("invalid-network")),
+            (
+                "network_id",
+                Value::from(policy["network_id"].as_str().unwrap().to_uppercase()),
+            ),
+            ("chain_discriminant", Value::from(65_536_u64)),
+            ("chain_discriminant", Value::from("369")),
+            ("chain_discriminant", Value::from(0_u64)),
+            ("authority", Value::from("faucet@sora")),
+            (
+                "authority",
+                Value::from(format!(" {}", policy["authority"].as_str().unwrap())),
+            ),
+            ("authority", Value::from(multisig.to_string())),
+            ("asset_definition_id", Value::from("xor#universal")),
+            (
+                "asset_definition_id",
+                Value::from(format!(" {DEFAULT_GAS_ASSET_ID}")),
+            ),
+            ("amount", Value::from("0")),
+            ("amount", Value::from("-1")),
+            ("amount", Value::from("025000")),
+            ("amount", Value::from(25_000_u64)),
+        ] {
+            let mut invalid = policy.clone();
+            invalid
+                .as_object_mut()
+                .unwrap()
+                .insert(field.to_owned(), value);
+            assert!(
+                validate_faucet_policy_discovery(200, Some(&invalid)).is_err(),
+                "invalid {field}: {invalid:?}"
+            );
+        }
+        // Discovery validates the advertised address network without changing the caller's network.
+        let _other_chain = ChainDiscriminantGuard::enter(0);
+        validate_faucet_policy_discovery(200, Some(&policy))
+            .expect("explicit discovery discriminant");
+        assert_eq!(iroha::data_model::account::address::chain_discriminant(), 0);
+    }
+
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
         let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));

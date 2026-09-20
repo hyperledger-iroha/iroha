@@ -5922,6 +5922,8 @@ mod fastpq_submission_tests {
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]
 mod tests;
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use tests::canonical_genesis_complete_tip_fixture_for_test;
 #[cfg(test)]
 pub(in crate::sumeragi) use tests::canonical_ordinary_terminal_fixture_for_test;
 #[cfg(test)]

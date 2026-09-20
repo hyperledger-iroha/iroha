@@ -328,6 +328,18 @@ pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     (fixture.block, fixture.genesis)
 }
 
+/// Reuse the exact executed genesis and independently checked native manifest binding.
+pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+    let fixture = Fixture::new();
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &fixture.block.encode_wire().unwrap(),
+        &fixture.manifest,
+        fixture.genesis.public_key(),
+        fixture.block.hash(),
+    )
+    .unwrap()
+}
+
 /// Execute and sign explicit active lane bindings with authority keys distinct from peer keys.
 pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
     static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();

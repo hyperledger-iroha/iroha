@@ -4,10 +4,44 @@ Run the native CLI checks, build the four AArch64 Linux executables, and capture
 read-only copies through one maintained command. This replaces per-release local
 build and capture scripts. Python 3.11+, Git, the repository Rust toolchain,
 cargo-zigbuild, Zig and an existing warm Cargo target directory are required.
+Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
+`/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
+nonexecutable inspector before compilation; install this prerequisite first.
+
+The compiled `iroha taira doctor` checks `GET /v1/accounts/faucet/policy` in
+both basic and full scopes without a client configuration or authentication.
+A successful response must contain the exact canonical V1 policy. Missing
+routes, malformed policies, unrelated forbidden responses and upstream failures
+fail the check. The explicit disabled-faucet response produces a warning that
+funding is unavailable; public-reset qualification still requires an enabled
+HTTP 200 policy. Discovery does not establish signing trust: funding operations
+continue to require independently trusted issuer and issuance inputs.
 
 Run only the early native gate:
 
     python3 scripts/taira_release.py check
+
+Linux development checks default to the installed LLVM 18 compiler and linker;
+macOS keeps the system Apple linker. Linux requires executable
+`/usr/bin/clang-18` and `/usr/bin/ld.lld-18`. Missing or nonexecutable tools fail
+before compilation, with their exact paths in the diagnostic. Install `clang-18`
+and `lld-18` with the platform package manager first; there is no automatic
+fallback. To diagnose with the system linker explicitly:
+
+    python3 scripts/taira_release.py check \
+      --target-dir /absolute/existing/development-lane \
+      --native-linker system
+
+The runner verifies `/usr/bin/clang-18` and `/usr/bin/ld.lld-18` against their
+fixed canonical installation paths, checks executable custody, and reports
+their paths and SHA256 digests. The standalone `scripts/taira_release_check.py`
+entry point accepts the same option. Switching from `system` to `llvm`
+invalidates Cargo fingerprints and can rebuild dependencies once in the
+existing warm lane; keeping the same selection reuses that cache. Switching
+back invalidates it again. Linker timing alone does not establish end-to-end
+build or release qualification time.
+`llvm` is rejected on macOS, and authenticated `prepare` does not accept
+`--native-linker`; its native and release environments remain unchanged.
 
 Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
@@ -16,13 +50,33 @@ warm development lane:
       --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
 
 Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. The
-diagnostic compiles the complete shared native harness graph, runs mandatory
-configuration checks first, then only the named tests. Names must already belong
+diagnostic compiles configuration and the requested native harnesses together,
+runs mandatory configuration checks first, then only the named tests. Names must already belong
 to the chosen `--native-check-scope`; unknown or repeated selections fail before
 Cargo starts. Independent failures are aggregated; dependent network tests run
 only after those checks pass. This mutable-source diagnostic writes no release
 qualification checkpoint. `prepare` has no focus option and still requires its
 complete immutable gate. Omit the option to run the normal development gate.
+
+The CLI regression selection runs as one serial native test process, using exact
+test names. This reuses immutable genesis fixtures instead of rebuilding them in
+a new process for every test. The gate requires every selected result exactly
+once and reconciles the complete result count with the process outcome; ignored,
+missing, unexpected or malformed results fail qualification. A failed or aborted
+batch reports unsuccessful and unexecuted tests without replaying successful
+ones. Long batches emit progress updates. Configuration and mandatory startup
+checks still run first, and node compilation and network fixtures remain later
+steps. Both focused diagnostics and the complete gate use this CLI execution
+path; other native harnesses retain their existing isolation.
+
+Network observation tests run before shipping binary compilation. Selecting only
+these tests requires no node binaries, four-validator workspace, or eight-GiB
+runtime storage reserve. A failed observation stops before shipping compilation.
+Selecting the beacon workload checks its private external workspace before
+source audits or compilation: the directory must be owner-only mode 0700, outside
+Git, with direct directory ancestors that reject group and world writes. Runtime
+network tests also require eight GiB free before compilation and recheck capacity
+before starting peers. The beacon workspace is revalidated at execution.
 
 Prepare binaries from an explicitly selected signed commit in the optimizations repository:
 
@@ -137,8 +191,8 @@ before checking copy capacity. Retirement runs under Cargo's locks after exact
 inode checks and an OS open-file check; a later copy failure leaves the current
 verified Cargo outputs intact.
 The first run only records current outputs; unrecorded files, production binaries,
-libraries, object files and warm compiler caches are retained. Busy files or an
-unavailable/inconclusive `lsof` check cause retention. A private quarantine closes
+libraries, object files and warm compiler caches are retained. Busy files and
+inconclusive or failed runtime `lsof` checks cause retention. A private quarantine closes
 the old pathname before the final open-file check; interrupted retirement remains
 recorded. Retries recover both rename windows using the recorded inode and stable
 metadata, recheck open-file status, and never adopt an unrelated replacement. A
@@ -153,6 +207,11 @@ replaced or busy copies. If isolation fails partway through a batch, only alread
 verified copies are cleanup-owned, including an unpublished CLI; incomplete or
 unrecorded files are retained. Observations and fixture logs remain. Cargo producers
 and Linux release artifacts are outside temporary-copy cleanup.
+
+Before publication, the shared artifact reader rechecks the pinned source bytes
+against their captured SHA256 using bounded reads that preserve the stream offset.
+This catches same-size edits even when filesystem timestamps coincide. Existing
+metadata, path, copied-content and archive-content checks remain mandatory.
 
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both

@@ -8,7 +8,7 @@ impl State {
         let manifests = Arc::clone(manifests);
         let _state_write_lock = self.state_write_lock.lock();
         let publication = self.begin_state_view_write();
-        if !manifests.is_bound_to_catalog(&self.nexus_snapshot().lane_catalog) {
+        if !manifests.is_bound_to_catalog(&self.nexus_ownership_projection().lane_catalog) {
             return false;
         }
         {

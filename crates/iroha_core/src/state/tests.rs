@@ -9141,7 +9141,20 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         .expect("drained lane catalog");
     drained_nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&drained_nexus.lane_catalog);
-    *state.nexus.write() = drained_nexus;
+    // This structural fixture must install drain metadata in the canonical
+    // runtime owner. Mutating only the process-local Nexus cache is not a
+    // committed drain and would leave both the positive and attack cases stale.
+    let install_drain_catalog = |nexus: iroha_config::parameters::actual::Nexus| {
+        state
+            .install_canonical_runtime_projection(
+                &nexus,
+                &state.lane_incarnation_lineage_snapshot(),
+                &state.autoscale_sample_history_snapshot(),
+            )
+            .expect("retain structural drain in canonical runtime");
+        *state.nexus.write() = nexus;
+    };
+    install_drain_catalog(drained_nexus);
     let_row! { unrelated_keypairs = autoscale_drain_keypairs_for_test(6) .into_iter() .skip(2) .collect::<Vec<_>>() };
     let_row! { unrelated_roster = unrelated_keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect::<Vec<_>>() };
     seed_consensus_keys_with_pops(&state, &unrelated_keypairs);
@@ -9226,10 +9239,10 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
         substituted_nexus.lane_catalog = LaneCatalog::new(substituted_nexus.lane_catalog.lane_count(), lanes)
             .expect("substituted catalog");
         substituted_nexus.lane_config = RuntimeLaneConfig::from_catalog(&substituted_nexus.lane_catalog);
-        *state.nexus.write() = substituted_nexus;
+        install_drain_catalog(substituted_nexus);
         assert!(state.merge_active_lane_authority_snapshot(authority_height).is_err(),
             "closed merge authority must reject {attack}");
-        *state.nexus.write() = canonical_nexus.clone();
+        install_drain_catalog(canonical_nexus.clone());
     }
     assert!(matches!(
         state.resolve_lane_committee_at_height(
