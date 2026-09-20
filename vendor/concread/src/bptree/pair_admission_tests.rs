@@ -676,3 +676,6 @@ fn joined_sum_rejects_byte_and_allocation_overflow_without_changing_demand() {
 
 #[path = "borrowed_pair_tests.rs"]
 mod borrowed;
+
+#[path = "clear_admission_tests.rs"]
+mod clear;

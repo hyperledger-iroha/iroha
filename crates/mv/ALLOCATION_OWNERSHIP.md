@@ -57,7 +57,7 @@ identity, allowing resolved checkpoints to reuse the pointer niche. Apply keeps
 edits private until the original writer commits. Caught mutation or cleanup panic makes that cursor unusable, including
 for reading, detaching and publishing. Borrowed current and saved-root values
 cannot outlive or mutate their checkpoint. Prepaid mode exposes only closed
-admitted insertion; generic checkpoint support does not grant ordinary mutation.
+admitted insertion and reset; generic checkpoints do not grant ordinary mutation.
 
 Production Storage now retains both current and block-undo maps in this same
 B+tree engine. Block opening clears a private undo root without deep-cloning the
@@ -77,16 +77,25 @@ and owned-query destruction, including work outside either tree cursor. Every
 value read, new edit, capture and publication preflights that state and both
 cursor states. A caught child undo-cursor panic therefore cannot publish a
 healthy current tree before discovering the failed undo owner.
-The ordered touch set still allocates without admission. Complete current/undo/
-touch admission and checked generation refusal through State remain required;
-these checkpoints do not enable production prepaid mutation.
+The ordered touch set still allocates without admission. Transaction touch
+admission and checked generation refusal through State remain required;
+these checkpoints do not enable prepaid State transactions.
 
-Current production MV Storage still instantiates Untracked maps. Initial root
-and reader control blocks now carry exact original charges; native mutex/runtime
-storage remains explicitly outside constructor admission. Real model payload
-policies, MV undo/transaction storage, iterator stacks and removal admission
-remain unfinished. Final-tree teardown walks original child pointers with a
-bounded stack and allocates nothing.
+The same MV Storage family also exposes explicit prepaid construction and
+insertion blocks. One checked startup reservation is partitioned between both
+map owners; `Arc::ptr_eq` authenticates the original pool, independently of equal
+limits or available counts. Both writer shells are admitted together, then a
+closed reset admits the actual empty undo root and retirement bookkeeping.
+Insertion uses one complete current/first-preimage demand while retaining both
+original locks. A higher-ranked callback prevents writer guards from escaping
+the whole-block refund scope. Node charges are actual `AllocationCharge` owners;
+copied nested payloads require an explicit `AdmittedStoragePolicy`.
+
+World currently instantiates Untracked Storage. Native mutex/runtime and
+publication/release control storage remain outside constructor admission. Real
+model payload policies, transaction touch storage, iterator stacks, detached
+capture and removal/mutable replacement admission remain unfinished. Final-tree
+teardown walks original child pointers with a bounded stack and allocates nothing.
 
 Extract node charges before destroying their cache-padded Box and refund only
 after deallocation returns. Dropping an ordinary charge field happens too early.
@@ -265,7 +274,7 @@ Abort destroys the entire private successor without obtaining more capacity.
 without fabricating one aggregate Layout. Actual allocations still split exact
 layouts and retain their own charges through physical free. Initial node, root
 and reader custody is explicit; native mutex/runtime ownership, real model
-payload policies, MV undo storage and configured aggregate State integration
+payload policies, MV transaction storage and configured aggregate State integration
 remain open.
 Real callback-bearing charges need their original notification-deferral scope
 around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)

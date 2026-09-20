@@ -42,6 +42,7 @@ from unittest.mock import MagicMock, patch
 # Twenty-two dispatcher controls preserve reversible upgrade custody and native preparation.
 # Two native canary receipt controls retain unsuccessful evidence and exact proof bindings.
 # Fifty-one native connection controls preserve transport, Queue and retained execution owners.
+# Sixteen admitted Storage/clear/partition controls preserve original finite-pool custody.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -50,8 +51,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -491,7 +492,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_mv_ownership_census_is_exact_required_and_focused_on_both_platforms(self):
         library_groups = {
-            "allocation::tests::": 6,
+            "allocation::tests::": 7,
             "release::tests::": 11,
             "cell::charged_allocation_tests::": 7,
             "storage::publication_tests::": 9,
@@ -506,10 +507,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 42)
+                self.assertEqual(len(library), 43)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 42), ("mv-ebr", 5), ("mv-map", 22), ("mv-admitted-map", 25), ("concread", 38)):
+                for harness, count in (("mv", 43), ("mv-ebr", 5), ("mv-map", 22), ("mv-admitted-map", 33), ("concread", 45)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -554,22 +555,33 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 gate.native_package_root(root, unknown)
         names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", text)
         admitted = names((root / "crates/mv/tests/admitted_map_custody.rs").read_text())
+        storage = names((root / "crates/mv/tests/admitted_map_custody/storage.rs").read_text())
         mapped = names((root / "crates/mv/tests/map_owned_generations.rs").read_text())
         admission_source = (root / "vendor/concread/src/bptree/admission_tests.rs").read_text()
         ordinary, writer = admission_source.split("mod writer_start {", 1)
         checkpoint = names((root / "vendor/concread/src/internals/bptree/checkpoint_tests.rs").read_text())
         paired = names((root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
         borrowed = names((root / "vendor/concread/src/bptree/borrowed_pair_tests.rs").read_text())
+        clear = names((root / "vendor/concread/src/bptree/clear_admission_tests.rs").read_text())
         expected = {
-            "mv-admitted-map": admitted,
+            "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage)],
             "mv-map": mapped,
             "concread": [*("bptree::admission::tests::" + name for name in names(ordinary)),
                          *("bptree::admission::tests::writer_start::" + name for name in names(writer)),
                          *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint),
                          *("bptree::admission::pair_admission::tests::" + name for name in paired),
-                         *("bptree::admission::pair_admission::tests::borrowed::" + name for name in borrowed)],
+                         *("bptree::admission::pair_admission::tests::borrowed::" + name for name in borrowed),
+                         *("bptree::admission::pair_admission::tests::clear::" + name for name in clear)],
         }
-        self.assertEqual((len(admitted), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed)), (25, 22, 7, 6, 9, 9, 7))
+        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (25, 8, 22, 7, 6, 9, 9, 7, 7))
+        self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
+                      (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
+        self.assertIn('#[path = "clear_admission_tests.rs"]\nmod clear;',
+                      (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        partition = "allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits"
+        self.assertEqual(names((root / "crates/mv/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
+        self.assertIn('#[path = "allocation_tests.rs"]\nmod tests;',
+                      (root / "crates/mv/src/allocation.rs").read_text())
         self.assertIn('#[path = "admission_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/bptree/admission.rs").read_text())
         self.assertIn('#[path = "pair_admission.rs"]\nmod pair_admission;',
@@ -586,6 +598,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                       (root / "vendor/concread/src/internals/bptree/checkpoint.rs").read_text())
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            self.assertEqual([name for _, names in selected["mv"] for name in names].count(partition), 1)
             for harness, actual_source_names in expected.items():
                 self.assertEqual([name for _, names in selected[harness] for name in names], actual_source_names)
         self.assertEqual(gate.HARNESS_TARGETS["mv-admitted-map"][3], ["-p", "mv", "--test", "admitted_map_custody"])
@@ -1983,7 +1996,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 132)
+            self.assertEqual(len(requested), 148)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2007,7 +2020,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("132 focused regressions", output.getvalue())
+            self.assertIn("148 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

@@ -13,7 +13,6 @@ use iroha_data_model::{
     fastpq::{TransferDeltaTranscript, TransferTranscript},
 };
 use iroha_model_base::state_path::StatePath;
-use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 type TranscriptMap = BTreeMap<Hash, Vec<TransferTranscript>>;

@@ -24,6 +24,9 @@ use std::sync::OnceLock;
 mod checkpoint;
 pub(crate) use checkpoint::{CheckpointBuffers, CursorCheckpoint};
 
+#[path = "clear.rs"]
+mod clear;
+
 /// One shared bound for planning, cursor construction and private checkpoints.
 pub(crate) fn checked_next_generation(txid: u64) -> Option<u64> {
     txid.checked_add(1)

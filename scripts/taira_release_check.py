@@ -1924,6 +1924,7 @@ MV_OWNERSHIP_STAGES = (
         'allocation::tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
         'allocation::tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
         'allocation::tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
+        'allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits',
     )),
     ('actual writer release observations', (
         'release::tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
@@ -2135,6 +2136,17 @@ MV_ADMITTED_MAP_STAGES = (
         'pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_reclaim_private_storage',
         'pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission',
     )),
+    ('production Storage admission and original block custody', (
+        'storage_custody::actual_storage_resets_first_none_and_some_between_blocks_and_aborts_parent',
+        'storage_custody::actual_storage_joined_refusal_precedes_clone_and_exact_budget_retry_preserves_input',
+        'storage_custody::actual_storage_old_reader_owns_nested_bytes_and_credits_until_physical_release',
+        'storage_custody::actual_storage_refund_wake_reenters_only_after_both_original_writers_release',
+        'storage_custody::actual_storage_constructor_rejects_foreign_and_short_policy_without_retained_credits',
+        'storage_custody::actual_storage_edit_rejects_foreign_and_short_policy_before_cloning_or_mutation',
+        'storage_custody::actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_images',
+        'storage_custody::actual_storage_caught_edit_panic_cannot_publish_and_reclaims_private_credits',
+    )),
+
 )
 
 CONCREAD_STAGES = (
@@ -2186,6 +2198,16 @@ CONCREAD_STAGES = (
         'bptree::admission::pair_admission::tests::borrowed::first_and_second_apply_cleanup_failures_invalidate_both_attached_writers',
         'bptree::admission::pair_admission::tests::borrowed::prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission',
     )),
+    ('admitted clear and original cursor reset custody', (
+        'bptree::admission::pair_admission::tests::clear::clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations',
+        'bptree::admission::pair_admission::tests::clear::clear_publication_retains_actual_old_reader_preimages_and_charges',
+        'bptree::admission::pair_admission::tests::clear::clear_nested_apply_and_repeated_resets_keep_full_budget_outer_abort',
+        'bptree::admission::pair_admission::tests::clear::clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent',
+        'bptree::admission::pair_admission::tests::clear::clear_caught_callback_and_provider_panics_leave_original_parent_unusable',
+        'bptree::admission::pair_admission::tests::clear::clear_apply_cleanup_panic_cannot_expose_a_usable_partial_writer',
+        'bptree::admission::pair_admission::tests::clear::clear_empty_root_has_exact_finite_layouts_and_never_copies_payloads',
+    )),
+
 )
 
 WALLET_STAGES = (("bounded faucet proof-of-work deadline", (

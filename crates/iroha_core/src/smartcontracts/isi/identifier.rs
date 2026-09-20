@@ -917,7 +917,6 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
-    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();

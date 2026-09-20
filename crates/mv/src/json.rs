@@ -349,6 +349,7 @@ where
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Storage {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),

@@ -788,10 +788,7 @@ mod tests {
     };
     use iroha_crypto::KeyPair;
     use iroha_model_base::topology::DataSpaceId;
-    use mv::{
-        json::JsonKeyCodec,
-        storage::{Storage, StorageReadOnly},
-    };
+    use mv::{json::JsonKeyCodec, storage::Storage};
     use norito::json::{Parser, from_json, to_json};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")

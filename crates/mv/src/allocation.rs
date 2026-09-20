@@ -304,6 +304,31 @@ impl AllocationReservation {
         self.remaining
     }
 
+    /// Whether this original reservation belongs to the exact budget pool.
+    /// Equal limits or available-byte observations never establish this identity.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.pool, &budget.pool)
+    }
+
+    /// Move part of one already prepaid sum into a second move-only reservation.
+    ///
+    /// No pool CAS, allocation, refund or notification occurs. Both remainders
+    /// retain the same original pool and together own exactly the previous sum.
+    /// A refused partition leaves the original owner unchanged.
+    pub fn try_partition(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
+        if bytes > self.remaining {
+            return Err(InsufficientReservation {
+                requested_bytes: bytes,
+                remaining_bytes: self.remaining,
+            });
+        }
+        self.remaining -= bytes;
+        Ok(Self {
+            pool: Arc::clone(&self.pool),
+            remaining: bytes,
+        })
+    }
+
     /// Move one exact layout's credits into an independent allocation owner.
     /// No pool acquisition or payload allocation occurs here. Refusal preserves
     /// the complete original reservation for a corrected split or abandonment.

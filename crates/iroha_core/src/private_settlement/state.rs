@@ -42,7 +42,6 @@ use iroha_data_model::{
         PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
     },
 };
-use mv::storage::StorageReadOnly as _;
 use norito::codec::{Decode, Encode};
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeSet, convert::TryFrom as _};

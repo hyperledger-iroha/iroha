@@ -24,8 +24,8 @@ pub use crate::internals::bptree::allocation::{NodeCloning, NodeFunding};
 pub use crate::internals::bptree::tracking::{FixedTrackingBuffer, TrackingBuffer};
 pub use crate::internals::lincowcell::Untracked;
 pub use admission::{
-    AllocationDemand, BptreeMapCheckpoint, ClonePlanning, InsertAdmissionError, PairInsertError,
-    PlanningError,
+    AllocationDemand, BptreeMapCheckpoint, ClearAdmissionError, ClonePlanning,
+    InsertAdmissionError, PairInsertError, PlanningError,
 };
 pub use mode::{MapMode, Prepaid};
 

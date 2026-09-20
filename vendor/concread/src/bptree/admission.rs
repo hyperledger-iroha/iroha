@@ -11,6 +11,10 @@ use std::alloc::Layout;
 mod pair_admission;
 pub use pair_admission::PairInsertError;
 
+#[path = "clear_admission.rs"]
+mod clear_admission;
+pub use clear_admission::ClearAdmissionError;
+
 /// Checked sum of actual requested allocation layouts, not encoded sizes or RSS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationDemand {
@@ -115,6 +119,15 @@ where
     P: NodeCloning<K, V>,
 {
     checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
+    writer_start_plan::<K, V, P>(shells)
+}
+
+fn writer_start_plan<K, V, P>(shells: WriterLayouts) -> Result<WriterStartPlan, PlanningError>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: NodeCloning<K, V>,
+{
     type Buffer<K, V, C> = FixedTrackingBuffer<*mut Node<K, V, C>, C>;
     let tracking_layout =
         Buffer::<K, V, P::Charge>::allocation_layout(0).map_err(|_| PlanningError::Overflow)?;
@@ -266,7 +279,7 @@ fn plan_tracking_growth<K, V, P>(
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     let needed = initialized
         .checked_add(required)
@@ -302,7 +315,7 @@ fn allocate_tracking<K, V, P>(
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     growth.map(|growth| {
         let charge = provider.take_node_charge(growth.layout);
@@ -317,6 +330,29 @@ where
     V: Clone + Send + Sync + 'static,
     P: NodeCloning<K, V>,
 {
+    /// Exact layout-only demand for the original no-edit writer start.
+    ///
+    /// This grants no lock or generation authority. `try_write_admitted` repeats
+    /// generation preflight and the same concrete plan under the original lock.
+    pub fn writer_start_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        Ok(
+            writer_start_plan::<K, V, P>(MapCell::<K, V, Prepaid<P>>::writer_allocation_layouts())?
+                .demand,
+        )
+    }
+
+    /// Exact initial node/root/reader layouts used by node-custody construction.
+    /// Native lock and runtime control storage remain outside this demand.
+    pub fn node_custody_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
+        let mut demand = AllocationDemand::new();
+        demand.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
+        for layout in [initial.root, initial.reader] {
+            demand.add_layout(layout)?;
+        }
+        Ok(demand)
+    }
+
     /// Admit an original writer without inserting or copying any tree entry.
     ///
     /// The callback runs once under the original nonblocking writer lock, after
@@ -395,15 +431,8 @@ where
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     ) -> Result<Self, E> {
         let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
-        let mut demand = AllocationDemand::new();
-        demand
-            .add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())
+        let demand = Self::node_custody_allocation_demand()
             .expect("three concrete initial layouts fit usize");
-        for layout in [initial.root, initial.reader] {
-            demand
-                .add_layout(layout)
-                .expect("three concrete initial layouts fit usize");
-        }
         let mut provider = Prepaid(Some(admit(demand)?));
         // The initial node takes its own original charge immediately before
         // allocation. The still-owned SuperBlock reclaims it if setup unwinds.
@@ -641,7 +670,7 @@ where
 /// new credit. Applying it keeps those edits private in the same writer. Nested
 /// guards resolve in LIFO order through exclusive reborrows. Publication and
 /// detachment are unavailable through the borrowed guard. Untracked checkpoints
-/// permit ordinary edits; prepaid checkpoints permit only admitted insertion.
+/// permit ordinary edits; prepaid checkpoints permit closed admitted edits.
 ///
 /// Keep a prepaid writer and all its checkpoints inside its budget's synchronous
 /// refund-notification deferral scope. An internal edit or cleanup panic makes

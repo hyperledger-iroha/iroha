@@ -1,17 +1,17 @@
 //! Borrowed current and undo maps for generation-fenced snapshot capture.
 
-use super::{Storage, View};
+use super::{Storage, StorageMode, View};
 use crate::{Key, Value};
-use concread::bptree::BptreeMapReadTxn;
+use concread::bptree::{BptreeMapReadTxn, Untracked};
 use std::collections::BTreeMap;
 
 /// Read guards retaining both serialized maps without consuming undo history.
 ///
 /// Acquisition is not atomic across the two maps. The owner must fence capture
 /// with its publication generation and discard it if that generation changes.
-pub struct Snapshot<'a, K: Key, V: Value> {
-    current: View<'a, K, V>,
-    revert: BptreeMapReadTxn<'a, K, Option<V>>,
+pub struct Snapshot<'a, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+    current: View<'a, K, V, M>,
+    revert: BptreeMapReadTxn<'a, K, Option<V>, M>,
 }
 
 impl<K: Key, V: Value> Storage<K, V> {
@@ -29,6 +29,7 @@ impl<K: Key, V: Value> Storage<K, V> {
     /// constructor; neither undo nor deleted entries are inferred from current data.
     pub fn from_snapshot_parts(current: BTreeMap<K, V>, revert: BTreeMap<K, Option<V>>) -> Self {
         Self {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),

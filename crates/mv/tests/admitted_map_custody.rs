@@ -2204,3 +2204,6 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[path = "admitted_map_custody/storage.rs"]
+mod storage_custody;

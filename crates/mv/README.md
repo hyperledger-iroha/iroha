@@ -99,9 +99,22 @@ opening no longer deep-clones prior undo values before clearing them. Transactio
 retain both parent checkpoints and borrow their original preimages; abort restores
 both roots without inverse edits, allocation or cloning. Apply resolves both
 checkpoints only after checking failures and dropping transaction touch keys.
-These maps remain Untracked pending native lock/runtime, joint current/undo/touch
-admission, generation-refusal propagation, concrete model payload policies and
-configured aggregate integration.
+`Storage<K, V, Prepaid<P>>::try_new_admitted` constructs this same storage family
+with one original finite pool. Construction and writer startup each reserve one
+checked sum for both maps and partition that reservation without reacquiring
+credits. `try_with_admitted_block` holds both original writers inside the pool's
+refund scope, clears the actual undo tree through admitted reset, and lends a
+private block to a synchronous callback. Its `try_insert_admitted` funds both
+current and missing first-preimage edits together. Success publishes the original
+pair; refusal or callback error leaves the published pair intact. A caught edit
+panic makes the aggregate unusable, including when the callback returns success.
+Read-only views and exclusive history retain original allocation owners.
+
+World storage remains Untracked pending native lock/runtime and publication
+control storage, transaction touch keys, removal/mutable replacement, detached
+capture, concrete model payload policies and configured aggregate integration.
+These operations are unavailable on prepaid Storage until their ownership paths
+are admitted; its insertion API does not claim complete State admission.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

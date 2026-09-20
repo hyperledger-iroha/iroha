@@ -5,35 +5,47 @@ use crate::{
 };
 use concread::bptree::{
     BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn,
-    BptreeMapWriteTxn, OwnedWriteError,
+    BptreeMapWriteTxn, MapMode, NodeCloning, OwnedWriteError, Untracked,
 };
 use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
-/// Multi-version key value storage
-pub struct Storage<K: Key, V: Value> {
+/// Original Concread mode for both current values and first undo preimages.
+///
+/// Implementations cannot introduce another map engine: `MapMode` is sealed by
+/// Concread. Both roles retain the same mode and its original allocation owners.
+pub trait StorageMode<K: Key, V: Value>:
+    MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
+{
+}
+impl<K: Key, V: Value, M> StorageMode<K, V> for M where
+    M: MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
+{
+}
+
+/// Multi-version key value storage using the original current and undo maps.
+pub struct Storage<K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
     /// Process-local identity of the jointly published current/undo pair.
     pub(crate) publication: Publication,
     pub(crate) revert_released: ReleaseNotification,
     pub(crate) blocks_released: ReleaseNotification,
     /// Previous version of values in the `blocks` map, required to perform revert of the latest changes
-    pub(crate) revert: BptreeMap<K, Option<V>>,
+    pub(crate) revert: BptreeMap<K, Option<V>, M>,
     /// Map which represent aggregated changes of multiple blocks
-    pub(crate) blocks: BptreeMap<K, V>,
+    pub(crate) blocks: BptreeMap<K, V, M>,
+    // Only the admitted constructor installs a pool; ordinary constructors
+    // remain explicitly Untracked and cannot create prepaid map owners.
+    pub(crate) allocation: Option<crate::allocation::AllocationBudget>,
 }
 impl<K: Key, V: Value> Storage<K, V> {
     /// Construct new [`Self`]
     pub fn new() -> Self {
         Self {
+            allocation: None,
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
             revert: BptreeMap::new(),
             blocks: BptreeMap::new(),
         }
-    }
-    /// Create persistent view of storage at certain point in time
-    pub fn view(&self) -> View<'_, K, V> {
-        let read = self.blocks.read();
-        View::from_read_txn(read)
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> Block<'_, K, V> {
@@ -99,6 +111,18 @@ impl<K: Key, V: Value> Storage<K, V> {
         )
     }
 }
+impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
+    /// Retain a read-only view of the current original allocation owners.
+    /// This does not copy map entries or create an admitted iteration workspace.
+    pub fn view(&self) -> View<'_, K, V, M> {
+        View::from_read_txn(self.blocks.read())
+    }
+}
+
+#[path = "storage/admitted.rs"]
+mod admitted;
+pub use admitted::{AdmittedBlockError, AdmittedStorageError, AdmittedStoragePolicy, StorageRole};
+
 impl<K: Key, V: Value> Default for Storage<K, V> {
     fn default() -> Self {
         Self::new()
@@ -107,6 +131,7 @@ impl<K: Key, V: Value> Default for Storage<K, V> {
 impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         Self {
+            allocation: None,
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
@@ -152,21 +177,44 @@ pub trait StorageReadOnly<K: Key, V: Value> {
 /// Module for [`View`] and it's related impls
 mod view {
     use super::*;
-    enum ViewInner<'storage, K: Key, V: Value> {
-        Txn(BptreeMapReadTxn<'storage, K, V>),
-        Snapshot(BptreeMapReadSnapshot<'storage, K, V>),
+    enum ViewInner<'storage, K: Key, V: Value, M: StorageMode<K, V>> {
+        Txn(BptreeMapReadTxn<'storage, K, V, M>),
+        Snapshot(BptreeMapReadSnapshot<'storage, K, V, M>),
     }
     /// Consistent view of the storage at the certain version
-    pub struct View<'storage, K: Key, V: Value> {
-        blocks: ViewInner<'storage, K, V>,
+    pub struct View<'storage, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        blocks: ViewInner<'storage, K, V, M>,
     }
-    impl<'storage, K: Key, V: Value> View<'storage, K, V> {
-        pub(crate) fn from_read_txn(read: BptreeMapReadTxn<'storage, K, V>) -> Self {
+    impl<'storage, K: Key, V: Value, M: StorageMode<K, V>> View<'storage, K, V, M> {
+        /// Borrow a current value without allocating iteration storage.
+        pub fn get<Q>(&self, key: &Q) -> Option<&V>
+        where
+            K: Borrow<Q>,
+            Q: Ord + ?Sized,
+        {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.get(key),
+                ViewInner::Snapshot(snapshot) => snapshot.get(key),
+            }
+        }
+        /// Number of current entries retained by this view.
+        pub fn len(&self) -> usize {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.len(),
+                ViewInner::Snapshot(snapshot) => snapshot.len(),
+            }
+        }
+        /// Whether this original view has no entries.
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        pub(crate) fn from_read_txn(read: BptreeMapReadTxn<'storage, K, V, M>) -> Self {
             Self {
                 blocks: ViewInner::Txn(read),
             }
         }
-        pub(crate) fn from_snapshot(snapshot: BptreeMapReadSnapshot<'storage, K, V>) -> Self {
+        pub(crate) fn from_snapshot(snapshot: BptreeMapReadSnapshot<'storage, K, V, M>) -> Self {
             Self {
                 blocks: ViewInner::Snapshot(snapshot),
             }
@@ -251,9 +299,9 @@ pub struct TouchedEntry<'a, K: Key, V: Value> {
 /// generation so untouched shared nodes remain alive even if Storage is dropped.
 /// Replacement semantics are already staged by the original block. Publication
 /// reacquires and authenticates that same current/undo pair without rebuilding it.
-pub struct Detached<K: Key, V: Value, Admission> {
-    revert: BptreeMapOwned<K, Option<V>>,
-    blocks: BptreeMapOwned<K, V>,
+pub struct Detached<K: Key, V: Value, Admission, M: StorageMode<K, V> = Untracked> {
+    revert: BptreeMapOwned<K, Option<V>, M>,
+    blocks: BptreeMapOwned<K, V, M>,
     // Release metadata admission after the original successors and their pins.
     metadata: DetachedMetadata<Admission>,
 }
@@ -405,9 +453,16 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
 /// Original map and undo successors held under both exact target writers.
 /// Drop abandons them without publication; abort returns the original owners.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
-pub struct PreparedPublication<'target, K: Key, V: Value, Admission, Installation> {
-    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>>>,
-    blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V>>,
+pub struct PreparedPublication<
+    'target,
+    K: Key,
+    V: Value,
+    Admission,
+    Installation,
+    M: StorageMode<K, V> = Untracked,
+> {
+    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,
+    blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
     publication: &'target Publication,
     metadata: DetachedMetadata<Admission>,
     // Release temporary resources after every retained successor and writer.
@@ -475,11 +530,12 @@ mod publication_tests;
 mod block {
     use super::*;
     /// Batched update to the storage that can be reverted later
-    pub struct Block<'store, K: Key, V: Value> {
-        pub(crate) revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
-        pub(crate) blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
+    pub struct Block<'store, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        pub(crate) revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>, M>>,
+        pub(crate) blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V, M>>,
         pub(super) dirty: bool,
-        failed: bool,
+        pub(super) failed: bool,
+        pub(super) allocation: Option<&'store crate::allocation::AllocationBudget>,
         pub(super) publication: &'store Publication,
         pub(super) predecessor: CapturedPublication,
         pub(super) mode: BlockMode,
@@ -518,6 +574,7 @@ mod block {
                 blocks,
                 dirty,
                 failed: false,
+                allocation: None,
                 publication,
                 predecessor,
                 mode,
@@ -553,6 +610,7 @@ mod block {
                 blocks,
                 dirty,
                 failed: _,
+                allocation: _,
                 publication,
                 predecessor: _,
                 mode: _,
@@ -588,6 +646,7 @@ mod block {
                 blocks,
                 dirty,
                 failed: _,
+                allocation: _,
                 predecessor,
                 mode,
                 publication: _,
@@ -743,9 +802,9 @@ mod block {
     /// Drop restores the parent roots without inverse mutations or allocation.
     /// First preimages live in the block-undo checkpoint; transaction preimages
     /// are borrowed from the original current root instead of cloned into a log.
-    pub struct Transaction<'block, K: Key, V: Value> {
-        blocks: Option<BptreeMapCheckpoint<'block, K, V>>,
-        revert: Option<BptreeMapCheckpoint<'block, K, Option<V>>>,
+    pub struct Transaction<'block, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        blocks: Option<BptreeMapCheckpoint<'block, K, V, M>>,
+        revert: Option<BptreeMapCheckpoint<'block, K, Option<V>, M>>,
         // TODO: admit ordered touch-key storage with both tree edits before
         // activating the prepaid State transaction path.
         touched: BTreeSet<K>,

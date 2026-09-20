@@ -144,7 +144,7 @@ mutation while borrowed or reference escape while a child is live. The logical
 failed-edit flag covers both admitted and ordinary mutation, preventing use after
 a caught mutation or cleanup panic even before the physical mutex unwinds.
 Public commit and detach check this flag before consuming their original shells.
-Prepaid checkpoints still expose only admitted insertion; unrestricted mutation
+Prepaid checkpoints expose only closed admitted operations; unrestricted mutation
 belongs to Untracked mode. The original funded writer and all checkpoint lifetimes
 must remain inside the original refund-deferral scope.
 
@@ -177,3 +177,15 @@ unwind, including cleanup after one apply. Typed refusal preserves both inputs
 and cursors. The caller must enclose the entire original writer lifetime in its
 common budget's refund-notification deferral scope; a scope around only one edit
 is insufficient. Ordered MV touch-key admission remains a separate prerequisite.
+
+### Closed prepaid empty-root reset
+
+`try_clear_admitted` on an original writer or checkpoint plans one empty root and
+all required fixed bookkeeping replacements before its one admission callback.
+A bounded stack visits the actual held tree without an allocating iterator or
+payload copy. Every prior node remains in the original retirement chain; old
+readers keep their preimages and charges until release. A child checkpoint retains
+exact parent tracking buffers for no-credit abort. Caught callback, provider and
+apply-cleanup panics leave the cursor unusable. The original physical writer's
+whole lifetime stays inside its budget's refund-notification deferral scope.
+This reset primitive does not activate MV/World or admit transaction touch keys.
