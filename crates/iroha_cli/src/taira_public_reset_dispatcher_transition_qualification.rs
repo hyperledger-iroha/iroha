@@ -1,6 +1,5 @@
 //! Join the completed preparation and maintained transfer producer records.
 use super::*;
-use std::io::Seek as _;
 const NAMES: [&str; 4] = ["iroha3d_taira", "iroha", "sorafs-node", "kagami"];
 const PACKAGES: [&str; 4] = ["irohad", "iroha_cli", "sorafs_node", "iroha_kagami"];
 const BASE: &str = "commit signer_fingerprint native_check_scope native_incremental native_linker environment_sha256 native_environment_sha256 tree target profile jobs source_unchanged toolchain_unchanged source_snapshot_sha256 source_root source_output_target compiler_tools tools command release_qualified deployed";

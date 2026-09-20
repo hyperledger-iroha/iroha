@@ -21,12 +21,15 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import select
 import shlex
 import stat
 import struct
 import subprocess
 import sys
+import time
 import types
+import zlib
 
 import taira_retained_release as common
 import taira_retry as retry
@@ -41,6 +44,9 @@ MAX_TOTAL = 4 * 1024**3
 MAX_ENTRIES = 65536
 BATCH = 256
 RESERVE = 256 * 1024**2
+PAYLOAD_ENCODING = "zlib-chunks-v1"
+# zlib's worst-case overhead at the fixed <=1MiB input bound is below 1KiB.
+COMPRESSED_OVERHEAD = 1024
 CONTROLS = ("HEAD", "ORIG_HEAD", "config", "shallow", "refs/heads/optimizations",
             "logs/HEAD", "logs/refs/heads/optimizations")
 need, canonical, decode, sha = common.need, common.canonical, common.decode, common.sha
@@ -468,32 +474,62 @@ def frame(fd, value):
     common.write_all(fd, struct.pack(">I", len(raw)) + raw)
 
 
+def payload_chunk(fd, raw):
+    """Transmit one bounded zlib member; saved archive bytes remain uncompressed."""
+    need(0 < len(raw) <= common.CHUNK, "source payload chunk exceeds bound")
+    encoded = zlib.compress(raw, level=1)
+    need(len(encoded) <= len(raw) + COMPRESSED_OVERHEAD, "compressed source chunk exceeds bound")
+    common.write_all(fd, struct.pack(">II", len(raw), len(encoded)) + encoded)
+
+
 class Reader(common.Reader):
     def frame(self):
         size = struct.unpack(">I", self.exact(4))[0]
         need(0 < size <= MAX_RECORD, "source frame exceeds bound")
         return decode(self.exact(size))
 
+    def payload_chunk(self, remaining):
+        expanded, compressed = struct.unpack(">II", self.exact(8))
+        need(0 < expanded <= min(common.CHUNK, remaining)
+             and 0 < compressed <= expanded + COMPRESSED_OVERHEAD,
+             "source payload chunk exceeds bound")
+        encoded = self.exact(compressed)
+        need(time.monotonic() < self.deadline, "stream deadline expired")
+        decoder = zlib.decompressobj()
+        try:
+            raw = decoder.decompress(encoded, expanded + 1)
+        except zlib.error as error:
+            raise ValueError("invalid compressed source chunk") from error
+        need(time.monotonic() < self.deadline, "stream deadline expired")
+        need(len(raw) == expanded and decoder.eof and not decoder.unused_data
+             and not decoder.unconsumed_tail, "compressed source chunk length or termination differs")
+        return raw
+
+    def eof(self):
+        remaining = self.deadline - time.monotonic()
+        need(remaining > 0 and select.select([self.fd], [], [], remaining)[0], "stream deadline expired")
+        need(os.read(self.fd, 1) == b"", "trailing source archive stream bytes")
+
 
 def archive_stream(plan, deployment, proof, admission, fd):
     with common.authority_locks(deployment):
         need(inspect(plan, deployment, proof) == admission, "archive source admission changed")
         root = Path(admission["source_root"])
-        frame(fd, {"admission_sha256": sha(canonical(admission))})
+        frame(fd, {"admission_sha256": sha(canonical(admission)), "payload_encoding": PAYLOAD_ENCODING})
         for row in admission["records"]:
             if row["kind"] == "directory":
                 continue
             if row["kind"] == "symlink":
                 raw = symlink_bytes(root, row)
                 need(len(raw) == row["size"] and sha(raw) == row["sha256"], "archive symlink changed")
-                common.write_all(fd, raw)
+                payload_chunk(fd, raw)
             else:
                 with common.held(root / row["path"], digest=row["sha256"], size=row["size"], stamp=row["identity"]) as (source_fd, _, _):
                     offset = 0
                     while offset < row["size"]:
                         data = os.pread(source_fd, min(common.CHUNK, row["size"] - offset), offset)
                         need(data, "archive source truncated")
-                        common.write_all(fd, data)
+                        payload_chunk(fd, data)
                         offset += len(data)
         need(inspect(plan, deployment, proof) == admission, "archive source changed while streaming")
         frame(fd, {"archive_stream_verified": True, "admission_sha256": sha(canonical(admission))})
@@ -815,12 +851,13 @@ def archive_local(plan, deployment, proof, admission, modules, output):
         write_new(output / (name + ".json"), canonical(value))
     envelope = {"operation": "archive", "plan": plan, "deployment": deployment, "proof": proof, "admission": admission}
     with session(plan["guest_ssh"], envelope, modules, output / "archive.stderr") as reader:
-        need(reader.frame() == {"admission_sha256": sha(canonical(admission))}, "source stream admission differs")
+        need(reader.frame() == {"admission_sha256": sha(canonical(admission)), "payload_encoding": PAYLOAD_ENCODING},
+             "source stream admission or encoding differs")
         fd = os.open(output / "payload.bin", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
             left = admission["payload_bytes"]
             while left:
-                raw = reader.exact(min(common.CHUNK, left))
+                raw = reader.payload_chunk(left)
                 common.write_all(fd, raw)
                 left -= len(raw)
             os.fsync(fd)
@@ -832,6 +869,7 @@ def archive_local(plan, deployment, proof, admission, modules, output):
             os.close(fd)
         common.sync(output)
         need(reader.frame() == {"archive_stream_verified": True, "admission_sha256": sha(canonical(admission))}, "source stream final verification differs")
+        reader.eof()
     result = {"schema": SCHEMA, "archive_complete": True, "admission_sha256": sha(canonical(admission)),
               "plan_sha256": sha(canonical(plan)), "proof_sha256": sha(canonical(proof)), "payload_sha256": digest,
               "retirement_authorized": False}

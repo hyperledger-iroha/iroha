@@ -633,7 +633,7 @@
             "Permission": {
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
-                "name": "CanRegisterSmartContractCode",
+                "name": "CanManageSmartContractCode",
                 "payload": null
               }
             }
@@ -644,7 +644,7 @@
             "Permission": {
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
-                "name": "CanManageSmartContractCodeRegistrars",
+                "name": "CanGrantSmartContractCodeManagement",
                 "payload": null
               }
             }
@@ -1111,7 +1111,7 @@
             "Permission": {
               "destination": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
               "object": {
-                "name": "CanRegisterSmartContractCode",
+                "name": "CanManageSmartContractCode",
                 "payload": null
               }
             }

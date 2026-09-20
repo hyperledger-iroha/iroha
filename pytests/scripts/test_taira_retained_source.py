@@ -8,8 +8,11 @@ import json
 import os
 from pathlib import Path
 import stat
+import struct
 import sys
+import tempfile
 import unittest
+import zlib
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -18,6 +21,95 @@ import test_taira_source_capture as fixture_module
 import taira_retained_source as owner
 import taira_retained_release as common
 import taira_source_capture as source
+
+
+class SourceWireTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def reader(self, raw):
+        with tempfile.TemporaryFile() as stream:
+            stream.write(raw)
+            stream.seek(0)
+            yield owner.Reader(stream.fileno())
+
+    def encoded(self, raw):
+        with tempfile.TemporaryFile() as stream:
+            owner.payload_chunk(stream.fileno(), raw)
+            stream.seek(0)
+            return stream.read()
+
+    def test_chunked_roundtrip_crosses_boundary_with_incompressible_member(self):
+        chunks = [b"a" * common.CHUNK, os.urandom(common.CHUNK), b"last"]
+        raw = b"".join(self.encoded(chunk) for chunk in chunks)
+        with self.reader(raw) as reader:
+            remaining = sum(map(len, chunks))
+            for expected in chunks:
+                self.assertEqual(reader.payload_chunk(remaining), expected)
+                remaining -= len(expected)
+            reader.eof()
+
+    def test_sender_refuses_empty_and_oversized_members(self):
+        for raw in (b"", b"x" * (common.CHUNK + 1)):
+            with self.subTest(size=len(raw)), self.assertRaisesRegex(ValueError, "chunk exceeds bound"):
+                self.encoded(raw)
+
+    def test_declared_lengths_refused_before_reading_compressed_body(self):
+        cases = [(0, 1, 1), (common.CHUNK + 1, 1, common.CHUNK + 1),
+                 (2, 1, 1), (1, 0, 1), (1, 1026, 1)]
+        for expanded, compressed, remaining in cases:
+            with self.subTest(lengths=(expanded, compressed, remaining)), self.reader(struct.pack(">II", expanded, compressed)) as reader:
+                with patch.object(reader, "exact", wraps=reader.exact) as exact:
+                    with self.assertRaisesRegex(ValueError, "chunk exceeds bound"):
+                        reader.payload_chunk(remaining)
+                    self.assertEqual([call.args for call in exact.call_args_list], [(8,)])
+
+    def test_truncated_chunk_header_and_body_refuse(self):
+        wire = self.encoded(b"public source")
+        for truncated in (wire[:7], wire[:-1]):
+            with self.subTest(length=len(truncated)), self.reader(truncated) as reader:
+                with self.assertRaisesRegex(ValueError, "truncated archive stream"):
+                    reader.payload_chunk(100)
+
+    def test_zlib_termination_corruption_and_expansion_are_bounded(self):
+        good = zlib.compress(b"abc", 1)
+        cases = [(3, good[:-1]), (3, good + b"tail"), (3, good + good),
+                 (2, good), (4, good), (1, zlib.compress(b"x" * 16384, 1)),
+                 (3, good[:-1] + bytes([good[-1] ^ 1]))]
+        for expanded, encoded in cases:
+            with self.subTest(expanded=expanded, encoded=len(encoded)), self.reader(struct.pack(">II", expanded, len(encoded)) + encoded) as reader:
+                with self.assertRaisesRegex(ValueError, "compressed source chunk"):
+                    reader.payload_chunk(100)
+
+    def test_decoder_receives_only_declared_expansion_plus_one(self):
+        encoded = zlib.compress(b"x" * 16384, 1)
+        decoder = unittest.mock.Mock(wraps=zlib.decompressobj())
+        with self.reader(struct.pack(">II", 1, len(encoded)) + encoded) as reader:
+            with patch.object(owner.zlib, "decompressobj", return_value=decoder):
+                with self.assertRaisesRegex(ValueError, "termination differs"):
+                    reader.payload_chunk(100)
+        decoder.decompress.assert_called_once_with(encoded, 2)
+
+    def test_original_deadline_covers_before_and_after_decompression(self):
+        wire = self.encoded(b"abc")
+        for times, invoked in (([0, 0, 11], False), ([0, 0, 0, 11], True)):
+            with self.subTest(invoked=invoked), self.reader(wire) as reader:
+                reader.deadline = 10
+                with patch.object(owner.time, "monotonic", side_effect=times), patch.object(owner.zlib, "decompressobj", wraps=zlib.decompressobj) as decoder:
+                    with self.assertRaisesRegex(ValueError, "deadline expired"):
+                        reader.payload_chunk(3)
+                    self.assertEqual(decoder.called, invoked)
+                    self.assertEqual(reader.deadline, 10)
+
+    def test_eof_rejects_trailing_data_expired_and_stalled_stream(self):
+        with self.reader(b"trailing") as reader:
+            with self.assertRaisesRegex(ValueError, "trailing source"):
+                reader.eof()
+        with self.reader(b"") as reader:
+            reader.deadline = 0
+            with self.assertRaisesRegex(ValueError, "deadline expired"):
+                reader.eof()
+        with self.reader(b"") as reader, patch.object(owner.select, "select", return_value=([], [], [])):
+            with self.assertRaisesRegex(ValueError, "deadline expired"):
+                reader.eof()
 
 
 class RetainedSourceFixture:
@@ -337,6 +429,100 @@ class RetainedSourceTests(RetainedSourceFixture, unittest.TestCase):
             payload_sha256=owner.sha(payload), retirement_authorized=False)
         owner.write_new(archive / "completed.json", owner.canonical(result))
         return archive, result
+
+    def stream_archive(self, name="stream-archive", transform=lambda raw: raw, *,
+                       inspect_values=None, session_failure=False):
+        self.plan["guest_ssh"] = {}
+        self.admission = owner.inspect(self.plan, self.deployment, self.proof)
+        output = self.fixture.case / name
+
+        @contextlib.contextmanager
+        def session(route, envelope, modules, evidence):
+            evidence.touch(mode=0o600)
+            with tempfile.TemporaryFile(dir=self.fixture.case) as stream:
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.object(common, "authority_locks", return_value=contextlib.nullcontext()))
+                    if inspect_values is not None:
+                        stack.enter_context(patch.object(owner, "inspect", side_effect=inspect_values))
+                    owner.archive_stream(self.plan, self.deployment, self.proof, self.admission, stream.fileno())
+                stream.seek(0)
+                raw = transform(stream.read())
+                stream.seek(0)
+                stream.truncate()
+                stream.write(raw)
+                stream.seek(0)
+                yield owner.Reader(stream.fileno())
+                if session_failure:
+                    raise ValueError("source operation failed; retain evidence")
+
+        with patch.object(owner, "session", side_effect=session), patch.object(common, "allocation"), patch.object(owner, "validate_plan", side_effect=lambda value: value):
+            result = owner.archive_local(self.plan, self.deployment, self.proof, self.admission, {}, output)
+            verified = owner.verify_archive(output)
+        return output, result, verified
+
+    def test_changed_admission_or_remote_failure_never_publishes_completion(self):
+        self.plan["guest_ssh"] = {}
+        admission = owner.inspect(self.plan, self.deployment, self.proof)
+        changed = {**admission, "payload_bytes": admission["payload_bytes"] + 1}
+        cases = [("initial-admission", [changed], False),
+                 ("final-admission", [admission, changed], False),
+                 ("remote-exit", None, True)]
+        for name, values, failure in cases:
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "admission changed|changed while streaming|source operation failed"):
+                self.stream_archive(name, inspect_values=values, session_failure=failure)
+            self.assertFalse((self.fixture.case / name / "completed.json").exists())
+        self.assertEqual(owner.inspect(self.plan, self.deployment, self.proof), admission)
+
+    def test_compressed_stream_retains_exact_uncompressed_archive_and_receipt(self):
+        output, result, verified = self.stream_archive()
+        expected = bytearray()
+        for row in self.admission["records"]:
+            if row["kind"] == "file":
+                expected.extend((self.root / row["path"]).read_bytes())
+            elif row["kind"] == "symlink":
+                expected.extend(os.fsencode(os.readlink(self.root / row["path"])))
+        self.assertEqual((output / "payload.bin").read_bytes(), expected)
+        self.assertEqual(result["payload_sha256"], owner.sha(expected))
+        self.assertEqual(verified[:3], (self.plan, self.proof, self.admission))
+        self.assertEqual(stat.S_IMODE((output / "payload.bin").stat().st_mode), 0o400)
+        self.assertFalse(result["retirement_authorized"])
+        self.assertEqual(set(result), {"schema", "archive_complete", "admission_sha256", "plan_sha256",
+                                      "proof_sha256", "payload_sha256", "retirement_authorized"})
+
+    def test_invalid_stream_never_publishes_archive_completion(self):
+        def replace_header(raw, **updates):
+            length = struct.unpack(">I", raw[:4])[0]
+            value = owner.decode(raw[4:4 + length])
+            value.update(updates)
+            header = owner.canonical(value)
+            return struct.pack(">I", len(header)) + header + raw[4 + length:]
+
+        def corrupt_chunk(raw):
+            position = 4 + struct.unpack(">I", raw[:4])[0]
+            compressed = struct.unpack(">II", raw[position:position + 8])[1]
+            end = position + 8 + compressed
+            return raw[:end - 1] + bytes([raw[end - 1] ^ 1]) + raw[end:]
+
+        def wrong_final_admission(raw):
+            digest = owner.sha(owner.canonical(self.admission)).encode()
+            position = raw.rfind(digest)
+            self.assertGreater(position, 0)
+            return raw[:position] + b"0" * len(digest) + raw[position + len(digest):]
+
+        mutations = {
+            "wrong-codec": lambda raw: replace_header(raw, payload_encoding="raw"),
+            "wrong-admission": lambda raw: replace_header(raw, admission_sha256="0" * 64),
+            "truncated-header": lambda raw: raw[:3],
+            "corrupt-member": corrupt_chunk,
+            "wrong-final-admission": wrong_final_admission,
+            "missing-final-frame": lambda raw: raw[:-4],
+            "extra-payload": lambda raw: raw[:4 + struct.unpack(">I", raw[:4])[0]] + b"extra payload" + raw[4 + struct.unpack(">I", raw[:4])[0]:],
+            "trailing-transport": lambda raw: raw + b"extra",
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.stream_archive(name, mutate)
+            self.assertFalse((self.fixture.case / name / "completed.json").exists())
 
     def test_offhost_archive_rehash_and_exact_held_binding(self):
         archive, _ = self.archive_fixture()

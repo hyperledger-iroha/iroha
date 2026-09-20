@@ -248,8 +248,8 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
     }
 }
 /// Decode the public Torii failure contract without inventing query-store state.
-/// A missing entity and a missing cursor both use HTTP 404; only the envelope
-/// describes which operation failed. Invalid payloads remain protocol errors.
+/// Only an explicit asset-absence code with its typed identity proves a missing
+/// asset. Generic status codes and diagnostics never establish query-store state.
 fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
     const MAX_ERROR_BYTES: usize = 64 * 1024;
     let protocol_error = |reason: &str| {
@@ -281,6 +281,21 @@ fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
         },
         _ => return protocol_error("requires application/x-norito or application/json"),
     };
+    if envelope.code() == "query_asset_not_found" {
+        if response.status() != StatusCode::NOT_FOUND {
+            return protocol_error("claims asset absence without HTTP 404");
+        }
+        let Some(asset_id) = envelope
+            .details
+            .as_ref()
+            .and_then(|details| details.query_asset_not_found.as_ref())
+        else {
+            return protocol_error("claims asset absence without its typed asset identity");
+        };
+        return QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            crate::data_model::query::error::FindError::Asset(Box::new(asset_id.clone())),
+        )));
+    }
     // ErrorEnvelope is the node's public, redacted diagnostic. Never display
     // unparsed upstream bytes or infer ValidationFail variants from status alone.
     QueryError::Http {
@@ -819,6 +834,116 @@ mod query_errors_handling {
             assert!(message.contains("404") && message.contains(envelope.code()));
             assert!(message.contains(envelope.message()));
             assert!(!message.contains("live query store"));
+        }
+        Ok(())
+    }
+    #[test]
+    fn query_error_envelope_decodes_exact_asset_absence() -> Result<()> {
+        use iroha_data_model::{asset::AssetId, query::error::FindError};
+        use iroha_torii_shared::ErrorDetails;
+
+        let id = AssetId::new(
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse()?,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let envelope = ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+            .with_details(ErrorDetails {
+                query_asset_not_found: Some(id.clone()),
+                ..ErrorDetails::default()
+            });
+        for (media_type, body) in [
+            (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+            ("application/json", json::to_vec(&envelope)?),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, media_type)
+                .body(body)?;
+            let error = decode_query_response(&response).expect_err("exact asset is absent");
+            assert!(matches!(
+                error,
+                QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                    FindError::Asset(missing),
+                ))) if missing.as_ref() == &id
+            ));
+        }
+        Ok(())
+    }
+    #[test]
+    fn query_error_envelope_rejects_unbound_asset_absence() -> Result<()> {
+        use iroha_data_model::asset::AssetId;
+        use iroha_torii_shared::ErrorDetails;
+
+        let id = AssetId::new(
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse()?,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let details = ErrorDetails {
+            query_asset_not_found: Some(id),
+            ..ErrorDetails::default()
+        };
+        for (status, envelope) in [
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_asset_not_found", "missing typed details"),
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_asset_not_found", "missing typed identity")
+                    .with_details(ErrorDetails::default()),
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_validation_failed", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::GONE,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details),
+            ),
+        ] {
+            for (media_type, body) in [
+                (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+                ("application/json", json::to_vec(&envelope)?),
+            ] {
+                let response = Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, media_type)
+                    .body(body)?;
+                assert!(matches!(
+                    decode_query_response(&response),
+                    Err(QueryError::Other(_))
+                ));
+            }
+        }
+        for value in [
+            json::Value::Null,
+            norito::json!(42),
+            norito::json!("invalid-asset-id"),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, "application/json")
+                .body(json::to_vec(&norito::json!({
+                    "code": "query_asset_not_found",
+                    "message": "asset is missing",
+                    "details": { "query_asset_not_found": value },
+                }))?)?;
+            assert!(matches!(
+                decode_query_response(&response),
+                Err(QueryError::Other(_))
+            ));
         }
         Ok(())
     }

@@ -5,13 +5,12 @@ use integration_tests::{
     sandbox,
     sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
-use iroha::{
-    blocking::Client,
-    crypto::KeyPair,
-    data_model::{ValidationFail, prelude::*},
-    query::QueryError,
+use iroha::query::QueryError;
+use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*};
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
 };
-use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -149,14 +148,16 @@ fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Quantity>
 fn asset_exists(clients: &mut ClientPool, asset_id: &AssetId) -> Result<bool> {
     retry_query(|| {
         let client = clients.next();
-        match client.client().query_single(FindAssetById {
-            id: asset_id.clone(),
-        }) {
-            Ok(_) => Ok(true),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-            ))) => Ok(false),
-            Err(err) => Err(eyre!(err)),
+        match client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
+            Ok(asset) if asset.id() == asset_id => Ok(true),
+            Ok(_) => Err(eyre!("exact asset query returned a different asset")),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == asset_id => Ok(false),
+            Err(error) => Err(eyre!(error)),
         }
     })
 }
@@ -237,13 +238,16 @@ fn wait_for_asset_absent(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        if let Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) = client
+        match client
             .client()
             .query_single(FindAssetById::new(asset_id.clone()))
         {
-            return Ok(());
+            Ok(asset) if asset.id() == asset_id => {}
+            Ok(_) => return Err(eyre!("exact asset query returned a different asset")),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == asset_id => return Ok(()),
+            Err(error) => return Err(eyre!(error)),
         }
         if Instant::now() >= deadline {
             return Err(eyre!(

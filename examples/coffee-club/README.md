@@ -38,8 +38,9 @@ standalone tests shown here. No library module is needed. Use
 `--template library` when creating a reusable package instead.
 Registry publication and on-chain deployment are separate operations.
 
-For Taira, configure an exact native client and an authorized contract alias
-with `musubi network configure`, then use `musubi deploy` and `musubi view`.
+For Taira, use Musubi's integrated wallet to create or import a signer, obtain
+testnet XOR, and inspect its balance. `musubi network configure` binds that wallet
+and the authorized contract alias; `musubi deploy` and `musubi view` use the binding.
 The [public Musubi guide](https://docs.iroha.tech/guide/tutorials/musubi.html)
 covers the supported workflow. Local VM tests do not qualify a live deployment;
 a successful deployment requires an Applied receipt and matching chain readback.

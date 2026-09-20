@@ -1,10 +1,17 @@
-//! Descriptor-anchored, exclusively locked immutable evidence for ordinary Taira account operations.
-use super::*;
+//! Descriptor-anchored immutable public evidence shared by wallet operations.
+use eyre::{Result, WrapErr as _, eyre};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+use sha2::{Digest as _, Sha256};
+use std::{
+    fs::{self, File},
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+};
 
 const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 
 /// Retained private operation directory and its exclusive process lock.
-pub(super) struct Journal {
+pub(crate) struct Journal {
     path: PathBuf,
     #[cfg(unix)]
     directory: File,
@@ -13,15 +20,15 @@ pub(super) struct Journal {
 }
 
 impl Journal {
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(super) fn create(path: &Path) -> Result<Self> {
+    pub(crate) fn create(path: &Path) -> Result<Self> {
         Self::acquire(path, true)
     }
 
-    pub(super) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         Self::acquire(path, false)
     }
 
@@ -95,13 +102,13 @@ impl Journal {
         )
     }
 
-    pub(super) fn write_operation(&self, operation: &OperationJournalV1) -> Result<()> {
+    pub(crate) fn write_operation<T: JsonSerialize>(&self, operation: &T) -> Result<()> {
         self.install("operation.json", &json::to_vec(operation)?)
     }
 
-    pub(super) fn read_operation(&self) -> Result<OperationJournalV1> {
+    pub(crate) fn read_operation<T: JsonDeserialize + JsonSerialize>(&self) -> Result<T> {
         let bytes = self.read("operation.json")?;
-        let operation: OperationJournalV1 =
+        let operation: T =
             json::from_slice(&bytes).wrap_err("invalid closed account-operation journal")?;
         if json::to_vec(&operation)? != bytes {
             eyre::bail!("operation journal must retain its exact canonical encoding");
@@ -109,15 +116,41 @@ impl Journal {
         Ok(operation)
     }
 
-    pub(super) fn record_submission(&self, operation: &OperationJournalV1) -> Result<()> {
-        let bytes = json::to_vec(&norito::json!({
-            "schema": "iroha.taira.account-submit-intent.v1",
+    fn submission_bytes<T: JsonSerialize>(operation: &T) -> Result<Vec<u8>> {
+        Ok(json::to_vec(&norito::json!({
+            "schema": "iroha.wallet.submission-intent.v1",
             "operation_sha256": (hex::encode(Sha256::digest(json::to_vec(operation)?)))
-        }))?;
+        }))?)
+    }
+    pub(crate) fn submission_recorded<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
+        let bytes = Self::submission_bytes(operation)?;
         match self.read_optional("submission.json")? {
-            Some(existing) if existing == bytes => Ok(()),
+            Some(existing) if existing == bytes => Ok(true),
             Some(_) => eyre::bail!("submission marker differs from the exact retained operation"),
-            None => self.install("submission.json", &bytes),
+            None => Ok(false),
+        }
+    }
+    pub(crate) fn record_submission<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
+        if self.submission_recorded(operation)? {
+            return Ok(false);
+        }
+        self.install("submission.json", &Self::submission_bytes(operation)?)?;
+        Ok(true)
+    }
+
+    pub(crate) fn write_evidence_exact<T: JsonSerialize>(
+        &self,
+        name: &str,
+        evidence: &T,
+    ) -> Result<()> {
+        if !matches!(name, "applied.json") {
+            eyre::bail!("invalid wallet evidence record name");
+        }
+        let bytes = json::to_vec(evidence)?;
+        match self.read_optional(name)? {
+            Some(existing) if existing == bytes => Ok(()),
+            Some(_) => eyre::bail!("retained wallet evidence differs from the exact operation"),
+            None => self.install(name, &bytes),
         }
     }
 
@@ -251,7 +284,7 @@ mod tests {
         journal.install("evidence.json", b"one").unwrap();
         assert!(journal.install("evidence.json", b"two").is_err());
         assert_eq!(journal.read("evidence.json").unwrap(), b"one");
-        assert!(journal.read_operation().is_err());
+        assert!(journal.read_operation::<norito::json::Value>().is_err());
         drop(journal);
         assert!(Journal::open(&path).is_ok());
     }

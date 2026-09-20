@@ -197,6 +197,17 @@ pub(crate) struct CarrierJournalInputs<'owner, 'state> {
     pub(crate) retained_effects_layout: std::alloc::Layout,
 }
 
+impl CarrierJournalInputs<'_, '_> {
+    /// Exact World wrapper demand available to the aggregate capture admission.
+    /// It matches the preexecution plan without reading or cloning State values.
+    /// This does not fund nested values or the other original carrier owners.
+    pub(crate) fn world_journal_shell_bytes(
+        &self,
+    ) -> Result<usize, mv::allocation::AllocationRefusal> {
+        PreparedCarrier::world_journal_shell_bytes()
+    }
+}
+
 /// Original journals after candidate execution, deterministic tails and capture.
 /// The default lifecycle is the original ValidBlock. Only the private consuming
 /// decision binder changes it to CommittedBlock; dropping either publishes nothing.

@@ -1,6 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator modern SORA Parliament and mandatory timed-OVN lifecycle corridor.
 
+use iroha::query::QueryError;
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use std::{
     collections::BTreeMap,
     num::NonZeroU64,
@@ -19,14 +24,13 @@ use iroha::{
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
-        ValidationFail,
         account::AccountId,
         block::{
             SignedBlock,
             consensus_v2::{
-                PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2GenesisContextParameters,
-                SumeragiV2LocalWorkStage, SumeragiV2ProgressTransition, SumeragiV2Status,
-                SumeragiV2StatusPhase,
+                PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2LocalWorkStage,
+                SumeragiV2ProgressTransition, SumeragiV2Status, SumeragiV2StatusPhase,
+                recommended_data_availability_layout,
             },
         },
         governance::types::{
@@ -71,18 +75,13 @@ use iroha::{
         },
         permission::Permission,
         prelude::{
-            Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
+            Account, AssetId, FeePaymentIntent, FindAssetById, FindBlocks, Grant,
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
             SignedTransaction,
         },
-        query::{
-            builder::SingleQueryError,
-            dsl::IntoPredicate as _,
-            error::{FindError, QueryExecutionFail},
-        },
+        query::dsl::IntoPredicate as _,
         smart_contract::ContractAddress,
     },
-    query::QueryError,
 };
 use iroha_core::{
     beacon::{
@@ -116,7 +115,7 @@ use iroha_core::{
 };
 use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
-    governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
+    governance::CanProposeContractDeployment, smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::{metadata::Metadata, peer::PeerId};
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode, read_on_dedicated_thread};
@@ -609,7 +608,7 @@ async fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str
     assert_eq!(
         query.asset_id(),
         asset_id,
-        "{label}: singular asset query must remain bound to the exact requested identifier"
+        "{label}: bind the exact requested asset"
     );
     match read_on_dedicated_thread({
         let client = client.client().clone();
@@ -617,45 +616,15 @@ async fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str
     })
     .await?
     {
-        Ok(_) => Err(eyre!(
-            "{label}: expected asset `{asset_id}` to be absent, but the query returned it"
-        )),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             FindError::Asset(missing),
         )))) if missing.as_ref() == asset_id => Ok(()),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            let exact_match = match read_on_dedicated_thread({
-                let client = client.client().clone();
-                let asset_id = asset_id.clone();
-                move || {
-                    Ok(client
-                        .query(FindAssets::new())
-                        .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
-                        .execute_single_opt())
-                }
-            })
-            .await?
-            {
-                Ok(exact_match) => exact_match,
-                Err(SingleQueryError::QueryError(QueryError::Validation(
-                    ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
-                ))) => None,
-                Err(error) => {
-                    return Err(eyre!(
-                        "{label}: exact-ID asset query failed after a generic not-found response: {error}"
-                    ));
-                }
-            };
-            match exact_match {
-                None => Ok(()),
-                Some(asset) => Err(eyre!(
-                    "{label}: generic not-found contradicted by exact-ID query returning asset `{}`",
-                    asset.id()
-                )),
-            }
-        }
+        Ok(asset) => Err(eyre!(
+            "{label}: expected asset `{asset_id}` to be absent, but the query returned `{}`",
+            asset.id()
+        )),
         Err(error) => Err(eyre!(
-            "{label}: expected an exact asset-not-found result for `{asset_id}`, got {error:?}"
+            "{label}: expected typed absence of exact asset `{asset_id}`, got {error:?}"
         )),
     }
 }
@@ -1188,7 +1157,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 .write(["gov", "parliament_timed_ovn", "max_corpus_entries"], 8_i64);
         })
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSmartContractCode),
+            Permission::from(CanManageSmartContractCode),
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(

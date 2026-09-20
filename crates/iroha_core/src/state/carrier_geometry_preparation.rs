@@ -3,8 +3,8 @@
 //! This owner binds the actual MV predecessor and accepted successor. It grants
 //! no storage publication authority. The private consuming carrier retains exact
 //! raw/tiered progress under an already-held Kura lease and binds completion to
-//! its original State and header. TODO: join original Queue retirement custody
-//! and complete pre-vote resources before activating the production handoff;
+//! its original State and header. Retirement also requires the original service
+//! Queue cut. TODO: complete pre-vote resources before the production handoff;
 //! physical custody alone cannot authorize geometry or State publication.
 
 use super::*;
@@ -201,15 +201,14 @@ impl PreparedCarrierGeometry {
         header: BlockHeader,
         backend: &mut tiered::TieredStateBackend,
         lease: &'geometry crate::kura::KuraPublicationLease<'kura>,
+        queue: Option<&carrier_preparation::queue_retirement::CarrierQueueRetirement<'_>>,
     ) -> Result<CompletedCarrierGeometry<'geometry, 'kura>, LaneLifecycleError> {
         if !self.matches_publication_target(target, header) {
             return Err(LaneLifecycleError::Storage(
                 "carrier geometry differs from its original State or carrier header".to_owned(),
             ));
         }
-        if self.requires_queue_custody() {
-            // TODO: retain the original service Queue cut across retirement and
-            // State publication; a certified frontier is not Queue completion.
+        if !self.has_queue_custody(target, header, queue) {
             return Err(LaneLifecycleError::Storage(
                 "carrier geometry retirement has no retained original Queue cut".to_owned(),
             ));
@@ -255,6 +254,57 @@ impl PreparedCarrierGeometry {
         self._pending.as_ref().is_some_and(|pending| {
             !pending.plan.retire.is_empty() || !pending.catalog_update.replaced_lane_ids.is_empty()
         })
+    }
+
+    /// Visit the exact captured predecessor identities, never current route guesses.
+    pub(super) fn for_each_retirement_route(
+        &self,
+        mut visit: impl FnMut(LaneId, DataSpaceId, Hash) -> Result<(), LaneLifecycleError>,
+    ) -> Result<(), LaneLifecycleError> {
+        let Some(pending) = &self._pending else {
+            return Ok(());
+        };
+        let update = &pending.catalog_update;
+        for lane in pending.plan.retire.iter().chain(
+            update
+                .replaced_lane_ids
+                .iter()
+                .filter(|lane| !pending.plan.retire.contains(lane)),
+        ) {
+            let previous = update
+                .previous_catalog
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == *lane)
+                .ok_or_else(|| {
+                    runtime_catalog_invalid(
+                        "retiring Queue route is absent from captured predecessor",
+                    )
+                })?;
+            let incarnation = update
+                .previous_lane_incarnations
+                .get(lane)
+                .copied()
+                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))
+                .ok_or_else(|| {
+                    runtime_catalog_invalid(
+                        "retiring Queue route has no captured nonzero incarnation",
+                    )
+                })?;
+            visit(*lane, previous.dataspace_id, incarnation)?;
+        }
+        Ok(())
+    }
+
+    /// A retained original Queue cut is mandatory for retirement, never inferred from emptiness.
+    pub(super) fn has_queue_custody(
+        &self,
+        target: &State,
+        header: BlockHeader,
+        queue: Option<&carrier_preparation::queue_retirement::CarrierQueueRetirement<'_>>,
+    ) -> bool {
+        !self.requires_queue_custody()
+            || queue.is_some_and(|queue| queue.authenticates(target, self, header))
     }
 
     /// Identity-only geometry has no lifecycle or namespace transition to publish.

@@ -1,0 +1,37 @@
+[package]
+name = "iroha_wallet"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Private developer wallet custody and exact native account operations"
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha = { workspace = true }
+iroha_crypto = { workspace = true, features = ["json", "rand"] }
+iroha_data_model = { workspace = true }
+iroha_model_base = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_torii_shared = { workspace = true }
+iroha_version = { workspace = true }
+norito = { workspace = true, features = ["json"] }
+eyre = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+scrypt = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+toml = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+iroha_test_samples = { workspace = true }

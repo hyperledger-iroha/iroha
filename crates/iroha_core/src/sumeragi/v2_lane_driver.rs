@@ -417,6 +417,20 @@ impl NativeLaneDriver {
         &self.process
     }
 
+    /// Rejoin an authenticated historical response to its original source owner.
+    /// Failure retains that exact recovery requirement for retry. Success does
+    /// not acknowledge transport custody or confer native body/Ready/Apply authority.
+    pub(crate) fn complete_source_recovery(
+        &mut self,
+        id: HeightContextId,
+        request: &super::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: &super::v2_transport::AuthenticatedCertifiedBodyResponse,
+    ) -> Result<()> {
+        self.process
+            .complete_source_recovery(id, request, response)
+            .map_err(|error| error.to_string())
+    }
+
     /// Transfer one retained diagnostic to the reporting consumer. It must not
     /// remain indefinitely in the bounded effect queue behind ordinary traffic.
     pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<core::Effect> {

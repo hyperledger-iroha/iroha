@@ -206,7 +206,7 @@ fn capacity_failure_builder(
                 );
         })
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSmartContractCode),
+            Permission::from(CanManageSmartContractCode),
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
@@ -335,7 +335,7 @@ fn confirmation_capacity_builder(
                 );
         })
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSmartContractCode),
+            Permission::from(CanManageSmartContractCode),
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
@@ -468,7 +468,7 @@ fn certified_terminal_builder(
                 .write(["gov", "parliament_timed_ovn", "max_corpus_entries"], 8_i64);
         })
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSmartContractCode),
+            Permission::from(CanManageSmartContractCode),
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(

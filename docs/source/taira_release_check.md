@@ -212,7 +212,16 @@ traces exercise reordered messages, duplicates, loss and recovery, including
 durable append before acknowledgement; they simulate authenticated I/O and do
 not replace cryptographic or network execution.
 
-After the standalone FSM and lifecycle source checks, the dedicated
+After the standalone FSM and lifecycle source checks, Cargo checks metadata for
+the exact selected test graph before compiling its executables. This expands
+Rust macros and checks platform types that formatting and source audits cannot
+validate. The check and build share their package and feature selection,
+environment, warm target and held locks. A failed check stops code generation,
+native fixtures and checkpoint publication; a successful check does not count
+as a test pass or replace full compilation. Build scripts and procedural macros
+can still require host code generation during the check.
+
+The dedicated
 `iroha_config --test taira_config_contracts` target checks production descriptor
 defaults, malformed collection values and the maintained Taira Nexus profile.
 It loads no runtime signers and has no Core or test-network dependency. These

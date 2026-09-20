@@ -730,6 +730,7 @@ TORII_UNIT_STAGES += (("signed account permission query preservation", (
 )),)
 
 DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
+    "taira_public_reset::host::dispatcher_transition::tests::copy::dispatcher_transition_private_copy_modes_survive_restrictive_umask",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_completed_replays_do_not_republish",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_publication_resumes_every_checked_boundary",
@@ -1257,6 +1258,11 @@ NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+)),)
+
+NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
+    'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
+    'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
 )),)
 
 # One genuine custody ceremony owns every retained network assertion: paid
@@ -1972,6 +1978,75 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 )),)
 
 
+# Native cutover owners run before process/network qualification. These checks
+# retain exact sources and resource obligations; they do not open live ingress.
+CORE_NATIVE_CONNECTION_STAGES = (
+    ('native process transport and exact source recovery', (
+        'state::tests::native_transport_production_poll_retries_real_actor_pressure_without_substitution',
+        'state::tests::native_transport_production_poll_fences_closed_actor_without_losing_fanout',
+        'state::tests::native_transport_production_decision_reaches_global_nonmembers_after_rollover',
+        'state::tests::native_driver_source_recovery_rejoins_original_owner_after_foreign_refusal',
+    )),
+    ('finite World journal shell planning', (
+        'state::world_journals::resources::tests::world_shell_plan_matches_constructed_capture_and_installation_layouts',
+        'state::world_journals::resources::tests::world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop',
+        'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
+        'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
+        'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
+    )),
+    ('retained candidate descriptors and exact marker custody', (
+        'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_reproposal_directory_sync_refusal_preserves_prior_confirmed_receipt',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_consumption_tombstone_rejects_delayed_earlier_round_without_execution',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_validation_requires_exact_store_and_existing_cached_owner',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_capacity_refuses_before_execution_or_marker_write',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_byte_admission_precedes_allocation_and_execution',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_charge_outlives_payload_and_wakes_exact_pool_retry',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_zero_and_overflow_do_not_allocate_or_execute',
+    )),
+    ('original service Queue retirement publication', (
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_binds_retirement_and_replacement_until_drop',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::empty_decoy_queue_and_foreign_state_never_supply_original_cut',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::malformed_captured_retirement_route_releases_original_queue_cut',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::pending_queue_work_releases_without_applying_the_blocked_carrier',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::queue_cut_does_not_replace_kura_or_original_geometry_authority',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::sticky_queue_fault_revokes_retained_retirement_before_storage_or_visibility',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::immutable_apply_service_exposes_only_its_actual_state_and_queue',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_completes_retirement_storage_without_publishing_state',
+    )),
+    ('retained carrier physical publication and release', (
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_execution_phases_survive_marker_reproposal_and_publication_refusals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_capture_refusal_resumes_original_archives_before_any_validation_marker',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::physical_preparation_diagnostics_retain_storage_cause_and_busy_owner',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_state_and_header_are_required_before_witness_or_archive_writes',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::joint_publication_persists_both_original_archives_without_state_effects_or_relocking',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::source_substitution_refuses_before_state_acquisition_and_retains_original_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_carrier_wire_refuses_source_join_and_restored_owner_reauthenticates',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::aggregate_acquisition_holds_every_family_without_publishing_or_losing_originals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_refusal_returns_original_decision_and_releases_every_physical_writer',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::installation_refusal_precedes_all_fences_and_returns_the_decided_carrier',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_defers_at_hash_before_taking_its_world_writers',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owners',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::checkpoint_storage_refusal_precedes_state_and_retains_exact_originals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::exact_checkpoint_retry_preserves_receipt_across_physical_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::attached_foreign_checkpoint_never_grants_state_acquisition',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::signed_retirement_and_replacement_publish_once_under_original_service_queue_cut',
+    )),
+)
+CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
+CORE_STAGES += CORE_NATIVE_CONNECTION_STAGES
+
 def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
     """Select honest test coverage without changing shipping features or artifacts."""
     if qualification_scope not in QUALIFICATION_SCOPES:
@@ -2226,7 +2301,7 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     missing = [harness for harness in harnesses if harness not in observed]
     if missing:
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
-    print(f"[taira-prequalify] native test metadata check passed in {elapsed:.1f}s; "
+    print(f"[taira-check] native test metadata check passed in {elapsed:.1f}s; "
           "full harness compilation remains required", flush=True)
 
 
@@ -3645,6 +3720,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
+        # Expand macros and type-check the exact test graph before expensive codegen.
+        # Keep the same feature union, environment, target lane and held locks; a
+        # metadata pass neither publishes test executables nor qualifies a regression.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:

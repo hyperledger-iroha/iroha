@@ -47,8 +47,8 @@ security and operability risk first, UX throughput second.
 ### RemoveSmartContractBytes
 - Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
   reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors artifact registration exactly
-  (`CanRegisterSmartContractCode`); removal remains impossible while any
+- Removal requires privileged `CanManageSmartContractCode`, separately from public
+  immutable artifact creation; removal remains impossible while any
   manifest or active instance references the bytes.
 - Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
   stale handles.

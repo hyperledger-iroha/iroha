@@ -28,7 +28,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
-use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+use iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -120,7 +120,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     Grant::account_permission(contract_call_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant vendor-bridge contract permission");
-    let lifecycle_permission: Permission = CanRegisterSmartContractCode.into();
+    let lifecycle_permission: Permission = CanManageSmartContractCode.into();
     Grant::account_permission(lifecycle_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant contract lifecycle permission");

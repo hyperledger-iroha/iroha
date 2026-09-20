@@ -5,7 +5,7 @@ pub const SMART_CONTRACT_CODE_CHUNK_BYTES: usize = 65_536;
 isi! {
     /// Register a smart contract manifest keyed by `code_hash` into the WSV.
     ///
-    /// The authority must hold `CanRegisterSmartContractCode`. The corresponding
+    /// The authority must be registered and sign the manifest with its own authorized key. The corresponding
     /// verified bytecode must already be present under the manifest's `code_hash`.
     #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode")]
     pub struct RegisterSmartContractCode {
@@ -110,9 +110,9 @@ isi! {
     /// guards. The executor derives `contract_address` from the authority, nonce, exact
     /// genesis-derived `NetworkId`, and alias dataspace, then either creates the first binding or
     /// replaces the exact active alias target. The authority must already exist, the referenced
-    /// artifact and manifest must already have been registered by an artifact registrar, and the
-    /// authority must be allowed to manage the alias. `CanRegisterSmartContractCode` authorizes
-    /// artifact registration only; it is not a deployment capability. Raw deployment into a
+    /// verified artifact and manifest must already exist, and the authority must be allowed to
+    /// manage the alias. Registered accounts create immutable artifacts with normal fees;
+    /// `CanManageSmartContractCode` is reserved for privileged administration. Raw deployment into a
     /// protected namespace is rejected; those addresses can be created only by the certified
     /// Parliament deployment corridor.
     #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment")]
@@ -138,7 +138,7 @@ isi! {
     /// The bytecode is the full compiled `.to` image including the IVM header. Nodes verify that
     /// `code_hash` equals the domain-separated canonical hash of the complete deployable `.to`
     /// artifact, including the execution header, `CNTR`, literals, and code, before storing. The
-    /// authority must hold `CanRegisterSmartContractCode`.
+    /// authority must be registered; normal transaction fee admission applies.
     #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes")]
     pub struct RegisterSmartContractBytes {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
@@ -199,7 +199,7 @@ impl crate::seal::Instruction for CancelSmartContractCodeUpload {}
 isi! {
     /// Remove compiled contract bytecode from on-chain storage.
     ///
-    /// The authority must hold `CanRegisterSmartContractCode`. Removal succeeds only when no
+    /// The authority must hold `CanManageSmartContractCode`. Removal succeeds only when no
     /// manifests or active instances reference the supplied `code_hash`. An optional audit reason
     /// surfaces alongside the emitted removal event.
     #[norito_schema(name = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes")]

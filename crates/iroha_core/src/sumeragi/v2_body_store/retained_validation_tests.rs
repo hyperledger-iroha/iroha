@@ -11,6 +11,7 @@ use crate::sumeragi::{
         retained_validation::{fail_next_marker_directory_sync, fail_next_marker_file_sync},
     },
 };
+use mv::allocation::{AllocationBudget, AllocationRefusal};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -69,6 +70,14 @@ fn validator(
     )
 }
 
+fn descriptor_budget(store: &V2BodyStore) -> AllocationBudget {
+    AllocationBudget::new(
+        store
+            .retained_validation_descriptor_bytes::<Validator>()
+            .unwrap(),
+    )
+}
+
 #[test]
 fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success() {
     let directory = TempDir::new().unwrap();
@@ -79,7 +88,9 @@ fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_
     let (mut producer, calls, drops) = validator(&durable);
     producer.ready = false;
     let resumes = Arc::clone(&producer.resume_calls);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     let mut original = None;
     for _ in 0..2 {
         assert!(matches!(
@@ -126,7 +137,9 @@ fn ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache() {
     let durable = store.store(manifest, body).unwrap();
     let (producer, calls, drops) = validator(&durable);
     let resumes = Arc::clone(&producer.resume_calls);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     fail_next_marker_file_sync();
     assert!(matches!(
         store.execute_retained_durable_validation(
@@ -170,7 +183,9 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
     let mut store = V2BodyStore::open(directory.path(), context).unwrap();
     let durable = store.store(manifest, body).unwrap();
     let (producer, calls, drops) = validator(&durable);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     fail_next_marker_file_sync();
     assert!(matches!(
         store.execute_retained_durable_validation(
@@ -273,7 +288,9 @@ fn retained_reproposal_directory_sync_refusal_preserves_prior_confirmed_receipt(
     let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
     let durable = store.store(manifest.clone(), body.clone()).unwrap();
     let (producer, calls, drops) = validator(&durable);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     let original = store
         .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
         .unwrap()
@@ -359,7 +376,9 @@ fn retained_consumption_tombstone_rejects_delayed_earlier_round_without_executio
     .clone();
     let current = store.store(manifest, body.clone()).unwrap();
     let (producer, calls, drops) = validator(&current);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     let receipt = store
         .execute_retained_durable_validation(current.clone(), current.manifest_hash(), &mut service)
         .unwrap()
@@ -409,7 +428,9 @@ fn retained_validation_requires_exact_store_and_existing_cached_owner() {
     let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
     let durable = store.store(manifest, body).unwrap();
     let (producer, calls, _) = validator(&durable);
-    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
     assert!(matches!(
         store.execute_retained_durable_validation(
             durable.clone(),
@@ -424,7 +445,9 @@ fn retained_validation_requires_exact_store_and_existing_cached_owner() {
         .unwrap();
     assert_eq!(outcome.validated_receipt().unwrap().durable(), &durable);
     let (replacement, replacement_calls, _) = validator(&durable);
-    let mut missing = store.retained_validation_service(replacement).unwrap();
+    let mut missing = store
+        .retained_validation_service(replacement, &descriptor_budget(&store))
+        .unwrap();
     assert!(matches!(
         store.execute_retained_durable_validation(
             durable.clone(),
@@ -466,8 +489,13 @@ fn retained_descriptor_capacity_refuses_before_execution_or_marker_write() {
     let (producer, calls, drops) = validator(&first);
     // Retain two actual body frames, but constrain the private descriptor table
     // to one entry so each pre-execution refusal can be exercised independently.
-    let mut service =
-        RetainedBodyValidationService::new(producer, store.instance_identity(), 1).unwrap();
+    let mut service = RetainedBodyValidationService::new(
+        producer,
+        store.instance_identity(),
+        1,
+        &descriptor_budget(&store),
+    )
+    .unwrap();
     let confirmed = store
         .execute_retained_durable_validation(first.clone(), first.manifest_hash(), &mut service)
         .unwrap()
@@ -550,4 +578,153 @@ fn retained_descriptor_capacity_refuses_before_execution_or_marker_write() {
             .validated_path_for(second.round(), second.subject())
             .exists()
     );
+}
+
+#[test]
+fn retained_descriptor_byte_admission_precedes_allocation_and_execution() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest(&context, &keys, None);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let bytes = store
+        .retained_validation_descriptor_bytes::<Validator>()
+        .unwrap();
+    assert!(bytes > 0);
+    let budget = AllocationBudget::new(bytes - 1);
+    let (producer, calls, drops) = validator(&durable);
+    assert!(matches!(
+        store.retained_validation_service(producer, &budget),
+        Err(V2BodyStoreError::CarrierCustody(CarrierCustodyError::DescriptorAdmission(
+            AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes }
+        ))) if requested_bytes == bytes && limit_bytes == bytes - 1
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(store.validated.is_empty());
+    assert!(store.rejected.is_empty());
+    let budget = AllocationBudget::new(bytes);
+    let (producer, calls, _) = validator(&durable);
+    let service = store
+        .retained_validation_service(producer, &budget)
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), bytes);
+    assert_eq!(service.descriptor_allocation_bytes_for_test(), bytes);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    drop(service);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_descriptor_charge_outlives_payload_and_wakes_exact_pool_retry() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Wake, Waker},
+    };
+    struct WakeAfterPayload {
+        dropped: Arc<AtomicUsize>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for WakeAfterPayload {
+        fn wake(self: Arc<Self>) {
+            assert_eq!(self.dropped.load(Ordering::SeqCst), 1);
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest(&context, &keys, None);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let budget = descriptor_budget(&store);
+    let (producer, calls, drops) = validator(&durable);
+    let mut service = store
+        .retained_validation_service(producer, &budget)
+        .unwrap();
+    store
+        .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let (replacement, retry_calls, _) = validator(&durable);
+    let Err(V2BodyStoreError::CarrierCustody(CarrierCustodyError::DescriptorAdmission(
+        AllocationRefusal::Capacity { release, .. },
+    ))) = store.retained_validation_service(replacement, &budget)
+    else {
+        panic!("the occupied pool must retain its original release observation");
+    };
+    let mut release = release.wait_for_release();
+    let wakes = Arc::new(WakeAfterPayload {
+        dropped: Arc::clone(&drops),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&wakes));
+    assert!(
+        Pin::new(&mut release)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert_eq!(retry_calls.load(Ordering::SeqCst), 0);
+    let other = AllocationBudget::new(1);
+    drop(other.try_reserve_bytes(1).unwrap());
+    assert_eq!(wakes.wakes.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(service);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(wakes.wakes.load(Ordering::SeqCst) > 0);
+    assert!(
+        Pin::new(&mut release)
+            .poll(&mut Context::from_waker(&waker))
+            .is_ready()
+    );
+    let (replacement, retry_calls, _) = validator(&durable);
+    let recovered = store
+        .retained_validation_service(replacement, &budget)
+        .unwrap();
+    // A new descriptor table grants no replay or restored marker authority.
+    assert_eq!(retry_calls.load(Ordering::SeqCst), 0);
+    drop(recovered);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_descriptor_zero_and_overflow_do_not_allocate_or_execute() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest(&context, &keys, None);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let budget = AllocationBudget::new(0);
+    assert_eq!(
+        RetainedBodyValidationService::<Validator>::descriptor_bytes(0).unwrap(),
+        0
+    );
+    let (producer, calls, _) = validator(&durable);
+    let empty = RetainedBodyValidationService::new(producer, store.instance_identity(), 0, &budget)
+        .unwrap();
+    assert_eq!(empty.descriptor_allocation_bytes_for_test(), 0);
+    drop(empty);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        RetainedBodyValidationService::<Validator>::descriptor_bytes(usize::MAX),
+        Err(AllocationRefusal::DemandOverflow)
+    ));
+    let (producer, calls, _) = validator(&durable);
+    assert!(matches!(
+        RetainedBodyValidationService::new(
+            producer,
+            store.instance_identity(),
+            usize::MAX,
+            &budget
+        ),
+        Err(CarrierCustodyError::DescriptorAdmission(
+            AllocationRefusal::DemandOverflow
+        ))
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(store.validated.is_empty());
+    assert!(store.rejected.is_empty());
 }

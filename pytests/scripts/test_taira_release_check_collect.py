@@ -57,7 +57,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
-                for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
+                for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity", "check_test_harnesses"):
                     stack.enter_context(patch.object(gate, function))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                 other = stack.enter_context(patch.object(gate, "compile_harness"))

@@ -373,6 +373,43 @@
         "type": "object",
         "x-iroha-max-bytes": 4096
       },
+      "AccountFaucetAdvertisement": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "asset_definition_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "network_prefix": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "network_id",
+          "network_prefix",
+          "authority",
+          "asset_definition_id",
+          "amount"
+        ],
+        "type": "object",
+        "x-iroha-max-bytes": 4096
+      },
       "AccountFaucetClaim": {
         "additionalProperties": false,
         "properties": {
@@ -394,42 +431,6 @@
           "account_id",
           "pow_anchor_height",
           "pow_nonce_hex"
-        ],
-        "type": "object"
-      },
-      "AccountFaucetPolicy": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "asset_definition_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "authority": {
-            "$ref": "#/components/schemas/CanonicalAccountId"
-          },
-          "chain_discriminant": {
-            "maximum": 65535,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/NetworkId"
-          },
-          "schema": {
-            "const": "iroha.accounts.faucet.policy.v1",
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "network_id",
-          "chain_discriminant",
-          "authority",
-          "asset_definition_id",
-          "amount"
         ],
         "type": "object"
       },
@@ -9182,6 +9183,11 @@
             "maxLength": 1024,
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          },
+          "query_asset_not_found": {
+            "description": "Canonical AssetId literal for a completed authoritative asset lookup. It denotes absence only with HTTP 404 and code query_asset_not_found, and must equal the exact requested asset ID.",
+            "minLength": 1,
             "type": "string"
           },
           "queue": {
@@ -52239,7 +52245,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountFaucetPolicy"
+                  "$ref": "#/components/schemas/AccountFaucetAdvertisement"
                 }
               }
             },
@@ -52254,8 +52260,8 @@
               }
             }
           },
-          "403": {
-            "description": "The account faucet is disabled."
+          "503": {
+            "description": "The account faucet is disabled (account_faucet_disabled), or its configured policy is unavailable."
           }
         },
         "security": [
@@ -82845,6 +82851,21 @@
               }
             },
             "description": "Bad request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Only code query_asset_not_found with details.query_asset_not_found equal to the exact requested AssetId denotes asset absence. Every selected dataspace route must report that same typed absence; unavailable routes remain errors. HTTP 404 alone does not establish absence. This response is not a cryptographic proof of ledger state."
           },
           "406": {
             "content": {

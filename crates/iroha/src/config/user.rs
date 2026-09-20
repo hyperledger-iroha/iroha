@@ -21,7 +21,6 @@ use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
-const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
 /// Root of the user-facing configuration loaded from TOML + env.
 #[derive(Clone, Debug, ReadConfig)]
@@ -127,10 +126,6 @@ fn valid_account_domain_scope_literal(value: &str) -> bool {
         name::canonicalize_domain_label(value).is_ok()
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "private-key source resolution keeps ordered fail-closed filesystem checks and origin reporting together"
-)]
 fn resolve_account_private_key(
     inline: Option<WithOrigin<PrivateKey>>,
     file: Option<WithOrigin<PathBuf>>,
@@ -162,80 +157,11 @@ fn resolve_account_private_key(
         emitter.emit(Report::new(ParseError::KeyPair).attach("account.private_key_file is empty"));
         return None;
     }
-    let opened = match File::open(&path) {
-        Ok(opened) => opened,
-        Err(err) => {
-            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-                "failed to open account.private_key_file `{}`: {err}",
-                path.display()
-            )));
-            return None;
-        }
-    };
-    let metadata = match opened.metadata() {
-        Ok(metadata) => metadata,
-        Err(err) => {
-            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-                "failed to inspect account.private_key_file `{}`: {err}",
-                path.display()
-            )));
-            return None;
-        }
-    };
-    if !metadata.is_file() {
-        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-            "account.private_key_file `{}` must reference a regular file",
-            path.display()
-        )));
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mode = metadata.permissions().mode();
-        if mode & 0o077 != 0 {
-            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-                "account.private_key_file `{}` must not be readable or writable by group/other users (mode {:04o})",
-                path.display(),
-                mode & 0o777
-            )));
-            return None;
-        }
-    }
-    let mut encoded = String::new();
-    if let Err(err) = opened
-        .take(MAX_PRIVATE_KEY_FILE_BYTES + 1)
-        .read_to_string(&mut encoded)
-    {
-        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-            "failed to read account.private_key_file `{}` as UTF-8: {err}",
-            path.display()
-        )));
-        return None;
-    }
-    if encoded.len() as u64 > MAX_PRIVATE_KEY_FILE_BYTES {
-        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-            "account.private_key_file `{}` exceeds the {MAX_PRIVATE_KEY_FILE_BYTES}-byte limit",
-            path.display()
-        )));
-        return None;
-    }
-    let encoded = encoded
-        .strip_suffix("\r\n")
-        .or_else(|| encoded.strip_suffix('\n'))
-        .unwrap_or(&encoded);
-    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
-        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-            "account.private_key_file `{}` must contain exactly one canonical private key",
-            path.display()
-        )));
-        return None;
-    }
-    match encoded.parse::<PrivateKey>() {
+    match super::private_key_file::read(&path) {
         Ok(private_key) => Some((private_key, origin)),
-        Err(err) => {
+        Err(error) => {
             emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
-                "account.private_key_file `{}` does not contain a canonical private key: {err}",
+                "cannot load account.private_key_file `{}`: {error:#}",
                 path.display()
             )));
             None

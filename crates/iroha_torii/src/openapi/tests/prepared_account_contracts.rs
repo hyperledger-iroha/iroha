@@ -322,21 +322,25 @@ fn faucet_policy_schema_is_exact_public_discovery() {
     let schemas = component_schemas(&document);
     assert_strict_object_schema(
         schemas,
-        "AccountFaucetPolicy",
+        "AccountFaucetAdvertisement",
         &[
-            "schema",
+            "schema_version",
             "network_id",
-            "chain_discriminant",
+            "network_prefix",
             "authority",
             "asset_definition_id",
             "amount",
         ],
         &[],
     );
-    let schema = &schemas["AccountFaucetPolicy"];
+    let schema = &schemas["AccountFaucetAdvertisement"];
     assert_eq!(
-        schema["properties"]["schema"]["const"].as_str(),
-        Some("iroha.accounts.faucet.policy.v1")
+        schema["x-iroha-max-bytes"].as_u64(),
+        Some(iroha_torii_shared::account_faucet_policy::ACCOUNT_FAUCET_POLICY_MAX_BYTES as u64)
+    );
+    assert_eq!(
+        schema["properties"]["schema_version"]["const"].as_u64(),
+        Some(1)
     );
     for (field, reference) in [
         ("network_id", "NetworkId"),
@@ -349,16 +353,16 @@ fn faucet_policy_schema_is_exact_public_discovery() {
         );
     }
     assert_eq!(
-        schema["properties"]["chain_discriminant"]["maximum"].as_u64(),
+        schema["properties"]["network_prefix"]["maximum"].as_u64(),
         Some(u64::from(u16::MAX))
     );
     let operation = &document["paths"]["/v1/accounts/faucet/policy"]["get"];
     assert_eq!(operation["x-iroha-tool-effect"].as_str(), Some("read"));
     assert_eq!(
         operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].as_str(),
-        Some("#/components/schemas/AccountFaucetPolicy")
+        Some("#/components/schemas/AccountFaucetAdvertisement")
     );
-    assert!(operation["responses"].get("403").is_some());
+    assert!(operation["responses"].get("503").is_some());
     assert!(operation.get("requestBody").is_none());
     assert_eq!(
         operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"].as_str(),

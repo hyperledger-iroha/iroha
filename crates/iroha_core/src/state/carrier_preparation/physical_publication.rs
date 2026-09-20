@@ -10,12 +10,16 @@ use crate::kura::{
     KuraPublicationLease, KuraPublicationPreparationError, KuraWsvCheckpointReceipt,
 };
 use crate::publication_lock::PublicationGuard;
+use crate::state::carrier_preparation::queue_retirement::{
+    CarrierQueueRetirement, CarrierQueueRetirementError,
+};
 use crate::state::{
     State,
     block_hashes_publication::PreparedBlockHashes,
     storage_transactions::PreparedDetachedTransactionsBlock,
     world_journals::publication::{PreparedWorld, WorldPublicationError},
 };
+use crate::sumeragi::v2_apply::carrier_queue_retirement::OriginalCarrierQueue;
 use std::convert::Infallible;
 
 /// Exact local acquisition refusal; this never invalidates a consensus decision.
@@ -26,6 +30,8 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     ForeignKura,
     /// The target State or block header differs from the captured original geometry.
     ForeignTarget,
+    /// Original service Queue identity, pending work, or recovery prevents publication.
+    Queue(CarrierQueueRetirementError),
     /// The original Kura is busy or requires storage repair before acquisition.
     Kura(KuraPublicationPreparationError),
     /// The retained durable checkpoint/finality no longer matches its original owner.
@@ -66,6 +72,7 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
             Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
             Self::ForeignKura => f.write_str("ForeignKura"),
             Self::ForeignTarget => f.write_str("ForeignTarget"),
+            Self::Queue(error) => f.debug_tuple("Queue").field(error).finish(),
             Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
             Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
             Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
@@ -215,6 +222,7 @@ impl<'target> StateFences<'target> {
 /// Physical State ownership drops before its enclosing original Kura boundary.
 struct CarrierFences<'target> {
     _state: StateFences<'target>,
+    _queue: Option<CarrierQueueRetirement<'target>>,
     _kura: KuraPublicationLease<'target>,
 }
 
@@ -224,6 +232,7 @@ impl<'target> CarrierFences<'target> {
     fn release_for_completion(self) -> PublicationGuard<'target> {
         let Self {
             _state: state,
+            _queue: queue,
             _kura: kura,
         } = self;
         let StateFences {
@@ -233,6 +242,7 @@ impl<'target> CarrierFences<'target> {
         } = state;
         drop(write);
         drop(lifecycle);
+        drop(queue);
         drop(kura);
         commit
     }
@@ -278,9 +288,9 @@ impl AcquiredCarrierComponents<'_> {
 
 /// A complete decided carrier holding every original storage writer together.
 ///
-/// The private terminal consumer completes retained nonretiring geometry before
-/// visibility. TODO: join original Queue retirement and participant durability
-/// owners, and complete production resource admission.
+/// The private terminal consumer completes retained geometry while keeping its
+/// original service Queue retirement cut through visibility. TODO: join complete
+/// participant durability and production resource admission.
 /// Acquiring these writers neither advances State visibility nor grants finality,
 /// retirement or Kura permission. No physical guard may cross an async wait.
 #[must_use = "keep the complete carrier until authorized publication or abort"]
@@ -327,6 +337,7 @@ impl<Admission, BindingAdmission>
     >(
         self,
         target: &'target State,
+        queue_source: Option<&OriginalCarrierQueue<'target>>,
         admit: impl FnOnce(&Self, &State) -> Result<Installation, E>,
     ) -> Result<
         PhysicallyPreparedCarrier<'target, Admission, BindingAdmission, Installation>,
@@ -356,6 +367,19 @@ impl<Admission, BindingAdmission>
         {
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
+        }
+        if original.journals.geometry.requires_queue_custody() {
+            let refusal = match queue_source {
+                None => Some(CarrierQueueRetirementError::Missing),
+                Some(source) if !source.belongs_to(target) => {
+                    Some(CarrierQueueRetirementError::ForeignState)
+                }
+                Some(_) => None,
+            };
+            if let Some(error) = refusal {
+                drop(installation);
+                return Err((original, CarrierPhysicalPreparationError::Queue(error)));
+            }
         }
         // Reject substituted execution or archive custody before any derived
         // persistence can modify its durable namespace. Release the temporary
@@ -435,13 +459,70 @@ impl<Admission, BindingAdmission>
                 CarrierPhysicalPreparationError::ExecutionWitness(error),
             ));
         }
+        // Queue transition ownership precedes lifecycle; all later probes are
+        // try-only because ordinary ingress may own a State view before Queue.
+        let queue_observer = if authenticated
+            .decision
+            .journals
+            .geometry
+            .requires_queue_custody()
+        {
+            let source = queue_source.expect("required original source checked before persistence");
+            match source.try_observe() {
+                Ok(observer) => Some(observer),
+                Err(wait) => {
+                    let original = authenticated.release();
+                    drop(installation);
+                    return Err((
+                        original,
+                        CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {
+                            field: "lane_reservation_transition_lock",
+                            wait,
+                        }),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let state = match StateFences::try_acquire(target) {
             Ok(fences) => fences,
             Err(error) => {
+                drop(queue_observer);
                 let original = authenticated.release();
                 drop(installation);
                 return Err((original, error));
             }
+        };
+        let queue = match queue_observer {
+            Some(observer) => {
+                let source = queue_source.expect("original service source remains borrowed");
+                let acquired = observer
+                    .try_into_cut()
+                    .map_err(|error| CarrierQueueRetirementError::Busy {
+                        field: error.field,
+                        wait: error.wait,
+                    })
+                    .and_then(|cut| {
+                        CarrierQueueRetirement::try_new(
+                            target,
+                            &authenticated.decision.journals.geometry,
+                            authenticated.decision.block().header(),
+                            source,
+                            cut,
+                        )
+                    });
+                match acquired {
+                    Ok(cut) => Some(cut),
+                    Err(error) => {
+                        drop(state);
+                        let original = authenticated.release();
+                        drop(installation);
+                        return Err((original, CarrierPhysicalPreparationError::Queue(error)));
+                    }
+                }
+            }
+            None => None,
         };
         let SourceAuthenticatedCarrier {
             decision: original,
@@ -449,6 +530,7 @@ impl<Admission, BindingAdmission>
         } = authenticated;
         let fences = CarrierFences {
             _state: state,
+            _queue: queue,
             _kura: kura,
         };
         let binding_admission;
@@ -581,7 +663,7 @@ impl<Admission, BindingAdmission>
 impl<Admission, BindingAdmission, Installation>
     PhysicallyPreparedCarrier<'_, Admission, BindingAdmission, Installation>
 {
-    /// Complete only the original nonretiring storage transition. The terminal
+    /// Complete the original storage transition under its retained Queue custody. The terminal
     /// publisher checks exact source and lifecycle authority before calling this.
     /// No retry state or replacement descriptor is introduced here; local refusal
     /// is returned to that publisher, which releases all writers with the owner.
@@ -606,6 +688,7 @@ impl<Admission, BindingAdmission, Installation>
             journals.effects.header,
             &mut backend,
             &journals.components._fences._kura,
+            journals.components._fences._queue.as_ref(),
         )?;
         Ok(completed.updated_da_mapping().is_some())
     }

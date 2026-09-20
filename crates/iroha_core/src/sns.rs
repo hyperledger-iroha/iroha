@@ -9,6 +9,10 @@ use crate::state::{State, StateReadOnly};
 use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
+use iroha_data_model::sns::pricing::{
+    PricingError, enforce_policy_active, label_matches_tier, payment_asset_definition_id,
+    pick_pricing_tier, required_payment_amount, tier_by_pricing_class, validate_term_bounds,
+};
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
 };
@@ -38,10 +42,9 @@ use iroha_model_base::state_path::StatePath;
 use iroha_model_base::topology::DataSpaceId;
 #[cfg(test)]
 use iroha_primitives::json::Json as IrohaJson;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
-use regex::Regex;
 #[cfg(test)]
 use std::time::SystemTime;
 use std::{
@@ -204,6 +207,14 @@ pub enum SnsError {
     /// The state mutation could not be committed.
     #[error("{0}")]
     Internal(String),
+}
+impl From<PricingError> for SnsError {
+    fn from(error: PricingError) -> Self {
+        match error {
+            PricingError::BadRequest(message) => Self::BadRequest(message),
+            PricingError::Conflict(message) => Self::Conflict(message),
+        }
+    }
 }
 /// SNS namespaces used by the authoritative name-record storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1314,7 +1325,7 @@ fn ensure_namespace_policy_is_current(
     let probe = namespace.current_policy_probe_label();
     let mut covers_current_label = false;
     for tier in &policy.pricing {
-        covers_current_label |= tier_regex(tier)?.is_match(probe);
+        covers_current_label |= label_matches_tier(tier, probe)?;
     }
     if !covers_current_label {
         return Err(SnsError::Conflict(format!(
@@ -1517,107 +1528,6 @@ pub(crate) fn seed_default_namespace_policies_for_payment_asset(
 fn years_to_ms(years: u8) -> u64 {
     u64::from(years).saturating_mul(MS_PER_YEAR)
 }
-fn enforce_policy_active(policy: &SuffixPolicyV1) -> Result<(), SnsError> {
-    match policy.status {
-        SuffixStatus::Active => Ok(()),
-        SuffixStatus::Paused => Err(SnsError::Conflict(format!(
-            "suffix `{}` is paused",
-            policy.suffix_key()
-        ))),
-        SuffixStatus::Revoked => Err(SnsError::Conflict(format!(
-            "suffix `{}` is revoked",
-            policy.suffix_key()
-        ))),
-    }
-}
-fn tier_regex(tier: &PriceTierV1) -> Result<Regex, SnsError> {
-    Regex::new(&tier.label_regex).map_err(|err| {
-        SnsError::Conflict(format!(
-            "pricing tier {} has invalid label regex: {err}",
-            tier.tier_id
-        ))
-    })
-}
-fn label_matches_tier(tier: &PriceTierV1, label: &str) -> Result<bool, SnsError> {
-    Ok(tier_regex(tier)?.is_match(label))
-}
-fn pick_pricing_tier(
-    policy: &SuffixPolicyV1,
-    selector: &NameSelectorV1,
-    pricing_class_hint: Option<u8>,
-) -> Result<PriceTierV1, SnsError> {
-    let label = selector.normalized_label();
-    if let Some(hint) = pricing_class_hint {
-        let tier = policy
-            .pricing
-            .iter()
-            .find(|tier| tier.tier_id == hint)
-            .ok_or_else(|| {
-                SnsError::BadRequest(format!(
-                    "pricing class {hint} is not offered for suffix `{}`",
-                    policy.suffix_key()
-                ))
-            })?;
-        if !label_matches_tier(tier, label)? {
-            return Err(SnsError::BadRequest(format!(
-                "label `{label}` does not satisfy pricing class {hint}"
-            )));
-        }
-        return Ok(tier.clone());
-    }
-    for tier in &policy.pricing {
-        if label_matches_tier(tier, label)? {
-            return Ok(tier.clone());
-        }
-    }
-    Err(SnsError::BadRequest(format!(
-        "label `{label}` does not match any pricing tier for suffix `{}`",
-        policy.suffix_key()
-    )))
-}
-fn tier_by_pricing_class(
-    policy: &SuffixPolicyV1,
-    selector: &NameSelectorV1,
-    pricing_class: u8,
-) -> Result<PriceTierV1, SnsError> {
-    let label = selector.normalized_label();
-    let tier = policy
-        .pricing
-        .iter()
-        .find(|tier| tier.tier_id == pricing_class)
-        .ok_or_else(|| {
-            SnsError::BadRequest(format!(
-                "pricing class {pricing_class} is not offered for suffix `{}`",
-                policy.suffix_key()
-            ))
-        })?;
-    if !label_matches_tier(tier, label)? {
-        return Err(SnsError::BadRequest(format!(
-            "label `{label}` no longer satisfies pricing class {pricing_class}"
-        )));
-    }
-    Ok(tier.clone())
-}
-fn validate_term_bounds(
-    policy: &SuffixPolicyV1,
-    tier: &PriceTierV1,
-    term_years: u8,
-) -> Result<(), SnsError> {
-    let min_years = policy.min_term_years.max(tier.min_duration_years);
-    let max_years = policy.max_term_years.min(tier.max_duration_years);
-    if min_years > max_years {
-        return Err(SnsError::Conflict(format!(
-            "suffix `{}` has incompatible policy/tier term bounds",
-            policy.suffix_key()
-        )));
-    }
-    if term_years < min_years || term_years > max_years {
-        return Err(SnsError::BadRequest(format!(
-            "term_years must be between {min_years} and {max_years} (got {term_years})"
-        )));
-    }
-    Ok(())
-}
 fn validate_payment_for_term(
     policy: &SuffixPolicyV1,
     tier: &PriceTierV1,
@@ -1635,16 +1545,7 @@ fn validate_payment_for_term(
             "net_amount must not exceed gross_amount".to_owned(),
         ));
     }
-    let required = tier
-        .base_price
-        .amount
-        .try_mul_decimal(&Numeric::from(u32::from(term_years)))
-        .map_err(|_| {
-            SnsError::Conflict(format!(
-                "required payment overflowed for pricing class {}",
-                tier.tier_id
-            ))
-        })?;
+    let required = required_payment_amount(tier, term_years)?;
     if payment.gross_amount < required || payment.net_amount < required {
         return Err(SnsError::BadRequest(format!(
             "payment ({}/{} {}) does not meet required amount {} for term {term_years}",
@@ -1652,29 +1553,6 @@ fn validate_payment_for_term(
         )));
     }
     Ok(())
-}
-fn required_payment_amount(tier: &PriceTierV1, term_years: u8) -> Result<Quantity, SnsError> {
-    tier.base_price
-        .amount
-        .try_mul_decimal(&Numeric::from(u32::from(term_years)))
-        .map_err(|_| {
-            SnsError::Conflict(format!(
-                "required payment overflowed for pricing class {}",
-                tier.tier_id
-            ))
-        })
-}
-fn payment_asset_definition_id(policy: &SuffixPolicyV1) -> Result<AssetDefinitionId, SnsError> {
-    if let Ok(asset_id) = AssetId::parse_literal(&policy.payment_asset_id) {
-        return Ok(asset_id.definition().clone());
-    }
-    AssetDefinitionId::parse_address_literal(&policy.payment_asset_id).map_err(|err| {
-        SnsError::Conflict(format!(
-            "suffix `{}` has invalid payment asset `{}`: {err}",
-            policy.suffix_key(),
-            policy.payment_asset_id
-        ))
-    })
 }
 fn lease_quote(
     selector: NameSelectorV1,

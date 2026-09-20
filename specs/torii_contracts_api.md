@@ -171,22 +171,23 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 
 ## Security and governance
 
-- Manifest registration, bytecode upload, and unreferenced bytecode removal
-  require `CanRegisterSmartContractCode`. After genesis, its grant and revoke
-  lifecycle belongs to the separate `CanManageSmartContractCodeRegistrars`
-  capability, including effective membership in a genesis-seeded manager role.
-  Managers are genesis-rooted; registrars cannot delegate their own permission.
-  Sponsored onboarding uses ordinary account registration and an authorized
-  grant. No upload prefix bypasses grant validation. The onboarding permission
-  allowlist and issued credential scope are additional restrictions, not grant
-  authority. Faucet funding confers neither registrar nor alias permission.
-- Registrar managers are seeded in newly generated genesis. Updating node binaries
-  does not introduce this capability into an existing network. The current closed
-  governance proposal set has no registrar-manager admission action; runtime
-  upgrade proposals do not assign account permissions. A network lacking a seeded
-  manager therefore cannot admit new registrars through this release's grant
-  lifecycle. Operators must qualify their deployed genesis and effective
-  permissions before advertising builder deployment onboarding.
+- Registered accounts may upload bounded artifacts and register manifests signed
+  by their own authorized key. Normal signed fee admission applies before these
+  state changes. Upload staging is keyed by its account owner; another account
+  cannot finalize or cancel that staging. Invalid bytecode, ABI, or signatures
+  remain rejected.
+- Identical verified artifact content is shared across developers. Registration
+  with another valid submitter signature is idempotent and preserves the first
+  stored manifest provenance. It cannot replace the embedded public interface.
+- `CanManageSmartContractCode` remains privileged authority for unreferenced
+  bytecode removal and privileged entrypoint delegation. It is not a
+  prerequisite for public artifact creation. Its grant/revoke lifecycle still
+  requires `CanGrantSmartContractCodeManagement`, whose assignment is
+  genesis-rooted. Ordinary developer funding grants neither privilege.
+- Developers may acquire an available namespace they own through the canonical
+  paid `EnsureAlias` planner. It enforces the live lease policy, bounded price,
+  and ownership, and derives only the exact acquired management scope. Domain
+  endorsement policy and protected namespaces remain authoritative.
 - Artifact registration does not confer address control. Direct deployment
   creates an account-owned revisioned lifecycle and is rejected for protected
   namespaces. Raw activation and deactivation require that current account

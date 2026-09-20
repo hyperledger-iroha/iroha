@@ -1,9 +1,9 @@
 //! Authenticated OpenSSH transport and compiled remote host dispatcher for public Taira reset.
 
-#[path = "taira_public_reset_dispatcher_transition.rs"]
-pub(super) mod dispatcher_transition;
 #[path = "taira_public_reset_beacon.rs"]
 pub(super) mod beacon;
+#[path = "taira_public_reset_dispatcher_transition.rs"]
+pub(super) mod dispatcher_transition;
 #[path = "taira_public_reset_epoch_generation.rs"]
 pub(super) mod epoch_generation;
 #[path = "taira_public_reset_epoch_reset_inputs.rs"]
@@ -23625,6 +23625,26 @@ time.sleep(30)
             error.to_string(),
             "Taira doctor report scope does not match signed qualification"
         );
+        let mut without_wallet = canonical.clone();
+        without_wallet
+            .get_mut("checks")
+            .and_then(norito::json::Value::as_array_mut)
+            .unwrap()
+            .retain(|check| {
+                !matches!(
+                    check["name"].as_str(),
+                    Some("account_capabilities" | "account_faucet_policy")
+                )
+            });
+        assert!(
+            validate_doctor_report(
+                &without_wallet,
+                public_root,
+                crate::taira::DoctorScope::Basic
+            )
+            .is_err(),
+            "a report omitting wallet prerequisites cannot qualify deployment"
+        );
 
         for scope in [
             crate::taira::DoctorScope::Basic,
@@ -23640,7 +23660,7 @@ time.sleep(30)
                 .and_then(|checks| {
                     checks.iter_mut().find(|check| {
                         check.get("name").and_then(norito::json::Value::as_str)
-                            == Some("faucet_policy")
+                            == Some("account_faucet_policy")
                     })
                 })
                 .and_then(norito::json::Value::as_object_mut)
@@ -23655,18 +23675,18 @@ time.sleep(30)
                 faucet.get("ok").and_then(norito::json::Value::as_bool),
                 Some(true)
             );
-            faucet.insert("http_status".to_owned(), 403_u64.into());
+            faucet.insert("http_status".to_owned(), 503_u64.into());
             disabled.as_object_mut().expect("doctor object").insert(
                 "warnings".to_owned(),
-                norito::json!(["faucet_policy: Account faucet disabled; funding is unavailable"]),
+                norito::json!(["account_faucet_policy: Account faucet disabled; funding is unavailable"]),
             );
             validate_common_report(&disabled, "taira_doctor", public_root)
-                .expect("disabled faucet remains an otherwise successful diagnostic");
+                .expect("a warning-only report passes the common envelope checks");
             let error = validate_doctor_report(&disabled, public_root, scope)
                 .expect_err("release qualification requires an enabled faucet despite the warning");
             assert_eq!(
                 error.to_string(),
-                "Taira doctor check `faucet_policy` is not exact V1"
+                "Taira doctor check `account_faucet_policy` is not exact V1"
             );
         }
 

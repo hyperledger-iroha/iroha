@@ -7,11 +7,17 @@ upload/manifest/atomic-commit sequence, and filesystem journals.
 
 `DeploymentService` receives one runtime `Config`. `prepare` takes complete
 artifact bytes, a typed alias, and an explicit fee intent; it verifies account
-existence, exact effective registrar and alias grants, deployment CAS state, and
+existence, exact effective alias grants, deployment CAS state, and
 every quoted native transaction. `persist` records the exact signed plan without
 submission. `execute` persists before dispatch; `resume` authenticates that plan
 and polls every attempted hash without signing a replacement or replaying it.
 Bare governance identities are rejected because they are not approval evidence.
+Registered developers need no global management grant for immutable artifact
+creation. All stages pay the configured native fees. Other valid publisher
+signatures over the same verified manifest content reuse the first stored
+provenance; neither the receipt nor readback claims that provenance was replaced.
+An owned domain acquired through the canonical paid `EnsureAlias` flow supplies
+only the exact alias scope needed within that domain.
 
 `execute` and `resume` receive one explicit typed progress observer. It sees the
 authenticated plan before dispatch, durable submitting/recovering stages by exact

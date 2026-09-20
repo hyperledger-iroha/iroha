@@ -3,6 +3,25 @@
 use super::*;
 use crate::smartcontracts::isi::triggers::set::{PreparedSet, SetPublicationError};
 use mv::PublicationPreparationError;
+use std::alloc::Layout;
+
+// These layouts describe the concrete Box pointees constructed below. Lifetimes
+// do not change layout; no target owner, value, reader or writer is acquired.
+pub(super) fn storage_shell_layout<K: Key, V: Value>() -> Layout {
+    Layout::new::<PreparedStorage<'static, K, V>>()
+}
+
+pub(super) fn cell_shell_layout<V: Value>() -> Layout {
+    Layout::new::<PreparedCell<'static, V>>()
+}
+
+pub(super) fn triggers_shell_layout() -> Layout {
+    Layout::new::<PreparedTriggers<'static>>()
+}
+
+pub(super) fn field_vector_layout(capacity: usize) -> Result<Layout, std::alloc::LayoutError> {
+    Layout::array::<Box<dyn PreparedWorldField>>(capacity)
+}
 
 /// Exact local component that prevented complete World preparation.
 #[derive(Debug)]
@@ -282,6 +301,20 @@ impl<Admission> DetachedWorld<Admission> {
 }
 
 impl<Admission, Installation> PreparedWorld<'_, Admission, Installation> {
+    /// Observe actual constructed shell sizes and both coexisting Vec capacities.
+    #[cfg(test)]
+    pub(super) fn observed_shell_layouts(
+        &self,
+    ) -> (Layout, Layout, impl ExactSizeIterator<Item = Layout> + '_) {
+        (
+            Layout::array::<Box<dyn RetainedWorldField>>(self.retry.capacity()).unwrap(),
+            field_vector_layout(self.fields.capacity()).unwrap(),
+            self.fields
+                .iter()
+                .map(|field| Layout::for_value(field.as_ref())),
+        )
+    }
+
     /// Release every writer and return the complete original journals and extras.
     pub(in crate::state) fn abort(self) -> DetachedWorld<Admission> {
         let installation;

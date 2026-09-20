@@ -17,9 +17,12 @@ API contracts in shell scripts.
 - For public endpoint diagnostics, use the same-revision compiled
   `iroha taira doctor --public-root https://taira.sora.org --json`.
 - For explicitly authorized ordinary account onboarding or funding, use the
-  same-revision `iroha taira account onboard` or `iroha taira account faucet`
-  workflow with its separate `prepare`, `submit`, and read-only `resume` actions.
-  Obtain the trusted issuer and any onboarding token from the deployment operator.
+  same-revision integrated `musubi wallet create`, `musubi wallet fund`, and
+  `musubi wallet namespace <full-domain>` workflow. Funding reads the independently
+  trusted public faucet policy from the exact pinned network. The advanced native
+  `iroha taira account onboard` or `iroha taira account faucet` workflows retain
+  their separate `prepare`, `submit`, and read-only `resume` actions; obtain their
+  explicit trusted issuer and any onboarding token from the deployment operator.
 - For a public write canary, require explicit user authorization and use the
   same-revision `iroha taira public-reset apply` coordinator. Its
   `write-canary` child is a low-level singular prepared-operation surface, not
@@ -257,18 +260,76 @@ public-reset verifier consumes that same scoped diagnostic contract.
 
 ## Ordinary account onboarding and funding
 
+For the ordinary Musubi developer flow, create or select runtime custody outside
+the project, fund native XOR, and acquire the exact domain used by the contract
+alias:
+
+```bash
+musubi wallet create
+musubi wallet fund
+musubi wallet balance
+musubi wallet namespace developer.universal
+musubi network configure taira --wallet default \
+  --contract coffee-club --alias coffee::developer.universal
+musubi deploy
+musubi view --contract coffee-club --entrypoint quote --args '{"coffees":"3"}'
+```
+
+Choose an available domain and retain the same suffix in its contract alias.
+The wallet pins the genesis-derived `NetworkId`, canonical Taira chain label,
+profile 369 and trusted HTTPS root. Native public capability discovery supplies
+the admitted signing policy. Funding separately reads
+`/v1/accounts/faucet/policy`, verifies its exact network/profile and canonical XOR
+asset, and uses the advertised issuer and amount as the independent policy for
+native claim verification. The faucet's prepared response cannot choose a
+different issuer, asset, amount or fee policy. This trusted public policy replaces
+manual issuer delivery for integrated `fund`; the explicit issuer native CLI
+path below remains available for operator-admitted contexts.
+
+The deployed node must expose the current faucet-policy route. Its HTTP 404 is a
+rollout prerequisite failure. The current basic and full doctor scopes validate
+both account capabilities and faucet policy through the SDK and fail readiness
+when either is missing or invalid; report that
+specific blocker instead of guessing policy, changing assets, or inferring a
+public reset request. Account creation, namespace acquisition, transfers and
+contract writes use the normal native pipeline with explicit fee payment.
+The faucet pays its funding transaction fees. Transfers and paid namespace
+setup default to authority payment, with SDK-quoted limits in the retained
+signed envelope; an exact sponsor revision can pay transaction fees but does
+not automatically cover transferred principal or domain rent.
+
+Registered, funded developers may publish immutable verified contract code with
+normal fees; ordinary public artifact creation needs no global management
+grant. Paid domain acquisition grants only its exact `CanManageAccountAlias`
+scope. Named alias deployment still requires that scope and exact ownership/CAS
+checks. `CanManageSmartContractCode` is for privileged unreferenced code removal
+and entrypoint delegation; only `CanGrantSmartContractCodeManagement` admits
+later grants/revocations of that management permission. Do not conflate those
+privileged operations with normal developer code creation.
+
+Wallet `fund`, `send` and `namespace` commands can stop at `--prepare`, submit a
+saved envelope with `--submit <journal>`, or reconcile it read-only with
+`--resume <journal>`. `--submit` dispatches only wholly unattempted work and
+recovers an existing attempt without another dispatch. Preserve the printed
+wallet/store selectors and journal path through recovery. Deployment uses its
+own retained plan: `musubi deploy --prepare` followed by
+`musubi deploy --resume <journal>`. Keys and tokens remain runtime-only; a
+completed deployment requires exact Applied and code/address readback.
+
 Use `iroha taira account onboard prepare|submit|resume` for one account and alias,
 or `iroha taira account faucet prepare|submit|resume` for one funding claim. These
 ordinary workflows do not require a public reset. Use a same-revision native CLI
 and a populated client configuration in an owner-only runtime workspace. Pin the
 canonical Taira chain, exact genesis network identity, and address profile 369.
-Obtain the onboarding issuer, onboarding token, and faucet issuer/asset/amount
-policy independently from the operator; never trust a response to supply its own
-issuer or funding policy. For public discovery, the read-only
+For these explicit native CLI commands, obtain the onboarding issuer, onboarding
+token, and faucet issuer/asset/amount policy independently from the operator;
+never trust a prepared response to supply its own issuer or funding policy.
+For public discovery, the read-only
 `iroha.accounts.faucet.policy` tool maps to `GET /v1/accounts/faucet/policy`
 and reports the enabled faucet's exact network, address profile, public authority,
-canonical asset, and amount. Compare this unsigned response with the operator's
-independent policy; it does not establish the trusted preparation inputs.
+canonical asset, and amount. In these operator-admitted CLI workflows, compare
+this unsigned response with the operator's independent policy; it does not
+establish the trusted preparation inputs.
 
 Prepare a new operation in a previously absent journal directory whose parent
 already exists. For example:
@@ -313,9 +374,10 @@ or a successful submit response is not completion. If onboarding requires a
 current-state proof instead of a transaction, the SDK atomically verifies the
 account and alias and reports `AlreadyPresent`; this is not an `Applied`
 transaction or proof of requested permissions. Follow up separately on any
-reported owner auto-renew instruction. Funding and deployment authorization are
-separate: verify the exact registrar, alias, or other permission needed for the
-next write with the operator.
+reported owner auto-renew instruction. Funding does not grant namespace ownership
+or privileged code-management authority: acquire and verify the exact alias
+scope, and obtain operator admission only for operations that require a
+privileged management permission.
 
 ## Public reset and canary qualification
 

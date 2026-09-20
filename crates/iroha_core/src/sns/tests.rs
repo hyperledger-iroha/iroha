@@ -834,6 +834,18 @@ fn quote_account_alias_registration_uses_default_policy_price_and_term() {
     );
     assert_eq!(quote.charge_amount, Quantity::one());
     assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
+    let policy = policy_by_id(&view, quote.selector.suffix_id)
+        .expect("stored policy")
+        .expect("existing policy");
+    let client_price =
+        iroha_data_model::sns::pricing::quote_lease_price(&policy, &quote.selector, 2, None)
+            .expect("client and consensus share canonical pricing");
+    assert_eq!(client_price.amount, quote.charge_amount);
+    assert_eq!(client_price.pricing_class, quote.pricing_class);
+    assert_eq!(
+        client_price.payment_asset,
+        quote.payment_asset_definition_id
+    );
 }
 #[test]
 fn current_namespace_policies_seed_directly_with_configured_asset() {

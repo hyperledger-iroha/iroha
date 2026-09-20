@@ -1,5 +1,8 @@
 //! Sora Name Service data structures for registrar APIs.
 
+/// Deterministic policy pricing used by consensus and native clients.
+pub mod pricing;
+
 use crate::account::{AccountAddress, AccountId};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use blake3::Hasher;

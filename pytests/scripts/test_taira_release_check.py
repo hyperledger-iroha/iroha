@@ -37,7 +37,9 @@ from unittest.mock import MagicMock, patch
 # Three explicit Torii listener controls preserve P2P and generated API ports.
 # Five real execution publication controls retain witness, wire and State ownership.
 # Twenty transaction-admission controls retain exact requests, deadlines and receipts.
-# Twenty-one dispatcher controls preserve reversible upgrade custody and native preparation.
+# Twenty-two dispatcher controls preserve reversible upgrade custody and native preparation.
+# Two native canary receipt controls retain unsuccessful evidence and exact proof bindings.
+# Fifty-one native connection controls preserve transport, Queue and retained execution owners.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -46,8 +48,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 21 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 21 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 51 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 51 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -475,6 +477,9 @@ class FixtureCopies(dict):
 
 class BasicReleaseQualificationTests(unittest.TestCase):
     def setUp(self):
+        metadata = patch.object(gate, "check_test_harnesses")
+        self.test_metadata = metadata.start()
+        self.addCleanup(metadata.stop)
         prerequisites = patch.object(gate, "require_network_fixture_prerequisites")
         prerequisites.start()
         self.addCleanup(prerequisites.stop)
@@ -721,6 +726,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+                'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
+                'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
             ),
         }
         real = EXPECTED_BEACON_NETWORK_TEST
@@ -1103,6 +1110,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+            'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
+            'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
             EXPECTED_BEACON_NETWORK_TEST,
         ]
         self.assertEqual([test for _, tests in basic["network"] for test in tests], basic_network)
@@ -1455,6 +1464,63 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 shipping.assert_not_called()
                 fsm.assert_not_called()
 
+    def test_metadata_failure_stops_codegen_fixtures_and_checkpoint_changes(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        later = ("compile_test_harnesses", "run_config_checks", "run_stages",
+                 "check_shipping_binaries", "compile_network_binaries", "run_network_checks",
+                 "independent_check_evidence")
+        for scope in gate.QUALIFICATION_SCOPES:
+            for completed in (None, {"existing": "independent pass"}):
+                with self.subTest(scope=scope, completed=completed), contextlib.ExitStack() as stack:
+                    checkpoint = MagicMock()
+                    stack.enter_context(patch.object(gate, "run_pure_fsm_checks"))
+                    stack.enter_context(patch.object(gate, "run_lifecycle_source_checks"))
+                    stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=shipping))
+                    downstream = [stack.enter_context(patch.object(gate, name)) for name in later]
+                    stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                    self.test_metadata.reset_mock()
+                    failure = gate.CheckError("native metadata rejected macro/type error")
+                    self.test_metadata.side_effect = failure
+                    with self.assertRaises(gate.CheckError) as caught:
+                        gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
+                            source_commit="a" * 40, lock_fds=(77, 88),
+                            completed_independent_checks=completed, update_independent_checks=checkpoint)
+                    self.assertIs(caught.exception, failure)
+                    self.test_metadata.assert_called_once()
+                    expected = gate.native_harness_plan(gate.qualification_stages(scope), shipping)[1]
+                    self.assertEqual(self.test_metadata.call_args.kwargs,
+                                     {"harnesses": expected, "lock_fds": (77, 88)})
+                    for action in downstream:
+                        action.assert_not_called()
+                    checkpoint.assert_not_called()
+
+    def test_metadata_success_precedes_codegen_with_identical_graph_environment_and_locks(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        graphs = []
+        for scope in gate.QUALIFICATION_SCOPES:
+            order = []
+            self.test_metadata.reset_mock()
+            self.test_metadata.side_effect = lambda *_args, **_kwargs: order.append("metadata")
+            def stop_at_codegen(*_args, **_kwargs):
+                order.append("codegen")
+                raise gate.CheckError("stop after metadata ordering assertion")
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "run_pure_fsm_checks"), \
+                 patch.object(gate, "run_lifecycle_source_checks"), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "compile_test_harnesses", side_effect=stop_at_codegen) as compile, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "stop after metadata"):
+                    gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
+                                    source_commit="a" * 40, lock_fds=(77, 88))
+            self.assertEqual(order, ["metadata", "codegen"])
+            self.test_metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertIs(self.test_metadata.call_args.args[1], compile.call_args.args[1])
+            self.assertEqual(compile.call_args.kwargs["lock_fds"], (77, 88))
+            graphs.append(compile.call_args.kwargs["harnesses"])
+        self.assertEqual(graphs[0], graphs[1])
+
     @staticmethod
     def copies():
         copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
@@ -1466,6 +1532,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_both_scopes_keep_identical_compile_graph_and_execute_exact_recorded_census(self):
         builds = []
         for scope in gate.QUALIFICATION_SCOPES:
+            self.test_metadata.reset_mock()
             executed, order, output, checkpoint = [], [], io.StringIO(), MagicMock()
             copies = self.copies()
             def run(harness, root, env, stages, locks, **_kwargs):
@@ -1488,6 +1555,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                 source_commit="a" * 40, update_independent_checks=checkpoint)
             builds.append(compile.call_args.kwargs["harnesses"])
+            self.test_metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
             selected = gate.qualification_stages(scope)
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
@@ -1862,7 +1930,8 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 gate.run_checks(Path("/mutable"), qualification_scope=scope,
                                 environment=self.env, source_commit="a" * 40, lock_fds=(91,))
                 complete_graph = compile.call_args.kwargs["harnesses"]
-                self.metadata.assert_not_called()  # Qualification keeps its existing build path.
+                self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+                self.metadata.reset_mock()
                 compile.reset_mock(); run.reset_mock(); network.reset_mock()
                 output.seek(0); output.truncate(0)
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
@@ -2222,6 +2291,9 @@ class NativeCliBatchTests(unittest.TestCase):
 class EarlyReleaseCheckTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
+        metadata = patch.object(gate, "check_test_harnesses")
+        metadata.start()
+        self.addCleanup(metadata.stop)
         mock = patch.object(gate, "run_pure_fsm_checks")
         self.pure_fsm = mock.start()
         self.addCleanup(mock.stop)
@@ -2959,6 +3031,9 @@ class FocusedNetworkObservationTests(unittest.TestCase):
 class EarlyConfigurationGateTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
+        metadata = patch.object(gate, "check_test_harnesses")
+        metadata.start()
+        self.addCleanup(metadata.stop)
 
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated",
            "CARGO_TARGET_DIR": "/warm", "CARGO_INCREMENTAL": "1"}
@@ -3519,6 +3594,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
 
     def test_failed_batch_stops_before_any_native_test_or_network_start(self):
         with patch.object(gate, "run_pure_fsm_checks"), patch.object(gate, "run_lifecycle_source_checks"), \
+             patch.object(gate, "check_test_harnesses"), \
              patch.object(gate, "run_config_checks"), \
              patch.object(gate, "require_network_fixture_capacity"), \
              patch.object(gate, "compile_test_harnesses", side_effect=gate.CheckError("batch failed")), \
@@ -4467,7 +4543,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 with contextlib.ExitStack() as stack:
                     for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
                         stack.enter_context(patch.object(gate, name, ()))
-                    for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks"):
+                    for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "check_test_harnesses"):
                         stack.enter_context(patch.object(gate, name))
                     stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                     network = stack.enter_context(patch.object(gate, "compile_network_binaries"))
